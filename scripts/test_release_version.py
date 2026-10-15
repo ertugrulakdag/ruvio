@@ -96,6 +96,81 @@ class ReleaseVersionTests(unittest.TestCase):
             self.assertIn('version = "0.1.1"', project.read_text(encoding="utf-8"))
             self.assertIn('__version__ = "0.1.1"', module.read_text(encoding="utf-8"))
 
+    def test_release_moves_unreleased_notes_under_the_version(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "Demo.csproj"
+            changelog = root / "CHANGELOG.md"
+            project.write_text("<Project><Version>0.1.0</Version></Project>\n", encoding="utf-8")
+            changelog.write_text(
+                "# Changelog\n\n## Unreleased\n\n- New thing.\n\n## 0.1.0 - 2026-01-01\n\n- First.\n",
+                encoding="utf-8",
+            )
+            release_version.PACKAGES["demo-log"] = {
+                "cargo": [],
+                "locks": [],
+                "csproj": [project],
+                "changelog": changelog,
+            }
+
+            try:
+                release_version.apply_version("demo-log", "", False)
+                self.assertIn("## Unreleased\n\n- New thing.", changelog.read_text(encoding="utf-8"))
+                release_version.apply_version("demo-log", "", True, date="2026-02-03")
+                release_version.apply_version("demo-log", "", True, date="2026-02-04")
+            finally:
+                del release_version.PACKAGES["demo-log"]
+
+            self.assertEqual(
+                changelog.read_text(encoding="utf-8"),
+                "# Changelog\n\n## Unreleased\n\n"
+                "## 0.1.2 - 2026-02-04\n\nNo recorded changes.\n\n"
+                "## 0.1.1 - 2026-02-03\n\n- New thing.\n\n"
+                "## 0.1.0 - 2026-01-01\n\n- First.\n",
+            )
+
+    def test_install_pins_follow_the_server_even_when_the_version_is_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cargo = root / "Cargo.toml"
+            readme = root / "README.md"
+            cargo.write_text('[package]\nname = "demo"\nversion = "0.3.2"\n', encoding="utf-8")
+            readme.write_text("```\nv=0.3.1\ncurl ...ruvio-$v\n```\n", encoding="utf-8")
+            release_version.PACKAGES["demo-pins"] = {
+                "cargo": [cargo],
+                "locks": [],
+                "csproj": [],
+                "pins": [readme],
+            }
+
+            try:
+                release_version.apply_version("demo-pins", "0.3.2", True, install_pins=True)
+            finally:
+                del release_version.PACKAGES["demo-pins"]
+
+            self.assertIn("\nv=0.3.2\n", readme.read_text(encoding="utf-8"))
+
+    def test_every_package_file_exists(self) -> None:
+        for name, spec in release_version.PACKAGES.items():
+            paths = [*spec.get("cargo", []), *spec.get("csproj", []), *spec.get("pins", [])]
+            paths += [lock for lock, _ in spec.get("locks", [])]
+            paths += [spec[key] for key in ("file", "dunder", "changelog") if key in spec]
+
+            for path in paths:
+                self.assertTrue(path.exists(), f"{name}: {path}")
+
+            self.assertIn("changelog", spec, name)
+            self.assertIn(
+                release_version.UNRELEASED + "\n",
+                spec["changelog"].read_text(encoding="utf-8"),
+                name,
+            )
+            release_version.current_version(name)
+
+        for path in release_version.PACKAGES["server"]["pins"]:
+            pins = release_version.PIN.findall(path.read_text(encoding="utf-8"))
+            self.assertEqual(len(pins), 1, path)
+
 
 if __name__ == "__main__":
     unittest.main()

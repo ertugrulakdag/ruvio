@@ -104,4 +104,4 @@ The Java blocking facade and command words are generated; the PR gate runs `gene
 
 ## Releases
 
-See [RELEASING.md](RELEASING.md). Versions are bumped by `scripts/release_version.py` from the `release` workflow; never move a published tag.
+See [RELEASING.md](RELEASING.md). A change users will notice gets a line under `## Unreleased` in the package's `CHANGELOG.md`. Versions are set by `scripts/release_version.py`, from the `release` workflow or by hand for the .NET integrations; it also moves the changelog notes under the new version. Never move a published tag.

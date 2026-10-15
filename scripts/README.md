@@ -39,7 +39,7 @@ Most scripts take the path to a built `ruvio` binary and start their own server.
 
 | Script | Purpose |
 | --- | --- |
-| `release_version.py` | Bumps or sets a package version in every manifest, the matrix pin and Python's `__version__` |
+| `release_version.py` | Bumps or sets a package version in every manifest, the matrix pin, Python's `__version__` and the package changelog; `--install-pins` moves the server download line |
 | `central_upload.sh` | Builds and uploads the Maven Central bundle |
 | `release_artifacts.sh`, `generate_sbom.py` | Checksums and a CycloneDX SBOM (run by hand; the release workflow does not call them yet) |
 | `collect_third_party_notices.py` | Writes `licenses/THIRD_PARTY_NOTICES` |
