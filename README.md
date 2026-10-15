@@ -50,7 +50,20 @@ docker run --rm -p 6379:6379 \
 redis-cli -h 127.0.0.1 -p 6379 -a change-me PING
 ```
 
-`linux` and `latest` are the same Linux image, as is each version tag,, built for linux/amd64. On an arm64 host such as Apple Silicon, Docker runs it under emulation; build from a checkout for a native arm64 binary. The image default durability is `memory`. A persistent deploy sets `RUVIO_DURABILITY` and keeps the volume.
+`linux` and `latest` are the same Linux image, as is each version tag, built for linux/amd64. On an arm64 host such as Apple Silicon, Docker runs it under emulation; use a prebuilt binary below for a native arm64 server. The image default durability is `memory`. A persistent deploy sets `RUVIO_DURABILITY` and keeps the volume.
+
+Without Docker, download a prebuilt binary from [GitHub Releases](https://github.com/salihcantekin/ruvio/releases/latest). Each archive holds `ruvio` (the server), `ruvio-ctl` (backup, restore and checks), `ruvio.example.toml`, the README and the license, for Linux x64 and arm64, macOS arm64 and Windows x64. `SHA256SUMS` lists the checksums.
+
+```bash
+# Linux x64; swap the platform for linux-arm64 or macos-arm64
+v=0.3.2
+curl -LO https://github.com/salihcantekin/ruvio/releases/download/ruvio-$v/ruvio-$v-linux-x64.tar.gz
+tar xzf ruvio-$v-linux-x64.tar.gz
+cd ruvio-$v-linux-x64
+./ruvio --requirepass change-me --data-dir ./data
+```
+
+On Windows, unzip `ruvio-<version>-windows-x64.zip` and run `ruvio.exe`. On macOS, a binary downloaded by a browser is quarantined; `xattr -d com.apple.quarantine ruvio ruvio-ctl` clears it (downloads with `curl` are not quarantined). `ruvio --help` lists every flag.
 
 From a checkout:
 
@@ -59,7 +72,7 @@ cargo run --release --bin ruvio
 redis-cli -h 127.0.0.1 -p 6379 PING
 ```
 
-The server is installed from the Docker image above or built from this checkout; it is not published as a crate.
+The server is installed from the Docker image, a release binary, or built from this checkout; it is not published as a crate.
 
 Settings merge in this order: built-in defaults, `ruvio.toml` (template: [`ruvio.example.toml`](ruvio.example.toml)), `RUVIO_*` environment variables, then CLI flags. The file is read once, at process start. [Configuration](https://salihcantekin.github.io/ruvio/configuration.html).
 
@@ -130,7 +143,7 @@ side effects still require their own transaction/idempotency mechanism.
 
 ## Packages
 
-Releases are cut from `main` by hand ([release workflow](.github/workflows/release.yml)). Counts come live from the registries. The Go, Java, Python and Node.js clients are in [`clients/`](clients/README.md) and install from source until their registry releases.
+Releases are cut from `main` by hand ([release workflow](.github/workflows/release.yml)). Counts come live from the registries. All clients are in [`clients/`](clients/README.md). The Go module is released by git tag (`clients/go/vX.Y.Z`) and fetched through the Go module proxy.
 
 | Package | What it is | Version | Downloads |
 | --- | --- | --- | --- |
@@ -143,6 +156,11 @@ Releases are cut from `main` by hand ([release workflow](.github/workflows/relea
 | [Ruvio.AspNetCore.RateLimiting](https://www.nuget.org/packages/Ruvio.AspNetCore.RateLimiting) | Distributed rate limiting | ![v](https://img.shields.io/nuget/v/Ruvio.AspNetCore.RateLimiting?label=) | ![dl](https://img.shields.io/nuget/dt/Ruvio.AspNetCore.RateLimiting?label=) |
 | [Ruvio.AspNetCore.Idempotency](https://www.nuget.org/packages/Ruvio.AspNetCore.Idempotency) | HTTP idempotency | ![v](https://img.shields.io/nuget/v/Ruvio.AspNetCore.Idempotency?label=) | ![dl](https://img.shields.io/nuget/dt/Ruvio.AspNetCore.Idempotency?label=) |
 | [Ruvio.AspNetCore.DistributedLock](https://www.nuget.org/packages/Ruvio.AspNetCore.DistributedLock) | Distributed locks and `[RuvioLock]` | ![v](https://img.shields.io/nuget/v/Ruvio.AspNetCore.DistributedLock?label=) | ![dl](https://img.shields.io/nuget/dt/Ruvio.AspNetCore.DistributedLock?label=) |
+| [ruvio-client (npm)](https://www.npmjs.com/package/ruvio-client) | Node.js SDK | ![v](https://img.shields.io/npm/v/ruvio-client?label=) | ![dl](https://img.shields.io/npm/dm/ruvio-client?label=) |
+| [ruvio-client (PyPI)](https://pypi.org/project/ruvio-client/) | Python SDK | ![v](https://img.shields.io/pypi/v/ruvio-client?label=) | ![dl](https://img.shields.io/pypi/dm/ruvio-client?label=) |
+| [io.github.salihcantekin:ruvio-client](https://central.sonatype.com/artifact/io.github.salihcantekin/ruvio-client) | Java SDK | ![v](https://img.shields.io/maven-central/v/io.github.salihcantekin/ruvio-client?label=) | |
+| [github.com/salihcantekin/ruvio/clients/go](https://pkg.go.dev/github.com/salihcantekin/ruvio/clients/go) | Go SDK | `clients/go/v0.1.0` | |
+| [Server binaries](https://github.com/salihcantekin/ruvio/releases/latest) | `ruvio` and `ruvio-ctl` for Linux, macOS, Windows | ![v](https://img.shields.io/github/v/release/salihcantekin/ruvio?label=) | ![dl](https://img.shields.io/github/downloads/salihcantekin/ruvio/total?label=) |
 | [salihcantekin/ruvio](https://hub.docker.com/r/salihcantekin/ruvio) | Server image (linux/amd64) | ![v](https://img.shields.io/docker/v/salihcantekin/ruvio?sort=semver&label=) | ![dl](https://img.shields.io/docker/pulls/salihcantekin/ruvio?label=) |
 | [salihcantekin/ruvio-ui](https://hub.docker.com/r/salihcantekin/ruvio-ui) | Operator UI image | ![v](https://img.shields.io/docker/v/salihcantekin/ruvio-ui?sort=semver&label=) | ![dl](https://img.shields.io/docker/pulls/salihcantekin/ruvio-ui?label=) |
 
