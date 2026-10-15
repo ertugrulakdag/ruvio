@@ -19,6 +19,10 @@ pub(in crate::protocol) use stream::*;
 pub(crate) use util::*;
 pub(in crate::protocol) use zset::*;
 
+use super::table::Args;
+
+type Parsed<'a> = Result<Command<'a>, ProtocolError>;
+
 pub(crate) fn command_rejection(message: &'static str) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(4 + message.len());
 
@@ -30,8 +34,8 @@ pub(crate) fn command_rejection(message: &'static str) -> Vec<u8> {
 pub(crate) fn parse_arguments(mut arguments: Vec<Bytes<'_>>) -> Result<Command<'_>, ProtocolError> {
     let name = arguments.remove(0);
 
-    match super::table::lookup(&name).and_then(|spec| spec.parse) {
-        Some(parse) => parse(&super::table::Args::from_slice(&arguments)),
+    match super::table::lookup(&name) {
+        Some(spec) => (spec.parse)(&Args::from_slice(&arguments)),
         None => Err(ProtocolError::Invalid("unknown command")),
     }
 }

@@ -15,39 +15,35 @@ pub(in crate::protocol) fn hash_expire_name(name: &[u8]) -> &'static str {
     }
 }
 
-/// Reads `FIELDS numfields field ...` starting at `index`. Every argument must be consumed.
+/// Reads `FIELDS numfields field ...` starting at argument `index`. Every argument must be
+/// consumed.
 pub(in crate::protocol) fn parse_field_block<'a>(
-    arguments: &mut Vec<Bytes<'a>>,
+    args: &Args<'a, '_>,
     index: usize,
     wrong_arity: &'static str,
 ) -> Result<Vec<Bytes<'a>>, ProtocolError> {
-    if arguments.len() < index + 3 {
+    if args.len() < index + 3 {
         return Err(ProtocolError::Invalid(wrong_arity));
     }
 
-    if !arguments[index].eq_ignore_ascii_case(b"FIELDS") {
+    if !args.bytes(index).eq_ignore_ascii_case(b"FIELDS") {
         return Err(ProtocolError::Invalid("syntax error"));
     }
 
-    let count = parse_usize(&arguments[index + 1])?;
+    let count = parse_usize(args.bytes(index + 1))?;
 
     if count == 0 {
         return Err(ProtocolError::Invalid(wrong_arity));
     }
 
-    let fields = arguments.split_off(index + 2);
-
-    match fields.len().cmp(&count) {
+    match (args.len() - (index + 2)).cmp(&count) {
         std::cmp::Ordering::Less => Err(ProtocolError::Invalid("wrong number of arguments")),
         std::cmp::Ordering::Greater => Err(ProtocolError::Invalid("unknown argument")),
-        std::cmp::Ordering::Equal => Ok(fields),
+        std::cmp::Ordering::Equal => Ok(args.rest(index + 2)),
     }
 }
 
-pub(in crate::protocol) fn parse_hash_expire<'a>(
-    mut arguments: Vec<Bytes<'a>>,
-    name: &[u8],
-) -> Result<Command<'a>, ProtocolError> {
+pub(in crate::protocol) fn parse_hash_expire<'a>(args: &Args<'a, '_>, name: &[u8]) -> Parsed<'a> {
     let command = hash_expire_name(name);
     let wrong_arity = match command {
         "hexpire" => "wrong number of arguments for 'hexpire' command",
@@ -56,11 +52,11 @@ pub(in crate::protocol) fn parse_hash_expire<'a>(
         _ => "wrong number of arguments for 'hpexpireat' command",
     };
 
-    if arguments.len() < 5 {
+    if args.len() < 5 {
         return Err(ProtocolError::Invalid(wrong_arity));
     }
 
-    let raw = parse_i64(&arguments[1])?;
+    let raw = parse_i64(args.bytes(1))?;
 
     if raw < 0 {
         return Err(ProtocolError::Invalid("invalid expire time, must be >= 0"));
@@ -91,8 +87,8 @@ pub(in crate::protocol) fn parse_hash_expire<'a>(
     let mut condition = FieldExpireCondition::Always;
     let mut index = 2;
 
-    while index < arguments.len() && !arguments[index].eq_ignore_ascii_case(b"FIELDS") {
-        let flag = arguments[index].as_ref();
+    while index < args.len() && !args.bytes(index).eq_ignore_ascii_case(b"FIELDS") {
+        let flag = args.bytes(index);
         let parsed = if flag.eq_ignore_ascii_case(b"NX") {
             FieldExpireCondition::Nx
         } else if flag.eq_ignore_ascii_case(b"XX") {
@@ -113,11 +109,10 @@ pub(in crate::protocol) fn parse_hash_expire<'a>(
         index += 1;
     }
 
-    let fields = parse_field_block(&mut arguments, index, wrong_arity)?;
-    let key = arguments.into_iter().next().expect("length checked");
+    let fields = parse_field_block(args, index, wrong_arity)?;
 
     Ok(Command::HashExpire {
-        key,
+        key: args.arg(0),
         time,
         condition,
         fields,
@@ -126,9 +121,9 @@ pub(in crate::protocol) fn parse_hash_expire<'a>(
 }
 
 pub(in crate::protocol) fn parse_hash_field_read<'a>(
-    mut arguments: Vec<Bytes<'a>>,
+    args: &Args<'a, '_>,
     name: &[u8],
-) -> Result<Command<'a>, ProtocolError> {
+) -> Parsed<'a> {
     let (reply, wrong_arity) = if name.eq_ignore_ascii_case(b"HTTL") {
         (
             Some(FieldTtlReply::Seconds),
@@ -153,12 +148,12 @@ pub(in crate::protocol) fn parse_hash_field_read<'a>(
         (None, "wrong number of arguments for 'hpersist' command")
     };
 
-    if arguments.len() < 4 {
+    if args.len() < 4 {
         return Err(ProtocolError::Invalid(wrong_arity));
     }
 
-    let fields = parse_field_block(&mut arguments, 1, wrong_arity)?;
-    let key = arguments.into_iter().next().expect("length checked");
+    let fields = parse_field_block(args, 1, wrong_arity)?;
+    let key = args.arg(0);
 
     Ok(match reply {
         Some(reply) => Command::HashTtl { key, reply, fields },
@@ -166,11 +161,9 @@ pub(in crate::protocol) fn parse_hash_field_read<'a>(
     })
 }
 
-pub(in crate::protocol) fn parse_hash_scan(
-    arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
+pub(in crate::protocol) fn parse_hash_scan<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
     let (key, cursor, pattern, count) =
-        parse_scan_arguments(arguments, "HSCAN expects a key and a cursor")?;
+        parse_scan_arguments(args, "HSCAN expects a key and a cursor")?;
 
     Ok(Command::HashScan {
         key,
@@ -180,15 +173,15 @@ pub(in crate::protocol) fn parse_hash_scan(
     })
 }
 
-pub(in crate::protocol) fn parse_collection_scan(
-    arguments: Vec<Bytes<'_>>,
+pub(in crate::protocol) fn parse_collection_scan<'a>(
+    args: &Args<'a, '_>,
     kind: CollectionScanKind,
-) -> Result<Command<'_>, ProtocolError> {
+) -> Parsed<'a> {
     let usage = match kind {
         CollectionScanKind::Set => "SSCAN expects a key and a cursor",
         CollectionScanKind::SortedSet => "ZSCAN expects a key and a cursor",
     };
-    let (key, cursor, pattern, count) = parse_scan_arguments(arguments, usage)?;
+    let (key, cursor, pattern, count) = parse_scan_arguments(args, usage)?;
 
     Ok(Command::CollectionScan {
         kind,
@@ -202,29 +195,29 @@ pub(in crate::protocol) fn parse_collection_scan(
 type ScanArguments<'a> = (Bytes<'a>, u64, Option<Bytes<'a>>, usize);
 
 fn parse_scan_arguments<'a>(
-    mut arguments: Vec<Bytes<'a>>,
+    args: &Args<'a, '_>,
     usage: &'static str,
 ) -> Result<ScanArguments<'a>, ProtocolError> {
-    if arguments.len() < 2 {
+    if args.len() < 2 {
         return Err(ProtocolError::Invalid(usage));
     }
 
-    let key = arguments.remove(0);
-    let cursor = parse_u64(&arguments.remove(0))?;
+    let cursor = parse_u64(args.bytes(1))?;
     let mut pattern = None;
     let mut count = 10;
-    let mut index = 0;
+    let mut index = 2;
 
-    while index < arguments.len() {
-        let name = arguments[index].as_ref();
-        let Some(value) = arguments.get(index + 1) else {
+    while index < args.len() {
+        let name = args.bytes(index);
+
+        if index + 1 >= args.len() {
             return Err(ProtocolError::Invalid("syntax error"));
-        };
+        }
 
         if name.eq_ignore_ascii_case(b"MATCH") {
-            pattern = Some(value.clone());
+            pattern = Some(args.arg(index + 1));
         } else if name.eq_ignore_ascii_case(b"COUNT") {
-            let parsed = parse_i64(value)?;
+            let parsed = parse_i64(args.bytes(index + 1))?;
 
             count = usize::try_from(parsed)
                 .map_err(|_| ProtocolError::Invalid("value is not an integer"))?;
@@ -235,5 +228,5 @@ fn parse_scan_arguments<'a>(
         index += 2;
     }
 
-    Ok((key, cursor, pattern, count))
+    Ok((args.arg(0), cursor, pattern, count))
 }

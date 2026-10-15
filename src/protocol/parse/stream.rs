@@ -1,24 +1,24 @@
 use super::*;
 
 /// `XINFO STREAM`, `XINFO GROUPS`, and `XINFO CONSUMERS`.
-pub(in crate::protocol) fn parse_xinfo(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    let Some(kind) = arguments.first().cloned() else {
+pub(in crate::protocol) fn parse_xinfo<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() == 0 {
         return Err(ProtocolError::Invalid(
             "XINFO expects STREAM, GROUPS, or CONSUMERS",
         ));
-    };
+    }
 
-    arguments.remove(0);
+    let kind = args.bytes(0);
+    // Arguments after the subcommand.
+    let rest = args.len() - 1;
 
     if kind.eq_ignore_ascii_case(b"STREAM") || kind.eq_ignore_ascii_case(b"GROUPS") {
-        if arguments.len() != 1 {
+        if rest != 1 {
             return Err(ProtocolError::Invalid("XINFO expects a key"));
         }
 
         return Ok(Command::StreamInfo {
-            key: arguments.remove(0),
+            key: args.arg(1),
             group: None,
             kind: if kind.eq_ignore_ascii_case(b"STREAM") {
                 StreamInfoKind::Stream
@@ -29,24 +29,21 @@ pub(in crate::protocol) fn parse_xinfo(
     }
 
     if kind.eq_ignore_ascii_case(b"CONSUMERS") {
-        if arguments.len() != 2 {
+        if rest != 2 {
             return Err(ProtocolError::Invalid(
                 "XINFO CONSUMERS expects a key and a group",
             ));
         }
 
-        let group = arguments.pop().expect("length checked");
-        let key = arguments.pop().expect("length checked");
-
-        if group.as_ref().is_empty() {
+        if args.bytes(2).is_empty() {
             return Err(ProtocolError::Invalid(
                 "XINFO CONSUMERS group must not be empty",
             ));
         }
 
         return Ok(Command::StreamInfo {
-            key,
-            group: Some(group),
+            key: args.arg(1),
+            group: Some(args.arg(2)),
             kind: StreamInfoKind::Consumers,
         });
     }
@@ -80,54 +77,55 @@ pub(in crate::protocol) fn parse_stream_add_id(bytes: &[u8]) -> Result<StreamAdd
     Ok(StreamAddId::Explicit(millis, sequence))
 }
 
-pub(in crate::protocol) fn parse_xadd(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() < 4 {
+pub(in crate::protocol) fn parse_xadd<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() < 4 {
         return Err(ProtocolError::Invalid(
             "XADD expects a key, id, and at least one field",
         ));
     }
 
-    let key = arguments.remove(0);
     let mut max_len = None;
     let mut min_id = None;
     let mut delay_ms = None;
     let mut nomkstream = false;
+    let mut index = 1;
 
-    while let Some(argument) = arguments.first() {
-        if argument.as_ref().eq_ignore_ascii_case(b"DELAY") {
+    while index < args.len() {
+        let argument = args.bytes(index);
+
+        if argument.eq_ignore_ascii_case(b"DELAY") {
             if delay_ms.is_some() {
                 return Err(ProtocolError::Invalid("XADD DELAY was repeated"));
             }
 
-            arguments.remove(0);
-            let raw = arguments
-                .first()
-                .ok_or(ProtocolError::Invalid("XADD DELAY expects milliseconds"))?;
+            index += 1;
+
+            if index >= args.len() {
+                return Err(ProtocolError::Invalid("XADD DELAY expects milliseconds"));
+            }
 
             delay_ms = Some(
-                parse_u64(raw.as_ref())
+                parse_u64(args.bytes(index))
                     .map_err(|_| ProtocolError::Invalid("XADD DELAY expects milliseconds"))?,
             );
 
-            arguments.remove(0);
+            index += 1;
 
             continue;
         }
 
-        if argument.as_ref().eq_ignore_ascii_case(b"NOMKSTREAM") {
+        if argument.eq_ignore_ascii_case(b"NOMKSTREAM") {
             if nomkstream {
                 return Err(ProtocolError::Invalid("XADD NOMKSTREAM was repeated"));
             }
 
             nomkstream = true;
-            arguments.remove(0);
+            index += 1;
 
             continue;
         }
 
-        if argument.as_ref().eq_ignore_ascii_case(b"MAXLEN") {
+        if argument.eq_ignore_ascii_case(b"MAXLEN") {
             if max_len.is_some() {
                 return Err(ProtocolError::Invalid("XADD MAXLEN was repeated"));
             }
@@ -138,26 +136,23 @@ pub(in crate::protocol) fn parse_xadd(
                 ));
             }
 
-            arguments.remove(0);
+            index += 1;
 
-            if arguments
-                .first()
-                .is_some_and(|argument| argument.as_ref() == b"~")
-            {
-                arguments.remove(0);
+            if index < args.len() && args.bytes(index) == b"~" {
+                index += 1;
             }
 
-            let count = arguments
-                .first()
-                .ok_or(ProtocolError::Invalid("XADD MAXLEN expects a count"))?;
+            if index >= args.len() {
+                return Err(ProtocolError::Invalid("XADD MAXLEN expects a count"));
+            }
 
-            max_len = Some(parse_usize(count)?);
-            arguments.remove(0);
+            max_len = Some(parse_usize(args.bytes(index))?);
+            index += 1;
 
             continue;
         }
 
-        if argument.as_ref().eq_ignore_ascii_case(b"MINID") {
+        if argument.eq_ignore_ascii_case(b"MINID") {
             if min_id.is_some() {
                 return Err(ProtocolError::Invalid("XADD MINID was repeated"));
             }
@@ -168,8 +163,8 @@ pub(in crate::protocol) fn parse_xadd(
                 ));
             }
 
-            arguments.remove(0);
-            min_id = Some(parse_min_id(&mut arguments)?);
+            index += 1;
+            min_id = Some(parse_min_id(args, &mut index)?);
 
             continue;
         }
@@ -177,28 +172,28 @@ pub(in crate::protocol) fn parse_xadd(
         break;
     }
 
-    let id_bytes = arguments
-        .first()
-        .ok_or(ProtocolError::Invalid("XADD expects an id"))?;
-    let id = parse_stream_add_id(id_bytes.as_ref())?;
+    if index >= args.len() {
+        return Err(ProtocolError::Invalid("XADD expects an id"));
+    }
 
-    arguments.remove(0);
+    let id = parse_stream_add_id(args.bytes(index))?;
 
-    if arguments.is_empty() || !arguments.len().is_multiple_of(2) {
+    index += 1;
+
+    let rest = args.len() - index;
+
+    if rest == 0 || !rest.is_multiple_of(2) {
         return Err(ProtocolError::Invalid("XADD expects field and value pairs"));
     }
 
-    let mut fields = Vec::with_capacity(arguments.len() / 2);
+    let mut fields = Vec::with_capacity(rest / 2);
 
-    while arguments.len() >= 2 {
-        let field = arguments.remove(0);
-        let value = arguments.remove(0);
-
-        fields.push((field, value));
+    for at in (index..args.len()).step_by(2) {
+        fields.push((args.arg(at), args.arg(at + 1)));
     }
 
     Ok(Command::StreamAdd {
-        key,
+        key: args.arg(0),
         id,
         max_len,
         min_id,
@@ -208,29 +203,25 @@ pub(in crate::protocol) fn parse_xadd(
     })
 }
 
-pub(in crate::protocol) fn parse_xrange(
-    reverse: bool,
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() < 3 {
+pub(in crate::protocol) fn parse_xrange<'a>(reverse: bool, args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() < 3 {
         return Err(ProtocolError::Invalid(
             "XRANGE expects a key, start, and end",
         ));
     }
 
-    let key = arguments.remove(0);
-    let first = parse_stream_bound(&arguments.remove(0))?;
-    let second = parse_stream_bound(&arguments.remove(0))?;
+    let first = parse_stream_bound(args.bytes(1))?;
+    let second = parse_stream_bound(args.bytes(2))?;
     let (start, end) = if reverse {
         (second, first)
     } else {
         (first, second)
     };
 
-    let count = parse_stream_count(&arguments)?;
+    let count = parse_stream_count(args, 3)?;
 
     Ok(Command::StreamRange {
-        key,
+        key: args.arg(0),
         start,
         end,
         count,
@@ -238,40 +229,45 @@ pub(in crate::protocol) fn parse_xrange(
     })
 }
 
-pub(in crate::protocol) fn parse_xread(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
+pub(in crate::protocol) fn parse_xread<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
     let mut count = None;
     let mut block = None;
     let mut saw_streams = false;
+    let mut index = 0;
 
-    while let Some(argument) = arguments.first() {
-        if argument.as_ref().eq_ignore_ascii_case(b"BLOCK") {
-            arguments.remove(0);
-            let raw = arguments
-                .first()
-                .ok_or(ProtocolError::Invalid("XREAD BLOCK expects milliseconds"))?;
+    while index < args.len() {
+        let argument = args.bytes(index);
 
-            block = Some(parse_block_millis(raw.as_ref())?);
-            arguments.remove(0);
+        if argument.eq_ignore_ascii_case(b"BLOCK") {
+            index += 1;
 
-            continue;
-        }
+            if index >= args.len() {
+                return Err(ProtocolError::Invalid("XREAD BLOCK expects milliseconds"));
+            }
 
-        if argument.as_ref().eq_ignore_ascii_case(b"COUNT") {
-            arguments.remove(0);
-            let raw = arguments.first().ok_or(ProtocolError::Invalid(
-                "XREAD COUNT expects a positive integer",
-            ))?;
-
-            count = Some(parse_positive_count(raw)?);
-            arguments.remove(0);
+            block = Some(parse_block_millis(args.bytes(index))?);
+            index += 1;
 
             continue;
         }
 
-        if argument.as_ref().eq_ignore_ascii_case(b"STREAMS") {
-            arguments.remove(0);
+        if argument.eq_ignore_ascii_case(b"COUNT") {
+            index += 1;
+
+            if index >= args.len() {
+                return Err(ProtocolError::Invalid(
+                    "XREAD COUNT expects a positive integer",
+                ));
+            }
+
+            count = Some(parse_positive_count(args.bytes(index))?);
+            index += 1;
+
+            continue;
+        }
+
+        if argument.eq_ignore_ascii_case(b"STREAMS") {
+            index += 1;
             saw_streams = true;
 
             break;
@@ -280,18 +276,19 @@ pub(in crate::protocol) fn parse_xread(
         return Err(ProtocolError::Invalid("XREAD expects COUNT and STREAMS"));
     }
 
-    if !saw_streams || arguments.is_empty() || !arguments.len().is_multiple_of(2) {
+    let rest = args.len() - index;
+
+    if !saw_streams || rest == 0 || !rest.is_multiple_of(2) {
         return Err(ProtocolError::Invalid(
             "XREAD expects STREAMS followed by key and id pairs",
         ));
     }
 
-    let half = arguments.len() / 2;
-    let ids = arguments.split_off(half);
+    let half = rest / 2;
     let mut keys = Vec::with_capacity(half);
 
-    for (key, id) in arguments.into_iter().zip(ids) {
-        keys.push((key, parse_stream_cursor(&id)?));
+    for at in index..index + half {
+        keys.push((args.arg(at), parse_stream_cursor(args.bytes(at + half))?));
     }
 
     Ok(Command::StreamRead { count, block, keys })
@@ -307,43 +304,47 @@ pub(in crate::protocol) fn parse_block_millis(bytes: &[u8]) -> Result<Option<u64
     Ok(Some(millis))
 }
 
-pub(in crate::protocol) fn parse_xdel(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() < 2 {
+pub(in crate::protocol) fn parse_xdel<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() < 2 {
         return Err(ProtocolError::Invalid("XDEL expects a key and an id"));
     }
 
-    let key = arguments.remove(0);
-    let mut ids = Vec::with_capacity(arguments.len());
+    let mut ids = Vec::with_capacity(args.len() - 1);
 
-    for id in arguments {
-        let (millis, sequence) = crate::stream::parse_id(id.as_ref()).ok_or(
+    for index in 1..args.len() {
+        let (millis, sequence) = crate::stream::parse_id(args.bytes(index)).ok_or(
             ProtocolError::Invalid("XDEL expects ids of the form ms-seq"),
         )?;
 
         ids.push((millis, sequence));
     }
 
-    Ok(Command::StreamDelete { key, ids })
+    Ok(Command::StreamDelete {
+        key: args.arg(0),
+        ids,
+    })
 }
 
+/// An optional `COUNT n` from argument `from` to the end.
 pub(in crate::protocol) fn parse_stream_count(
-    arguments: &[Bytes<'_>],
+    args: &Args<'_, '_>,
+    from: usize,
 ) -> Result<Option<usize>, ProtocolError> {
-    if arguments.is_empty() {
+    let rest = args.len() - from;
+
+    if rest == 0 {
         return Ok(None);
     }
 
-    if arguments.len() == 2 && arguments[0].as_ref().eq_ignore_ascii_case(b"COUNT") {
-        return Ok(Some(parse_positive_count(&arguments[1])?));
+    if rest == 2 && args.bytes(from).eq_ignore_ascii_case(b"COUNT") {
+        return Ok(Some(parse_positive_count(args.bytes(from + 1))?));
     }
 
     Err(ProtocolError::Invalid("stream range only supports COUNT"))
 }
 
-pub(in crate::protocol) fn parse_positive_count(bytes: &Bytes<'_>) -> Result<usize, ProtocolError> {
-    let count = parse_usize(bytes.as_ref())?;
+pub(in crate::protocol) fn parse_positive_count(bytes: &[u8]) -> Result<usize, ProtocolError> {
+    let count = parse_usize(bytes)?;
 
     if count == 0 {
         return Err(ProtocolError::Invalid("COUNT must be positive"));
@@ -353,187 +354,173 @@ pub(in crate::protocol) fn parse_positive_count(bytes: &Bytes<'_>) -> Result<usi
 }
 
 pub(in crate::protocol) fn parse_stream_cursor(
-    bytes: &Bytes<'_>,
+    bytes: &[u8],
 ) -> Result<crate::stream::StreamCursor, ProtocolError> {
-    if bytes.as_ref() == b"$" {
+    if bytes == b"$" {
         return Ok(crate::stream::StreamCursor::End);
     }
 
-    if bytes.as_ref() == b"0" {
+    if bytes == b"0" {
         return Ok(crate::stream::StreamCursor::After(0, 0));
     }
 
-    let (millis, sequence) = crate::stream::parse_id(bytes.as_ref())
+    let (millis, sequence) = crate::stream::parse_id(bytes)
         .ok_or(ProtocolError::Invalid("XREAD id must be $, 0, or ms-seq"))?;
 
     Ok(crate::stream::StreamCursor::After(millis, sequence))
 }
 
+/// `[~|=] id` at argument `*index`, which is moved past what was read.
 pub(in crate::protocol) fn parse_min_id(
-    arguments: &mut Vec<Bytes<'_>>,
+    args: &Args<'_, '_>,
+    index: &mut usize,
 ) -> Result<(u64, u64), ProtocolError> {
-    if arguments
-        .first()
-        .is_some_and(|argument| argument.as_ref() == b"~" || argument.as_ref() == b"=")
-    {
-        arguments.remove(0);
+    if *index < args.len() && matches!(args.bytes(*index), b"~" | b"=") {
+        *index += 1;
     }
 
-    let raw = arguments
-        .first()
-        .ok_or(ProtocolError::Invalid("MINID expects an id"))?;
+    if *index >= args.len() {
+        return Err(ProtocolError::Invalid("MINID expects an id"));
+    }
 
-    if raw.as_ref().eq_ignore_ascii_case(b"LIMIT") {
+    let raw = args.bytes(*index);
+
+    if raw.eq_ignore_ascii_case(b"LIMIT") {
         return Err(ProtocolError::Invalid("LIMIT is not supported"));
     }
 
-    let id = crate::stream::parse_id(raw.as_ref())
-        .ok_or(ProtocolError::Invalid("MINID id must be ms-seq"))?;
+    let id =
+        crate::stream::parse_id(raw).ok_or(ProtocolError::Invalid("MINID id must be ms-seq"))?;
 
-    arguments.remove(0);
+    *index += 1;
 
-    if arguments
-        .first()
-        .is_some_and(|argument| argument.as_ref().eq_ignore_ascii_case(b"LIMIT"))
-    {
+    if *index < args.len() && args.bytes(*index).eq_ignore_ascii_case(b"LIMIT") {
         return Err(ProtocolError::Invalid("LIMIT is not supported"));
     }
 
     Ok(id)
 }
 
-pub(in crate::protocol) fn parse_xsetid(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() != 2 {
+pub(in crate::protocol) fn parse_xsetid<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() != 2 {
         return Err(ProtocolError::Invalid("XSETID expects a key and an id"));
     }
 
-    let key = arguments.remove(0);
-    let id = crate::stream::parse_id(arguments.remove(0).as_ref())
+    let id = crate::stream::parse_id(args.bytes(1))
         .ok_or(ProtocolError::Invalid("XSETID id must be ms-seq"))?;
 
-    Ok(Command::StreamSetId { key, id })
+    Ok(Command::StreamSetId {
+        key: args.arg(0),
+        id,
+    })
 }
 
-pub(in crate::protocol) fn parse_xtrim(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() < 3 {
+pub(in crate::protocol) fn parse_xtrim<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() < 3 {
         return Err(ProtocolError::Invalid(
             "XTRIM expects a key and MAXLEN or MINID",
         ));
     }
 
-    let key = arguments.remove(0);
-    let strategy = arguments
-        .first()
-        .ok_or(ProtocolError::Invalid("XTRIM expects MAXLEN or MINID"))?;
+    let key = args.arg(0);
+    let strategy = args.bytes(1);
+    let mut index = 2;
 
-    if strategy.as_ref().eq_ignore_ascii_case(b"MINID") {
-        arguments.remove(0);
-        let id = parse_min_id(&mut arguments)?;
+    if strategy.eq_ignore_ascii_case(b"MINID") {
+        let id = parse_min_id(args, &mut index)?;
 
-        if !arguments.is_empty() {
+        if index != args.len() {
             return Err(ProtocolError::Invalid("XTRIM MINID expects one id"));
         }
 
         return Ok(Command::StreamTrimMinId { key, id });
     }
 
-    if !strategy.as_ref().eq_ignore_ascii_case(b"MAXLEN") {
+    if !strategy.eq_ignore_ascii_case(b"MAXLEN") {
         return Err(ProtocolError::Invalid(
             "XTRIM only supports MAXLEN and MINID",
         ));
     }
 
-    arguments.remove(0);
-
-    if arguments
-        .first()
-        .is_some_and(|argument| argument.as_ref() == b"~" || argument.as_ref() == b"=")
-    {
-        arguments.remove(0);
+    if matches!(args.bytes(index), b"~" | b"=") {
+        index += 1;
     }
 
-    if arguments.len() != 1 {
+    if args.len() - index != 1 {
         return Err(ProtocolError::Invalid("XTRIM expects MAXLEN and a count"));
     }
 
     Ok(Command::StreamTrim {
         key,
-        max_len: parse_usize(&arguments.pop().expect("length checked"))?,
+        max_len: parse_usize(args.bytes(index))?,
     })
 }
 
 pub(in crate::protocol) fn parse_group_start(
-    bytes: &Bytes<'_>,
+    bytes: &[u8],
 ) -> Result<crate::stream::GroupStart, ProtocolError> {
-    if bytes.as_ref() == b"$" {
+    if bytes == b"$" {
         return Ok(crate::stream::GroupStart::End);
     }
 
-    if bytes.as_ref() == b"0" {
+    if bytes == b"0" {
         return Ok(crate::stream::GroupStart::Id(0, 0));
     }
 
-    let (millis, sequence) = crate::stream::parse_id(bytes.as_ref())
+    let (millis, sequence) = crate::stream::parse_id(bytes)
         .ok_or(ProtocolError::Invalid("XGROUP id must be $, 0, or ms-seq"))?;
 
     Ok(crate::stream::GroupStart::Id(millis, sequence))
 }
 
-pub(in crate::protocol) fn parse_xgroup(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    let Some(subcommand) = arguments.first().cloned() else {
-        return Err(ProtocolError::Invalid(
-            "XGROUP expects CREATE, CREATECONSUMER, DESTROY, SETID, or DELCONSUMER",
-        ));
-    };
-
-    arguments.remove(0);
-
-    if subcommand.as_ref().eq_ignore_ascii_case(b"DESTROY") {
-        return parse_xgroup_destroy(arguments);
-    }
-
-    if subcommand.as_ref().eq_ignore_ascii_case(b"SETID") {
-        return parse_xgroup_setid(arguments);
-    }
-
-    if subcommand.as_ref().eq_ignore_ascii_case(b"DELCONSUMER") {
-        return parse_xgroup_delconsumer(arguments);
-    }
-
-    if subcommand.as_ref().eq_ignore_ascii_case(b"CREATECONSUMER") {
-        return parse_xgroup_createconsumer(arguments);
-    }
-
-    if !subcommand.as_ref().eq_ignore_ascii_case(b"CREATE") {
+pub(in crate::protocol) fn parse_xgroup<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() == 0 {
         return Err(ProtocolError::Invalid(
             "XGROUP expects CREATE, CREATECONSUMER, DESTROY, SETID, or DELCONSUMER",
         ));
     }
 
-    if arguments.len() < 3 || arguments.len() > 4 {
+    let subcommand = args.bytes(0);
+
+    if subcommand.eq_ignore_ascii_case(b"DESTROY") {
+        return parse_xgroup_destroy(args);
+    }
+
+    if subcommand.eq_ignore_ascii_case(b"SETID") {
+        return parse_xgroup_setid(args);
+    }
+
+    if subcommand.eq_ignore_ascii_case(b"DELCONSUMER") {
+        return parse_xgroup_delconsumer(args);
+    }
+
+    if subcommand.eq_ignore_ascii_case(b"CREATECONSUMER") {
+        return parse_xgroup_createconsumer(args);
+    }
+
+    if !subcommand.eq_ignore_ascii_case(b"CREATE") {
+        return Err(ProtocolError::Invalid(
+            "XGROUP expects CREATE, CREATECONSUMER, DESTROY, SETID, or DELCONSUMER",
+        ));
+    }
+
+    // Arguments after the subcommand.
+    let rest = args.len() - 1;
+
+    if !(3..=4).contains(&rest) {
         return Err(ProtocolError::Invalid(
             "XGROUP CREATE expects a key, group, id, and optional MKSTREAM",
         ));
     }
 
-    let key = arguments.remove(0);
-    let group = arguments.remove(0);
-    let id = arguments.remove(0);
-
-    if group.as_ref().is_empty() {
+    if args.bytes(2).is_empty() {
         return Err(ProtocolError::Invalid(
             "XGROUP group name must not be empty",
         ));
     }
 
-    let mkstream = if let Some(flag) = arguments.first() {
-        if flag.as_ref().eq_ignore_ascii_case(b"MKSTREAM") {
+    let mkstream = if rest == 4 {
+        if args.bytes(4).eq_ignore_ascii_case(b"MKSTREAM") {
             true
         } else {
             return Err(ProtocolError::Invalid(
@@ -545,35 +532,25 @@ pub(in crate::protocol) fn parse_xgroup(
     };
 
     Ok(Command::StreamGroupCreate {
-        key,
-        group,
-        start: parse_group_start(&id)?,
+        key: args.arg(1),
+        group: args.arg(2),
+        start: parse_group_start(args.bytes(3))?,
         mkstream,
     })
 }
 
-pub(in crate::protocol) fn parse_xreadgroup(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments
-        .first()
-        .is_none_or(|argument| !argument.as_ref().eq_ignore_ascii_case(b"GROUP"))
-    {
+pub(in crate::protocol) fn parse_xreadgroup<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() == 0 || !args.bytes(0).eq_ignore_ascii_case(b"GROUP") {
         return Err(ProtocolError::Invalid("XREADGROUP expects GROUP"));
     }
 
-    arguments.remove(0);
-
-    if arguments.len() < 4 {
+    if args.len() - 1 < 4 {
         return Err(ProtocolError::Invalid(
             "XREADGROUP expects a group, consumer, and one stream",
         ));
     }
 
-    let group = arguments.remove(0);
-    let consumer = arguments.remove(0);
-
-    if group.as_ref().is_empty() || consumer.as_ref().is_empty() {
+    if args.bytes(1).is_empty() || args.bytes(2).is_empty() {
         return Err(ProtocolError::Invalid(
             "XREADGROUP group and consumer must not be empty",
         ));
@@ -582,30 +559,30 @@ pub(in crate::protocol) fn parse_xreadgroup(
     let mut count = None;
     let mut block = None;
     let mut noack = false;
+    let mut index = 3;
 
-    while arguments
-        .first()
-        .is_some_and(|argument| !argument.as_ref().eq_ignore_ascii_case(b"STREAMS"))
-    {
-        let option = arguments.remove(0);
+    while index < args.len() && !args.bytes(index).eq_ignore_ascii_case(b"STREAMS") {
+        let option = args.bytes(index);
 
-        if option.as_ref().eq_ignore_ascii_case(b"COUNT") {
-            let Some(value) = arguments.first() else {
+        index += 1;
+
+        if option.eq_ignore_ascii_case(b"COUNT") {
+            if index >= args.len() {
                 return Err(ProtocolError::Invalid("XREADGROUP COUNT expects a number"));
-            };
+            }
 
-            count = Some(parse_positive_count(value)?);
-            arguments.remove(0);
-        } else if option.as_ref().eq_ignore_ascii_case(b"BLOCK") {
-            let Some(value) = arguments.first() else {
+            count = Some(parse_positive_count(args.bytes(index))?);
+            index += 1;
+        } else if option.eq_ignore_ascii_case(b"BLOCK") {
+            if index >= args.len() {
                 return Err(ProtocolError::Invalid(
                     "XREADGROUP BLOCK expects milliseconds",
                 ));
-            };
+            }
 
-            block = Some(parse_block_millis(value)?);
-            arguments.remove(0);
-        } else if option.as_ref().eq_ignore_ascii_case(b"NOACK") {
+            block = Some(parse_block_millis(args.bytes(index))?);
+            index += 1;
+        } else if option.eq_ignore_ascii_case(b"NOACK") {
             noack = true;
         } else {
             return Err(ProtocolError::Invalid(
@@ -614,221 +591,198 @@ pub(in crate::protocol) fn parse_xreadgroup(
         }
     }
 
-    if arguments
-        .first()
-        .is_none_or(|argument| !argument.as_ref().eq_ignore_ascii_case(b"STREAMS"))
-    {
+    if index >= args.len() || !args.bytes(index).eq_ignore_ascii_case(b"STREAMS") {
         return Err(ProtocolError::Invalid("XREADGROUP expects STREAMS"));
     }
 
-    arguments.remove(0);
+    index += 1;
 
-    if arguments.len() != 2 {
+    if args.len() - index != 2 {
         return Err(ProtocolError::Invalid("XREADGROUP reads one stream"));
     }
 
-    let key = arguments.remove(0);
-    let id = arguments.remove(0);
-
-    if id.as_ref() != b">" {
+    if args.bytes(index + 1) != b">" {
         return Err(ProtocolError::Invalid(
             "XREADGROUP only reads new messages with >",
         ));
     }
 
     Ok(Command::StreamGroupRead {
-        key,
-        group,
-        consumer,
+        key: args.arg(index),
+        group: args.arg(1),
+        consumer: args.arg(2),
         count,
         block,
         noack,
     })
 }
 
-pub(in crate::protocol) fn parse_xgroup_destroy(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() != 2 {
+/// `XGROUP DESTROY key group`, after the subcommand.
+pub(in crate::protocol) fn parse_xgroup_destroy<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() - 1 != 2 {
         return Err(ProtocolError::Invalid(
             "XGROUP DESTROY expects a key and a group",
         ));
     }
 
-    let key = arguments.remove(0);
-    let group = arguments.remove(0);
-
-    if group.as_ref().is_empty() {
+    if args.bytes(2).is_empty() {
         return Err(ProtocolError::Invalid(
             "XGROUP group name must not be empty",
         ));
     }
 
-    Ok(Command::StreamGroupDestroy { key, group })
+    Ok(Command::StreamGroupDestroy {
+        key: args.arg(1),
+        group: args.arg(2),
+    })
 }
 
-pub(in crate::protocol) fn parse_xgroup_setid(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() != 3 {
+/// `XGROUP SETID key group id`, after the subcommand.
+pub(in crate::protocol) fn parse_xgroup_setid<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() - 1 != 3 {
         return Err(ProtocolError::Invalid(
             "XGROUP SETID expects a key, group, and id",
         ));
     }
 
-    let key = arguments.remove(0);
-    let group = arguments.remove(0);
-    let id = arguments.remove(0);
-
-    if group.as_ref().is_empty() {
+    if args.bytes(2).is_empty() {
         return Err(ProtocolError::Invalid(
             "XGROUP group name must not be empty",
         ));
     }
 
     Ok(Command::StreamGroupSetId {
-        key,
-        group,
-        start: parse_group_start(&id)?,
+        key: args.arg(1),
+        group: args.arg(2),
+        start: parse_group_start(args.bytes(3))?,
     })
 }
 
-pub(in crate::protocol) fn parse_xgroup_createconsumer(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() != 3 {
+/// `XGROUP CREATECONSUMER key group consumer`, after the subcommand.
+pub(in crate::protocol) fn parse_xgroup_createconsumer<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() - 1 != 3 {
         return Err(ProtocolError::Invalid(
             "XGROUP CREATECONSUMER expects a key, group, and consumer",
         ));
     }
 
-    let key = arguments.remove(0);
-    let group = arguments.remove(0);
-    let consumer = arguments.remove(0);
-
-    if group.as_ref().is_empty() || consumer.as_ref().is_empty() {
+    if args.bytes(2).is_empty() || args.bytes(3).is_empty() {
         return Err(ProtocolError::Invalid(
             "XGROUP group and consumer must not be empty",
         ));
     }
 
     Ok(Command::StreamGroupCreateConsumer {
-        key,
-        group,
-        consumer,
+        key: args.arg(1),
+        group: args.arg(2),
+        consumer: args.arg(3),
     })
 }
 
-pub(in crate::protocol) fn parse_xgroup_delconsumer(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() != 3 {
+/// `XGROUP DELCONSUMER key group consumer`, after the subcommand.
+pub(in crate::protocol) fn parse_xgroup_delconsumer<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() - 1 != 3 {
         return Err(ProtocolError::Invalid(
             "XGROUP DELCONSUMER expects a key, group, and consumer",
         ));
     }
 
-    let key = arguments.remove(0);
-    let group = arguments.remove(0);
-    let consumer = arguments.remove(0);
-
-    if group.as_ref().is_empty() || consumer.as_ref().is_empty() {
+    if args.bytes(2).is_empty() || args.bytes(3).is_empty() {
         return Err(ProtocolError::Invalid(
             "XGROUP group and consumer must not be empty",
         ));
     }
 
     Ok(Command::StreamGroupDelConsumer {
-        key,
-        group,
-        consumer,
+        key: args.arg(1),
+        group: args.arg(2),
+        consumer: args.arg(3),
     })
 }
 
-pub(in crate::protocol) fn parse_xack(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() < 3 {
+pub(in crate::protocol) fn parse_xack<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() < 3 {
         return Err(ProtocolError::Invalid(
             "XACK expects a key, group, and at least one id",
         ));
     }
 
-    let key = arguments.remove(0);
-    let group = arguments.remove(0);
-
-    if group.as_ref().is_empty() {
+    if args.bytes(1).is_empty() {
         return Err(ProtocolError::Invalid("XACK group name must not be empty"));
     }
 
-    let mut ids = Vec::with_capacity(arguments.len());
+    let mut ids = Vec::with_capacity(args.len() - 2);
 
-    for id in arguments {
-        let (millis, sequence) = crate::stream::parse_id(id.as_ref()).ok_or(
+    for index in 2..args.len() {
+        let (millis, sequence) = crate::stream::parse_id(args.bytes(index)).ok_or(
             ProtocolError::Invalid("XACK expects ids of the form ms-seq"),
         )?;
 
         ids.push((millis, sequence));
     }
 
-    Ok(Command::StreamAck { key, group, ids })
+    Ok(Command::StreamAck {
+        key: args.arg(0),
+        group: args.arg(1),
+        ids,
+    })
 }
 
-pub(in crate::protocol) fn parse_xpending(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() < 2 {
+pub(in crate::protocol) fn parse_xpending<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() < 2 {
         return Err(ProtocolError::Invalid("XPENDING expects a key and a group"));
     }
 
-    let key = arguments.remove(0);
-    let group = arguments.remove(0);
-
-    if group.as_ref().is_empty() {
+    if args.bytes(1).is_empty() {
         return Err(ProtocolError::Invalid(
             "XPENDING group name must not be empty",
         ));
     }
 
-    if arguments.is_empty() {
+    let key = args.arg(0);
+    let group = args.arg(1);
+
+    if args.len() == 2 {
         return Ok(Command::StreamPending { key, group });
     }
 
     let mut min_idle = None;
+    let mut index = 2;
 
-    if arguments[0].as_ref().eq_ignore_ascii_case(b"IDLE") {
-        arguments.remove(0);
+    if args.bytes(index).eq_ignore_ascii_case(b"IDLE") {
+        index += 1;
 
-        if arguments.is_empty() {
+        if index >= args.len() {
             return Err(ProtocolError::Invalid(
                 "XPENDING IDLE expects a millisecond count",
             ));
         }
 
-        min_idle = Some(parse_u64(arguments.remove(0).as_ref())?);
+        min_idle = Some(parse_u64(args.bytes(index))?);
+        index += 1;
     }
 
-    if !(3..=4).contains(&arguments.len()) {
+    let rest = args.len() - index;
+
+    if !(3..=4).contains(&rest) {
         return Err(ProtocolError::Invalid(
             "XPENDING expects a start id, an end id, a count, and an optional consumer",
         ));
     }
 
-    let start = parse_stream_bound(&arguments.remove(0))?;
-    let end = parse_stream_bound(&arguments.remove(0))?;
-    let count = parse_usize(arguments.remove(0).as_ref())?;
-    let consumer = if arguments.is_empty() {
+    let start = parse_stream_bound(args.bytes(index))?;
+    let end = parse_stream_bound(args.bytes(index + 1))?;
+    let count = parse_usize(args.bytes(index + 2))?;
+    let consumer = if rest == 3 {
         None
     } else {
-        let consumer = arguments.remove(0);
-
-        if consumer.as_ref().is_empty() {
+        if args.bytes(index + 3).is_empty() {
             return Err(ProtocolError::Invalid(
                 "XPENDING consumer must not be empty",
             ));
         }
 
-        Some(consumer)
+        Some(args.arg(index + 3))
     };
 
     Ok(Command::StreamPendingRange {
@@ -842,23 +796,18 @@ pub(in crate::protocol) fn parse_xpending(
     })
 }
 
-pub(in crate::protocol) fn parse_xautoclaim(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() < 5 {
+pub(in crate::protocol) fn parse_xautoclaim<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() < 5 {
         return Err(ProtocolError::Invalid(
             "XAUTOCLAIM expects a key, group, consumer, min-idle time, and start id",
         ));
     }
 
-    let key = arguments.remove(0);
-    let group = arguments.remove(0);
-    let consumer = arguments.remove(0);
-    let min_idle = parse_u64(arguments.remove(0).as_ref())?;
-    let start = crate::stream::parse_id(arguments.remove(0).as_ref())
+    let min_idle = parse_u64(args.bytes(3))?;
+    let start = crate::stream::parse_id(args.bytes(4))
         .ok_or(ProtocolError::Invalid("XAUTOCLAIM start id must be ms-seq"))?;
 
-    if group.as_ref().is_empty() || consumer.as_ref().is_empty() {
+    if args.bytes(1).is_empty() || args.bytes(2).is_empty() {
         return Err(ProtocolError::Invalid(
             "XAUTOCLAIM group and consumer must not be empty",
         ));
@@ -866,16 +815,21 @@ pub(in crate::protocol) fn parse_xautoclaim(
 
     let mut count = None;
     let mut just_id = false;
+    let mut index = 5;
 
-    while !arguments.is_empty() {
-        let name = arguments.remove(0);
+    while index < args.len() {
+        let name = args.bytes(index);
 
-        if name.as_ref().eq_ignore_ascii_case(b"COUNT") {
-            if count.is_some() || arguments.is_empty() {
+        index += 1;
+
+        if name.eq_ignore_ascii_case(b"COUNT") {
+            if count.is_some() || index >= args.len() {
                 return Err(ProtocolError::Invalid("XAUTOCLAIM COUNT needs one integer"));
             }
 
-            let value = parse_u64(arguments.remove(0).as_ref())?;
+            let value = parse_u64(args.bytes(index))?;
+
+            index += 1;
 
             if value == 0 {
                 return Err(ProtocolError::Invalid(
@@ -887,7 +841,7 @@ pub(in crate::protocol) fn parse_xautoclaim(
             continue;
         }
 
-        if name.as_ref().eq_ignore_ascii_case(b"JUSTID") {
+        if name.eq_ignore_ascii_case(b"JUSTID") {
             if just_id {
                 return Err(ProtocolError::Invalid("XAUTOCLAIM JUSTID was repeated"));
             }
@@ -900,9 +854,9 @@ pub(in crate::protocol) fn parse_xautoclaim(
     }
 
     Ok(Command::StreamAutoclaim {
-        key,
-        group,
-        consumer,
+        key: args.arg(0),
+        group: args.arg(1),
+        consumer: args.arg(2),
         min_idle,
         start,
         count,
@@ -910,21 +864,16 @@ pub(in crate::protocol) fn parse_xautoclaim(
     })
 }
 
-pub(in crate::protocol) fn parse_xclaim(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() < 5 {
+pub(in crate::protocol) fn parse_xclaim<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() < 5 {
         return Err(ProtocolError::Invalid(
             "XCLAIM expects a key, group, consumer, min-idle time, and at least one id",
         ));
     }
 
-    let key = arguments.remove(0);
-    let group = arguments.remove(0);
-    let consumer = arguments.remove(0);
-    let min_idle = parse_u64(arguments.remove(0).as_ref())?;
+    let min_idle = parse_u64(args.bytes(3))?;
 
-    if group.as_ref().is_empty() || consumer.as_ref().is_empty() {
+    if args.bytes(1).is_empty() || args.bytes(2).is_empty() {
         return Err(ProtocolError::Invalid(
             "XCLAIM group and consumer must not be empty",
         ));
@@ -933,9 +882,12 @@ pub(in crate::protocol) fn parse_xclaim(
     let mut ids = Vec::new();
     let mut options = ClaimOptions::plain();
     let mut parsing_options = false;
+    let mut index = 4;
 
-    while !arguments.is_empty() {
-        let token = arguments[0].as_ref();
+    while index < args.len() {
+        let token = args.bytes(index);
+
+        index += 1;
 
         if !parsing_options && !xclaim_option(token) {
             let (millis, sequence) = crate::stream::parse_id(token).ok_or(
@@ -943,14 +895,13 @@ pub(in crate::protocol) fn parse_xclaim(
             )?;
 
             ids.push((millis, sequence));
-            arguments.remove(0);
             continue;
         }
 
         parsing_options = true;
-        let name = arguments.remove(0);
+        let name = token;
 
-        if name.as_ref().eq_ignore_ascii_case(b"IDLE") {
+        if name.eq_ignore_ascii_case(b"IDLE") {
             if options.idle.is_some() {
                 return Err(ProtocolError::Invalid("XCLAIM IDLE was repeated"));
             }
@@ -961,8 +912,8 @@ pub(in crate::protocol) fn parse_xclaim(
                 ));
             }
 
-            options.idle = Some(parse_xclaim_u64(&mut arguments, b"IDLE")?);
-        } else if name.as_ref().eq_ignore_ascii_case(b"TIME") {
+            options.idle = Some(parse_xclaim_u64(args, &mut index, b"IDLE")?);
+        } else if name.eq_ignore_ascii_case(b"TIME") {
             if options.time.is_some() {
                 return Err(ProtocolError::Invalid("XCLAIM TIME was repeated"));
             }
@@ -973,41 +924,41 @@ pub(in crate::protocol) fn parse_xclaim(
                 ));
             }
 
-            options.time = Some(parse_xclaim_u64(&mut arguments, b"TIME")?);
-        } else if name.as_ref().eq_ignore_ascii_case(b"RETRYCOUNT") {
+            options.time = Some(parse_xclaim_u64(args, &mut index, b"TIME")?);
+        } else if name.eq_ignore_ascii_case(b"RETRYCOUNT") {
             if options.retry_count.is_some() {
                 return Err(ProtocolError::Invalid("XCLAIM RETRYCOUNT was repeated"));
             }
 
-            options.retry_count = Some(parse_xclaim_u64(&mut arguments, b"RETRYCOUNT")?);
-        } else if name.as_ref().eq_ignore_ascii_case(b"FORCE") {
+            options.retry_count = Some(parse_xclaim_u64(args, &mut index, b"RETRYCOUNT")?);
+        } else if name.eq_ignore_ascii_case(b"FORCE") {
             if options.force {
                 return Err(ProtocolError::Invalid("XCLAIM FORCE was repeated"));
             }
 
             options.force = true;
-        } else if name.as_ref().eq_ignore_ascii_case(b"JUSTID") {
+        } else if name.eq_ignore_ascii_case(b"JUSTID") {
             if options.just_id {
                 return Err(ProtocolError::Invalid("XCLAIM JUSTID was repeated"));
             }
 
             options.just_id = true;
-        } else if name.as_ref().eq_ignore_ascii_case(b"LASTID") {
+        } else if name.eq_ignore_ascii_case(b"LASTID") {
             if options.last_id.is_some() {
                 return Err(ProtocolError::Invalid("XCLAIM LASTID was repeated"));
             }
 
-            let Some(id) = arguments.first() else {
+            if index >= args.len() {
                 return Err(ProtocolError::Invalid(
                     "XCLAIM LASTID expects an id of the form ms-seq",
                 ));
-            };
+            }
 
-            let parsed = crate::stream::parse_id(id.as_ref()).ok_or(ProtocolError::Invalid(
-                "XCLAIM LASTID expects an id of the form ms-seq",
-            ))?;
+            let parsed = crate::stream::parse_id(args.bytes(index)).ok_or(
+                ProtocolError::Invalid("XCLAIM LASTID expects an id of the form ms-seq"),
+            )?;
 
-            arguments.remove(0);
+            index += 1;
             options.last_id = Some(parsed);
         } else {
             return Err(ProtocolError::Invalid("XCLAIM option is not supported"));
@@ -1021,9 +972,9 @@ pub(in crate::protocol) fn parse_xclaim(
     }
 
     Ok(Command::StreamClaimPending {
-        key,
-        group,
-        consumer,
+        key: args.arg(0),
+        group: args.arg(1),
+        consumer: args.arg(2),
         min_idle,
         ids,
         options,
@@ -1039,36 +990,38 @@ pub(in crate::protocol) fn xclaim_option(token: &[u8]) -> bool {
         || token.eq_ignore_ascii_case(b"LASTID")
 }
 
+/// The number after an `XCLAIM` option at argument `*index`, which is moved past it.
 pub(in crate::protocol) fn parse_xclaim_u64(
-    arguments: &mut Vec<Bytes<'_>>,
+    args: &Args<'_, '_>,
+    index: &mut usize,
     name: &[u8],
 ) -> Result<u64, ProtocolError> {
-    let Some(value) = arguments.first() else {
+    if *index >= args.len() {
         return Err(ProtocolError::Invalid(match name {
             b"IDLE" => "XCLAIM IDLE expects a millisecond count",
             b"TIME" => "XCLAIM TIME expects a unix millisecond time",
             _ => "XCLAIM RETRYCOUNT expects a count",
         }));
-    };
+    }
 
-    let parsed = parse_u64(value.as_ref())?;
+    let parsed = parse_u64(args.bytes(*index))?;
 
-    arguments.remove(0);
+    *index += 1;
     Ok(parsed)
 }
 
 pub(in crate::protocol) fn parse_stream_bound(
-    bytes: &Bytes<'_>,
+    bytes: &[u8],
 ) -> Result<crate::stream::StreamBound, ProtocolError> {
-    if bytes.as_ref() == b"-" {
+    if bytes == b"-" {
         return Ok(crate::stream::StreamBound::Min);
     }
 
-    if bytes.as_ref() == b"+" {
+    if bytes == b"+" {
         return Ok(crate::stream::StreamBound::Max);
     }
 
-    let (millis, sequence) = crate::stream::parse_id(bytes.as_ref())
+    let (millis, sequence) = crate::stream::parse_id(bytes)
         .ok_or(ProtocolError::Invalid("stream id must be -, +, or ms-seq"))?;
 
     Ok(crate::stream::StreamBound::Id(millis, sequence))

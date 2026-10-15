@@ -1,7 +1,9 @@
-//! Compile-time command table. One row per command: dispatch, arity, flags and
-//! key positions live here. Rows built with `CommandSpec::migrated` parse [`Args`] straight
-//! from the input frame; rows built with `legacy!` still hand their `parse/commands.rs`
-//! function an argument vector (`Args::rest`, one allocation) until they move over.
+//! Compile-time command table. One row per command: dispatch, arity, flags, key positions
+//! and the parser live here. Every parser reads [`Args`]: spans straight into the input
+//! frame, so a command whose `Command` keeps only single arguments allocates nothing to
+//! parse. Parsers live here, in `direct.rs`, and in `parse/` (`parse/commands.rs` and the
+//! per-type files); a body several rows share takes the command name or a flag, and each
+//! row gets a small named wrapper.
 
 use super::parse::commands;
 use super::*;
@@ -16,7 +18,7 @@ pub(crate) mod flags {
 }
 
 /// Arguments after the command name. Either spans into the input frame (no allocation) or
-/// an already-built argument vector (scripts, `read_command`, legacy callers).
+/// an already-built argument vector (scripts, inline commands, `read_command`).
 pub(crate) struct Args<'a, 's> {
     source: ArgSource<'a, 's>,
 }
@@ -91,8 +93,7 @@ pub(crate) struct CommandSpec {
     pub(crate) last_key: i8,
     pub(crate) step: i8,
     pub(crate) categories: &'static [&'static str],
-    /// Every row has one today; see the module note for the two parser styles.
-    pub(crate) parse: Option<ParseFn>,
+    pub(crate) parse: ParseFn,
 }
 
 impl CommandSpec {
@@ -127,21 +128,9 @@ impl CommandSpec {
             last_key: keys.1,
             step: keys.2,
             categories,
-            parse: Some(parse),
+            parse,
         }
     }
-}
-
-/// A row for a command whose parser still takes the argument vector: `$parse` is the
-/// per-command function in `parse/commands.rs`, `$name` the name it is called with.
-macro_rules! legacy {
-    ($parse:path, $name:literal) => {{
-        fn parse<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
-            $parse($name, args.rest(0))
-        }
-
-        parse
-    }};
 }
 
 pub(crate) fn commands() -> &'static [CommandSpec] {
@@ -735,7 +724,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["connection", "slow"],
-        legacy!(commands::cmd_wait, b"WAIT"),
+        commands::cmd_wait,
     ),
     CommandSpec::migrated(
         "ruvio",
@@ -743,7 +732,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         FAST,
         (0, 0, 0),
         &["connection", "fast"],
-        legacy!(commands::cmd_ruvio, b"RUVIO"),
+        commands::cmd_ruvio,
     ),
     CommandSpec::migrated(
         "cluster",
@@ -751,7 +740,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["slow"],
-        legacy!(commands::cmd_cluster, b"CLUSTER"),
+        commands::cmd_cluster,
     ),
     CommandSpec::migrated(
         "readonly",
@@ -759,7 +748,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         FAST,
         (0, 0, 0),
         &["connection", "fast"],
-        legacy!(commands::cmd_readonly, b"READONLY"),
+        parse_readonly,
     ),
     CommandSpec::migrated(
         "readwrite",
@@ -767,7 +756,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         FAST,
         (0, 0, 0),
         &["connection", "fast"],
-        legacy!(commands::cmd_readonly, b"READWRITE"),
+        parse_readwrite,
     ),
     CommandSpec::migrated(
         "config",
@@ -775,7 +764,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["admin", "slow", "dangerous"],
-        legacy!(commands::cmd_config, b"CONFIG"),
+        commands::cmd_config,
     ),
     CommandSpec::migrated(
         "info",
@@ -783,7 +772,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["admin", "slow", "dangerous"],
-        legacy!(commands::cmd_info, b"INFO"),
+        commands::cmd_info,
     ),
     CommandSpec::migrated(
         "save",
@@ -791,7 +780,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["admin", "slow", "dangerous"],
-        legacy!(commands::cmd_save, b"SAVE"),
+        commands::cmd_save,
     ),
     CommandSpec::migrated(
         "bgsave",
@@ -799,7 +788,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["admin", "slow", "dangerous"],
-        legacy!(commands::cmd_bgsave, b"BGSAVE"),
+        commands::cmd_bgsave,
     ),
     CommandSpec::migrated(
         "json.get",
@@ -807,7 +796,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "slow"],
-        legacy!(commands::cmd_json_get, b"JSON.GET"),
+        parse_json_get,
     ),
     CommandSpec::migrated(
         "json.mget",
@@ -815,7 +804,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, -2, 1),
         &["read", "slow"],
-        legacy!(commands::cmd_json_mget, b"JSON.MGET"),
+        commands::cmd_json_mget,
     ),
     CommandSpec::migrated(
         "json.del",
@@ -823,7 +812,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_json_get, b"JSON.DEL"),
+        parse_json_del,
     ),
     CommandSpec::migrated(
         "json.forget",
@@ -831,7 +820,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_json_get, b"JSON.FORGET"),
+        parse_json_forget,
     ),
     CommandSpec::migrated(
         "json.set",
@@ -839,7 +828,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_json_set, b"JSON.SET"),
+        commands::cmd_json_set,
     ),
     CommandSpec::migrated(
         "json.merge",
@@ -847,7 +836,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_json_merge, b"JSON.MERGE"),
+        commands::cmd_json_merge,
     ),
     CommandSpec::migrated(
         "json.index",
@@ -855,7 +844,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (0, 0, 0),
         &["write", "slow"],
-        legacy!(commands::cmd_json_index, b"JSON.INDEX"),
+        parse_json_index,
     ),
     CommandSpec::migrated(
         "json.find",
@@ -863,7 +852,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (0, 0, 0),
         &["read", "slow"],
-        legacy!(commands::cmd_json_index, b"JSON.FIND"),
+        parse_json_find,
     ),
     CommandSpec::migrated(
         "json.type",
@@ -871,7 +860,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.TYPE"),
+        parse_json_type,
     ),
     CommandSpec::migrated(
         "json.strlen",
@@ -879,7 +868,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.STRLEN"),
+        parse_json_strlen,
     ),
     CommandSpec::migrated(
         "json.arrlen",
@@ -887,7 +876,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.ARRLEN"),
+        parse_json_arrlen,
     ),
     CommandSpec::migrated(
         "json.objkeys",
@@ -895,7 +884,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.OBJKEYS"),
+        parse_json_objkeys,
     ),
     CommandSpec::migrated(
         "json.numincrby",
@@ -903,7 +892,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.NUMINCRBY"),
+        parse_json_numincrby,
     ),
     CommandSpec::migrated(
         "json.toggle",
@@ -911,7 +900,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.TOGGLE"),
+        parse_json_toggle,
     ),
     CommandSpec::migrated(
         "json.arrappend",
@@ -919,7 +908,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.ARRAPPEND"),
+        parse_json_arrappend,
     ),
     CommandSpec::migrated(
         "json.clear",
@@ -927,7 +916,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.CLEAR"),
+        parse_json_clear,
     ),
     CommandSpec::migrated(
         "json.objlen",
@@ -935,7 +924,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.OBJLEN"),
+        parse_json_objlen,
     ),
     CommandSpec::migrated(
         "json.strappend",
@@ -943,7 +932,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.STRAPPEND"),
+        parse_json_strappend,
     ),
     CommandSpec::migrated(
         "json.nummultby",
@@ -951,7 +940,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.NUMMULTBY"),
+        parse_json_nummultby,
     ),
     CommandSpec::migrated(
         "json.arrinsert",
@@ -959,7 +948,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.ARRINSERT"),
+        parse_json_arrinsert,
     ),
     CommandSpec::migrated(
         "json.arrpop",
@@ -967,7 +956,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.ARRPOP"),
+        parse_json_arrpop,
     ),
     CommandSpec::migrated(
         "json.arrtrim",
@@ -975,7 +964,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.ARRTRIM"),
+        parse_json_arrtrim,
     ),
     CommandSpec::migrated(
         "json.arrindex",
@@ -983,15 +972,16 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "slow"],
-        legacy!(commands::cmd_json_op, b"JSON.ARRINDEX"),
+        parse_json_arrindex,
     ),
+    // JMERGE is an alias of JSON.MERGE and shares its parser.
     CommandSpec::migrated(
         "jmerge",
         4,
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_json_merge, b"JMERGE"),
+        commands::cmd_json_merge,
     ),
     CommandSpec::migrated(
         "lease",
@@ -999,7 +989,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["keyspace", "write", "fast"],
-        legacy!(commands::cmd_lease, b"LEASE"),
+        commands::cmd_lease,
     ),
     CommandSpec::migrated(
         "semaphore",
@@ -1007,7 +997,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["keyspace", "write", "fast"],
-        legacy!(commands::cmd_semaphore, b"SEMAPHORE"),
+        commands::cmd_semaphore,
     ),
     CommandSpec::migrated(
         "limit",
@@ -1015,7 +1005,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["keyspace", "write", "fast"],
-        legacy!(commands::cmd_limit, b"LIMIT"),
+        commands::cmd_limit,
     ),
     CommandSpec::migrated(
         "idem",
@@ -1023,7 +1013,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["keyspace", "write"],
-        legacy!(commands::cmd_idem, b"IDEM"),
+        commands::cmd_idem,
     ),
     CommandSpec::migrated(
         "once",
@@ -1031,7 +1021,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["keyspace", "write", "fast"],
-        legacy!(commands::cmd_once, b"ONCE"),
+        commands::cmd_once,
     ),
     CommandSpec::migrated(
         "take",
@@ -1039,7 +1029,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | FAST,
         (1, 1, 1),
         &["string", "write", "fast"],
-        legacy!(commands::cmd_take, b"TAKE"),
+        commands::cmd_take,
     ),
     CommandSpec::migrated(
         "getex",
@@ -1047,7 +1037,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["string", "write", "fast"],
-        legacy!(commands::cmd_getex, b"GETEX"),
+        commands::cmd_getex,
     ),
     CommandSpec::migrated(
         "release",
@@ -1055,7 +1045,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | FAST,
         (1, 1, 1),
         &["keyspace", "write", "fast"],
-        legacy!(commands::cmd_release, b"RELEASE"),
+        commands::cmd_release,
     ),
     CommandSpec::migrated(
         "setv",
@@ -1063,7 +1053,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["string", "write", "fast"],
-        legacy!(commands::cmd_setv, b"SETV"),
+        commands::cmd_setv,
     ),
     CommandSpec::migrated(
         "changes",
@@ -1071,7 +1061,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (0, 0, 0),
         &["keyspace", "read", "slow"],
-        legacy!(commands::cmd_changes, b"CHANGES"),
+        commands::cmd_changes,
     ),
     CommandSpec::migrated(
         "mset",
@@ -1111,7 +1101,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (0, 0, 0),
         &["keyspace", "read", "slow"],
-        legacy!(commands::cmd_scan, b"SCAN"),
+        parse_scan,
     ),
     CommandSpec::migrated(
         "dbsize",
@@ -1135,7 +1125,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (0, 0, 0),
         &["keyspace", "write", "slow", "dangerous"],
-        legacy!(commands::cmd_flushdb, b"FLUSHDB"),
+        parse_flushdb,
     ),
     CommandSpec::migrated(
         "flushall",
@@ -1143,7 +1133,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (0, 0, 0),
         &["keyspace", "write", "slow", "dangerous"],
-        legacy!(commands::cmd_flushdb, b"FLUSHALL"),
+        parse_flushall,
     ),
     CommandSpec::migrated(
         "swapdb",
@@ -1151,7 +1141,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | FAST,
         (0, 0, 0),
         &["keyspace", "write", "fast", "dangerous"],
-        legacy!(commands::cmd_swapdb, b"SWAPDB"),
+        commands::cmd_swapdb,
     ),
     CommandSpec::migrated(
         "move",
@@ -1159,7 +1149,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | FAST,
         (1, 1, 1),
         &["keyspace", "write", "fast"],
-        legacy!(commands::cmd_move, b"MOVE"),
+        commands::cmd_move,
     ),
     CommandSpec::migrated(
         "del",
@@ -1183,7 +1173,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["pubsub", "slow"],
-        legacy!(commands::cmd_subscribe, b"SUBSCRIBE"),
+        commands::cmd_subscribe,
     ),
     CommandSpec::migrated(
         "unsubscribe",
@@ -1191,7 +1181,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["pubsub", "slow"],
-        legacy!(commands::cmd_unsubscribe, b"UNSUBSCRIBE"),
+        commands::cmd_unsubscribe,
     ),
     CommandSpec::migrated(
         "psubscribe",
@@ -1199,7 +1189,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["pubsub", "slow"],
-        legacy!(commands::cmd_psubscribe, b"PSUBSCRIBE"),
+        commands::cmd_psubscribe,
     ),
     CommandSpec::migrated(
         "punsubscribe",
@@ -1207,7 +1197,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["pubsub", "slow"],
-        legacy!(commands::cmd_punsubscribe, b"PUNSUBSCRIBE"),
+        commands::cmd_punsubscribe,
     ),
     CommandSpec::migrated(
         "spublish",
@@ -1215,7 +1205,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         FAST,
         (1, 1, 1),
         &["pubsub", "fast"],
-        legacy!(commands::cmd_spublish, b"SPUBLISH"),
+        commands::cmd_spublish,
     ),
     CommandSpec::migrated(
         "ssubscribe",
@@ -1223,7 +1213,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (1, -1, 1),
         &["pubsub", "slow"],
-        legacy!(commands::cmd_ssubscribe, b"SSUBSCRIBE"),
+        commands::cmd_ssubscribe,
     ),
     CommandSpec::migrated(
         "sunsubscribe",
@@ -1231,7 +1221,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (1, -1, 1),
         &["pubsub", "slow"],
-        legacy!(commands::cmd_sunsubscribe, b"SUNSUBSCRIBE"),
+        commands::cmd_sunsubscribe,
     ),
     CommandSpec::migrated(
         "hello",
@@ -1239,7 +1229,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         FAST,
         (0, 0, 0),
         &["connection", "fast"],
-        legacy!(commands::cmd_hello, b"HELLO"),
+        parse_hello,
     ),
     CommandSpec::migrated(
         "client",
@@ -1247,7 +1237,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["connection", "slow"],
-        legacy!(commands::cmd_client, b"CLIENT"),
+        parse_client,
     ),
     CommandSpec::migrated(
         "auth",
@@ -1255,7 +1245,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         FAST,
         (0, 0, 0),
         &["connection", "fast"],
-        legacy!(commands::cmd_auth, b"AUTH"),
+        commands::cmd_auth,
     ),
     CommandSpec::migrated(
         "acl",
@@ -1263,7 +1253,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["admin", "slow", "dangerous"],
-        legacy!(commands::cmd_acl, b"ACL"),
+        parse_acl_command,
     ),
     CommandSpec::migrated(
         "expire",
@@ -1415,7 +1405,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | BLOCKING,
         (1, -2, 1),
         &["write", "list", "slow", "blocking"],
-        legacy!(commands::cmd_blpop, b"BLPOP"),
+        parse_blpop,
     ),
     CommandSpec::migrated(
         "brpop",
@@ -1423,7 +1413,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | BLOCKING,
         (1, -2, 1),
         &["write", "list", "slow", "blocking"],
-        legacy!(commands::cmd_blpop, b"BRPOP"),
+        parse_brpop,
     ),
     CommandSpec::migrated(
         "sadd",
@@ -1471,7 +1461,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, -1, 1),
         &["read", "set", "slow"],
-        legacy!(commands::cmd_sinter, b"SINTER"),
+        commands::cmd_sinter,
     ),
     CommandSpec::migrated(
         "sunion",
@@ -1479,7 +1469,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, -1, 1),
         &["read", "set", "slow"],
-        legacy!(commands::cmd_sunion, b"SUNION"),
+        commands::cmd_sunion,
     ),
     CommandSpec::migrated(
         "sdiff",
@@ -1487,7 +1477,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, -1, 1),
         &["read", "set", "slow"],
-        legacy!(commands::cmd_sdiff, b"SDIFF"),
+        commands::cmd_sdiff,
     ),
     CommandSpec::migrated(
         "sinterstore",
@@ -1495,7 +1485,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, -1, 1),
         &["write", "set", "slow"],
-        legacy!(commands::cmd_sinterstore, b"SINTERSTORE"),
+        commands::cmd_sinterstore,
     ),
     CommandSpec::migrated(
         "sunionstore",
@@ -1503,7 +1493,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, -1, 1),
         &["write", "set", "slow"],
-        legacy!(commands::cmd_sunionstore, b"SUNIONSTORE"),
+        commands::cmd_sunionstore,
     ),
     CommandSpec::migrated(
         "sdiffstore",
@@ -1511,7 +1501,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, -1, 1),
         &["write", "set", "slow"],
-        legacy!(commands::cmd_sdiffstore, b"SDIFFSTORE"),
+        commands::cmd_sdiffstore,
     ),
     CommandSpec::migrated(
         "spop",
@@ -1535,7 +1525,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 2, 1),
         &["write", "set", "fast"],
-        legacy!(commands::cmd_smove, b"SMOVE"),
+        commands::cmd_smove,
     ),
     CommandSpec::migrated(
         "hincrby",
@@ -1559,7 +1549,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "hash", "slow"],
-        legacy!(commands::cmd_hscan, b"HSCAN"),
+        parse_hash_scan,
     ),
     CommandSpec::migrated(
         "sscan",
@@ -1567,7 +1557,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "set", "slow"],
-        legacy!(commands::cmd_sscan, b"SSCAN"),
+        commands::cmd_sscan,
     ),
     CommandSpec::migrated(
         "zscan",
@@ -1575,7 +1565,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "sortedset", "slow"],
-        legacy!(commands::cmd_zscan, b"ZSCAN"),
+        commands::cmd_zscan,
     ),
     CommandSpec::migrated(
         "hstrlen",
@@ -1663,7 +1653,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["write", "hash", "fast"],
-        legacy!(commands::cmd_hexpire, b"HEXPIRE"),
+        parse_hexpire,
     ),
     CommandSpec::migrated(
         "hpexpire",
@@ -1671,7 +1661,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["write", "hash", "fast"],
-        legacy!(commands::cmd_hexpire, b"HPEXPIRE"),
+        parse_hpexpire,
     ),
     CommandSpec::migrated(
         "hexpireat",
@@ -1679,7 +1669,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["write", "hash", "fast"],
-        legacy!(commands::cmd_hexpire, b"HEXPIREAT"),
+        parse_hexpireat,
     ),
     CommandSpec::migrated(
         "hpexpireat",
@@ -1687,7 +1677,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["write", "hash", "fast"],
-        legacy!(commands::cmd_hexpire, b"HPEXPIREAT"),
+        parse_hpexpireat,
     ),
     CommandSpec::migrated(
         "httl",
@@ -1695,7 +1685,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY | FAST,
         (1, 1, 1),
         &["read", "hash", "fast"],
-        legacy!(commands::cmd_httl, b"HTTL"),
+        parse_httl,
     ),
     CommandSpec::migrated(
         "hpttl",
@@ -1703,7 +1693,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY | FAST,
         (1, 1, 1),
         &["read", "hash", "fast"],
-        legacy!(commands::cmd_httl, b"HPTTL"),
+        parse_hpttl,
     ),
     CommandSpec::migrated(
         "hexpiretime",
@@ -1711,7 +1701,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY | FAST,
         (1, 1, 1),
         &["read", "hash", "fast"],
-        legacy!(commands::cmd_httl, b"HEXPIRETIME"),
+        parse_hexpiretime,
     ),
     CommandSpec::migrated(
         "hpexpiretime",
@@ -1719,7 +1709,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY | FAST,
         (1, 1, 1),
         &["read", "hash", "fast"],
-        legacy!(commands::cmd_httl, b"HPEXPIRETIME"),
+        parse_hpexpiretime,
     ),
     CommandSpec::migrated(
         "hpersist",
@@ -1727,7 +1717,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | FAST,
         (1, 1, 1),
         &["write", "hash", "fast"],
-        legacy!(commands::cmd_httl, b"HPERSIST"),
+        parse_hpersist,
     ),
     CommandSpec::migrated(
         "zadd",
@@ -1743,7 +1733,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "sortedset", "slow"],
-        legacy!(commands::cmd_zrange, b"ZRANGE"),
+        parse_zrange,
     ),
     CommandSpec::migrated(
         "zrevrange",
@@ -1751,7 +1741,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "sortedset", "slow"],
-        legacy!(commands::cmd_zrange, b"ZREVRANGE"),
+        parse_zrevrange,
     ),
     CommandSpec::migrated(
         "zrangebyscore",
@@ -1759,7 +1749,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "sortedset", "slow"],
-        legacy!(commands::cmd_zrangebyscore, b"ZRANGEBYSCORE"),
+        parse_sorted_set_range_by_score,
     ),
     CommandSpec::migrated(
         "zrangebylex",
@@ -1767,7 +1757,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "sortedset", "slow"],
-        legacy!(commands::cmd_zrangebylex, b"ZRANGEBYLEX"),
+        parse_zrangebylex,
     ),
     CommandSpec::migrated(
         "zrevrangebylex",
@@ -1775,7 +1765,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "sortedset", "slow"],
-        legacy!(commands::cmd_zrangebylex, b"ZREVRANGEBYLEX"),
+        parse_zrevrangebylex,
     ),
     CommandSpec::migrated(
         "zrem",
@@ -1831,7 +1821,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | FAST,
         (1, 1, 1),
         &["write", "sortedset", "fast"],
-        legacy!(commands::cmd_zpopmin, b"ZPOPMIN"),
+        parse_zpopmin,
     ),
     CommandSpec::migrated(
         "zpopmax",
@@ -1839,7 +1829,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | FAST,
         (1, 1, 1),
         &["write", "sortedset", "fast"],
-        legacy!(commands::cmd_zpopmin, b"ZPOPMAX"),
+        parse_zpopmax,
     ),
     CommandSpec::migrated(
         "bzpopmin",
@@ -1847,7 +1837,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | FAST | BLOCKING,
         (1, -2, 1),
         &["write", "sortedset", "fast", "blocking"],
-        legacy!(commands::cmd_bzpopmin, b"BZPOPMIN"),
+        parse_bzpopmin,
     ),
     CommandSpec::migrated(
         "bzpopmax",
@@ -1855,7 +1845,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | FAST | BLOCKING,
         (1, -2, 1),
         &["write", "sortedset", "fast", "blocking"],
-        legacy!(commands::cmd_bzpopmin, b"BZPOPMAX"),
+        parse_bzpopmax,
     ),
     CommandSpec::migrated(
         "zremrangebyrank",
@@ -1863,7 +1853,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (1, 1, 1),
         &["write", "sortedset", "slow"],
-        legacy!(commands::cmd_zremrangebyrank, b"ZREMRANGEBYRANK"),
+        parse_zremrangebyrank,
     ),
     CommandSpec::migrated(
         "zremrangebyscore",
@@ -1871,7 +1861,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (1, 1, 1),
         &["write", "sortedset", "slow"],
-        legacy!(commands::cmd_zremrangebyrank, b"ZREMRANGEBYSCORE"),
+        parse_zremrangebyscore,
     ),
     CommandSpec::migrated(
         "zremrangebylex",
@@ -1879,7 +1869,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (1, 1, 1),
         &["write", "sortedset", "slow"],
-        legacy!(commands::cmd_zremrangebyrank, b"ZREMRANGEBYLEX"),
+        parse_zremrangebylex,
     ),
     CommandSpec::migrated(
         "geoadd",
@@ -1887,7 +1877,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "geo", "slow"],
-        legacy!(commands::cmd_geoadd, b"GEOADD"),
+        parse_geo_add,
     ),
     CommandSpec::migrated(
         "geodist",
@@ -1895,7 +1885,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "geo", "slow"],
-        legacy!(commands::cmd_geodist, b"GEODIST"),
+        parse_geo_dist,
     ),
     CommandSpec::migrated(
         "geopos",
@@ -1903,7 +1893,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "geo", "slow"],
-        legacy!(commands::cmd_geopos, b"GEOPOS"),
+        parse_geo_pos,
     ),
     CommandSpec::migrated(
         "geohash",
@@ -1911,7 +1901,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "geo", "slow"],
-        legacy!(commands::cmd_geohash, b"GEOHASH"),
+        parse_geo_hash,
     ),
     CommandSpec::migrated(
         "geosearch",
@@ -1919,7 +1909,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "geo", "slow"],
-        legacy!(commands::cmd_geosearch, b"GEOSEARCH"),
+        commands::cmd_geosearch,
     ),
     CommandSpec::migrated(
         "geosearchstore",
@@ -1927,7 +1917,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 2, 1),
         &["write", "geo", "slow"],
-        legacy!(commands::cmd_geosearchstore, b"GEOSEARCHSTORE"),
+        commands::cmd_geosearchstore,
     ),
     CommandSpec::migrated(
         "georadius",
@@ -1935,7 +1925,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["read", "write", "geo", "slow"],
-        legacy!(commands::cmd_georadius, b"GEORADIUS"),
+        commands::cmd_georadius,
     ),
     CommandSpec::migrated(
         "georadiusbymember",
@@ -1943,7 +1933,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["read", "write", "geo", "slow"],
-        legacy!(commands::cmd_georadiusbymember, b"GEORADIUSBYMEMBER"),
+        commands::cmd_georadiusbymember,
     ),
     CommandSpec::migrated(
         "bf.reserve",
@@ -1951,7 +1941,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_bf_reserve, b"BF.RESERVE"),
+        commands::cmd_bf_reserve,
     ),
     CommandSpec::migrated(
         "bf.add",
@@ -1959,7 +1949,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["write", "fast"],
-        legacy!(commands::cmd_bf_add, b"BF.ADD"),
+        parse_bf_add,
     ),
     CommandSpec::migrated(
         "bf.madd",
@@ -1967,7 +1957,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_bf_many, b"BF.MADD"),
+        parse_bf_madd,
     ),
     CommandSpec::migrated(
         "bf.mexists",
@@ -1975,7 +1965,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["read", "slow"],
-        legacy!(commands::cmd_bf_many, b"BF.MEXISTS"),
+        parse_bf_mexists,
     ),
     CommandSpec::migrated(
         "bf.insert",
@@ -1983,7 +1973,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "slow"],
-        legacy!(commands::cmd_bf_insert, b"BF.INSERT"),
+        commands::cmd_bf_insert,
     ),
     CommandSpec::migrated(
         "bf.info",
@@ -1991,7 +1981,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY | FAST,
         (1, 1, 1),
         &["read", "fast"],
-        legacy!(commands::cmd_bf_info, b"BF.INFO"),
+        parse_bf_info,
     ),
     CommandSpec::migrated(
         "bf.card",
@@ -1999,7 +1989,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY | FAST,
         (1, 1, 1),
         &["read", "fast"],
-        legacy!(commands::cmd_bf_info, b"BF.CARD"),
+        parse_bf_card,
     ),
     CommandSpec::migrated(
         "bf.exists",
@@ -2007,7 +1997,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY | FAST,
         (1, 1, 1),
         &["read", "fast"],
-        legacy!(commands::cmd_bf_add, b"BF.EXISTS"),
+        parse_bf_exists,
     ),
     CommandSpec::migrated(
         "xadd",
@@ -2015,7 +2005,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["stream", "write", "fast"],
-        legacy!(commands::cmd_xadd, b"XADD"),
+        parse_xadd,
     ),
     CommandSpec::migrated(
         "xlen",
@@ -2031,7 +2021,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["stream", "read", "slow"],
-        legacy!(commands::cmd_xrange, b"XRANGE"),
+        parse_xrange,
     ),
     CommandSpec::migrated(
         "xrevrange",
@@ -2039,7 +2029,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["stream", "read", "slow"],
-        legacy!(commands::cmd_xrange, b"XREVRANGE"),
+        parse_xrevrange,
     ),
     CommandSpec::migrated(
         "xread",
@@ -2047,7 +2037,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY | BLOCKING,
         (0, 0, 0),
         &["stream", "read", "slow"],
-        legacy!(commands::cmd_xread, b"XREAD"),
+        parse_xread,
     ),
     CommandSpec::migrated(
         "xdel",
@@ -2055,7 +2045,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | FAST,
         (1, 1, 1),
         &["stream", "write", "fast"],
-        legacy!(commands::cmd_xdel, b"XDEL"),
+        parse_xdel,
     ),
     CommandSpec::migrated(
         "xtrim",
@@ -2063,7 +2053,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (1, 1, 1),
         &["stream", "write", "slow"],
-        legacy!(commands::cmd_xtrim, b"XTRIM"),
+        parse_xtrim,
     ),
     CommandSpec::migrated(
         "xsetid",
@@ -2071,7 +2061,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["stream", "write", "fast"],
-        legacy!(commands::cmd_xsetid, b"XSETID"),
+        parse_xsetid,
     ),
     CommandSpec::migrated(
         "xinfo",
@@ -2079,7 +2069,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (2, 2, 1),
         &["stream", "read", "slow"],
-        legacy!(commands::cmd_xinfo, b"XINFO"),
+        parse_xinfo,
     ),
     CommandSpec::migrated(
         "xgroup",
@@ -2087,7 +2077,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (2, 2, 1),
         &["stream", "write", "slow"],
-        legacy!(commands::cmd_xgroup, b"XGROUP"),
+        parse_xgroup,
     ),
     CommandSpec::migrated(
         "xreadgroup",
@@ -2095,7 +2085,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | BLOCKING,
         (0, 0, 0),
         &["stream", "write", "slow"],
-        legacy!(commands::cmd_xreadgroup, b"XREADGROUP"),
+        parse_xreadgroup,
     ),
     CommandSpec::migrated(
         "xack",
@@ -2103,7 +2093,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | FAST,
         (1, 1, 1),
         &["stream", "write", "fast"],
-        legacy!(commands::cmd_xack, b"XACK"),
+        parse_xack,
     ),
     CommandSpec::migrated(
         "xpending",
@@ -2111,7 +2101,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         READONLY,
         (1, 1, 1),
         &["stream", "read", "slow"],
-        legacy!(commands::cmd_xpending, b"XPENDING"),
+        parse_xpending,
     ),
     CommandSpec::migrated(
         "xclaim",
@@ -2119,7 +2109,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["stream", "write", "fast"],
-        legacy!(commands::cmd_xclaim, b"XCLAIM"),
+        parse_xclaim,
     ),
     CommandSpec::migrated(
         "xautoclaim",
@@ -2127,7 +2117,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["stream", "write", "fast"],
-        legacy!(commands::cmd_xautoclaim, b"XAUTOCLAIM"),
+        parse_xautoclaim,
     ),
     CommandSpec::migrated(
         "multi",
@@ -2135,7 +2125,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         FAST,
         (0, 0, 0),
         &["transaction", "fast"],
-        legacy!(commands::cmd_multi, b"MULTI"),
+        commands::cmd_multi,
     ),
     CommandSpec::migrated(
         "exec",
@@ -2143,7 +2133,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["transaction", "slow"],
-        legacy!(commands::cmd_exec, b"EXEC"),
+        commands::cmd_exec,
     ),
     CommandSpec::migrated(
         "discard",
@@ -2151,7 +2141,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         FAST,
         (0, 0, 0),
         &["transaction", "fast"],
-        legacy!(commands::cmd_discard, b"DISCARD"),
+        commands::cmd_discard,
     ),
     CommandSpec::migrated(
         "watch",
@@ -2159,7 +2149,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         FAST,
         (1, -1, 1),
         &["transaction", "fast"],
-        legacy!(commands::cmd_watch, b"WATCH"),
+        commands::cmd_watch,
     ),
     CommandSpec::migrated(
         "unwatch",
@@ -2167,7 +2157,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         FAST,
         (0, 0, 0),
         &["transaction", "fast"],
-        legacy!(commands::cmd_unwatch, b"UNWATCH"),
+        commands::cmd_unwatch,
     ),
     CommandSpec::migrated(
         "eval",
@@ -2175,7 +2165,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (0, 0, 0),
         &["scripting", "slow", "write"],
-        legacy!(commands::cmd_eval, b"EVAL"),
+        parse_eval,
     ),
     CommandSpec::migrated(
         "evalsha",
@@ -2183,7 +2173,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (0, 0, 0),
         &["scripting", "slow", "write"],
-        legacy!(commands::cmd_eval, b"EVALSHA"),
+        parse_evalsha,
     ),
     CommandSpec::migrated(
         "fcall",
@@ -2191,7 +2181,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         WRITE,
         (0, 0, 0),
         &["scripting", "slow", "write"],
-        legacy!(commands::cmd_fcall, b"FCALL"),
+        parse_fcall,
     ),
     CommandSpec::migrated(
         "script",
@@ -2199,7 +2189,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["scripting", "slow"],
-        legacy!(commands::cmd_script, b"SCRIPT"),
+        parse_script,
     ),
     CommandSpec::migrated(
         "function",
@@ -2207,7 +2197,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         0,
         (0, 0, 0),
         &["scripting", "slow"],
-        legacy!(commands::cmd_function, b"FUNCTION"),
+        parse_function,
     ),
     CommandSpec::migrated(
         "command",
@@ -4116,6 +4106,232 @@ fn parse_command_meta<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolEr
     })
 }
 
+// Rows whose body in `parse/commands.rs` serves several commands: each passes its own name.
+
+fn parse_readonly<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_readonly(b"READONLY", args)
+}
+
+fn parse_readwrite<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_readonly(b"READWRITE", args)
+}
+
+fn parse_json_get<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_get(b"JSON.GET", args)
+}
+
+fn parse_json_del<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_get(b"JSON.DEL", args)
+}
+
+fn parse_json_forget<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_get(b"JSON.FORGET", args)
+}
+
+fn parse_json_index<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_index(b"JSON.INDEX", args)
+}
+
+fn parse_json_find<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_index(b"JSON.FIND", args)
+}
+
+fn parse_json_type<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.TYPE", args)
+}
+
+fn parse_json_strlen<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.STRLEN", args)
+}
+
+fn parse_json_arrlen<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.ARRLEN", args)
+}
+
+fn parse_json_objkeys<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.OBJKEYS", args)
+}
+
+fn parse_json_numincrby<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.NUMINCRBY", args)
+}
+
+fn parse_json_toggle<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.TOGGLE", args)
+}
+
+fn parse_json_arrappend<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.ARRAPPEND", args)
+}
+
+fn parse_json_clear<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.CLEAR", args)
+}
+
+fn parse_json_objlen<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.OBJLEN", args)
+}
+
+fn parse_json_strappend<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.STRAPPEND", args)
+}
+
+fn parse_json_nummultby<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.NUMMULTBY", args)
+}
+
+fn parse_json_arrinsert<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.ARRINSERT", args)
+}
+
+fn parse_json_arrpop<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.ARRPOP", args)
+}
+
+fn parse_json_arrtrim<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.ARRTRIM", args)
+}
+
+fn parse_json_arrindex<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_json_op(b"JSON.ARRINDEX", args)
+}
+
+fn parse_flushdb<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_flushdb(b"FLUSHDB", args)
+}
+
+fn parse_flushall<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_flushdb(b"FLUSHALL", args)
+}
+
+fn parse_bzpopmin<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_bzpopmin(b"BZPOPMIN", args)
+}
+
+fn parse_bzpopmax<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_bzpopmin(b"BZPOPMAX", args)
+}
+
+fn parse_bf_add<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_bf_add(b"BF.ADD", args)
+}
+
+fn parse_bf_madd<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_bf_many(b"BF.MADD", args)
+}
+
+fn parse_bf_mexists<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_bf_many(b"BF.MEXISTS", args)
+}
+
+fn parse_bf_info<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_bf_info(b"BF.INFO", args)
+}
+
+fn parse_bf_card<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_bf_info(b"BF.CARD", args)
+}
+
+fn parse_bf_exists<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_bf_add(b"BF.EXISTS", args)
+}
+
+fn parse_blpop<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_blpop(b"BLPOP", args)
+}
+
+fn parse_brpop<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_blpop(b"BRPOP", args)
+}
+
+fn parse_eval<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_eval(b"EVAL", args)
+}
+
+fn parse_evalsha<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_eval(b"EVALSHA", args)
+}
+
+fn parse_hexpire<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_hexpire(b"HEXPIRE", args)
+}
+
+fn parse_hpexpire<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_hexpire(b"HPEXPIRE", args)
+}
+
+fn parse_hexpireat<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_hexpire(b"HEXPIREAT", args)
+}
+
+fn parse_hpexpireat<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_hexpire(b"HPEXPIREAT", args)
+}
+
+fn parse_httl<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_httl(b"HTTL", args)
+}
+
+fn parse_hpttl<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_httl(b"HPTTL", args)
+}
+
+fn parse_hexpiretime<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_httl(b"HEXPIRETIME", args)
+}
+
+fn parse_hpexpiretime<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_httl(b"HPEXPIRETIME", args)
+}
+
+fn parse_hpersist<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_httl(b"HPERSIST", args)
+}
+
+fn parse_zrange<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_zrange(b"ZRANGE", args)
+}
+
+fn parse_zrevrange<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_zrange(b"ZREVRANGE", args)
+}
+
+fn parse_zrangebylex<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_zrangebylex(b"ZRANGEBYLEX", args)
+}
+
+fn parse_zrevrangebylex<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_zrangebylex(b"ZREVRANGEBYLEX", args)
+}
+
+fn parse_zpopmin<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_zpopmin(b"ZPOPMIN", args)
+}
+
+fn parse_zpopmax<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_zpopmin(b"ZPOPMAX", args)
+}
+
+fn parse_zremrangebyrank<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_zremrangebyrank(b"ZREMRANGEBYRANK", args)
+}
+
+fn parse_zremrangebyscore<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_zremrangebyrank(b"ZREMRANGEBYSCORE", args)
+}
+
+fn parse_zremrangebylex<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_zremrangebyrank(b"ZREMRANGEBYLEX", args)
+}
+
+fn parse_xrange<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_xrange(b"XRANGE", args)
+}
+
+fn parse_xrevrange<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_xrange(b"XREVRANGE", args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4148,7 +4364,7 @@ mod tests {
             let spec = lookup(name.as_bytes()).unwrap();
             let arguments: Vec<Bytes<'_>> =
                 (1..spec.arity).map(|_| Cow::Borrowed(&b"k"[..])).collect();
-            let parse = spec.parse.unwrap();
+            let parse = spec.parse;
 
             assert!(parse(&Args::from_slice(&arguments)).is_ok(), "{name}");
 

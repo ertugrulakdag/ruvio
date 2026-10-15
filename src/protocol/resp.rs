@@ -91,14 +91,9 @@ pub fn parse_command_with_limits(
     let spans = spans.as_slice();
     let (start, end) = spans[0];
     let name = &bytes[start as usize..end as usize];
-    let command = match super::table::lookup(name).and_then(|spec| spec.parse) {
-        Some(parse) => parse(&super::table::Args::from_frame(bytes, &spans[1..])),
-        None => parse_arguments(
-            spans
-                .iter()
-                .map(|&(start, end)| Cow::Borrowed(&bytes[start as usize..end as usize]))
-                .collect(),
-        ),
+    let command = match super::table::lookup(name) {
+        Some(spec) => (spec.parse)(&super::table::Args::from_frame(bytes, &spans[1..])),
+        None => Err(ProtocolError::Invalid("unknown command")),
     };
 
     let command = match command {
