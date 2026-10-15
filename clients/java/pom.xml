@@ -114,7 +114,7 @@
   </build>
 
   <profiles>
-    <!-- Central needs signed artifacts. Used only by the release workflow: mvn -P release deploy -->
+    <!-- Central needs signed artifacts. Used only by the release workflow: mvn -P release verify, then scripts/central_upload.sh -->
     <profile>
       <id>release</id>
       <build>

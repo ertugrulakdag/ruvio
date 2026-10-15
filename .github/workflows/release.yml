@@ -402,25 +402,15 @@ jobs:
       - run: chmod +x server-bin/ruvio
       - name: Test against a live server
         run: scripts/run_with_servers.sh "$PWD/server-bin/ruvio" 17400 -- mvn -B -f clients/java/pom.xml verify
-      - name: Sign and upload to Maven Central
+      - name: Build and sign the Maven artifacts
+        env:
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: mvn -B -f clients/java/pom.xml -P release verify -DskipTests
+      - name: Upload to Maven Central
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
-          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: mvn -B -f clients/java/pom.xml -P release deploy -DskipTests -Dcentral.autoPublish=${{ inputs.maven_auto_publish }}
-      - name: List the Central bundle
-        if: always()
-        run: |
-          unzip -Z1 clients/java/target/central-publishing/central-bundle.zip | sort || true
-          ls -la clients/java/target/central-publishing clients/java/target/central-staging || true
-      - name: Keep the Central bundle for inspection
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: central-bundle
-          path: clients/java/target/central-publishing/central-bundle.zip
-          if-no-files-found: ignore
-          retention-days: 3
+        run: scripts/central_upload.sh ${{ inputs.maven_auto_publish && 'automatic' || 'user-managed' }}
 
   server-binaries:
     needs: versions
