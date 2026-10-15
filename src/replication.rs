@@ -579,7 +579,34 @@ fn transaction_needs_snapshot(shard: &mut KvShard, db: u8, mutations: &[OwnedMut
                 kinds.set(db, source, None);
                 kinds.set(db, destination, Some(ValueKind::Set));
             }
-            _ => {}
+            // An empty push or add creates nothing, and a group without MKSTREAM needs a
+            // stream that already exists.
+            OwnedMutation::ListPushFront { .. }
+            | OwnedMutation::ListPushBack { .. }
+            | OwnedMutation::SetAdd { .. }
+            | OwnedMutation::HashSet { .. }
+            | OwnedMutation::SortedSetAdd { .. }
+            | OwnedMutation::StreamGroupCreate { .. } => {}
+            // These change a value in place: they never create or remove a key. A replica
+            // keeps fields past their deadline until the primary deletes them.
+            OwnedMutation::ListSet { .. }
+            | OwnedMutation::ListInsert { .. }
+            | OwnedMutation::HashFieldExpire { .. }
+            | OwnedMutation::HashFieldPersist { .. }
+            | OwnedMutation::StreamDelete { .. }
+            | OwnedMutation::StreamSetId { .. }
+            | OwnedMutation::StreamClaim { .. }
+            | OwnedMutation::StreamReclaim { .. }
+            | OwnedMutation::StreamForceClaim { .. }
+            | OwnedMutation::StreamAck { .. }
+            | OwnedMutation::StreamGroupDestroy { .. }
+            | OwnedMutation::StreamGroupSetId { .. }
+            | OwnedMutation::StreamGroupDelConsumer { .. }
+            | OwnedMutation::StreamGroupCreateConsumer { .. }
+            | OwnedMutation::StreamHold { .. }
+            | OwnedMutation::StreamGroupAdvance { .. } => {}
+            // A transaction record never nests another one.
+            OwnedMutation::Transaction { .. } => {}
         }
         if missing {
             break;
@@ -612,7 +639,61 @@ fn needs_snapshot(shard: &mut KvShard, mutation: &OwnedMutation) -> bool {
         OwnedMutation::Persist { key } | OwnedMutation::ExpireAt { key, .. } => {
             shard.value_kind(key).is_none()
         }
-        _ => false,
+        // Every other record applies whether or not the replica holds the key.
+        OwnedMutation::IdempotencyPut { .. }
+        | OwnedMutation::SetBytes { .. }
+        | OwnedMutation::SetBytesExpiring { .. }
+        | OwnedMutation::JsonPut { .. }
+        | OwnedMutation::SetInteger { .. }
+        | OwnedMutation::Delete { .. }
+        | OwnedMutation::ListPushFront { .. }
+        | OwnedMutation::ListPopFront { .. }
+        | OwnedMutation::ListPushBack { .. }
+        | OwnedMutation::ListPopBack { .. }
+        | OwnedMutation::ListTrim { .. }
+        | OwnedMutation::SetRange { .. }
+        | OwnedMutation::ListSet { .. }
+        | OwnedMutation::ListInsert { .. }
+        | OwnedMutation::ListRemove { .. }
+        | OwnedMutation::SetAdd { .. }
+        | OwnedMutation::SetRemove { .. }
+        | OwnedMutation::SetStore { .. }
+        | OwnedMutation::SetMove { .. }
+        | OwnedMutation::HashSet { .. }
+        | OwnedMutation::HashDelete { .. }
+        | OwnedMutation::HashFieldExpire { .. }
+        | OwnedMutation::HashFieldPersist { .. }
+        | OwnedMutation::SemaphoreAcquire { .. }
+        | OwnedMutation::SemaphoreRelease { .. }
+        | OwnedMutation::SortedSetAdd { .. }
+        | OwnedMutation::SortedSetRemove { .. }
+        | OwnedMutation::BloomReserve { .. }
+        | OwnedMutation::BloomAdd { .. }
+        | OwnedMutation::BloomAddMany { .. }
+        | OwnedMutation::StreamAppend { .. }
+        | OwnedMutation::StreamDelete { .. }
+        | OwnedMutation::StreamTrim { .. }
+        | OwnedMutation::StreamTrimMinId { .. }
+        | OwnedMutation::StreamSetId { .. }
+        | OwnedMutation::StreamGroupCreate { .. }
+        | OwnedMutation::StreamClaim { .. }
+        | OwnedMutation::StreamReclaim { .. }
+        | OwnedMutation::StreamForceClaim { .. }
+        | OwnedMutation::StreamAck { .. }
+        | OwnedMutation::StreamGroupDestroy { .. }
+        | OwnedMutation::StreamGroupSetId { .. }
+        | OwnedMutation::StreamGroupDelConsumer { .. }
+        | OwnedMutation::StreamGroupCreateConsumer { .. }
+        | OwnedMutation::StreamHold { .. }
+        | OwnedMutation::StreamGroupAdvance { .. }
+        | OwnedMutation::FlushDatabase
+        | OwnedMutation::FlushAll
+        | OwnedMutation::SwapDatabases { .. }
+        | OwnedMutation::LeasePut { .. }
+        | OwnedMutation::SetVersioned { .. }
+        | OwnedMutation::LimitPut { .. }
+        | OwnedMutation::OncePut { .. }
+        | OwnedMutation::Transaction { .. } => false,
     }
 }
 

@@ -289,7 +289,14 @@ fn hand_kept_command_lists_agree_with_the_table() {
     eprintln!("acl name mismatches:\n{}", acl_name.join("\n"));
     eprintln!("write flag mismatches:\n{}", write_flag.join("\n"));
     eprintln!("blocking without the table flag: {blocking:?}");
-    assert!(acl_name.is_empty() && write_flag.is_empty() && blocking.is_empty());
+    // A row no generated form parses is a row this test cannot check: give the search the
+    // words it needs (`WORDS`) instead of letting the command drop out silently.
+    assert!(
+        never_parsed.is_empty()
+            && acl_name.is_empty()
+            && write_flag.is_empty()
+            && blocking.is_empty()
+    );
 }
 
 /// Rows with keys the table cannot place by position: after a `numkeys` argument or a
