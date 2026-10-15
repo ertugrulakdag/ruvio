@@ -266,6 +266,47 @@ def validate(matrix: dict, root: Path = ROOT) -> list[str]:
                 f"{client.get('id')} pins {client.get('version')} but the package is {released}"
             )
 
+    errors.extend(stated_command_counts(len(commands), root))
+    return errors
+
+
+# Phrases that state how many commands the matrix holds, in the site and the READMEs.
+COUNT_PHRASES = [
+    re.compile(r"\b(\d{2,4}) of \1 commands"),
+    re.compile(r"\ball (\d{2,4}) (?:matrix |listed )?commands"),
+    re.compile(r"\bthe (\d{2,4})-command (?:matrix|check)"),
+    re.compile(r"\b(\d{2,4}) (?:matrix|listed) commands"),
+    re.compile(r"\*\*(\d{2,4})\*\* commands"),
+    re.compile(r"\((\d{2,4})/(\d{2,4})\b"),
+]
+
+
+def stated_command_counts(count: int, root: Path = ROOT) -> list[str]:
+    """A page that says "287 of 287 commands" must say the matrix's real count."""
+    files = list((root / "site").glob("*.html")) + [root / "README.md"]
+    files += [path for path in (root / "docs").glob("*.md")]
+    files += [
+        path
+        for path in (root / "clients").glob("**/README.md")
+        if "node_modules" not in path.parts and "target" not in path.parts
+    ]
+    errors = []
+
+    for path in sorted(files):
+        if not path.exists():
+            continue
+
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for pattern in COUNT_PHRASES:
+                for match in pattern.finditer(line):
+                    numbers = {int(group) for group in match.groups()}
+
+                    if numbers != {count}:
+                        errors.append(
+                            f"{path.relative_to(root)}:{line_number} says {match.group(0)!r}; "
+                            f"the matrix has {count} commands"
+                        )
+
     return errors
 
 

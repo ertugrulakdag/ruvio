@@ -26,7 +26,7 @@ Most scripts take the path to a built `ruvio` binary and start their own server.
 | `test_area.sh` | Tests of one area, or a client suite against `RUVIO_HOST:RUVIO_PORT` |
 | `run_with_servers.sh` | Starts a standalone server and a 3-shard cluster, exports `RUVIO_TEST_ADDR`, runs a command |
 | `run_client_suites.py` | Rust and C# client suites plus the .NET integrations against one server |
-| `check_compatibility_matrix.py` | Matrix against the parser, the table, the docs, coverage files and client manifests |
+| `check_compatibility_matrix.py` | Matrix against the parser, the table, the docs, coverage files, client manifests, and command counts stated in the site and READMEs |
 | `check_instruction_baseline.py` | iai-callgrind counts against `benchmark/baselines/instructions.json` (PR gate, +2%) |
 | `check_package_metadata.py` | Package descriptions, links and licenses (Python 3.11+) |
 | `resp_conformance.py` | RESP2 conformance smoke |
@@ -61,6 +61,7 @@ Most scripts take the path to a built `ruvio` binary and start their own server.
 | Script | Purpose |
 | --- | --- |
 | `redis_compare.py`, `redis_compare_features.py`, `docker_compare.py` | Ruvio vs Redis tables published on the site |
+| `site_chrome.py` | Writes the shared head links, menu and footer from `site_chrome/` into every site page; `--check` runs in `check.sh` |
 | `render_compare_pages.py` | Renders a `redis_compare_features.py` result into the site pages |
 | `render_azure_pages.py`, `render_x86_pages.py` | Rendered two dated site sections; frozen, refuse to run without `--force` |
 | `bench_matrix.py`, `perf_matrix.py`, `benchmark.sh`, `benchmark_regression.py`, `pinned_run.py` | Throughput matrices and repeatable samples |

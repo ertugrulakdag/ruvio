@@ -16,7 +16,7 @@ Where the code lives, how to check a change quickly, and every place a new comma
 | `Directory.Build.props`, `Directory.Packages.props` | Settings and package metadata shared by every .NET project, and the one version of each NuGet dependency (a `PackageReference` has no `Version`) |
 | `docs/` | Reference docs and `compatibility-matrix.json`, the list of supported commands |
 | `scripts/` | Local gates, release helpers, fault and benchmark harnesses ([scripts/README.md](../scripts/README.md)) |
-| `site/` | GitHub Pages site |
+| `site/` | GitHub Pages site. The menu, footer and stylesheet links come from `scripts/site_chrome/`; edit them there and run `python3 scripts/site_chrome.py` |
 | `.github/workflows/` | `pr-gate` runs on pull requests and pushes to `main`; every other workflow is started by hand |
 
 ## Server module map

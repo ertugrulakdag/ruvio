@@ -34,6 +34,7 @@ run() {
 }
 
 run python3 scripts/check_compatibility_matrix.py
+run python3 scripts/site_chrome.py --check
 run cargo check -q --all-targets
 run cargo clippy -q --lib -- -D warnings
 
