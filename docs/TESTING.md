@@ -47,8 +47,20 @@ See the workflow file for the exact commands and job boundaries. A local
 re-run of the principal Rust suite is:
 
 ```bash
-cargo test --all-targets
+cargo test --lib --bins --tests
 ```
+
+## Known flaky tests
+
+These fail now and then under load and pass on a re-run. A failure in one of
+them is re-run once before it is investigated; a second failure is a real
+failure. Remove a line when its test is fixed.
+
+| Test | Where |
+| --- | --- |
+| `evented_hot_keys_save_publishes_after_hot_partition` | `src/runtime/evented/tests/cluster.rs` |
+| `data_directory_lock_excludes_a_second_owner` | `src/persistence/mod.rs` |
+| `CancelledCallersNeverObserveAnotherCallersReplyUnderSaturation` | `clients/csharp/Ruvio.Client.Tests/PooledRequestTests.cs` |
 
 ## Risk areas and their test groups
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""JSON speed/memory table and a mixed-write durability check for Ruvio (J1/J4/J6).
+"""JSON speed/memory table and a mixed-write durability check for Ruvio.
 
   bench   field GET/SET, MERGE into a small object, root GET on 1 KiB .. 1 MiB
           documents; req/s, batch p99 and RSS. With --rejson-module and --redis-server

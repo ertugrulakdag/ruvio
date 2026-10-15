@@ -40,9 +40,9 @@ rps and max p99.
 
 | Script | What it runs |
 | --- | --- |
-| `scripts/baremetal_compare.py` | 5-sample matrix (evented, io_uring, Redis; 1 core and 4 cores), pipeline / client / payload sweeps, durability, two 15-minute soaks. Host paths are absolute (`/root/ruvio`, `/usr/local/bin/redis-server-8`). |
+| `scripts/attic/baremetal_compare.py` | 5-sample matrix (evented, io_uring, Redis; 1 core and 4 cores), pipeline / client / payload sweeps, durability, two 15-minute soaks. Host paths are absolute (`/root/ruvio`, `/usr/local/bin/redis-server-8`). |
 | `scripts/benchmark_shards.py` | One `redis-benchmark` per shard, hash-tag keys, aggregate rps from wall time. |
-| `scripts/durability_rebench.py` | Single-core SET after the WAL change. 3 samples, n=1,000,000, 50 clients, pipeline 16, 64-byte values. |
+| `scripts/attic/durability_rebench.py` | Single-core SET after the WAL change. 3 samples, n=1,000,000, 50 clients, pipeline 16, 64-byte values. |
 | `scripts/kill9_harness.py` | Live `kill -9` during pipelined SET, then restart and prefix check. |
 
 Raw matrix output from the host copy lives under `profile/results/` locally.

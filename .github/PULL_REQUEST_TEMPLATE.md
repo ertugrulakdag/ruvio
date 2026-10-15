@@ -4,4 +4,4 @@
 
 - [ ] I can explain this patch without reading the diff again.
 - [ ] The change is one job. Unrelated edits are not in this branch.
-- [ ] `cargo test --lib` passed for a behavior change.
+- [ ] `scripts/check.sh` and the tests of the area I changed passed.

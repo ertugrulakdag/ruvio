@@ -4,6 +4,14 @@
 Idempotent: the sections sit between <!-- x86-2026-10-10:start --> and <!-- ...:end --> markers.
     python3 scripts/render_x86_pages.py
 """
+
+import sys
+
+# The section this script rendered is a dated record; rerunning it would rewrite the page
+# from the frozen data file. Refuse unless asked to on purpose.
+if __name__ == "__main__" and "--force" not in sys.argv[1:]:
+    sys.exit(f"{__file__}: frozen record (x86-linux-2026-10-10); pass --force to re-render it on purpose")
+
 import json, re, statistics
 from pathlib import Path
 
