@@ -134,7 +134,7 @@ jobs:
               echo --write
             fi
           }
-          read -r -a server_flag <<< "$(flag docker docker)"
+          read -r -a server_flag <<< "$(flag docker server-binaries)"
           read -r -a rust_client_flag <<< "$(flag rust-client rust-client)"
           read -r -a csharp_flag <<< "$(flag nuget nuget)"
           read -r -a ui_flag <<< "$(flag docker-ui ui-host)"
