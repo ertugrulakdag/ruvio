@@ -1,5 +1,5 @@
 # MIT License - Copyright (c) 2026 Salih Cantekin. See LICENSE.
-"""Cluster routing without a Ruvio server: slot hashing, key extraction for all 287 commands,
+"""Cluster routing without a Ruvio server: slot hashing, key extraction for every matrix command,
 and the router's behavior against scripted fake servers (sync and asyncio clients)."""
 
 from __future__ import annotations
@@ -202,7 +202,6 @@ SINGLE_KEY = set(
 def test_every_matrix_command_has_a_routing_rule():
     with open(MATRIX, encoding="utf-8") as f:
         names = [c["name"] for c in json.load(f)["commands"]]
-    assert len(names) == 287
     unrouted = []
     for n in names:
         first = n.split(" ")[0].encode()

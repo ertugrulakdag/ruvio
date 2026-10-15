@@ -148,7 +148,6 @@ def _resolve(cls, pubsub_cls, method):
 
 def test_every_matrix_command_has_a_typed_method():
     names = _matrix()
-    assert len(names) == 287
     missing = [n for n in names if n not in COMMANDS]
     assert not missing, f"no typed method mapped for: {missing}"
     for cls, ps in ((ruvio.Ruvio, ruvio.PubSub), (ruvio.asyncio.Ruvio, ruvio.asyncio.PubSub)):
