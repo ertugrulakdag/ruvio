@@ -23,7 +23,6 @@ use std::{
     time::Duration,
 };
 
-use fs2::FileExt;
 use serde::Deserialize;
 
 use crate::{KvShard, OwnedMutation, time::UnixMillis};
@@ -145,7 +144,8 @@ impl DataDirectoryLock {
             .write(true)
             .open(config.data_dir.join("LOCK"))?;
 
-        file.try_lock_exclusive().map_err(|error| {
+        // `flock` on Unix and `LockFileEx` on Windows, the same locks older builds took.
+        file.try_lock().map_err(|error| {
             PersistenceError::Failed(format!(
                 "data directory {} is already locked or unavailable: {error}",
                 config.data_dir.display()
