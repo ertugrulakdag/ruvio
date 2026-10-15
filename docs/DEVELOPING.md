@@ -101,7 +101,7 @@ Every client has a coverage test that loads `docs/compatibility-matrix.json` and
 | Node | `src/commands.ts`, `src/command-names.ts` | `test/coverage.test.ts`, `ROUTED_COMMANDS` in `src/cluster.ts` | `test/live-*.test.ts` |
 | Python | `ruvio/_commands.py` | `tests/test_coverage.py`, `SPEC` in `ruvio/_cluster.py` | `tests/test_live.py` |
 
-The Java blocking facade and command words are generated; the PR gate runs `generate.py --check`.
+The Java blocking facade and command words are generated; the PR gate runs `generate.py --check`. Cluster routing, redirects and retries are compared across clients in [CLIENT_BEHAVIOR.md](CLIENT_BEHAVIOR.md); every client's slot function is tested against `clients/testdata/slots.json`.
 
 ## Releases
 
