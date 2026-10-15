@@ -5,43 +5,8 @@ import argparse
 import socket
 import time
 
-
-def encode(*arguments: bytes) -> bytes:
-    frame = [f"*{len(arguments)}\r\n".encode()]
-    for argument in arguments:
-        frame.extend((f"${len(argument)}\r\n".encode(), argument, b"\r\n"))
-    return b"".join(frame)
-
-
-def read_response(stream):
-    prefix = stream.read(1)
-    line = stream.readline()
-    if not prefix or not line.endswith(b"\r\n"):
-        raise AssertionError("truncated RESP response")
-    payload = line[:-2]
-    if prefix in (b"+", b"-"):
-        return prefix, payload
-    if prefix == b":":
-        return prefix, int(payload)
-    if prefix == b"$":
-        length = int(payload)
-        if length == -1:
-            return prefix, None
-        value = stream.read(length)
-        assert stream.read(2) == b"\r\n"
-        return prefix, value
-    if prefix == b"*":
-        count = int(payload)
-        if count < 0:
-            return prefix, None
-        return prefix, [read_response(stream) for _ in range(count)]
-    raise AssertionError(f"unsupported response prefix: {prefix!r}")
-
-
-def request(stream, *arguments: bytes):
-    stream.write(encode(*arguments))
-    stream.flush()
-    return read_response(stream)
+# Re-exported: several scripts import these names from this module.
+from _ruvio import encode, read_response, request  # noqa: F401
 
 
 def run(host: str, port: int):

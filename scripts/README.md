@@ -15,7 +15,7 @@ Build tests in the debug profile, or with `--profile release-fast` when a script
 
 ## All scripts
 
-Most scripts take the path to a built `ruvio` binary and start their own server. Read a script's header before running it; benchmark scripts expect a quiet machine, and fault scripts marked "root" change the host. One-off experiments that produced a recorded result once are in [attic/](attic/README.md).
+Most scripts take the path to a built `ruvio` binary and start their own server. Shared helpers (RESP framing, `free_port`, `wait_for_port`) are in `_ruvio.py`; a new script imports them from there, and an older script with its own copy moves over when it is next changed. Read a script's header before running it; benchmark scripts expect a quiet machine, and fault scripts marked "root" change the host. One-off experiments that produced a recorded result once are in [attic/](attic/README.md).
 
 ### Checks and gates
 

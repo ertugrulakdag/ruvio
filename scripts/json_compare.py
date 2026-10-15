@@ -26,15 +26,13 @@ import tempfile
 import time
 from pathlib import Path
 
+from _ruvio import free_port
+
 ROOT = Path(__file__).resolve().parents[1]
 SIZES = [("1 KiB", 1024), ("64 KiB", 64 * 1024), ("255 KiB", 255 * 1024),
          ("257 KiB", 257 * 1024), ("1 MiB", 1024 * 1024)]
 
 
-def free_port():
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
 
 
 def frame(*args):

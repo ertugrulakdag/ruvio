@@ -13,13 +13,11 @@ import threading
 import time
 from pathlib import Path
 
+from _ruvio import free_port
+
 BINARY = Path(__file__).resolve().parents[1] / "target/release-fast/ruvio"
 
 
-def free_port():
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
 
 
 def frame(*args):
