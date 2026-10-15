@@ -2354,7 +2354,7 @@
       "same_slot": false,
       "limitations": "Alias of JSON.DEL.",
       "coverage": [
-        "src/protocol/table.rs"
+        "src/protocol/table/parsers.rs"
       ]
     },
     {

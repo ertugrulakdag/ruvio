@@ -53,7 +53,7 @@ The compiler or a test catches a missed step where the last column says so; the 
 | Step | Where | Caught by |
 | --- | --- | --- |
 | 1. Variant | `Command` in `src/protocol/mod.rs` | compiler (every `match` on `Command`) |
-| 2. Table row: arity, flags, key positions, ACL categories, parser (a function that reads `Args`) | `src/protocol/table.rs` (`CommandSpec::migrated`) | `consistency.rs` tests (`scripts/check.sh`) |
+| 2. Table row: arity, flags, key positions, ACL categories, parser (a function that reads `Args`) | `src/protocol/table.rs` (`CommandSpec::migrated`); the parser in `src/protocol/table/parsers.rs` or `src/protocol/parse/` | `consistency.rs` tests (`scripts/check.sh`) |
 | 3. Owned copy and validation | `src/protocol/command.rs` (`into_owned_measured`), `src/protocol/validate.rs` | compiler |
 | 4. Routing | `src/routing.rs` (`command_slot`, `command_keys`) | compiler, `consistency.rs` |
 | 5. ACL name | `src/acl.rs` | compiler, `consistency.rs` |
