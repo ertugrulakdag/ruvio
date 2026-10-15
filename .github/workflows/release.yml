@@ -21,7 +21,8 @@ name: release
 # Go has no registry; its client is not part of this workflow yet.
 # GITHUB_TOKEN — built-in token, not a repository secret. Pushes the version commit and creates the GitHub Release when that option is on.
 #
-# Leave a version input empty to bump that package's patch number.
+# Leave a version input empty to bump that package's patch number. Exception: docker, server-binaries,
+# docker-ui and ui-host run alone need their version filled in, because each pair shares one version.
 # Fill it (1.2.3 or v1.2.3) to publish that exact version.
 # server_version is the ruvio image tag.
 # rust_client_version is the ruvio-client crate.
@@ -126,9 +127,35 @@ jobs:
       - name: Check package metadata
         run: python3 scripts/check_package_metadata.py
       - id: publish
+        env:
+          TARGET: ${{ inputs.target }}
+          SERVER_VERSION: ${{ inputs.server_version }}
+          RUST_CLIENT_VERSION: ${{ inputs.rust_client_version }}
+          CSHARP_VERSION: ${{ inputs.csharp_version }}
+          UI_VERSION: ${{ inputs.ui_version }}
+          NODE_VERSION: ${{ inputs.node_version }}
+          PYTHON_VERSION: ${{ inputs.python_version }}
+          JAVA_VERSION: ${{ inputs.java_version }}
         run: |
           set -euo pipefail
-          target="${{ inputs.target }}"
+          target="$TARGET"
+          # docker and server-binaries share the server version, docker-ui and ui-host the UI version.
+          # An empty version bumps the patch, so publishing one half of a pair and then the other
+          # with empty inputs would ship two different versions. Outside `all`, ask for it explicitly.
+          case "$target" in
+            docker|server-binaries)
+              if [ -z "$SERVER_VERSION" ]; then
+                echo "::error::$target needs server_version (the image and the binaries must share one version; current: $(python3 scripts/release_version.py server))"
+                exit 1
+              fi
+              ;;
+            docker-ui|ui-host)
+              if [ -z "$UI_VERSION" ]; then
+                echo "::error::$target needs ui_version (the UI image and host binaries must share one version; current: $(python3 scripts/release_version.py ui))"
+                exit 1
+              fi
+              ;;
+          esac
           flag() {
             if [ "$target" = "all" ] || [ "$target" = "$1" ] || [ "$target" = "$2" ]; then
               echo --write
@@ -138,16 +165,16 @@ jobs:
           read -r -a rust_client_flag <<< "$(flag rust-client rust-client)"
           read -r -a csharp_flag <<< "$(flag nuget nuget)"
           read -r -a ui_flag <<< "$(flag docker-ui ui-host)"
-          server=$(python3 scripts/release_version.py server --set "${{ inputs.server_version }}" "${server_flag[@]}")
-          rust_client=$(python3 scripts/release_version.py rust-client --set "${{ inputs.rust_client_version }}" "${rust_client_flag[@]}")
-          csharp=$(python3 scripts/release_version.py csharp --set "${{ inputs.csharp_version }}" "${csharp_flag[@]}")
-          ui=$(python3 scripts/release_version.py ui --set "${{ inputs.ui_version }}" "${ui_flag[@]}")
+          server=$(python3 scripts/release_version.py server --set "$SERVER_VERSION" "${server_flag[@]}")
+          rust_client=$(python3 scripts/release_version.py rust-client --set "$RUST_CLIENT_VERSION" "${rust_client_flag[@]}")
+          csharp=$(python3 scripts/release_version.py csharp --set "$CSHARP_VERSION" "${csharp_flag[@]}")
+          ui=$(python3 scripts/release_version.py ui --set "$UI_VERSION" "${ui_flag[@]}")
           read -r -a node_flag <<< "$(flag npm npm)"
           read -r -a python_flag <<< "$(flag pypi pypi)"
           read -r -a java_flag <<< "$(flag maven maven)"
-          node=$(python3 scripts/release_version.py node --set "${{ inputs.node_version }}" "${node_flag[@]}")
-          python=$(python3 scripts/release_version.py python --set "${{ inputs.python_version }}" "${python_flag[@]}")
-          java=$(python3 scripts/release_version.py java --set "${{ inputs.java_version }}" "${java_flag[@]}")
+          node=$(python3 scripts/release_version.py node --set "$NODE_VERSION" "${node_flag[@]}")
+          python=$(python3 scripts/release_version.py python --set "$PYTHON_VERSION" "${python_flag[@]}")
+          java=$(python3 scripts/release_version.py java --set "$JAVA_VERSION" "${java_flag[@]}")
           {
             echo "server=$server"
             echo "rust_client=$rust_client"
@@ -161,7 +188,7 @@ jobs:
             echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git add Cargo.toml Cargo.lock clients/ruvio-client/Cargo.toml clients/ruvio-client/Cargo.lock clients/ruvio-ui/Cargo.toml clients/ruvio-ui/Cargo.lock clients/csharp/Ruvio.Client/Ruvio.Client.csproj clients/csharp/Ruvio.Client.AspNetCore/Ruvio.Client.AspNetCore.csproj clients/node/package.json clients/node/package-lock.json clients/python/pyproject.toml clients/java/pom.xml
+          git add Cargo.toml Cargo.lock clients/ruvio-client/Cargo.toml clients/ruvio-client/Cargo.lock clients/ruvio-ui/Cargo.toml clients/ruvio-ui/Cargo.lock clients/csharp/Ruvio.Client/Ruvio.Client.csproj clients/csharp/Ruvio.Client.AspNetCore/Ruvio.Client.AspNetCore.csproj clients/node/package.json clients/node/package-lock.json clients/python/pyproject.toml clients/python/ruvio/__init__.py clients/java/pom.xml docs/compatibility-matrix.json
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "Set release versions to server ${server}, rust client ${rust_client}, C# ${csharp}, UI ${ui}, npm ${node}, PyPI ${python}, and Maven ${java}."
           git push origin HEAD
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"

@@ -28,6 +28,7 @@ PACKAGES = {
             (ROOT / "clients" / "ruvio-ui" / "Cargo.lock", "ruvio-client"),
         ],
         "csproj": [],
+        "matrix": "ruvio-client",
     },
     "csharp": {
         "cargo": [],
@@ -40,6 +41,7 @@ PACKAGES = {
             / "Ruvio.Client.AspNetCore"
             / "Ruvio.Client.AspNetCore.csproj",
         ],
+        "matrix": "ruvio-csharp",
     },
     "ui": {
         "cargo": [ROOT / "clients" / "ruvio-ui" / "Cargo.toml"],
@@ -47,9 +49,30 @@ PACKAGES = {
         "csproj": [],
     },
     "node": {"file": ROOT / "clients" / "node" / "package.json", "kind": "node"},
-    "python": {"file": ROOT / "clients" / "python" / "pyproject.toml", "kind": "python"},
+    "python": {
+        "file": ROOT / "clients" / "python" / "pyproject.toml",
+        "kind": "python",
+        "dunder": ROOT / "clients" / "python" / "ruvio" / "__init__.py",
+    },
     "java": {"file": ROOT / "clients" / "java" / "pom.xml", "kind": "java"},
 }
+
+
+MATRIX = ROOT / "docs" / "compatibility-matrix.json"
+
+
+def write_matrix_pin(path: Path, client_id: str, version: str) -> None:
+    """Keep the client version pinned in the compatibility matrix equal to the manifest."""
+    text = path.read_text(encoding="utf-8")
+    pattern = re.compile(
+        r'("id": "' + re.escape(client_id) + r'"[^}]*?"version": ")([^"]+)(")', re.S
+    )
+    text, count = pattern.subn(lambda m: m.group(1) + version + m.group(3), text, count=1)
+
+    if count != 1:
+        raise ValueError(f"{path} has no client {client_id}")
+
+    path.write_text(text, encoding="utf-8")
 
 
 def bump_patch(version: str) -> str:
@@ -159,6 +182,18 @@ def write_other_version(spec: dict, version: str) -> None:
             lock.write_text(lock_text, encoding="utf-8")
     elif kind == "python":
         text = text.replace(f'version = "{current}"', f'version = "{version}"', 1)
+        dunder = spec.get("dunder")
+
+        if dunder is not None and dunder.exists():
+            module = dunder.read_text(encoding="utf-8")
+            module, count = re.subn(
+                r'(?m)^__version__ = "[^"]+"', f'__version__ = "{version}"', module, count=1
+            )
+
+            if count != 1:
+                raise ValueError(f"no __version__ in {dunder}")
+
+            dunder.write_text(module, encoding="utf-8")
     else:
         text = text.replace(
             f"<artifactId>ruvio-client</artifactId>\n  <version>{current}</version>",
@@ -208,6 +243,9 @@ def apply_version(package: str, requested: str, write: bool) -> str:
 
     for path in spec["csproj"]:
         write_csproj_version(path, chosen)
+
+    if "matrix" in spec:
+        write_matrix_pin(MATRIX, spec["matrix"], chosen)
 
     return chosen
 

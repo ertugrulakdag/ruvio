@@ -90,16 +90,36 @@ def load_matrix(path: Path = MATRIX_PATH) -> dict:
 
 
 def read_module(root: Path, relative: str) -> str | None:
-    """Source of `src/x.rs`, or of every file under `src/x/` once the module was split."""
+    """Source of a file, or of every `.rs` file under a directory written as `src/x/`.
+
+    A path that no longer exists is reported, so a module split must update the matrix.
+    """
     path = root / relative
+    if relative.endswith("/") and path.is_dir():
+        return "\n".join(
+            file.read_text(encoding="utf-8") for file in sorted(path.rglob("*.rs"))
+        )
     if path.is_file():
         return path.read_text(encoding="utf-8")
-    directory = path.with_suffix("")
-    if directory.is_dir():
-        return "\n".join(
-            file.read_text(encoding="utf-8") for file in sorted(directory.rglob("*.rs"))
-        )
     return None
+
+
+# Where each client's released version lives, so the matrix pin cannot go stale.
+CLIENT_MANIFESTS = {
+    "ruvio-client": ("clients/ruvio-client/Cargo.toml", r'(?m)^version\s*=\s*"([^"]+)"'),
+    "ruvio-csharp": (
+        "clients/csharp/Ruvio.Client/Ruvio.Client.csproj",
+        r"<Version>([^<]+)</Version>",
+    ),
+}
+
+
+def manifest_version(root: Path, client_id: str) -> str | None:
+    entry = CLIENT_MANIFESTS.get(client_id)
+    if entry is None or not (root / entry[0]).is_file():
+        return None
+    found = re.search(entry[1], (root / entry[0]).read_text(encoding="utf-8"))
+    return found.group(1) if found else None
 
 
 def extract_parser_commands(source: str, table: str = "") -> set[str]:
@@ -240,6 +260,11 @@ def validate(matrix: dict, root: Path = ROOT) -> list[str]:
             errors.append(f"{client.get('id')} must pin RESP2")
         if not client.get("version"):
             errors.append(f"{client.get('id')} is missing a pinned version")
+        released = manifest_version(root, client.get("id"))
+        if released is not None and client.get("version") != released:
+            errors.append(
+                f"{client.get('id')} pins {client.get('version')} but the package is {released}"
+            )
 
     return errors
 

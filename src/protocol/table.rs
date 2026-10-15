@@ -1,7 +1,7 @@
 //! Compile-time command table. One row per command: dispatch, arity, flags and
-//! key positions live here, and a migrated command's parser takes [`Args`] straight from
-//! the input frame. Commands without a `parse` function still go through the legacy
-//! `parse_arguments` chain until they move over.
+//! key positions live here. Rows built with `CommandSpec::migrated` parse [`Args`] straight
+//! from the input frame; rows built with `legacy!` still hand their `parse/commands.rs`
+//! function an argument vector (`Args::rest`, one allocation) until they move over.
 
 use super::parse::commands;
 use super::*;
@@ -91,7 +91,7 @@ pub(crate) struct CommandSpec {
     pub(crate) last_key: i8,
     pub(crate) step: i8,
     pub(crate) categories: &'static [&'static str],
-    /// `None` while the command is still parsed by the legacy chain.
+    /// Every row has one today; see the module note for the two parser styles.
     pub(crate) parse: Option<ParseFn>,
 }
 

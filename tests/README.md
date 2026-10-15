@@ -8,8 +8,6 @@ Run from the repository root.
 cargo test --lib --bins --tests
 ```
 
-(`cargo test` with all targets also builds the `hot_count` example, which only links on macOS.)
-
 | File | Covers |
 | --- | --- |
 | `zero_alloc.rs`, `layout.rs`, `memory_budget.rs` | Zero-cost rules: no allocation on the hot path, size ceilings, memory budgets |

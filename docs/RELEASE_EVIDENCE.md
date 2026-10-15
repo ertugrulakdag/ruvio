@@ -43,17 +43,17 @@ cargo build --locked --release --bin ruvio --bin ruvio-ctl
 | 24-hour mixed-workload soak | Not run by design in the current test plan; the 30-second Docker workload is only a bounded smoke test. |
 | String RSS within the same band as Redis | Open product P0 from the Cherry soak. The numbers are in `docs/MEMORY_DENSITY.md`. |
 | Bare-metal p50/p95/p99/p99.9 publication | One Cherry EPYC 7313P run is recorded in `docs/BARE_METAL.md`. Frequency boost was disabled. The 99.902% redis-benchmark bucket is not a computed p99.9. Container and laptop numbers are still not release evidence. |
-| SLSA/provenance attestations | Checksums and a CycloneDX SBOM are produced by `scripts/release_artifacts.sh`. Signed provenance is not wired yet. |
+| SLSA/provenance attestations | `scripts/release_artifacts.sh` produces checksums and a CycloneDX SBOM when run by hand. The `release` workflow writes its own checksums and attaches no SBOM yet. Signed provenance is not wired yet. |
 
 The extended `ci.yml` workflow is manually dispatched; its Docker,
 cross-platform, fuzz, sanitizer, and supply-chain jobs are not automatic. The
 short, read-only `pr-gate.yml` workflow runs on pull requests and pushes to
-`main`, covering formatting, core tests, first-party Rust/.NET client tests,
-and local two-shard routing regressions. A workflow definition is not a passed
-run; consult the check result for the exact commit. The compatibility-matrix
-validator currently fails on stale `src/server.rs` references and is not part
-of the automatic gate. Run the main Rust suite with `cargo test --all-targets`
-and inspect `.github/workflows/ci.yml` for the remaining commands. Do not
+`main`, covering formatting, core tests, `scripts/check.sh` (which includes the
+compatibility-matrix validator), the instruction-count gate, client tests and
+local two-shard routing regressions. A workflow definition is not a passed
+run; consult the check result for the exact commit. Run the main Rust suite
+with `cargo test --lib --bins --tests` and inspect `.github/workflows/ci.yml`
+for the remaining commands. Do not
 treat Docker Desktop throughput as a substitute for the bare-metal performance
 P0.
 

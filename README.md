@@ -244,7 +244,7 @@ Docker RSS is not the bare-metal result; the memory detail is in [docs/MEMORY_DE
 | [`clients/`](clients/README.md) | Rust, C#, Go, Java, Python and Node.js SDKs, and the operator UI. |
 | [`integrations/`](integrations/README.md) | .NET framework integrations. |
 | [`docs/`](docs/README.md) | Configuration, compatibility, recovery, threat model. |
-| [`site/`](site) | The GitHub Pages site. `main` publishes it. |
+| [`site/`](site) | The GitHub Pages site, published from `main` by the manual `pages` workflow. |
 | [`deploy/`](deploy/README.md) | systemd unit, Kubernetes example, local Docker stack. |
 | [`tests/`](tests/README.md), [`fuzz/`](fuzz/README.md), [`benches/`](benches/README.md) | Integration tests, libFuzzer targets, instruction-count benchmark. |
 | [`examples/`](examples/README.md), [`scripts/`](scripts/README.md), `benchmark/` | Contributor probes, check and release scripts, the benchmark script (result files stay local). |

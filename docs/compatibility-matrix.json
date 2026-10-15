@@ -42,8 +42,8 @@
       "same_slot": false,
       "limitations": "No arguments replies PONG is taken. OWNER names the shard rule. Any other argument is an error.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -85,7 +85,7 @@
       "limitations": "The name copied at the last AUTH.",
       "coverage": [
         "src/acl.rs",
-        "src/protocol.rs"
+        "src/protocol/"
       ]
     },
     {
@@ -137,7 +137,7 @@
       "coverage": [
         "src/protocol/parse/admin.rs",
         "src/acl.rs",
-        "src/protocol.rs"
+        "src/protocol/"
       ]
     },
     {
@@ -148,7 +148,7 @@
       "limitations": "Replaces the live directory from security.acl_file. A missing path or a bad line changes nothing. Open connections keep the rules from their last AUTH. GET and SET do not read the file.",
       "coverage": [
         "src/acl.rs",
-        "src/protocol.rs"
+        "src/protocol/"
       ]
     },
     {
@@ -159,7 +159,7 @@
       "limitations": "Writes the live directory to security.acl_file, including passwords. ACL LIST stays redacted. A missing path changes nothing.",
       "coverage": [
         "src/acl.rs",
-        "src/protocol.rs"
+        "src/protocol/"
       ]
     },
     {
@@ -180,8 +180,8 @@
       "same_slot": false,
       "limitations": "Writes a versioned string. The first call with no version creates version 1. A later call must pass the current version and receives the next one. A mismatch returns an error and does not change the value. A plain SET replaces the versioned string. The version is stored only on keys written with SETV, and that write is a WAL record.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -191,8 +191,8 @@
       "same_slot": false,
       "limitations": "Subtracts a positive count from an integer when the key holds at least that many. Returns the remainder. A missing key or a shortfall returns a null bulk and does not create or change the key. The successful subtraction is the same integer WAL record as INCR. A non-integer is WRONGTYPE.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -212,8 +212,8 @@
       "same_slot": false,
       "limitations": "Returns the string and sets its deadline to now plus the given milliseconds. A missing key returns a null bulk and stores nothing. GET does not move a deadline. The deadline is the existing expire WAL record. A non-string is WRONGTYPE.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -223,8 +223,8 @@
       "same_slot": false,
       "limitations": "Fixed window on one key. Returns the remaining allowance after this call, or a null bulk when the window is full. The counter is not incremented on rejection. The window is the key deadline, so an unused window disappears. A plain key does not store a limit. The accepted call is a WAL record. GET of a limit is WRONGTYPE.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -234,7 +234,7 @@
       "same_slot": false,
       "limitations": "IDEM key BEGIN fingerprint owner ttl_ms atomically reserves a missing key or returns pending, conflict, or completed with the binary result. IDEM key COMPLETE fingerprint owner result publishes only for the matching live owner. Identical completion is acknowledged without rewriting; changed results are refused. Neither retries nor completion renew the original TTL. Tokens are 1-128 bytes, retention is 1 ms-7 days, and result is at most 4 MiB (also subject to protocol limits including the packed metadata). Uses the existing string layout with an internal packed record; do not modify it with string/expiry commands. Each state transition and its deadline is one WAL record. Not exactly-once for external effects.",
       "coverage": [
-        "src/protocol.rs",
+        "src/protocol/",
         "src/engine/idempotency.rs"
       ]
     },
@@ -245,8 +245,8 @@
       "same_slot": false,
       "limitations": "First call returns 1 and keeps the key until the TTL. A later call returns 0 and does not refresh the TTL. After the deadline the next call is first again. The marker exists only on keys written with ONCE. The first call is a WAL record. GET of an once key is WRONGTYPE.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -256,8 +256,8 @@
       "same_slot": false,
       "limitations": "Acquires a shard-owned lease. Returns a new fencing token, or a null bulk when the lease is still held. Expiry and RELEASE keep the token so the next LEASE continues the sequence. DEL starts a new key at token 1. The grant is a WAL record. GET of a lease is WRONGTYPE. Unused keys do not store a lease.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -268,7 +268,7 @@
       "limitations": "SEMAPHORE key max ttl_ms returns a token while fewer than max holders are live, or a null bulk when full. Each holder has its own TTL. RELEASE key token frees one slot. The key stores 16 bytes per live holder and goes away with the last one. Grant and release are WAL records. GET of a semaphore is WRONGTYPE.",
       "coverage": [
         "scripts/resp_conformance.py",
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -278,8 +278,8 @@
       "same_slot": false,
       "limitations": "Releases a lease when the token matches the current holder. Returns 1 or 0. A mismatch leaves the holder in place. The key keeps the token so the next LEASE continues the sequence. The release is a WAL record.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -289,8 +289,8 @@
       "same_slot": false,
       "limitations": "CHANGES START arms an in-memory feed on this shard and returns the cursor. CHANGES cursor reads notes after that cursor, at most 1024. Nothing is recorded before START. The feed is not a second copy of the WAL and is empty after restart.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -488,7 +488,7 @@
       "limitations": "Indexes 0 through databases - 1 (16 by default, at most 256). Cluster mode allows only 0. Each database is its own map in the shard; WAL records carry the database. Routing hashes the user key. Not scriptable.",
       "coverage": [
         "src/runtime/session.rs",
-        "src/runtime/evented.rs"
+        "src/runtime/evented/"
       ]
     },
     {
@@ -498,8 +498,8 @@
       "same_slot": false,
       "limitations": "Clears the selected database on every shard. ASYNC runs synchronously. One WAL record. Allowed inside MULTI; refused in scripts.",
       "coverage": [
-        "src/protocol.rs",
-        "src/runtime/evented.rs",
+        "src/protocol/",
+        "src/runtime/evented/",
         "src/protocol/tests.rs"
       ]
     },
@@ -510,8 +510,8 @@
       "same_slot": false,
       "limitations": "Clears every database. ASYNC runs synchronously. One WAL record. Allowed inside MULTI; refused in scripts.",
       "coverage": [
-        "src/protocol.rs",
-        "src/runtime/evented.rs"
+        "src/protocol/",
+        "src/runtime/evented/"
       ]
     },
     {
@@ -522,7 +522,7 @@
       "limitations": "O(1) map exchange, one WAL record. Allowed inside MULTI; refused in cluster mode and in scripts. Does not wake clients blocked on keys that now exist.",
       "coverage": [
         "src/runtime/session.rs",
-        "src/runtime/evented.rs"
+        "src/runtime/evented/"
       ]
     },
     {
@@ -533,7 +533,7 @@
       "limitations": "One WAL record. Refused in cluster mode and in scripts. Returns 0 when the key is missing or the target already has it.",
       "coverage": [
         "src/runtime/session.rs",
-        "src/runtime/evented.rs"
+        "src/runtime/evented/"
       ]
     },
     {
@@ -657,7 +657,7 @@
       "coverage": [
         "scripts/resp_conformance.py",
         "scripts/redis_differential.py",
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -878,8 +878,8 @@
       "same_slot": false,
       "limitations": "Does not remove members. No count returns one bulk or nil. A positive count returns distinct members up to the set size. A negative count may repeat. Count 0 is an empty array.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -999,8 +999,8 @@
       "same_slot": false,
       "limitations": "Returns 1 and records one field when the field is missing. Returns 0 with no write when the field exists.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -1010,8 +1010,8 @@
       "same_slot": false,
       "limitations": "Returns the field length, or 0 when the key or field is missing.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -1021,8 +1021,8 @@
       "same_slot": false,
       "limitations": "Cursor pages follow storage order. MATCH and COUNT are supported. A missing key returns cursor 0 and an empty array.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -1174,8 +1174,8 @@
       "same_slot": false,
       "limitations": "Bounds are -, +, [member, and (member. Member order ignores the score. LIMIT is supported. A negative count returns the rest of the range.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -1185,8 +1185,8 @@
       "same_slot": false,
       "limitations": "The first bound is the high member and the second is the low member. Same bound and LIMIT rules as ZRANGEBYLEX.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -1337,7 +1337,7 @@
       "same_slot": false,
       "limitations": "One sorted set. Score is the 52-bit geohash. NX, XX, and CH.",
       "coverage": [
-        "src/protocol.rs"
+        "src/protocol/"
       ]
     },
     {
@@ -1347,7 +1347,7 @@
       "same_slot": false,
       "limitations": "Units M, KM, FT, and MI. Missing member is nil.",
       "coverage": [
-        "src/protocol.rs"
+        "src/protocol/"
       ]
     },
     {
@@ -1357,7 +1357,7 @@
       "same_slot": false,
       "limitations": "11-character string. The last character is 0.",
       "coverage": [
-        "src/protocol.rs"
+        "src/protocol/"
       ]
     },
     {
@@ -1367,7 +1367,7 @@
       "same_slot": false,
       "limitations": "Missing member is nil.",
       "coverage": [
-        "src/protocol.rs"
+        "src/protocol/"
       ]
     },
     {
@@ -1377,7 +1377,7 @@
       "same_slot": false,
       "limitations": "FROMMEMBER, FROMLONLAT, BYRADIUS, BYBOX, ASC, DESC, COUNT, ANY, WITHDIST, WITHHASH, WITHCOORD.",
       "coverage": [
-        "src/protocol.rs"
+        "src/protocol/"
       ]
     },
     {
@@ -1387,7 +1387,7 @@
       "same_slot": true,
       "limitations": "Replaces the destination sorted set. STOREDIST stores the distance.",
       "coverage": [
-        "src/protocol.rs"
+        "src/protocol/"
       ]
     },
     {
@@ -1397,7 +1397,7 @@
       "same_slot": true,
       "limitations": "STORE and STOREDIST replace the destination. Same-slot when storing.",
       "coverage": [
-        "src/protocol.rs"
+        "src/protocol/"
       ]
     },
     {
@@ -1407,7 +1407,7 @@
       "same_slot": true,
       "limitations": "STORE and STOREDIST replace the destination. Same-slot when storing.",
       "coverage": [
-        "src/protocol.rs"
+        "src/protocol/"
       ]
     },
     {
@@ -1561,7 +1561,7 @@
       "same_slot": false,
       "limitations": "Auto id is * or ms-*. Explicit ids are ms-seq. DELAY holds the new entry from XREADGROUP until that many milliseconds pass. The hold is a WAL record and a snapshot trailer, written only when a delay is set. A millisecond behind the top id is rejected. MAXLEN and MINID, including ~ and =, both trim exactly. They cannot be combined. NOMKSTREAM returns a null bulk and does not create a missing key. The assigned id is the WAL record. The approximate trim option LIMIT is not accepted.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1571,7 +1571,7 @@
       "same_slot": false,
       "limitations": "Returns 0 for a missing key.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1581,7 +1581,7 @@
       "same_slot": false,
       "limitations": "start and end are -, +, or ms-seq. COUNT limits the reply. No exclusive bounds.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1591,7 +1591,7 @@
       "same_slot": false,
       "limitations": "end then start, like Redis. COUNT keeps the newest matches. No exclusive bounds.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1601,7 +1601,7 @@
       "same_slot": true,
       "limitations": "COUNT and STREAMS. Id is exclusive; 0 means 0-0 and $ means the current end. BLOCK waits on this shard and does not remove entries. BLOCK 0 waits until an entry or shutdown. This command does not read a consumer group.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1611,7 +1611,7 @@
       "same_slot": false,
       "limitations": "Many ids. A repeated id counts once. The stream key and its last id remain after the last entry is deleted.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1621,8 +1621,8 @@
       "same_slot": false,
       "limitations": "Sets the last generated id without adding an entry. The id must be greater than or equal to the current top id. A missing key is an error. ENTRIESADDED and MAXDELETEDID are not accepted.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -1632,7 +1632,7 @@
       "same_slot": false,
       "limitations": "MAXLEN and MINID, including ~ and =, both trim exactly. MINID drops entries below the id and keeps that id. The approximate trim option LIMIT is not accepted.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1642,7 +1642,7 @@
       "same_slot": false,
       "limitations": "Creates one group at $, 0, or an explicit id. MKSTREAM creates an empty stream when the key is missing.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1652,8 +1652,8 @@
       "same_slot": false,
       "limitations": "Registers a consumer before it has a pending entry. Returns 1 when the name is new and 0 when that group already has it. The name stays after its pending entries are acknowledged.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -1663,7 +1663,7 @@
       "same_slot": false,
       "limitations": "One stream and the > id only. COUNT limits the new entries. BLOCK waits on this shard until a later XADD and delivers that id to the oldest waiting consumer of the group. BLOCK 0 waits until an entry or shutdown. NOACK advances the group id and does not add a pending entry.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1673,7 +1673,7 @@
       "same_slot": false,
       "limitations": "Returns 1 when the group is removed and 0 when it is already gone. A blocked XREADGROUP on that group receives NOGROUP.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1683,7 +1683,7 @@
       "same_slot": false,
       "limitations": "Moves the group id to $, 0, or an explicit id. Pending entries stay as they are.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1693,7 +1693,7 @@
       "same_slot": false,
       "limitations": "Returns how many pending entries that consumer held. A missing consumer returns 0. A missing group is NOGROUP.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1703,7 +1703,7 @@
       "same_slot": false,
       "limitations": "Many ids. A repeated id counts once. Removes the id from that group's pending list and leaves the stream entry stored.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1713,7 +1713,7 @@
       "same_slot": false,
       "limitations": "No arguments after the group returns the summary: count, smallest id, greatest id, and consumers sorted by name. An empty group returns 0, two nils, and an empty array. The extended form is optional IDLE, an inclusive start, an inclusive end, a count, and an optional consumer. Each row is the id, consumer, idle milliseconds, and delivery count.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1723,8 +1723,8 @@
       "same_slot": false,
       "limitations": "Scans pending ids after the start id. Claims those idle for at least min-idle milliseconds, up to COUNT, which defaults to the rest of the list. JUSTID returns ids. The reply is the next start id, the claimed entries, and ids dropped because the stream entry is gone. The next start id is 0-0 when the scan finishes.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -1734,7 +1734,7 @@
       "same_slot": false,
       "limitations": "Claims pending ids idle for at least min-idle milliseconds. IDLE, TIME, RETRYCOUNT, FORCE, JUSTID, and LASTID are accepted. IDLE and TIME cannot be combined. FORCE claims an id that is in the stream but not pending and does not move the group cursor. LASTID sets that cursor. A repeated id is claimed once. An id deleted from the stream is dropped from the pending list and is not returned. JUSTID returns only the claimed ids.",
       "coverage": [
-        "src/engine.rs"
+        "src/engine/"
       ]
     },
     {
@@ -1744,8 +1744,8 @@
       "same_slot": false,
       "limitations": "Reports length, last-generated-id, groups, and the first and last entries. Does not report a radix tree or entries-added. A missing key is an error.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -1755,8 +1755,8 @@
       "same_slot": false,
       "limitations": "Reports name, consumers, pending, last-delivered-id, and lag. Consumers are the distinct names on the pending list.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -1766,8 +1766,8 @@
       "same_slot": false,
       "limitations": "Lists pending consumers with pending count and idle time since the latest delivery. A consumer with an empty pending list is not stored.",
       "coverage": [
-        "src/protocol.rs",
-        "src/engine.rs"
+        "src/protocol/",
+        "src/engine/"
       ]
     },
     {
@@ -1788,7 +1788,7 @@
       "same_slot": false,
       "limitations": "Blocks only the calling client until N replicas have synced this shard's wal_last_sequence to disk, or the timeout. Timeout 0 waits until shutdown. The integer reply is how many replicas reached that sequence. A missing replica does not drop the write. Off and replica roles return 0. Not queued inside MULTI and not scriptable.",
       "coverage": [
-        "src/protocol.rs"
+        "src/protocol/"
       ]
     },
     {
@@ -1819,7 +1819,7 @@
       "same_slot": false,
       "limitations": "In-process, not a fork.",
       "coverage": [
-        "src/protocol.rs"
+        "src/protocol/"
       ]
     },
     {
@@ -3030,7 +3030,7 @@
       "language": "Rust",
       "library": "ruvio-client",
       "package": "ruvio-client",
-      "version": "0.2.4",
+      "version": "0.3.1",
       "protocol": "RESP2",
       "suite": "clients/ruvio-client/src/commands.rs"
     },
@@ -3039,7 +3039,7 @@
       "language": "C#",
       "library": "Ruvio.Client",
       "package": "Ruvio.Client",
-      "version": "0.2.6",
+      "version": "0.3.2",
       "protocol": "RESP2",
       "suite": "clients/csharp/Ruvio.Client/Commands/Commands.cs"
     }

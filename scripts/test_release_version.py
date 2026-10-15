@@ -60,6 +60,42 @@ class ReleaseVersionTests(unittest.TestCase):
             self.assertEqual(chosen, "1.0.0")
             self.assertIn("<Version>1.0.0</Version>", project.read_text(encoding="utf-8"))
 
+    def test_matrix_pin_follows_the_client(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            matrix = Path(directory) / "matrix.json"
+            matrix.write_text(
+                '{"clients": [\n  {"id": "a", "version": "0.1.0"},\n'
+                '  {"id": "b", "version": "0.1.0"}\n]}\n',
+                encoding="utf-8",
+            )
+            release_version.write_matrix_pin(matrix, "b", "0.2.0")
+            text = matrix.read_text(encoding="utf-8")
+            self.assertIn('{"id": "a", "version": "0.1.0"}', text)
+            self.assertIn('{"id": "b", "version": "0.2.0"}', text)
+            with self.assertRaises(ValueError):
+                release_version.write_matrix_pin(matrix, "missing", "0.2.0")
+
+    def test_python_version_also_updates_dunder(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "pyproject.toml"
+            project.write_text('[project]\nversion = "0.1.0"\n', encoding="utf-8")
+            module = Path(directory) / "__init__.py"
+            module.write_text('x = 1\n__version__ = "0.1.0"\n', encoding="utf-8")
+            release_version.PACKAGES["demo-py"] = {
+                "file": project,
+                "kind": "python",
+                "dunder": module,
+            }
+
+            try:
+                chosen = release_version.apply_version("demo-py", "", True)
+            finally:
+                del release_version.PACKAGES["demo-py"]
+
+            self.assertEqual(chosen, "0.1.1")
+            self.assertIn('version = "0.1.1"', project.read_text(encoding="utf-8"))
+            self.assertIn('__version__ = "0.1.1"', module.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

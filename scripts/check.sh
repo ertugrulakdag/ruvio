@@ -20,9 +20,17 @@ if [[ "${1:-}" == "--install-hook" ]]; then
 fi
 
 limit="${RUVIO_TEST_TIMEOUT:-300}"
+# Stock macOS has no `timeout`; coreutils installs it as `gtimeout`. Without either the
+# checks still run, only without the time limit.
+timeout_cmd=()
+if command -v timeout >/dev/null; then
+	timeout_cmd=(timeout "$limit")
+elif command -v gtimeout >/dev/null; then
+	timeout_cmd=(gtimeout "$limit")
+fi
 run() {
 	echo "+ $*" >&2
-	timeout "$limit" "$@"
+	${timeout_cmd[@]+"${timeout_cmd[@]}"} "$@"
 }
 
 run python3 scripts/check_compatibility_matrix.py
@@ -44,6 +52,15 @@ standards=(
 	every_value_kind_survives_log_replay_checkpoint_and_dump
 	version_one_wal
 )
+# A filter that matches nothing passes silently, so first make sure every filter still
+# matches at least one test name (a filter may name a prefix shared by several tests).
+listed="$(run cargo test -q --lib -- --list)"
+for name in "${standards[@]}"; do
+	if ! grep -q "::[^:]*${name}[^:]*: test$" <<<"$listed"; then
+		echo "check.sh: standards test '${name}' not found; it was renamed or removed" >&2
+		exit 1
+	fi
+done
 run cargo test -q --lib -- "${standards[@]}"
 run cargo test -q --test zero_alloc --test layout
 echo "check.sh: ok"
