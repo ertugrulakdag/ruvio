@@ -69,7 +69,7 @@ A write that needs a new WAL record also touches:
 | Step | Where | Caught by |
 | --- | --- | --- |
 | Mutation | `Mutation`, `OwnedMutation`, `to_owned` and the write-key arm in `src/mutation.rs` | compiler |
-| Encoding | borrowed and owned encoders, decoder, `FORMAT_MINOR`/`RECORD_MINORS` and a fixture in `src/persistence/codec.rs` | `borrowed_encoding_matches_owned_encoding`, `every_record_type_the_decoder_knows_has_a_format_minor`, `version_one_wal*` |
+| Encoding | a `record::` number, borrowed and owned encoders, decoder, `FORMAT_MINOR`/`RECORD_MINORS` and a fixture in `src/persistence/codec.rs` | `borrowed_encoding_matches_owned_encoding`, `every_record_type_the_decoder_knows_has_a_format_minor`, `version_one_wal*` |
 | Replay, replication, CDC, DUMP | `src/persistence/mod.rs`, `src/replication.rs`, `src/changes.rs`, `src/dump.rs` | compiler |
 
 A change to persistence, the WAL, unsafe code or memory layout gets a second, independent review before it merges.
