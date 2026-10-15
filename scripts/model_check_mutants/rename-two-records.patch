@@ -1,0 +1,39 @@
+diff --git a/src/engine/keyspace.rs b/src/engine/keyspace.rs
+index 90d926c..b8c3a1e 100644
+--- a/src/engine/keyspace.rs
++++ b/src/engine/keyspace.rs
+@@ -174,10 +174,30 @@ pub(super) fn rename_key<'a, C: Clock, I: StorageIndex, S: MutationSink>(
+         return Ok(rejected);
+     }
+ 
+-    sink.record(Mutation::Rename {
+-        source: &source,
+-        destination: &destination,
+-    })?;
++    // A string moves as a delete and a set, which replicas apply without a rename.
++    if let Ok(Some(value)) = shard.get_bytes(&source) {
++        let value = value.to_vec();
++        let deadline = shard.expires_at(&source);
++        let keys = [source.clone()];
++
++        sink.record(Mutation::Delete { keys: &keys })?;
++        match deadline {
++            Some(at) => sink.record(Mutation::SetBytesExpiring {
++                key: &destination,
++                value: &value,
++                expires_at: at.get(),
++            })?,
++            None => sink.record(Mutation::SetBytes {
++                key: &destination,
++                value: &value,
++            })?,
++        }
++    } else {
++        sink.record(Mutation::Rename {
++            source: &source,
++            destination: &destination,
++        })?;
++    }
+ 
+     shard.rename(&source, &destination);
+     Ok(Response::Simple(b"OK"))

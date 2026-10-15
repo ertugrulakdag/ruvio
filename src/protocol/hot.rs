@@ -1,0 +1,294 @@
+use super::*;
+
+/// Parse the allocation-sensitive command subset directly from a network buffer.
+pub fn parse_hot_command(bytes: &[u8]) -> Result<HotParse<'_>, ProtocolError> {
+    parse_hot_command_with_limits(bytes, ProtocolLimits::default())
+}
+
+pub fn parse_hot_command_with_limits(
+    bytes: &[u8],
+    limits: ProtocolLimits,
+) -> Result<HotParse<'_>, ProtocolError> {
+    match parse_hot_frame(bytes, limits) {
+        // The general parser words the refusal and consumes the frame, so the connection
+        // survives an oversized key or value.
+        Err(ProtocolError::LimitExceeded(_)) if bytes.first() == Some(&b'*') => {
+            Ok(HotParse::Fallback)
+        }
+
+        other => other,
+    }
+}
+
+fn parse_hot_frame(bytes: &[u8], limits: ProtocolLimits) -> Result<HotParse<'_>, ProtocolError> {
+    if bytes.is_empty() {
+        return Ok(HotParse::Incomplete);
+    }
+
+    if bytes[0] != b'*' {
+        // Inline command; the general parser handles it.
+        return Ok(HotParse::Fallback);
+    }
+
+    let mut position = 1;
+    let Some(argument_count) = read_length_line(bytes, &mut position)? else {
+        return Ok(HotParse::Incomplete);
+    };
+
+    if argument_count == 0 {
+        return Err(ProtocolError::Invalid("command array cannot be empty"));
+    }
+
+    if argument_count > limits.max_arguments {
+        return Err(ProtocolError::LimitExceeded("too many arguments"));
+    }
+
+    if argument_count > 5 {
+        return Ok(HotParse::Fallback);
+    }
+
+    // Hot names are 3 to 6 bytes long: any other `$<len>\r\n` goes to the general
+    // parser before the name is read.
+    if let [b'$', length, b'\r', ..] = bytes[position.min(bytes.len())..]
+        && !matches!(length, b'3' | b'4' | b'5' | b'6')
+    {
+        return Ok(HotParse::Fallback);
+    }
+
+    let mut arguments = [&[][..]; 5];
+    let Some(name) = read_hot_bulk(bytes, &mut position, limits)? else {
+        return Ok(HotParse::Incomplete);
+    };
+
+    arguments[0] = name;
+
+    // Anything else is parsed once by the full parser. Reading the payload here
+    // would scan those bytes twice.
+
+    if !hot_command_name(name, argument_count) {
+        return Ok(HotParse::Fallback);
+    }
+
+    for argument in arguments.iter_mut().take(argument_count).skip(1) {
+        let Some(bulk) = read_hot_bulk(bytes, &mut position, limits)? else {
+            return Ok(HotParse::Incomplete);
+        };
+
+        *argument = bulk;
+    }
+
+    let command = arguments[0];
+
+    if command.eq_ignore_ascii_case(b"PING") {
+        return match argument_count {
+            1 => Ok(HotParse::Complete(HotCommand::Ping(None), position)),
+            2 => {
+                validate_value(arguments[1], limits)?;
+                Ok(HotParse::Complete(
+                    HotCommand::Ping(Some(arguments[1])),
+                    position,
+                ))
+            }
+
+            _ => Ok(HotParse::Fallback),
+        };
+    }
+
+    if command.eq_ignore_ascii_case(b"GET") && argument_count == 2 {
+        validate_key(arguments[1], limits)?;
+
+        return Ok(HotParse::Complete(HotCommand::Get(arguments[1]), position));
+    }
+
+    if command.eq_ignore_ascii_case(b"SET") && (argument_count == 3 || argument_count == 5) {
+        validate_key(arguments[1], limits)?;
+        validate_value(arguments[2], limits)?;
+
+        if argument_count == 3 {
+            return Ok(HotParse::Complete(
+                HotCommand::Set(arguments[1], arguments[2], None),
+                position,
+            ));
+        }
+
+        let ex = arguments[3].eq_ignore_ascii_case(b"EX");
+        let px = arguments[3].eq_ignore_ascii_case(b"PX");
+
+        if !ex && !px {
+            return Ok(HotParse::Fallback);
+        }
+
+        // A bad expiry takes the full parser, which words the error.
+        let Ok(parsed) = parse_i64(arguments[4]) else {
+            return Ok(HotParse::Fallback);
+        };
+        let milliseconds = if ex {
+            match parsed.checked_mul(1_000) {
+                Some(milliseconds) => milliseconds,
+                None => return Ok(HotParse::Fallback),
+            }
+        } else {
+            parsed
+        };
+
+        return Ok(HotParse::Complete(
+            HotCommand::Set(arguments[1], arguments[2], Some(milliseconds)),
+            position,
+        ));
+    }
+
+    if command.eq_ignore_ascii_case(b"SETEX") && argument_count == 4 {
+        validate_key(arguments[1], limits)?;
+        validate_value(arguments[3], limits)?;
+
+        // A bad or non-positive expiry takes the full parser, which words the error.
+        return Ok(
+            match parse_i64(arguments[2])
+                .ok()
+                .filter(|seconds| *seconds > 0)
+                .and_then(|seconds| seconds.checked_mul(1_000))
+            {
+                Some(milliseconds) => HotParse::Complete(
+                    HotCommand::SetEx(arguments[1], arguments[3], milliseconds),
+                    position,
+                ),
+                None => HotParse::Fallback,
+            },
+        );
+    }
+
+    if (command.eq_ignore_ascii_case(b"DEL") || command.eq_ignore_ascii_case(b"UNLINK"))
+        && argument_count == 2
+    {
+        validate_key(arguments[1], limits)?;
+
+        return Ok(HotParse::Complete(
+            HotCommand::Delete(arguments[1]),
+            position,
+        ));
+    }
+
+    if command.eq_ignore_ascii_case(b"INCR") && argument_count == 2 {
+        validate_key(arguments[1], limits)?;
+
+        return Ok(HotParse::Complete(
+            HotCommand::Increment(arguments[1], 1),
+            position,
+        ));
+    }
+
+    if command.eq_ignore_ascii_case(b"DECR") && argument_count == 2 {
+        validate_key(arguments[1], limits)?;
+
+        return Ok(HotParse::Complete(
+            HotCommand::Increment(arguments[1], -1),
+            position,
+        ));
+    }
+
+    if command.eq_ignore_ascii_case(b"INCRBY") && argument_count == 3 {
+        validate_key(arguments[1], limits)?;
+        let Ok(delta) = parse_i64(arguments[2]) else {
+            return Ok(HotParse::Fallback);
+        };
+
+        return Ok(HotParse::Complete(
+            HotCommand::Increment(arguments[1], delta),
+            position,
+        ));
+    }
+
+    if command.eq_ignore_ascii_case(b"DECRBY") && argument_count == 3 {
+        validate_key(arguments[1], limits)?;
+        let Some(delta) = parse_i64(arguments[2]).ok().and_then(i64::checked_neg) else {
+            return Ok(HotParse::Fallback);
+        };
+
+        return Ok(HotParse::Complete(
+            HotCommand::Increment(arguments[1], delta),
+            position,
+        ));
+    }
+
+    Ok(HotParse::Fallback)
+}
+
+pub(super) fn hot_command_name(name: &[u8], count: usize) -> bool {
+    // Dispatch on length first: a name that cannot be hot costs one compare, not ten.
+    let is = |word: &[u8]| name.eq_ignore_ascii_case(word);
+
+    match name.len() {
+        3 => (is(b"GET") || is(b"DEL")) && count == 2 || is(b"SET") && (count == 3 || count == 5),
+        4 => {
+            is(b"PING") && (count == 1 || count == 2) || (is(b"INCR") || is(b"DECR")) && count == 2
+        }
+        5 => is(b"SETEX") && count == 4,
+        6 => (is(b"UNLINK") && count == 2) || ((is(b"INCRBY") || is(b"DECRBY")) && count == 3),
+        _ => false,
+    }
+}
+
+pub(super) fn read_hot_bulk<'a>(
+    bytes: &'a [u8],
+    position: &mut usize,
+    limits: ProtocolLimits,
+) -> Result<Option<&'a [u8]>, ProtocolError> {
+    if *position == bytes.len() {
+        return Ok(None);
+    }
+
+    if bytes[*position] != b'$' {
+        return Err(ProtocolError::Invalid("expected a bulk string"));
+    }
+
+    *position += 1;
+
+    let Some(length) = read_length_line(bytes, position)? else {
+        return Ok(None);
+    };
+
+    if length > limits.max_bulk_bytes() {
+        return Err(ProtocolError::LimitExceeded("bulk string is too large"));
+    }
+
+    let Some(payload_end) = position.checked_add(length) else {
+        return Err(ProtocolError::LimitExceeded("length overflow"));
+    };
+
+    let Some(frame_end) = payload_end.checked_add(2) else {
+        return Err(ProtocolError::LimitExceeded("length overflow"));
+    };
+
+    if frame_end > limits.max_command_bytes {
+        return Err(ProtocolError::LimitExceeded("command is too large"));
+    }
+
+    if frame_end > bytes.len() {
+        return Ok(None);
+    }
+
+    if bytes[payload_end..frame_end] != *b"\r\n" {
+        return Err(ProtocolError::Invalid("bulk string must end with CRLF"));
+    }
+
+    let argument = &bytes[*position..payload_end];
+
+    *position = frame_end;
+    Ok(Some(argument))
+}
+
+pub(super) fn checked_frame_add(
+    current: usize,
+    additional: usize,
+    limits: ProtocolLimits,
+) -> Result<usize, ProtocolError> {
+    let total = current
+        .checked_add(additional)
+        .ok_or(ProtocolError::LimitExceeded("length overflow"))?;
+
+    if total > limits.max_command_bytes {
+        return Err(ProtocolError::LimitExceeded("command is too large"));
+    }
+
+    Ok(total)
+}

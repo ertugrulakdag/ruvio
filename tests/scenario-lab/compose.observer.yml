@@ -1,0 +1,98 @@
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.136.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./observer/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    depends_on:
+      - tempo
+    ports:
+      - "${COLLECTOR_BIND_IP:?Set COLLECTOR_BIND_IP to the observer peer-reachable IP}:4317:4317"
+      - "127.0.0.1:8889:8889"
+    networks:
+      - observer-net
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}
+      - --web.enable-lifecycle
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./observer/prometheus.generated.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - observer-net
+
+  tempo:
+    image: grafana/tempo:2.8.0
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./observer/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    networks:
+      - observer-net
+
+  grafana:
+    image: grafana/grafana:12.0.2
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observer/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "${GRAFANA_BIND_IP:?Set GRAFANA_BIND_IP to the observer peer-reachable IP}:3000:3000"
+    depends_on:
+      - prometheus
+      - tempo
+    networks:
+      - observer-net
+
+  k6:
+    image: grafana/k6:0.54.0
+    profiles: ["load"]
+    environment:
+      TARGET_URL: ${TARGET_URL:?Set TARGET_URL in .env}
+      DURATION: ${DURATION:-30m}
+      CATALOG_RPS: ${CATALOG_RPS:-80}
+      ORDER_RPS: ${ORDER_RPS:-5}
+      RATE_PROBE_RPS: ${RATE_PROBE_RPS:-5}
+      STRESS_RATES: ${STRESS_RATES:-50,100,200,400,600,800,1200,1600,2000,2400,3000,300,1600,3000}
+      STRESS_STAGE_SECONDS: ${STRESS_STAGE_SECONDS:-120}
+      STRESS_PREALLOCATED_VUS: ${STRESS_PREALLOCATED_VUS:-250}
+      STRESS_MAX_VUS: ${STRESS_MAX_VUS:-4000}
+      STRESS_MIN_MEMORY_AVAILABLE_PERCENT: ${STRESS_MIN_MEMORY_AVAILABLE_PERCENT:-10}
+      COMPARE_RATE_RPS: ${COMPARE_RATE_RPS:-200}
+      COMPARE_STAGE_SECONDS: ${COMPARE_STAGE_SECONDS:-300}
+      COMPARE_GAP_SECONDS: ${COMPARE_GAP_SECONDS:-60}
+      COMPARE_PREALLOCATED_VUS: ${COMPARE_PREALLOCATED_VUS:-2000}
+      COMPARE_MAX_VUS: ${COMPARE_MAX_VUS:-2500}
+      ENABLE_RUVIO_PARTITION: ${ENABLE_RUVIO_PARTITION:-false}
+      FAULT_CONTROL_URL: ${K6_FAULT_CONTROL_URL:-${FAULT_CONTROL_URL:-}}
+      FAULT_AFTER: ${FAULT_AFTER:-5m}
+      FAULT_DURATION: ${FAULT_DURATION:-30s}
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+    volumes:
+      - ./load/k6:/scripts:ro
+      - ./load/results:/results
+    networks:
+      - observer-net
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  tempo-data:
+
+networks:
+  observer-net:
+    driver: bridge

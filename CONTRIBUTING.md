@@ -1,0 +1,42 @@
+# Contributing
+
+Issues and pull requests are in English.
+
+A pull request is one change that you can explain. Say what behavior changes, how you checked it, and which test covers it. A drive-by that rewrites an unrelated file, restyles a module, or stacks several ideas is closed.
+
+## License
+
+By opening a pull request you agree that your contribution is licensed under the license of the part you change: AGPL-3.0 for the server and the operator UI (`clients/ruvio-ui/`), MIT for the SDKs in `clients/` and for `integrations/`. The maintainer may also offer the server under other terms, including a commercial license; if you are not comfortable with that, say so in the pull request before it is merged.
+
+## Generated changes
+
+An assistant may help you write the patch. You still own it. Before opening the request you can answer, in your own words:
+
+- what the code does
+- why this place in the server is the right place
+- what you ran
+
+A patch you cannot explain, or a batch of unrelated edits produced by a prompt, is closed without a line-by-line review. "An assistant suggested it" is not a reason to merge.
+
+## The hot path
+
+The shard that owns a key parses, records, applies, and replies. A feature costs memory or CPU only on keys that use it.
+
+- `GET`, `SET`, and `INCR` do not gain an extra index lookup for a feature that is off.
+- `Value` stays at most 24 bytes. Do not widen `Entry`.
+- Record a write before applying it. A rejected write does not go into the WAL.
+- Do not stall the shard on `PUBLISH`.
+- The process is evented. Do not add another runtime.
+
+## Checks
+
+From the repository root:
+
+```bash
+cargo fmt --all --check
+cargo test --lib
+```
+
+A behavior change needs a test that fails without the change. Docs that state a number come from a measurement in `docs/BENCHMARK_RESULTS.md`. Do not write an unmeasured "N times faster" claim.
+
+Security defects go through [SECURITY.md](SECURITY.md), not a public issue or pull request.

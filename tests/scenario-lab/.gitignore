@@ -1,0 +1,6 @@
+.env
+observer/prometheus.generated.yml
+api/bin/
+api/obj/
+load/results/*
+!load/results/.gitkeep

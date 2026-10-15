@@ -1,0 +1,60 @@
+{
+  "name": "ruvio-client",
+  "version": "0.1.0",
+  "description": "Fast, zero-dependency, pipelined RESP client for the Ruvio server (Node.js 18+).",
+  "license": "MIT",
+  "author": "Salih Cantekin <17653555+salihcantekin@users.noreply.github.com>",
+  "homepage": "https://salihcantekin.github.io/ruvio/client-node.html",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/salihcantekin/ruvio.git",
+    "directory": "clients/node"
+  },
+  "bugs": {
+    "url": "https://github.com/salihcantekin/ruvio/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
+  "keywords": [
+    "ruvio",
+    "redis",
+    "resp",
+    "resp3",
+    "client",
+    "cache",
+    "pipeline",
+    "cluster",
+    "typescript"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:test": "tsc -p tsconfig.test.json",
+    "test": "npm run build:test && node --test --test-concurrency=1 --test-timeout=60000 build/test/*.test.js",
+    "bench": "npm run build:test && node --expose-gc --min-semi-space-size=64 --max-semi-space-size=64 build/bench/bench.js",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.1",
+    "ioredis": "^5.8.2",
+    "typescript": "^5.9.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

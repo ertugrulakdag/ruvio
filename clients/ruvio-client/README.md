@@ -1,0 +1,266 @@
+# ruvio-client
+
+Blocking RESP2 client for [Ruvio](https://salihcantekin.github.io/ruvio/). Connecting does not send `CLIENT SETINFO` or `HELLO`. Give the client one address; it sends `CLUSTER SLOTS` and, on a sharded server, opens one socket per shard and routes by hash slot. `MOVED` refreshes the map. `MGET` / `MSET` / `DEL` split across shards. Methods take `&mut self` and are named after the command they send. They cover every command in [`docs/compatibility-matrix.json`](../../docs/compatibility-matrix.json) (287/287, checked by `tests/coverage.rs`) plus the options that change what Ruvio does. `execute` and `execute_many` send any argument list, as `redis-cli` would; `execute_binary` does the same with raw byte arguments.
+
+```rust
+use std::time::Duration;
+use ruvio_client::Client;
+
+let mut db = Client::connect("127.0.0.1", 6379)?;
+db.set("session:ada", "hello")?;
+let value = db.get_string("session:ada")?;
+db.incr("visits")?;
+db.expire("session:ada", Duration::from_secs(60))?;
+db.hset("user:1", &[("name", "Ada"), ("plan", "pro")])?;
+db.zadd("leaderboard", &[("player1", 100.0), ("player2", 80.0)])?;
+let top = db.zrevrange_with_scores("leaderboard", 0, 9)?;
+```
+
+## Connecting
+
+`hash_slot(key)` is the same 0–16383 slot Ruvio uses, including `{hash tags}`. Set `ClientOptions::discover_cluster` to `false` to stay on the seed socket. An incomplete, overlapping, or malformed `CLUSTER SLOTS` map fails discovery instead of silently using an ambiguous owner. A disconnected stale owner triggers a refresh from another connected node before sending the command; a dropped in-flight command is not replayed automatically. Cross-slot `MSET` / `DEL` and `RENAME` are client-side operations, not atomic transactions: an error may leave some keys changed. Use a shared hash tag for atomic multi-key writes.
+
+A standalone client is bound to one logical database. Database 0 sends nothing after discovery. Any other index sends `SELECT` before the connect call returns. Cluster mode has only database 0.
+
+```rust
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use ruvio_client::{Client, ClientOptions};
+
+let mut cache = Client::connect_database("127.0.0.1", 6379, 2)?;
+let mut sessions = Client::connect_ip(IpAddr::V4(Ipv4Addr::LOCALHOST), 6379, 3)?;
+let mut main = Client::connect_addr(SocketAddr::from(([10, 0, 0, 5], 6379)), 0)?;
+let mut secured = Client::connect_with(ClientOptions {
+    host: "10.0.0.5".into(),
+    username: Some("app".into()),
+    password: Some("secret".into()),
+    database: 4,
+    ..ClientOptions::default()
+})?;
+```
+
+`select` switches the same connection, and `into_database` does the same and returns the client. `flushdb`, `flushall`, `swapdb`, and `move_key` send `FLUSHDB`, `FLUSHALL`, `SWAPDB`, and `MOVE`.
+
+A password is sent as `AUTH` only when `ClientOptions::password` is set. A server error reply leaves the connection usable. A broken read or write does not.
+
+## Commands
+
+`idempotency_begin(key, fingerprint, owner, ttl_ms)` sends native
+`IDEM key BEGIN ...` and returns the state array with optional binary
+result. `idempotency_complete(key, fingerprint, owner, result)` sends native
+`COMPLETE` with a text result and returns 1 or 0. Only an acquired reservation
+allows execution; a pending response must not be treated as permission to retry.
+Neither completion nor replay renews retention. This is not exactly-once for
+external effects; see [the native contract](../../docs/IDEM.md).
+
+| Family | Methods |
+| --- | --- |
+| Ruvio jobs | `lease`, `release`, `semaphore`, `setv`, `limit`, `once`, `take`, `getex`, `incr_by_max`, `changes_start`, `changes`, `idem_begin`, `idem_complete`, `idempotency_begin`, `idempotency_complete`, `fill_get`, `fill_get_wait` (`WAIT`), `fill_set` (`SWR`) |
+| Ruvio extensions | `delex` (`DELEX key IFEQ v`), `set_if_eq`, `set_if_eq_keep_ttl` (`SET ... IFEQ`), `lpushcap`, `rpushcap`, `json_index_create`, `json_index_drop`, `json_index_list`, `json_find`, `ruvio` |
+| Strings | `get`, `get_string`, `set`, `set_with`, `set_ex`, `set_exat`, `set_expires_at`, `set_keep_ttl`, `set_and_get`, `set_bytes`, `setex`, `psetex`, `setnx`, `getdel`, `mget`, `mset`, `msetnx`, `getset`, `append`, `strlen`, `incr`, `incr_by`, `incr_by_float`, `decr`, `decr_by`, `getrange`, `substr`, `setrange` |
+| Bitmaps / HyperLogLog | `setbit`, `getbit`, `bitcount`, `bitcount_range` (`BYTE`/`BIT`), `bitpos`, `bitpos_range`, `bitop`, `bitfield`, `bitfield_ro`, `pfadd`, `pfcount`, `pfmerge` |
+| Keys | `del`, `del_key`, `unlink`, `unlink_key`, `exists`, `exists_key`, `key_type`, `rename`, `rename_nx`, `copy`, `touch`, `keys`, `random_key`, `scan`, `scan_iter`, `dbsize`, `expire`, `pexpire`, `expire_at`, `expire_time`, `pexpire_time`, `ttl`, `pttl`, `persist`, `dump`, `restore`, `object_encoding`, `object_idletime`, `object_freq`, `memory_usage`, `memory_usage_samples` |
+| Lists | `lpush`, `rpush`, `lpushx`, `rpushx`, `lpop`, `lpop_count`, `rpop`, `rpop_count`, `llen`, `lindex`, `lrange`, `ltrim`, `lset`, `linsert`, `lrem`, `lpos`, `lpos_with`, `lpos_count`, `lmove`, `blmove`, `rpoplpush`, `lmpop`, `blmpop`, `blpop`, `blpop_key`, `brpop`, `brpop_key` |
+| Sets | `sadd`, `srem`, `sismember`, `smismember`, `scard`, `smembers`, `sinter`, `sintercard`, `sunion`, `sdiff`, `sinterstore`, `sunionstore`, `sdiffstore`, `smove`, `spop`, `spop_count`, `srandmember`, `srandmember_count`, `sscan`, `sscan_iter` |
+| Hashes | `hset`, `hget`, `hdel`, `hlen`, `hgetall`, `hmget`, `hexists`, `hkeys`, `hvals`, `hincr_by`, `hincr_by_float`, `hsetnx`, `hstrlen`, `hrandfield`, `hrandfield_count`, `hrandfield_with_values`, `hscan`, `hscan_iter`, `hexpire`, `hexpire_with`, `hpexpire`, `hexpire_at`, `httl`, `hpttl`, `hexpiretime`, `hpexpiretime`, `hpersist` |
+| Sorted sets | `zadd`, `zadd_with`, `zadd_incr`, `zincr_by`, `zrange`, `zrevrange`, `zrange_with_scores`, `zrevrange_with_scores`, `zrange_by_lex`, `zrange_query`, `zrange_query_with_scores` (`BYSCORE`/`BYLEX`/`REV`/`LIMIT`), `zrange_by_score`, `zrange_by_score_with_scores`, `zrangebylex`, `zrevrangebylex`, `zcount`, `zlexcount`, `zmscore`, `zrem`, `zcard`, `zscore`, `zrank`, `zrevrank`, `zpopmin`, `zpopmax`, `bzpopmin`, `bzpopmax`, `zremrangebyrank`, `zremrangebyscore`, `zremrangebylex`, `zunion`, `zinter`, `zdiff` (and `_with_scores`), `zunionstore`, `zinterstore`, `zdiffstore`, `zrandmember`, `zrandmember_count`, `zrandmember_with_scores`, `zscan`, `zscan_iter` |
+| Geo | `geo_add`, `geo_add_with`, `geo_dist`, `geo_hash`, `geo_pos`, `geo_search`, `geo_search_with` (`BYBOX`, `COUNT ANY`, `WITHDIST`/`WITHHASH`/`WITHCOORD`), `geo_search_store`, `geo_radius`, `geo_radius_by_member` |
+| Bloom filters | `bf_reserve`, `bf_reserve_with` (`EXPANSION`/`NONSCALING`), `bf_add`, `bf_madd`, `bf_insert`, `bf_exists`, `bf_mexists`, `bf_info`, `bf_info_field`, `bf_card` |
+| JSON | `json_get`, `json_mget`, `json_set`, `json_set_with` (`NX`/`XX`), `json_merge`, `jmerge`, `json_del`, `json_forget`, `json_type`, `json_strlen`, `json_strappend`, `json_arrlen`, `json_objkeys`, `json_objlen`, `json_numincrby`, `json_nummultby`, `json_toggle`, `json_arrappend`, `json_arrappend_many`, `json_arrinsert`, `json_arrpop`, `json_arrtrim`, `json_arrindex`, `json_clear`, `json_index_*`, `json_find` |
+| Streams | `xadd`, `xadd_maxlen`, `xadd_delay`, `xadd_nomkstream`, `xlen`, `xrange`, `xrevrange`, `xdel`, `xtrim_maxlen`, `xtrim_minid`, `xsetid`, `xread`, `xgroup_create`, `xgroup_create_consumer`, `xreadgroup`, `xgroup_destroy`, `xgroup_setid`, `xgroup_delconsumer`, `xack`, `xpending_summary`, `xpending`, `xclaim`, `xclaim_ids`, `xautoclaim`, `xinfo_stream`, `xinfo_groups`, `xinfo_consumers` |
+| Transactions | `multi`, `exec`, `discard`, `watch`, `watch_key`, `unwatch` |
+| Scripts and functions | `eval`, `evalsha`, `script_load`, `script_exists`, `script_flush`, `script_kill`, `fcall`, `function_load`, `function_list`, `function_delete` |
+| Pub/Sub | `publish`, `spublish`, `subscribe`, `unsubscribe`, `psubscribe`, `punsubscribe`, `ssubscribe`, `sunsubscribe`, `next_message`, `read_message`, `subscriber`, `listen` |
+| Server | `ping`, `ping_message`, `echo`, `auth`, `auth_user`, `info`, `config_get`, `save`, `bgsave`, `wait`, `select`, `flushdb`, `flushall`, `swapdb`, `move_key`, `hello`, `command_list`, `command_count`, `command_info`, `command_docs`, `latency_latest`, `slowlog_get`, `slowlog_len`, `slowlog_reset`, `client_id`, `client_info`, `client_list`, `client_kill_id`, `client_kill_addr`, `client_getname`, `client_setname`, `client_tracking`, `cluster_slots`, `cluster_nodes`, `cluster_shards`, `cluster_info`, `cluster_myid`, `cluster_keyslot`, `readonly`, `readwrite` |
+| ACL | `acl_whoami`, `acl_users`, `acl_list`, `acl_getuser`, `acl_cat`, `acl_setuser`, `acl_load`, `acl_save` |
+
+`SortedSetAddOptions`, `StreamReadOptions`, `StreamPendingFilter`, and `StreamClaimOptions` carry the optional `ZADD`, `XREAD`/`XREADGROUP`, `XPENDING`, and `XCLAIM` arguments. `eval`, `evalsha`, and `fcall` take keys and arguments separately and send `keys.len()` as the key count.
+
+Inside `MULTI` the server answers `QUEUED` instead of the typed reply, so queue commands with `execute` and read the results from `exec`:
+
+```rust
+db.watch(&["balance"])?;
+db.multi()?;
+db.execute(&["INCRBY", "balance", "10"])?;
+db.execute(&["GET", "balance"])?;
+let replies = db.exec()?; // None when a watched key changed
+```
+
+`subscribe` opens a second socket, the same way `Ruvio.Client` does. Keep `publish`, `GET`, and `PING` on the same client. `listen` (callback) or `next_message` reads that subscriber socket. `subscriber()` still returns the extra socket if you want it separately. `set_read_timeout` bounds the wait.
+
+A dropped socket is opened again before the next command, including a shard socket. The command that discovers the drop returns an error. `on_connection_lost` and `on_connection_restored` report the change. Set `ClientOptions::reconnect` to false and call `reconnect` yourself, or `set_reconnect_delay` to own the wait. Returning `None` stops the retry.
+
+```rust
+db.subscribe(&["news"])?;
+assert_eq!(db.ping()?, "PONG");
+db.listen(|message| println!("{}", String::from_utf8_lossy(&message.payload)))?;
+```
+
+## Helpers
+
+Thin layers over the native commands, the same set every Ruvio client ships.
+
+```rust
+use std::time::Duration;
+use ruvio_client::{CacheOptions, Client, Error, IdemOutcome};
+
+// Distributed lock: SET key token NX PX, renew with SET ... IFEQ, release with DELEX IFEQ.
+// The guard derefs to the client and releases on drop; it never deletes another holder's lock.
+if let Some(mut lock) = db.try_lock("lock:report", Duration::from_secs(30))? {
+    lock.set("report:status", "running")?;
+    lock.renew(Duration::from_secs(30))?;
+} // DELEX lock:report IFEQ <token>
+let waited = db.lock("lock:report", Duration::from_secs(30), Duration::from_secs(2))?; // polls
+db.with_lock("lock:job", Duration::from_secs(30), |db| db.incr("jobs"))?;
+
+// Fenced lease and semaphore permits (RELEASE on drop).
+if let Some(lease) = db.lease_guard("leader", Duration::from_secs(10))? {
+    let fence = lease.fence(); // pass it to the protected resource
+}
+let permit = db.semaphore_permit("downloads", 4, Duration::from_secs(60))?;
+
+// Rate limit: LIMIT key max window -> RateLimit { allowed, remaining }.
+let verdict = db.rate_limit("login:ada", 5, Duration::from_secs(60))?;
+
+// Cache-aside with stampede protection on FILLGET / FILLSET.
+let page = db.get_or_create("page:home", Duration::from_secs(60), || {
+    Ok::<_, Error>(render_home())
+})?;
+
+// Run once with IDEM BEGIN / COMPLETE.
+match db.idempotent("pay:42", "fingerprint", "worker-1", Duration::from_secs(3600), || {
+    Ok::<_, Error>(charge_card()?)
+})? {
+    IdemOutcome::Executed(result) | IdemOutcome::Replayed(result) => { /* reply */ }
+    IdemOutcome::Pending | IdemOutcome::Conflict => { /* retry later / reject */ }
+}
+
+// Lazy scan iterators (SCAN / HSCAN / SSCAN / ZSCAN), one page in memory at a time.
+for key in db.scan_iter(Some("session:*"), Some(500)) { let key = key?; }
+
+// Capped "recent items" list (LPUSHCAP) and Bloom "seen before" (BF.MADD / BF.MEXISTS).
+db.push_recent("recent:ada", 50, "item:9")?;
+let last_ten = db.recent("recent:ada", 10)?;
+let seen = db.seen_before("emails:seen", &["a@x", "b@x"])?; // [false, false] the first time
+```
+
+`get_or_create` polls plain `FILLGET` with a 2–50 ms backoff on `BUSY` instead of sending
+`FILLGET ... WAIT`, which would park the connection; `fill_get_wait` is there when you want the
+server-side wait. `CacheOptions` sets the fill timeout, the stale-while-revalidate window
+(`FILLSET ... SWR`) and how long to wait before an `ErrorKind::TimedOut` error. Lock tokens come
+from `new_token()` (128 random bits from std's hasher seeds, the clock, pid and a counter); they
+identify the holder, they are not secrets. `acquire_lock`, `renew_lock` and `release_lock` take
+your own token when the lock crosses processes.
+
+With the `serde` feature, `json_set_value`, `json_set_value_with`, `json_merge_value`,
+`json_arrappend_value`, `json_get_value`, `json_arrpop_value` and `json_find_value` take and return
+typed values.
+
+## Binary values
+
+`get` returns bytes. `set_bytes`, `restore` (for `dump` payloads), `idem_complete` and
+`execute_binary` send raw bytes; everything else takes `&str`. On a cluster `execute_binary`
+routes by its second argument and does not split multi-key commands.
+
+## Performance notes
+
+- Fixed-arity commands borrow their arguments into a stack array and format numbers into a stack
+  buffer, so `GET`, `INCR`, `EXPIRE`, `DELEX`, `ZCOUNT` and the like allocate nothing but the reply
+  value. Variadic commands allocate one `Vec<&str>`, never owned copies of the arguments.
+- Each connection keeps one encode buffer and one buffered reader. Replies are parsed in place;
+  bulk strings move into the returned `String`/`Vec<u8>` without a second copy.
+- The client is synchronous and `&mut self`: one connection per thread (or a pool) is the scaling
+  model. `execute_many` pipelines a batch in one write. There is no multiplexing of concurrent
+  callers on one socket, unlike the C# client.
+
+`RUVIO_ADDR=127.0.0.1:6379 cargo run --release --example alloc_bench` prints allocations, bytes
+and time per command, codec-only encode/parse cost, and 1- and 4-thread GET/SET throughput. Numbers
+from a 4-vCPU container, release build, one-shard server on loopback (noisy, shared machine):
+
+| Measurement | alloc/op | time |
+| --- | --- | --- |
+| encode `SET k v` (no I/O) | 0 | 0.03–0.04 µs |
+| parse `:int` / `+OK` / `$32` / `*3` (no I/O) | 0 / 1 / 1 / 2 | 0.03 / 0.05 / 0.06 / 0.15–0.23 µs |
+| `GET` small, `GET` missing | 1 (the value), 0 | round trip |
+| `INCR`, `EXPIRE`, `DELEX`, `ZCOUNT`, `LIMIT` | 0 | round trip |
+| `SET`, `SET PX`, `SET IFEQ PX` | 1 (the 2-byte `OK`) | round trip |
+| `LPUSHCAP` 1 item / `BF.MADD` 2 / `ZUNION` 2 keys | 1 / 3 / 5 | round trip |
+| serial round trip, any of the above | | 13–67 µs (two runs; the host was shared and noisy) |
+| GET / SET, 1 thread | | 17k–60k ops/s (two runs) |
+| GET / SET, 4 threads | | 40k–46k ops/s (one-shard server) |
+
+Allocation counts are exact (counting allocator); times are loopback on a shared 4-vCPU container
+and vary run to run, so compare them only within one run.
+
+## Tests
+
+`cargo test` runs the unit tests and `tests/coverage.rs`, which reads the compatibility matrix and
+fails when a command has no typed method. `RUVIO_TEST_ADDR=127.0.0.1:16390 cargo test` also runs
+`tests/live.rs` (databases 0 to 7) and `tests/live_ext.rs` (databases 0 and 8 to 15) against a server
+on that address; they flush those databases. Without the variable the live tests return early.
+
+## Not done / not verified
+
+- Cluster routing for the new commands (`BITOP`, `SINTERCARD`, `JSON.MGET`, `XGROUP`/`XINFO`,
+  keyless `RUVIO`/`JSON.INDEX`/`JSON.FIND`) is unit-tested (`command_keys`), but not run against a
+  live multi-shard server in this round (`tests/cluster_live.rs` needs `RUVIO_CLUSTER_ADDR`).
+- `ZRANGE ... BYSCORE REV` and `BYLEX REV` take the high bound first, as in Redis (older server
+  builds expected the low bound first). `zrange_query` sends bounds exactly as given.
+- `GEORADIUS ... STORE`, `XADD ... MINID` and `XAUTOCLAIM ... COUNT/JUSTID` have no dedicated
+  typed option; send them with `execute`.
+- No multiplexed/async connection: concurrent callers need one client each.
+
+## Unreleased
+
+- Typed methods for every matrix command (287/287): `DELEX`, `SET ... IFEQ`, `LPUSHCAP`/`RPUSHCAP`,
+  the full `BF.*` and `JSON.*` families including `JSON.INDEX`/`JSON.FIND`, bitmaps, HyperLogLog,
+  `SSCAN`/`ZSCAN`, `ZUNION`/`ZINTER`/`ZDIFF` and their stores, `DUMP`/`RESTORE`, `WAIT`, `COMMAND`,
+  `LATENCY`, and the rest of the strings, sets, sorted sets and hashes.
+- Helpers: `LockGuard`, `LeaseGuard`, `SemaphorePermit`, `rate_limit`, `get_or_create`,
+  `idempotent`, `scan_iter`/`hscan_iter`/`sscan_iter`/`zscan_iter`, `push_recent`/`recent`,
+  `seen_before`/`maybe_seen`.
+- `execute_binary`, `set_bytes`, `hash_slot_bytes`, `RespValue::into_string` / `into_bytes`.
+- Fewer allocations on existing commands: fixed-arity commands no longer build `Vec<String>`.
+
+## 0.2.5
+
+- `geo_add`, `geo_dist`, `geo_hash`, `geo_pos`, `geo_search`, `geo_search_store`, `geo_radius`, and `geo_radius_by_member`.
+
+## 0.2.4
+
+- A dropped command or shard socket is opened again before the next command. The command that sees the drop returns an error. Subscriptions on a dedicated Pub/Sub socket are sent again after it reopens.
+- `on_connection_lost` and `on_connection_restored` take a `ConnectionNotice` (`host`, `port`, `subscriber`).
+- `ClientOptions::reconnect` (default true), `max_reconnect_attempts`, `reconnect_base_delay`, `reconnect_max_delay`, `set_reconnect_delay`, and `reconnect`. `None` from the delay stops the retry. `max_reconnect_attempts` is not applied while a custom delay is set.
+
+## 0.2.3
+
+- `subscribe` / `psubscribe` / `ssubscribe` open a dedicated Pub/Sub socket so command traffic stays on the original connection. `subscriber()` still returns that extra socket if you want it separately. `listen` calls a callback for each delivery.
+
+## 0.2.2
+
+- `del_key`, `unlink_key`, `exists_key`, `watch_key`, `blpop_key`, and `brpop_key` take one key. The slice methods remain for many keys.
+
+## 0.2.1
+
+- A sharded server is discovered from one seed address. Commands are routed by hash slot, `MOVED` is followed, and `MGET` / `MSET` / `DEL` split across shards.
+- `cluster_shards`, `cluster_info`, `cluster_myid`, `cluster_keyslot`, `readonly`, `readwrite`.
+- `hash_slot`, `is_cluster`, `shard_count`, and `ClientOptions::discover_cluster`.
+
+## 0.2.0
+
+- Typed methods for every command Ruvio supports.
+- `ClientOptions::database`, `connect_database`, `connect_ip`, `connect_addr`, `select`, `into_database`, and `database`.
+- `set_expires_at` (`PXAT`), `set_keep_ttl` (`KEEPTTL`), `set_and_get` (`GET`), and `ping_message`.
+- `expire` sends `PEXPIRE` when the duration is not whole seconds. It used to round up to the next second.
+- `RespValue::as_integer`, `as_array`, and `is_null`.
+- The minimum Rust version is 1.87.
+
+## Typed JSON values (`serde` feature)
+
+```toml
+ruvio-client = { version = "0.3", features = ["serde"] }
+```
+
+`json_set_value`, `json_merge_value`, `json_arrappend_value` take any `Serialize` value and
+`json_get_value::<T>` returns any `DeserializeOwned`. `db.json_set_value("doc", "$.city", "izmir")`
+sends `"izmir"` with quotes. Serializer settings are serde attributes on your type. To use another
+serializer, serialize yourself and call the raw `json_set`, `json_merge`, `json_arrappend`.

@@ -1,0 +1,163 @@
+using System.Net;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Ruvio.Client;
+using Xunit;
+
+namespace Ruvio.AspNetCore.Idempotency.Tests;
+
+public class HttpPipelineTests
+{
+    [LiveFact]
+    public async Task Real_http_uses_native_idem_to_replay_and_reject_changed_requests()
+    {
+        var endpoint = Environment.GetEnvironmentVariable("RUVIO_TEST_ADDR")!.Split(':');
+
+        await using var connection = await RuvioConnection.ConnectAsync(endpoint[0], int.Parse(endpoint[1]));
+        IRuvioClient client = await connection.GetDefaultDatabaseAsync();
+        var builder = WebApplication.CreateBuilder();
+
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Logging.ClearProviders();
+        builder.Services.AddSingleton<IRuvioClient>(client);
+        builder.Services.AddRuvioIdempotency(o =>
+        {
+            o.Namespace = "native-http-" + Guid.NewGuid().ToString("N");
+            o.ScopeSelector = _ => "tenant";
+            o.Retention = TimeSpan.FromSeconds(10);
+        });
+
+        await using var app = builder.Build();
+        app.Use(async (context, next) =>
+        {
+            context.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", "user")], "test"));
+            await next();
+        });
+
+        app.UseRouting();
+        app.UseRuvioIdempotency();
+        int calls = 0;
+
+        app.MapPost("/native", () =>
+        {
+            calls++;
+
+            return new { value = "saved" };
+        }).WithMetadata(new RuvioIdempotencyAttribute());
+
+        await app.StartAsync();
+        try
+        {
+            string address = app.Services.GetRequiredService<IServer>().Features
+                .Get<IServerAddressesFeature>()!.Addresses.Single();
+            using var http = new HttpClient { BaseAddress = new Uri(address), Timeout = TimeSpan.FromSeconds(10) };
+
+            http.DefaultRequestHeaders.Add("Idempotency-Key", "native-request");
+            using var first = await http.PostAsync("/native", new StringContent("{}"));
+            using var replay = await http.PostAsync("/native", new StringContent("{}"));
+
+            Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+            Assert.Equal(await first.Content.ReadAsStringAsync(), await replay.Content.ReadAsStringAsync());
+            using var conflict = await http.PostAsync("/native", new StringContent("{\"changed\":true}"));
+
+            Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+            Assert.Equal(1, calls);
+        }
+
+        finally { await app.StopAsync(); }
+    }
+
+    [Fact]
+    public async Task RealHttpReplaysJsonAndNeverSendsPartialHandlerFailure()
+    {
+        var (client, _) = StubClient.Create();
+        var builder = WebApplication.CreateBuilder();
+
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Logging.ClearProviders();
+        builder.Services.AddSingleton(client);
+        builder.Services.AddRuvioIdempotency(o =>
+        {
+            o.Namespace = "http-tests";
+            o.ScopeSelector = _ => "tenant";
+        });
+
+        await using var app = builder.Build();
+        int outerCallbacks = 0;
+
+        app.Use(async (context, next) =>
+        {
+            // Test-only authenticated identity; real applications must use their authentication middleware.
+            context.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", "user")], "test"));
+            context.Response.OnStarting(() =>
+            {
+                context.Response.Headers["X-Outer-Callback"] = Interlocked.Increment(ref outerCallbacks).ToString();
+
+                return Task.CompletedTask;
+            });
+
+            await next();
+        });
+
+        app.UseRouting();
+        app.UseRuvioIdempotency();
+        int calls = 0;
+
+        app.MapPost("/json", async c =>
+        {
+            calls++;
+            c.Response.OnStarting(() => { c.Response.Headers.ETag = "\"saved\""; return Task.CompletedTask; });
+
+            await c.Response.WriteAsJsonAsync(new { value = "saved" });
+        }).WithMetadata(new RuvioIdempotencyAttribute());
+
+        app.MapPost("/failure", async c =>
+        {
+            calls++;
+            await c.Response.WriteAsync("partial-success");
+            await c.Response.StartAsync();
+            throw new InvalidOperationException("handler failed after buffered write");
+        }).WithMetadata(new RuvioIdempotencyAttribute());
+
+        await app.StartAsync();
+        try
+        {
+            string address = app.Services.GetRequiredService<IServer>().Features
+                .Get<IServerAddressesFeature>()!.Addresses.Single();
+            using var http = new HttpClient { BaseAddress = new Uri(address) };
+
+            http.DefaultRequestHeaders.Add("Idempotency-Key", "json");
+            using var first = await http.PostAsync("/json", new StringContent("{}"));
+            using var replay = await http.PostAsync("/json", new StringContent("{}"));
+
+            Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+            Assert.Equal(await first.Content.ReadAsStringAsync(), await replay.Content.ReadAsStringAsync());
+            Assert.Equal("\"saved\"", replay.Headers.ETag!.Tag);
+            Assert.Equal("1", first.Headers.GetValues("X-Outer-Callback").Single());
+            Assert.Equal("2", replay.Headers.GetValues("X-Outer-Callback").Single());
+            Assert.Equal(1, calls);
+            http.DefaultRequestHeaders.Remove("Idempotency-Key");
+            http.DefaultRequestHeaders.Add("Idempotency-Key", "failure");
+            using var failed = await http.PostAsync("/failure", new StringContent("{}"));
+
+            Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+            Assert.DoesNotContain("partial-success", await failed.Content.ReadAsStringAsync());
+            using var pending = await http.PostAsync("/failure", new StringContent("{}"));
+
+            Assert.Equal(HttpStatusCode.Conflict, pending.StatusCode);
+            Assert.Equal(2, calls);
+        }
+
+        finally
+        {
+            await app.StopAsync();
+        }
+    }
+}

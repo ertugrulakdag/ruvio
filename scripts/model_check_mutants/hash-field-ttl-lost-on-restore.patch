@@ -1,0 +1,15 @@
+diff --git a/src/store/snapshot.rs b/src/store/snapshot.rs
+index 0327032..e7ea638 100644
+--- a/src/store/snapshot.rs
++++ b/src/store/snapshot.rs
+@@ -608,10 +608,6 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
+                     }
+ 
+                     hash.hash_insert(&field, &value, limits);
+-
+-                    if at != 0 {
+-                        hash.set_field_deadline(&field, at);
+-                    }
+                 }
+ 
+                 if hash.as_hash().is_none_or(HashValue::is_empty) {

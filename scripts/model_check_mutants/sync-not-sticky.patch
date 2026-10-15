@@ -1,0 +1,13 @@
+diff --git a/src/persistence/wal.rs b/src/persistence/wal.rs
+index 6dce97f..8393a4f 100644
+--- a/src/persistence/wal.rs
++++ b/src/persistence/wal.rs
+@@ -1364,7 +1364,7 @@ impl WalSink {
+                 "WAL fsync failed; writes are refused until restart"
+             );
+         }
+-        self.sync_failed = true;
++        // Recovery retries the segment like after a failed write.
+         self.failed = Some(error.clone());
+         Err(PersistenceError::Failed(error))
+     }

@@ -1,0 +1,202 @@
+{
+  "ruvio": {
+    "GET (baseline, for scale)": {
+      "instructions": 1908.0,
+      "i1_misses": 11.5
+    },
+    "SET (baseline, for scale)": {
+      "instructions": 2276.0,
+      "i1_misses": 14.1
+    },
+    "LPOS (100 elements, hit in the middle)": {
+      "instructions": 12860.0,
+      "i1_misses": 227.8
+    },
+    "LSET (100 elements)": {
+      "instructions": 58204.0,
+      "i1_misses": 507.8
+    },
+    "LINSERT (pivot missing, scans 100)": {
+      "instructions": 24327.0,
+      "i1_misses": 270.5
+    },
+    "LREM (value missing, scans 100)": {
+      "instructions": 25423.0,
+      "i1_misses": 212.4
+    },
+    "LMOVE (rotate a 100-element list)": {
+      "instructions": 9585.0,
+      "i1_misses": 355.7
+    },
+    "BITFIELD INCRBY u8 (always writes)": {
+      "instructions": 7578.0,
+      "i1_misses": 348.8
+    },
+    "BITFIELD GET u8": {
+      "instructions": 6261.0,
+      "i1_misses": 308.6
+    },
+    "SETBIT (1 KiB bitmap, same bit)": {
+      "instructions": 4619.0,
+      "i1_misses": 132.2
+    },
+    "GETBIT (1 KiB bitmap)": {
+      "instructions": 4767.0,
+      "i1_misses": 151.7
+    },
+    "BITCOUNT (1 KiB bitmap)": {
+      "instructions": 10610.0,
+      "i1_misses": 144.4
+    },
+    "PFADD": {
+      "instructions": 25920.0,
+      "i1_misses": 216.3
+    },
+    "PFCOUNT": {
+      "instructions": 249259.0,
+      "i1_misses": 260.8
+    },
+    "COPY ... REPLACE (64 B string)": {
+      "instructions": 10245.0,
+      "i1_misses": 423.8
+    },
+    "DUMP (64 B string)": {
+      "instructions": 6653.0,
+      "i1_misses": 240.2
+    },
+    "EXPIRETIME": {
+      "instructions": 4610.0,
+      "i1_misses": 125.3
+    },
+    "TOUCH": {
+      "instructions": 4270.0,
+      "i1_misses": 141.8
+    },
+    "OBJECT ENCODING": {
+      "instructions": 5286.0,
+      "i1_misses": 174.8
+    },
+    "MEMORY USAGE": {
+      "instructions": 4856.0,
+      "i1_misses": 167.9
+    },
+    "GETRANGE": {
+      "instructions": 4565.0,
+      "i1_misses": 115.6
+    },
+    "SETRANGE": {
+      "instructions": 5352.0,
+      "i1_misses": 177.4
+    },
+    "SETEX": {
+      "instructions": 8120.0,
+      "i1_misses": 331.2
+    },
+    "GEOADD": {
+      "instructions": 12336.0,
+      "i1_misses": 469.2
+    },
+    "GEOSEARCH (radius 50 km, COUNT 10)": {
+      "instructions": 10625965.0,
+      "i1_misses": 779.7
+    }
+  },
+  "redis": {
+    "GET (baseline, for scale)": {
+      "instructions": 3607.0,
+      "i1_misses": 1.9
+    },
+    "SET (baseline, for scale)": {
+      "instructions": 4544.0,
+      "i1_misses": 19.2
+    },
+    "LPOS (100 elements, hit in the middle)": {
+      "instructions": 19681.0,
+      "i1_misses": 7.1
+    },
+    "LSET (100 elements)": {
+      "instructions": 10021.0,
+      "i1_misses": 4.6
+    },
+    "LINSERT (pivot missing, scans 100)": {
+      "instructions": 32828.0,
+      "i1_misses": 7.5
+    },
+    "LREM (value missing, scans 100)": {
+      "instructions": 32282.0,
+      "i1_misses": 6.6
+    },
+    "LMOVE (rotate a 100-element list)": {
+      "instructions": 7454.0,
+      "i1_misses": 90.7
+    },
+    "BITFIELD INCRBY u8 (always writes)": {
+      "instructions": 6754.0,
+      "i1_misses": 22.2
+    },
+    "BITFIELD GET u8": {
+      "instructions": 5702.0,
+      "i1_misses": 4.4
+    },
+    "SETBIT (1 KiB bitmap, same bit)": {
+      "instructions": 4438.0,
+      "i1_misses": 2.5
+    },
+    "GETBIT (1 KiB bitmap)": {
+      "instructions": 3816.0,
+      "i1_misses": 2.1
+    },
+    "BITCOUNT (1 KiB bitmap)": {
+      "instructions": 7438.0,
+      "i1_misses": 2.9
+    },
+    "PFADD": {
+      "instructions": 5176.0,
+      "i1_misses": 3.1
+    },
+    "PFCOUNT": {
+      "instructions": 3901.0,
+      "i1_misses": 6.7
+    },
+    "COPY ... REPLACE (64 B string)": {
+      "instructions": 6594.0,
+      "i1_misses": 13.4
+    },
+    "DUMP (64 B string)": {
+      "instructions": 8063.0,
+      "i1_misses": 67.9
+    },
+    "EXPIRETIME": {
+      "instructions": 3324.0,
+      "i1_misses": 1.5
+    },
+    "TOUCH": {
+      "instructions": 3320.0,
+      "i1_misses": 1.4
+    },
+    "OBJECT ENCODING": {
+      "instructions": 4540.0,
+      "i1_misses": 2.1
+    },
+    "MEMORY USAGE": {
+      "instructions": 4219.0,
+      "i1_misses": 1.8
+    },
+    "GETRANGE": {
+      "instructions": 4693.0,
+      "i1_misses": 1.9
+    },
+    "SETRANGE": {
+      "instructions": 4578.0,
+      "i1_misses": 2.6
+    },
+    "SETEX": {
+      "instructions": 8898.0,
+      "i1_misses": 49.6
+    },
+    "GEOADD": {
+      "instructions": 15421.0,
+      "i1_misses": 214.7
+    }
+  }
+}

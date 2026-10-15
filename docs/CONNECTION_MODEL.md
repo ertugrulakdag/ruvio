@@ -1,0 +1,114 @@
+# Connection model
+
+This page says who chooses what when an application talks to Ruvio: the
+server, the client library, or the application. It covers servers, shards,
+logical databases, and the Rust and C# clients.
+
+## The three layers
+
+| Layer | What it is | Who chooses |
+| --- | --- | --- |
+| Server address | One `host:port` of a running Ruvio process | The application's configuration (per environment) |
+| Shard | One slot owner inside a Ruvio process, with its own port | The client, from one seed address |
+| Logical database | A numbered key space (`SELECT 0..databases-1`) | The application, once, when it opens a connection |
+
+## Servers
+
+A Ruvio process is one server. The application is configured with the address
+of the server it should use, for example from a connection string. A client
+never finds a different Ruvio process by itself. Two independent servers mean
+two clients, each opened with its own address.
+
+## Shards
+
+`shards` (default 1) starts that many shard owners in one process. Shard `i`
+listens on the bind port plus `i` and owns a range of the 16,384 hash slots.
+A shard answers `MOVED` for a key it does not own and `CROSSSLOT` for a
+multi-key command that spans slots.
+
+The application does not pick a shard. It gives the client one address. On
+connect, the client sends `CLUSTER SLOTS`, learns every shard, opens a socket
+to each as needed, and sends every key to the shard that owns
+`hash_slot(key)`. Both first-party clients do this. A single-shard server
+answers as a standalone server and the client skips routing.
+
+The application's only part is key design. Commands that touch several keys
+need those keys in one slot, which a hash tag does: `{user:1}:profile` and
+`{user:1}:cart` hash on `user:1`.
+
+## Logical databases
+
+With `shards = 1`, the server has `databases` numbered key spaces (16 by
+default, 1 to 256). A connection starts on database 0 and `SELECT n` changes
+it for that connection only. `user:1` in database 0 and in database 1 are
+different keys. See [LOGICAL_DATABASES.md](LOGICAL_DATABASES.md).
+
+With `shards > 1` only database 0 exists, as in Redis Cluster. The clients
+reject `database != 0` against a sharded server. So a server has either many
+databases and one shard, or many shards and one database. It never has both.
+
+## Clients
+
+A client handle is bound to one database. The database is chosen when the
+connection is opened, and the application does not name it on each command.
+
+Rust (`clients/ruvio-client`):
+
+```rust
+// Server address comes from application config. Shards are discovered.
+let mut cache = Client::connect("10.0.0.5", 6379)?;
+cache.set("k", "v")?;
+
+// A single-shard server with logical databases: one handle per database.
+let mut sessions = Client::connect_database("10.0.0.5", 6379, 1)?;
+```
+
+`Client` is synchronous and takes `&mut self`. One handle is one command
+connection (plus a second socket for Pub/Sub). `select` and `into_database`
+switch the database of that same connection; they do not open another socket.
+
+C# (`clients/csharp`):
+
+```csharp
+await using var connection = await RuvioConnection.ConnectAsync(
+    new RuvioClientOptions { Host = "10.0.0.5", Port = 6379 });
+
+IRuvioClient cache = await connection.GetDatabaseAsync(0);
+IRuvioClient sessions = await connection.GetDatabaseAsync(1);
+```
+
+`RuvioConnection` owns the connection settings, reconnect, events, and
+disposal. `GetDatabaseAsync(n)` returns one cached client per database, each
+with its own command connection that selected `n` when it opened. Asking for
+the same `n` again returns the same client. On a sharded server only `0` is
+allowed. ASP.NET Core registration exposes the connection and the default
+database client as singletons.
+
+Both clients end up with the same rule: **one handle, one database**.
+
+## What application code does
+
+- Reads the server address (and a database number, if it uses one) from
+  configuration.
+- Opens the client or connection once at start-up and shares it.
+- Uses key prefixes (`session:`, `cache:`) to separate kinds of data. This
+  works on every server shape. Database numbers do not exist on sharded
+  servers, do not isolate memory, ACL, or `FLUSHALL`, and are best kept to a
+  few well-known roles on a single-shard server.
+- Uses hash tags when several keys must be handled together on a sharded
+  server.
+
+It does not choose shards, and it does not send `SELECT` between commands.
+
+## Reconnect
+
+A dropped socket, including one shard's socket, is opened again before the
+next command. Pass the database in the options when you open the client, so a
+new socket is opened on that database. Do not rely on a later `select` to
+survive a reconnect; this page does not claim that. See
+[clients/README.md](../clients/README.md).
+
+## Socket I/O stays on the shard thread
+
+A connection's `recv`, parse, execute, format and `send` all run on its shard's thread. Moving the socket
+calls to dedicated I/O threads measured slower on Linux and macOS, so there are none.

@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>0.1.1</Version>
+    <Authors>Salih Cantekin</Authors>
+    <Description>Binary-safe IDistributedCache integration for Ruvio.</Description>
+    <PackageId>Ruvio.Extensions.Caching</PackageId>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>ruvio-icon.png</PackageIcon>
+    <PackageTags>ruvio;redis;cache;distributedcache</PackageTags>
+    <RepositoryUrl>https://github.com/salihcantekin/ruvio</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://salihcantekin.github.io/ruvio/</PackageProjectUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.0" />
+    <ProjectReference Include="../../../clients/csharp/Ruvio.Client/Ruvio.Client.csproj" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../../../brand/ruvio-icon-square.png" Pack="true" PackagePath="ruvio-icon.png" />
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>Ruvio.Extensions.Caching.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+</Project>

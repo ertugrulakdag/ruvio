@@ -1,0 +1,35 @@
+# The existing local Ruvio container is a two-shard server on 6380/6381.
+# The UI shares that container's network, so cluster addresses of 127.0.0.1
+# reach the server. Port 8080 is published on the server container for the UI.
+services:
+  ruvio:
+    image: salihcantekin/ruvio:linux
+    container_name: ruvio
+    volumes:
+      - ruvio-2shard-data:/data
+    ports:
+      - "6380:6380"
+      - "6381:6381"
+      - "8080:8080"
+    environment:
+      RUVIO_ADDR: 0.0.0.0:6380
+      RUVIO_SHARDS: "2"
+      RUVIO_ADVERTISE_HOST: 127.0.0.1
+      RUVIO_PROTECTED_MODE: "false"
+      RUVIO_CONFIG: /data/ruvio.toml
+  ruvio-ui:
+    build:
+      context: ..
+      dockerfile: ruvio-ui/Dockerfile
+    image: salihcantekin/ruvio-ui:linux
+    network_mode: service:ruvio
+    depends_on:
+      - ruvio
+    environment:
+      RUVIO_UI_ADDR: 0.0.0.0:8080
+      RUVIO_UI_TARGET_HOST: 127.0.0.1
+      RUVIO_UI_TARGET_PORT: "6380"
+
+volumes:
+  ruvio-2shard-data:
+    external: true

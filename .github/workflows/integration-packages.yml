@@ -1,0 +1,109 @@
+name: integration-packages
+
+# Publish uses NuGet trusted publishing. The package job has id-token: write and exchanges that token through NuGet/login. There is no NUGET_API_KEY secret.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Integration package to build
+        type: choice
+        required: true
+        options:
+          - all
+          - Ruvio.Extensions.Caching
+          - Ruvio.AspNetCore.RateLimiting
+          - Ruvio.AspNetCore.Idempotency
+          - Ruvio.AspNetCore.OutputCaching
+          - Ruvio.AspNetCore.DataProtection
+          - Ruvio.AspNetCore.DistributedLock
+      publish:
+        description: Publish to NuGet (required client version must already be published)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --bin ruvio --locked
+      - name: Verify and package
+        env:
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/ruvio-integrations"
+          mkdir -p "$data_dir"
+          cat > "$RUNNER_TEMP/ruvio-integrations.toml" << EOF
+          address = "127.0.0.1:16382"
+          shards = 1
+
+          [persistence]
+          profile = "memory"
+          data_dir = "$data_dir"
+
+          [security]
+          protected_mode = true
+          allow_unauthenticated_public = false
+          EOF
+          export RUVIO_ADDR=127.0.0.1:16382
+          export RUVIO_TEST_ADDR="$RUVIO_ADDR"
+          export RUVIO_DATA_DIR="$data_dir"
+          export RUVIO_DURABILITY=memory
+          export RUVIO_SHARDS=1
+          ./target/debug/ruvio --config "$RUNNER_TEMP/ruvio-integrations.toml" > "$RUNNER_TEMP/ruvio-integrations.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          python3 -c "import socket,time
+          for _ in range(100):
+              try:
+                  with socket.create_connection(('127.0.0.1',16382), timeout=1) as s:
+                      s.sendall(b'*1\r\n\$4\r\nPING\r\n')
+                      if s.recv(64) == b'+PONG\r\n': break
+              except OSError: pass
+              time.sleep(0.1)
+          else: raise SystemExit('Ruvio did not become ready')"
+          if [ "$PACKAGE" = "all" ]; then
+            packages=(
+              Ruvio.Extensions.Caching
+              Ruvio.AspNetCore.RateLimiting
+              Ruvio.AspNetCore.Idempotency
+              Ruvio.AspNetCore.OutputCaching
+              Ruvio.AspNetCore.DataProtection
+              Ruvio.AspNetCore.DistributedLock
+            )
+          else
+            packages=("$PACKAGE")
+          fi
+          for name in "${packages[@]}"; do
+            dotnet test "integrations/dotnet/$name.Tests/$name.Tests.csproj" -c Release
+            dotnet pack "integrations/dotnet/$name/$name.csproj" -c Release -o dist -p:ContinuousIntegrationBuild=true
+          done
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ inputs.package }}
+          path: |
+            dist/*.nupkg
+            dist/*.snupkg
+      - name: NuGet login
+        if: inputs.publish
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: salihcantekin
+      - name: Publish
+        if: inputs.publish
+        run: dotnet nuget push "dist/*.nupkg" --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate

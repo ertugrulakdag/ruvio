@@ -1,0 +1,34 @@
+# Ruvio
+
+Ruvio is a memory-first key-value server that speaks the Redis protocol (RESP2). `redis-cli` and existing RESP clients connect to it. It adds jobs that usually need a second system: leases and fencing tokens, semaphores, conditional writes, a change feed and delayed stream entries.
+
+- Source: https://github.com/salihcantekin/ruvio
+- Documentation: https://salihcantekin.github.io/ruvio/
+- Supported commands: https://salihcantekin.github.io/ruvio/commands.html
+- Performance and memory results: https://salihcantekin.github.io/ruvio/testing-performance.html and https://salihcantekin.github.io/ruvio/testing-memory.html
+- Security reports: https://github.com/salihcantekin/ruvio/blob/main/SECURITY.md
+
+## Run it
+
+```bash
+docker run --rm -p 6379:6379 \
+  -e RUVIO_REQUIREPASS=change-me \
+  -v ruvio-data:/data \
+  salihcantekin/ruvio:linux
+
+redis-cli -h 127.0.0.1 -p 6379 -a change-me PING
+```
+
+The default durability is `memory`. For a persistent deployment set `RUVIO_DURABILITY` (`snapshot`, `everysec` or `always`) and keep the `/data` volume. Settings are described at https://salihcantekin.github.io/ruvio/configuration.html.
+
+## Tags
+
+`linux` and `latest` are the same image (linux/amd64). A version tag such as `0.3.0` is the same image for that release.
+
+## Not claimed
+
+Ruvio implements a listed subset of Redis, not the full surface. There is no cluster bus, online slot migration or automatic failover.
+
+## License
+
+The server is licensed under the GNU Affero General Public License v3.0 (`AGPL-3.0-only`); the text is in the image at `/usr/local/share/ruvio/LICENSE`. Third-party notices are in `/usr/local/share/ruvio/THIRD_PARTY_NOTICES`. The client libraries are MIT licensed.

@@ -1,0 +1,25 @@
+diff --git a/src/replication.rs b/src/replication.rs
+index f86e39e..992f08f 100644
+--- a/src/replication.rs
++++ b/src/replication.rs
+@@ -367,6 +367,10 @@ pub(crate) fn accept_replica_frame(
+     limits: ProtocolLimits,
+ ) -> Result<(u8, OwnedMutation, bool), ApplyFailure> {
+     let record = decode_record(frame, wal.shard_id(), limits).map_err(decode_failure)?;
++    // The resent last frame is already in the log.
++    if record.sequence != 0 && record.sequence == wal.last_sequence() {
++        return Ok((record.database, record.mutation, false));
++    }
+     if record.sequence != wal.last_sequence() + 1 {
+         return Err(ApplyFailure::Sequence);
+     }
+@@ -1746,7 +1750,8 @@ fn read_primary(
+         0 // A persisted incomplete image has no trustworthy resume cursor.
+     } else {
+         let wal = link.wal.lock().unwrap_or_else(|error| error.into_inner());
+-        wal.published().load(Ordering::Acquire)
++        // Ask for the last frame again: a link that dropped mid-frame may have torn it.
++        wal.published().load(Ordering::Acquire).saturating_sub(1)
+     };
+     if requested != 0 {
+         outstanding.clear();

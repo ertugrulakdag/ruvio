@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Operations — Ruvio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css?v=20261015a">
+  <link rel="stylesheet" href="vendor/highlightjs/github-dark.min.css">
+  <link rel="icon" href="images/ruvio-icon.png" type="image/png">
+  <meta property="og:image" content="https://salihcantekin.github.io/ruvio/images/ruvio-social.png">
+</head>
+<body data-page="operations.html">
+    <header class="top">
+    <div class="top-inner">
+      <a class="mark" href="index.html">Ruvio</a>
+      <nav aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="start.html">Start</a>
+        <details>
+          <summary>Build</summary>
+          <div class="nav-menu">
+            <a href="compare.html">How it runs</a>
+            <a href="commands.html">Commands</a>
+            <a href="packages.html">Packages</a>
+            <a href="ui.html">Operator UI</a>
+          </div>
+        </details>
+        <details>
+          <summary>Clients</summary>
+          <div class="nav-menu">
+            <a href="clients.html">Overview</a>
+            <a href="client-rust.html">Rust</a>
+            <a href="client-csharp.html">C#</a>
+            <a href="client-go.html">Go</a>
+            <a href="client-java.html">Java</a>
+            <a href="client-python.html">Python</a>
+            <a href="client-node.html">Node.js</a>
+            <a href="examples.html">Examples</a>
+          </div>
+        </details>
+        <details>
+          <summary>Operate</summary>
+          <div class="nav-menu">
+            <a href="configuration.html">Configuration</a>
+            <a href="durability.html">Durability</a>
+            <a href="replication.html">Replication</a>
+            <a href="operations.html">Operations</a>
+          </div>
+        </details>
+        <a href="testing.html">Testing</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap layout">
+    <nav class="side">
+      <a href="#observe">Observe</a>
+      <a href="#memory">Memory</a>
+      <a href="#bench">Benchmarks</a>
+      <a href="#open">Still open</a>
+    </nav>
+    <article>
+      <h1>Operations</h1>
+      
+<section class="panel">
+<h2 id="observe">Observe</h2>
+      <p><code>INFO</code> and <code>INFO prometheus</code> describe the shard that received the command. When <code>metrics_address</code> is set, that shard also serves <code>GET /metrics</code> on a separate port. Successful <code>GET</code>, <code>SET</code>, and <code>INCR</code> only move counters. Histograms are scraped, not pushed per command.</p>
+      <p>Operational lines go to a bounded background writer. A full queue drops the line and increments <code>ruvio_log_lines_dropped_total</code> instead of stalling the shard. <code>RUST_LOG</code> selects the filter at startup.</p>
+</section>
+
+<section class="panel">
+<h2 id="memory">Memory and expiry</h2>
+      <p><code>max_shard_bytes</code> and <code>max_process_bytes</code> default to <code>0</code>, which disables those budgets. <code>noeviction</code> rejects writes over the budget. Sampled policies are <code>allkeys-lru</code>, <code>allkeys-lfu</code>, <code>volatile-lru</code>, and <code>volatile-ttl</code>. Deadlines are Unix milliseconds. After recovery the clock floor is <code>max(CLOCK, checkpoint.created_at)</code>.</p>
+</section>
+
+<section class="panel">
+<h2 id="bench">Benchmarks</h2>
+      <p>The latest results for each machine are on the <a href="testing-performance.html">performance</a> and <a href="testing-memory.html">memory</a> pages: one dated run per machine, with the raw samples linked. Older runs on the same machines were removed.</p>
+</section>
+
+<section class="panel">
+<h2 id="open">Still open</h2>
+      <ul>
+        <li>Published bare-metal latency and a 24-hour soak.</li>
+        <li>Automatic failover and <code>REPLICAOF</code>. A caught-up replica is promoted by hand. The steps are on the <a href="replication.html#promote">replication page</a>.</li>
+        <li>A live GitHub Pages deploy until this site is on <code>main</code> and Pages is enabled for the <code>pages</code> workflow.</li>
+      </ul>
+      <p>The workflow <code>.github/workflows/pages.yml</code> publishes the <code>site/</code> directory from <code>main</code>.</p>
+</section>
+</article>
+  </main>
+  <footer class="foot"><div class="foot-inner">Threat boundaries: <code>docs/THREAT_MODEL.md</code>.</div></footer>
+  <script src="js/versions.js?v=20261013j"></script>
+  <script src="vendor/highlightjs/highlight.min.js"></script>
+  <footer class="site-foot">
+    <div class="site-foot-inner">
+      <div class="site-foot-brand">
+        <img src="images/ruvio-mark.png?v=20261015b" alt="" width="36" height="36">
+        <div>
+          <strong>Ruvio</strong>
+          <span>One RESP process. The shard that owns the key does the work.</span>
+          <small>Server AGPL-3.0 · Clients MIT</small>
+        </div>
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/salihcantekin/ruvio/tree/main/docs">Docs</a>
+        <a href="https://github.com/salihcantekin/ruvio">GitHub</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="js/chrome.js?v=20261015a"></script>
+</body>
+</html>

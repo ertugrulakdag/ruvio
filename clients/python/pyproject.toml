@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ruvio-client"
+version = "0.1.0"
+description = "Fast sync and asyncio Python client for the Ruvio key-value server (RESP2/RESP3)"
+readme = "README.md"
+license = { text = "MIT" }
+keywords = ["ruvio", "redis", "resp", "client", "cache", "asyncio", "cluster"]
+authors = [{ name = "Salih Cantekin" }]
+requires-python = ">=3.9"
+dependencies = []
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Framework :: AsyncIO",
+    "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+hiredis = ["hiredis>=2.0"]
+test = ["pytest>=7", "pytest-asyncio>=0.23"]
+
+[project.urls]
+Homepage = "https://salihcantekin.github.io/ruvio/client-python.html"
+Documentation = "https://salihcantekin.github.io/ruvio/client-python.html"
+Repository = "https://github.com/salihcantekin/ruvio"
+Issues = "https://github.com/salihcantekin/ruvio/issues"
+
+[tool.setuptools]
+packages = ["ruvio", "ruvio.asyncio"]
+
+[tool.setuptools.package-data]
+ruvio = ["py.typed"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

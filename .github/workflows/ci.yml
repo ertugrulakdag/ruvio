@@ -1,0 +1,277 @@
+name: CI
+
+# Manual only. Push and pull requests do not start this workflow.
+# Secrets: none.
+on:
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: "Jobs to run: all, or a comma list of test, supply-chain, container, clients, fuzz, asan, miri"
+        type: string
+        default: all
+      os:
+        description: Operating system for the test job
+        type: choice
+        options: [all, ubuntu-latest, macos-latest, windows-latest]
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: inputs.jobs == 'all' || contains(format(',{0},', inputs.jobs), ',test,')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.os == 'all' && '["macos-latest","ubuntu-latest","windows-latest"]' || format('["{0}"]', inputs.os)) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      # A smaller random sample keeps the property tests quick; run them with the default 256 locally.
+      PROPTEST_CASES: "32"
+      # Debug info roughly doubles compile and link time (most on Windows) and the cache size.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+      # Lints do not depend on the OS, and Windows and macOS minutes cost more.
+      - run: cargo fmt --check
+        if: runner.os == 'Linux'
+      - run: cargo clippy --all-targets -- -D warnings
+        if: runner.os == 'Linux'
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+        if: runner.os == 'Linux'
+      - run: cargo test --locked --lib --bins --tests
+      - run: cargo run --example 04_store_smoke
+
+  supply-chain:
+    if: inputs.jobs == 'all' || contains(format(',{0},', inputs.jobs), ',supply-chain,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+      - run: python3 scripts/test_supply_chain.py
+      - run: python3 scripts/test_release_version.py
+      - run: python3 scripts/generate_sbom.py --output /tmp/ruvio-sbom.cdx.json
+
+  container:
+    if: inputs.jobs == 'all' || contains(format(',{0},', inputs.jobs), ',container,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - run: >-
+          python3 -m py_compile
+          scripts/cluster_smoke.py
+          scripts/churn_benchmark.py
+          scripts/benchmark_shards.py
+          scripts/benchmark_regression.py
+          scripts/test_benchmark_regression.py
+          scripts/resp_conformance.py
+          scripts/redis_differential.py
+          scripts/docker_resilience.py
+          scripts/native_resilience.py
+          scripts/check_compatibility_matrix.py
+          scripts/test_compatibility_matrix.py
+          scripts/run_client_suites.py
+          scripts/generate_sbom.py
+          scripts/test_supply_chain.py
+          scripts/test_release_version.py
+      - run: python3 scripts/test_benchmark_regression.py
+      - run: python3 scripts/test_release_version.py
+      - run: python3 scripts/check_compatibility_matrix.py
+      - run: python3 scripts/test_compatibility_matrix.py
+      - run: bash -n scripts/benchmark.sh scripts/profile_linux.sh scripts/run_sanitizers.sh scripts/test.sh
+      - uses: docker/setup-buildx-action@v4
+      # Dockerfile and Dockerfile.linux build the same server, and the release
+      # publishes Dockerfile.linux, so one image serves every check below. Its
+      # dependency layer is cached, so a source change rebuilds only the crate.
+      # The checks are behavioral, so the image skips fat LTO, which alone takes
+      # minutes; the release workflow builds the published image with it.
+      - name: Build the image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.linux
+          load: true
+          build-args: |
+            CARGO_ARGS=--config=profile.release.lto=false --config=profile.release.codegen-units=16 --config=profile.release.debug=0
+          tags: |
+            ruvio
+            ruvio:evented
+          cache-from: |
+            type=gha,scope=ci-ruvio-evented
+            type=gha,scope=ruvio-server
+          cache-to: type=gha,scope=ci-ruvio-evented,mode=max
+      - run: docker run --detach --name ruvio-test -e RUVIO_ALLOW_UNAUTHENTICATED=true --publish 16379:6379 ruvio
+      - name: Verify RESP endpoint
+        run: python3 scripts/resp_conformance.py --port 16379
+      - run: docker run --detach --name redis-reference --publish 16380:6379 redis:7-alpine
+      - name: Reset Ruvio so the differential starts empty
+        run: |
+          docker restart ruvio-test
+          python3 -c "import socket,time
+          for _ in range(50):
+              try:
+                  socket.create_connection(('127.0.0.1', 16379), timeout=1).close()
+                  raise SystemExit(0)
+              except OSError:
+                  time.sleep(0.1)
+          raise SystemExit('ruvio did not restart')"
+      - name: Verify Redis differential behavior
+        run: >-
+          python3 scripts/redis_differential.py
+          --ruvio-port 16379 --redis-port 16380
+      - if: always()
+        run: docker logs ruvio-test || true
+      - if: always()
+        run: docker rm --force ruvio-test redis-reference
+      - name: Start evented standalone
+        run: >-
+          docker run --detach --name ruvio-evented-test
+          -e RUVIO_ALLOW_UNAUTHENTICATED=true
+          -p 16383:6379
+          ruvio:evented
+      - name: Verify evented conformance
+        run: python3 scripts/resp_conformance.py --port 16383
+      - if: always()
+        run: docker logs ruvio-evented-test || true
+      - if: always()
+        run: docker rm --force ruvio-evented-test
+      - name: Start evented cluster
+        run: >-
+          docker run --detach --name ruvio-evented-cluster-test
+          -e RUVIO_ALLOW_UNAUTHENTICATED=true
+          -e RUVIO_SHARDS=2
+          -e RUVIO_PORT_MODE=per-shard
+          -e RUVIO_ADVERTISE_HOST=127.0.0.1
+          -p 6379:6379 -p 6380:6380
+          ruvio:evented
+      - name: Verify evented cluster routing
+        run: python3 scripts/cluster_smoke.py
+      - if: always()
+        run: docker logs ruvio-evented-cluster-test || true
+      - if: always()
+        run: docker rm --force ruvio-evented-cluster-test
+
+  clients:
+    if: inputs.jobs == 'all' || contains(format(',{0},', inputs.jobs), ',clients,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            clients/ruvio-client
+      - uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('clients/csharp/**/*.csproj', 'integrations/dotnet/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+      - run: python3 scripts/check_compatibility_matrix.py
+      - run: cargo build --bin ruvio
+      - name: Start Ruvio
+        run: |
+          mkdir -p /tmp/ruvio-clients
+          RUVIO_ADDR=127.0.0.1:16382 RUVIO_DATA_DIR=/tmp/ruvio-clients \
+            ./target/debug/ruvio &
+          echo $! > /tmp/ruvio-clients.pid
+          python3 -c "import socket,time
+          for _ in range(50):
+              try:
+                  socket.create_connection(('127.0.0.1', 16382), timeout=1).close()
+                  raise SystemExit(0)
+              except OSError:
+                  time.sleep(0.1)
+          raise SystemExit('ruvio did not start')"
+      - run: python3 scripts/run_client_suites.py --port 16382 --require-all
+      - if: always()
+        run: kill "$(cat /tmp/ruvio-clients.pid)" || true
+
+  fuzz:
+    if: inputs.jobs == 'all' || contains(format(',{0},', inputs.jobs), ',fuzz,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      # Also keeps the installed cargo-fuzz binary, so the install below is a no-op on a warm cache.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo install cargo-fuzz --locked
+      - run: cargo fuzz run resp_parsers -- -max_total_time=15
+
+  asan:
+    if: inputs.jobs == 'all' || contains(format(',{0},', inputs.jobs), ',asan,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTUP_TOOLCHAIN: nightly
+      RUSTFLAGS: "-Zsanitizer=address"
+      ASAN_OPTIONS: "detect_leaks=1:detect_stack_use_after_return=1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      - name: AddressSanitizer library tests
+        run: cargo test --no-default-features --lib --target x86_64-unknown-linux-gnu
+
+  # Miri interprets every instruction, so even small model tests take minutes.
+  # It only adds value where unsafe code lives (the hash-table fork and the
+  # tables built on it), so it covers those units and the parsers, and the
+  # safe-code model tests are left to the normal test job. One job builds once.
+  miri:
+    if: inputs.jobs == 'all' || contains(format(',{0},', inputs.jobs), ',miri,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTUP_TOOLCHAIN: nightly
+      MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-disable-isolation"
+      PROPTEST_CASES: "2"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      - id: nightly
+        run: echo "version=$(rustc +nightly -V | tr -cd '[:alnum:].-')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/miri
+          key: miri-sysroot-${{ steps.nightly.outputs.version }}
+      - run: cargo miri setup
+      - name: Miri on the table and parser units
+        # Filters match substrings, so "time::" would also pick up "runtime::";
+        # the runtime and persistence tests touch fsync and sockets, which Miri
+        # cannot run, so they are skipped explicitly.
+        run: >-
+          cargo miri test --no-default-features --lib --
+          store::arena_table:: store::intset:: store::smallbuf::
+          protocol:: routing:: transaction:: list_waiters::
+          time:: memory:: metrics:: config:: output:: admission:: security::
+          --skip runtime:: --skip persistence::

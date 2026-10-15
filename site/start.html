@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Start — Ruvio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css?v=20261015a">
+  <link rel="stylesheet" href="vendor/highlightjs/github-dark.min.css">
+  <link rel="icon" href="images/ruvio-icon.png" type="image/png">
+  <meta property="og:image" content="https://salihcantekin.github.io/ruvio/images/ruvio-social.png">
+</head>
+<body data-page="start.html">
+    <header class="top">
+    <div class="top-inner">
+      <a class="mark" href="index.html">Ruvio</a>
+      <nav aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="start.html">Start</a>
+        <details>
+          <summary>Build</summary>
+          <div class="nav-menu">
+            <a href="compare.html">How it runs</a>
+            <a href="commands.html">Commands</a>
+            <a href="packages.html">Packages</a>
+            <a href="ui.html">Operator UI</a>
+          </div>
+        </details>
+        <details>
+          <summary>Clients</summary>
+          <div class="nav-menu">
+            <a href="clients.html">Overview</a>
+            <a href="client-rust.html">Rust</a>
+            <a href="client-csharp.html">C#</a>
+            <a href="client-go.html">Go</a>
+            <a href="client-java.html">Java</a>
+            <a href="client-python.html">Python</a>
+            <a href="client-node.html">Node.js</a>
+            <a href="examples.html">Examples</a>
+          </div>
+        </details>
+        <details>
+          <summary>Operate</summary>
+          <div class="nav-menu">
+            <a href="configuration.html">Configuration</a>
+            <a href="durability.html">Durability</a>
+            <a href="replication.html">Replication</a>
+            <a href="operations.html">Operations</a>
+          </div>
+        </details>
+        <a href="testing.html">Testing</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap layout">
+    <nav class="side">
+      <a href="#run">Run</a>
+      <a href="#adapters">Adapters</a>
+      <a href="#docker">Docker</a>
+      <a href="#clients">Which client</a>
+      <a href="#ui">Operator UI</a>
+    </nav>
+    <article>
+      <h1>Start</h1>
+      <p>The default bind is loopback. <code>redis-cli PING</code> should answer <code>PONG</code>.</p>
+      
+<section class="panel">
+<h2 id="run">From a checkout</h2>
+<pre>cargo run --bin ruvio
+redis-cli -h 127.0.0.1 -p 6379 PING</pre>
+      <p>Settings resolve in this order: built-in defaults, <code>ruvio.toml</code> (or <code>--config</code> / <code>RUVIO_CONFIG</code>), <code>RUVIO_*</code> environment variables, then explicit command-line options. Unknown TOML fields are rejected. Environment overrides are written back at startup; editing the file while the process is running waits for the next start. Details are on <a href="configuration.html#apply">Configuration</a>.</p>
+</section>
+
+<section class="panel">
+<h2 id="adapters">One runtime</h2>
+      <p>The binary is evented. Linux uses epoll, macOS uses kqueue, and Windows uses IOCP. There is no <code>backend</code> setting. <code>INFO</code> reports <code>ruvio_backend:evented</code>. Shards and TLS are available on all three systems. Default features are <code>mimalloc-allocator</code>.</p>
+</section>
+
+<section class="panel">
+<h2 id="docker">Docker</h2>
+      <p>Docker Hub has one Linux image, built with the evented adapter. Pull <code>linux</code>. <code>latest</code> and the newest version tag are that same image, built for linux/amd64. Tags, pull counts, and the other packages are on the <a href="packages.html">packages page</a>.</p>
+      <p>The container sets <code>RUVIO_PROTECTED_MODE=false</code> because a published port is not loopback inside the namespace. Put a password on any bind that is not loopback when you leave that default.</p>
+<pre>docker pull salihcantekin/ruvio:linux
+docker run --rm -p 6379:6379 -v ruvio-data:/data salihcantekin/ruvio:linux</pre>
+      <p>Two shards publish consecutive ports. Advertise the host clients can reach. Without that, <code>CLUSTER SLOTS</code> hands out <code>127.0.0.1</code> and a remote app cannot follow <code>MOVED</code>.</p>
+<pre>docker run --rm -p 6379-6380:6379-6380 \
+  -e RUVIO_SHARDS=2 \
+  -e RUVIO_ADDR=0.0.0.0:6379 \
+  -e RUVIO_ADVERTISE_HOST=YOUR_SERVER_IP \
+  -e RUVIO_PROTECTED_MODE=false \
+  -v ruvio-data:/data \
+  salihcantekin/ruvio:linux</pre>
+      <p>First-party clients take only <code>YOUR_SERVER_IP:6379</code>. They read the slot map and open 6380 themselves. Put a password on any bind that is not loopback. The process runs as UID 10001. The same image builds locally with <code>docker build -f Dockerfile.linux -t ruvio:local .</code></p>
+</section>
+
+<section class="panel">
+<h2 id="clients">Which client</h2>
+      <p>Use <code>ruvio-client</code>, <code>Ruvio.Client</code>, or <code>Ruvio.Client.AspNetCore</code>. See <a href="examples.html">Clients</a> and <a href="packages.html">Packages</a>.</p>
+</section>
+
+<section class="panel">
+<h2 id="ui">Operator UI</h2>
+      <p>Pull <code>salihcantekin/ruvio-ui:linux</code> and publish port <code>8080</code>. It signs in as an ACL user on the server you already started. Install, shards, and user rules are on the <a href="ui.html">UI page</a>.</p>
+</section>
+</article>
+  </main>
+  <footer class="foot"><div class="foot-inner">Canonical setup notes live in <code>docs/SETUP.md</code> and <code>docs/CONFIGURATION.md</code>.</div></footer>
+  <script src="js/versions.js?v=20261013j"></script>
+  <script src="vendor/highlightjs/highlight.min.js"></script>
+  <footer class="site-foot">
+    <div class="site-foot-inner">
+      <div class="site-foot-brand">
+        <img src="images/ruvio-mark.png?v=20261015b" alt="" width="36" height="36">
+        <div>
+          <strong>Ruvio</strong>
+          <span>One RESP process. The shard that owns the key does the work.</span>
+          <small>Server AGPL-3.0 · Clients MIT</small>
+        </div>
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/salihcantekin/ruvio/tree/main/docs">Docs</a>
+        <a href="https://github.com/salihcantekin/ruvio">GitHub</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="js/chrome.js?v=20261015a"></script>
+</body>
+</html>

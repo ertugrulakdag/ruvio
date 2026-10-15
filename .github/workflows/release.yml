@@ -1,0 +1,603 @@
+name: release
+
+# Manual only. Push and pull requests do not start this workflow.
+#
+# Secrets:
+# DOCKERHUB_TOKEN — Docker Hub access token for the salihcantekin account. Used by the docker and docker-ui jobs.
+#   Updating the repository description needs a token with Read, Write and Delete permission.
+# CARGO_REGISTRY_TOKEN — crates.io API token. Used by the rust-client job.
+# The server (crate `ruvio`) is not published to crates.io; its Cargo.toml has publish = false. Users get it as a Docker image or a GitHub Release binary.
+# Server binaries: the server-binaries job builds ruvio and ruvio-ctl for Linux (x64, arm64), macOS (arm64) and Windows (x64), plus the UI host binaries.
+#   They are attached to the GitHub Release when create_github_release is on; otherwise they stay as workflow artifacts.
+# Every workflow in this repository is started by hand (workflow_dispatch); only pr-gate also runs on pull requests and pushes to main, and it publishes nothing.
+# NuGet trusted publishing — the nuget job has id-token: write and exchanges that token through NuGet/login. There is no NUGET_API_KEY secret.
+# npm trusted publishing — the npm job has id-token: write and publishes with the npm CLI (11.5.1 or newer), no NPM_TOKEN secret.
+#   One-time setup: publish 0.1.0 by hand, then npmjs.com > ruvio-client > Settings > Trusted Publisher > GitHub Actions
+#   (workflow release.yml, environment npm). Provenance is only produced for public repositories.
+# PyPI trusted publishing — the pypi job has id-token: write and uses pypa/gh-action-pypi-publish, no PYPI_TOKEN secret.
+#   One-time setup: pypi.org > Publishing > pending publisher (project ruvio-client, workflow release.yml, environment pypi).
+# Maven Central — the maven job signs and uploads through the Central Portal. Secrets: CENTRAL_USERNAME and CENTRAL_PASSWORD
+#   (Portal user token), GPG_PRIVATE_KEY (armored), GPG_PASSPHRASE. Environment: maven. Central has no OIDC publishing.
+# Go has no registry; its client is not part of this workflow yet.
+# GITHUB_TOKEN — built-in token, not a repository secret. Pushes the version commit and creates the GitHub Release when that option is on.
+#
+# Leave a version input empty to bump that package's patch number.
+# Fill it (1.2.3 or v1.2.3) to publish that exact version.
+# server_version is the ruvio image tag.
+# rust_client_version is the ruvio-client crate.
+# csharp_version is Ruvio.Client and Ruvio.Client.AspNetCore together.
+# ui_version is the ruvio-ui image tag.
+# node_version is the npm package ruvio-client, python_version the PyPI package ruvio-client,
+# java_version the Maven artifact io.github.salihcantekin:ruvio-client.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: What to publish
+        type: choice
+        options:
+          - all
+          - docker
+          - docker-ui
+          - rust-client
+          - nuget
+          - server-binaries
+          - ui-host
+          - npm
+          - pypi
+          - maven
+        required: true
+        default: all
+      server_version:
+        description: Server image version. Empty bumps the patch.
+        type: string
+        default: ""
+        required: false
+      rust_client_version:
+        description: Rust client crate version. Empty bumps the patch.
+        type: string
+        default: ""
+        required: false
+      csharp_version:
+        description: C# package version. Empty bumps the patch.
+        type: string
+        default: ""
+        required: false
+      ui_version:
+        description: UI image version. Empty bumps the patch.
+        type: string
+        default: ""
+        required: false
+      node_version:
+        description: npm package version. Empty bumps the patch.
+        type: string
+        default: ""
+        required: false
+      python_version:
+        description: PyPI package version. Empty bumps the patch.
+        type: string
+        default: ""
+        required: false
+      java_version:
+        description: Maven artifact version. Empty bumps the patch.
+        type: string
+        default: ""
+        required: false
+      maven_auto_publish:
+        description: Release to Maven Central right after validation. Off leaves the deployment waiting in the Central Portal for a manual Publish click.
+        type: boolean
+        default: false
+        required: false
+      create_github_release:
+        description: Also create a GitHub Release. The tag defaults to ruvio-<server version>.
+        type: boolean
+        default: false
+        required: false
+      git_tag:
+        description: GitHub Release tag. Used only when the release option is on. Empty uses ruvio-<server version>.
+        type: string
+        default: ""
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  versions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.publish.outputs.sha }}
+      server: ${{ steps.publish.outputs.server }}
+      rust_client: ${{ steps.publish.outputs.rust_client }}
+      csharp: ${{ steps.publish.outputs.csharp }}
+      ui: ${{ steps.publish.outputs.ui }}
+      node: ${{ steps.publish.outputs.node }}
+      python: ${{ steps.publish.outputs.python }}
+      java: ${{ steps.publish.outputs.java }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      - name: Check package metadata
+        run: python3 scripts/check_package_metadata.py
+      - id: publish
+        run: |
+          set -euo pipefail
+          target="${{ inputs.target }}"
+          flag() {
+            if [ "$target" = "all" ] || [ "$target" = "$1" ] || [ "$target" = "$2" ]; then
+              echo --write
+            fi
+          }
+          read -r -a server_flag <<< "$(flag docker docker)"
+          read -r -a rust_client_flag <<< "$(flag rust-client rust-client)"
+          read -r -a csharp_flag <<< "$(flag nuget nuget)"
+          read -r -a ui_flag <<< "$(flag docker-ui ui-host)"
+          server=$(python3 scripts/release_version.py server --set "${{ inputs.server_version }}" "${server_flag[@]}")
+          rust_client=$(python3 scripts/release_version.py rust-client --set "${{ inputs.rust_client_version }}" "${rust_client_flag[@]}")
+          csharp=$(python3 scripts/release_version.py csharp --set "${{ inputs.csharp_version }}" "${csharp_flag[@]}")
+          ui=$(python3 scripts/release_version.py ui --set "${{ inputs.ui_version }}" "${ui_flag[@]}")
+          read -r -a node_flag <<< "$(flag npm npm)"
+          read -r -a python_flag <<< "$(flag pypi pypi)"
+          read -r -a java_flag <<< "$(flag maven maven)"
+          node=$(python3 scripts/release_version.py node --set "${{ inputs.node_version }}" "${node_flag[@]}")
+          python=$(python3 scripts/release_version.py python --set "${{ inputs.python_version }}" "${python_flag[@]}")
+          java=$(python3 scripts/release_version.py java --set "${{ inputs.java_version }}" "${java_flag[@]}")
+          {
+            echo "server=$server"
+            echo "rust_client=$rust_client"
+            echo "csharp=$csharp"
+            echo "ui=$ui"
+            echo "node=$node"
+            echo "python=$python"
+            echo "java=$java"
+          } >> "$GITHUB_OUTPUT"
+          if git diff --quiet; then
+            echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git add Cargo.toml Cargo.lock clients/ruvio-client/Cargo.toml clients/ruvio-client/Cargo.lock clients/ruvio-ui/Cargo.toml clients/ruvio-ui/Cargo.lock clients/csharp/Ruvio.Client/Ruvio.Client.csproj clients/csharp/Ruvio.Client.AspNetCore/Ruvio.Client.AspNetCore.csproj clients/node/package.json clients/node/package-lock.json clients/python/pyproject.toml clients/java/pom.xml
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "Set release versions to server ${server}, rust client ${rust_client}, C# ${csharp}, UI ${ui}, npm ${node}, PyPI ${python}, and Maven ${java}."
+          git push origin HEAD
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  docker:
+    needs: versions
+    if: inputs.target == 'all' || inputs.target == 'docker'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.versions.outputs.sha }}
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: salihcantekin
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.linux
+          platforms: linux/amd64
+          push: true
+          tags: |
+            salihcantekin/ruvio:linux
+            salihcantekin/ruvio:${{ needs.versions.outputs.server }}
+            salihcantekin/ruvio:latest
+          cache-from: type=gha,scope=ruvio-server
+          cache-to: type=gha,scope=ruvio-server,mode=max
+      - name: Docker Hub description
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: salihcantekin
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: salihcantekin/ruvio
+          short-description: Memory-first key-value server that speaks the Redis protocol (RESP2).
+          readme-filepath: docker/hub/ruvio.md
+      - name: Verify the Docker Hub page
+        run: |
+          set -euo pipefail
+          curl -fsS https://hub.docker.com/v2/repositories/salihcantekin/ruvio/ | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["description"] and "AGPL" in d["full_description"], "Docker Hub description is missing"'
+
+  docker-ui:
+    needs: versions
+    if: inputs.target == 'all' || inputs.target == 'docker-ui'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.versions.outputs.sha }}
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: salihcantekin
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: clients
+          file: clients/ruvio-ui/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            salihcantekin/ruvio-ui:linux
+            salihcantekin/ruvio-ui:${{ needs.versions.outputs.ui }}
+            salihcantekin/ruvio-ui:latest
+          cache-from: type=gha,scope=ruvio-ui
+          cache-to: type=gha,scope=ruvio-ui,mode=max
+      - name: Docker Hub description
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: salihcantekin
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: salihcantekin/ruvio-ui
+          short-description: Browser operator console for a Ruvio server.
+          readme-filepath: docker/hub/ruvio-ui.md
+      - name: Verify the Docker Hub page
+        run: |
+          set -euo pipefail
+          curl -fsS https://hub.docker.com/v2/repositories/salihcantekin/ruvio-ui/ | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["description"] and "AGPL" in d["full_description"], "Docker Hub description is missing"'
+
+  rust-client:
+    needs: versions
+    if: inputs.target == 'all' || inputs.target == 'rust-client'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.versions.outputs.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/ruvio-client
+      - run: cargo test --manifest-path clients/ruvio-client/Cargo.toml --locked
+      - run: cargo publish --locked --manifest-path clients/ruvio-client/Cargo.toml
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  nuget:
+    needs: versions
+    if: inputs.target == 'all' || inputs.target == 'nuget'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.versions.outputs.sha }}
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet test clients/csharp/Ruvio.Client.Tests/Ruvio.Client.Tests.csproj
+      - run: dotnet test clients/csharp/Ruvio.Client.AspNetCore.Tests/Ruvio.Client.AspNetCore.Tests.csproj
+      - run: dotnet pack clients/csharp/Ruvio.Client/Ruvio.Client.csproj -c Release -o dist
+      - run: dotnet pack clients/csharp/Ruvio.Client.AspNetCore/Ruvio.Client.AspNetCore.csproj -c Release -o dist
+      - name: NuGet login
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: salihcantekin
+      - run: dotnet nuget push "dist/*.nupkg" --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+  server-binary:
+    needs: versions
+    if: inputs.target == 'all' || inputs.target == 'npm' || inputs.target == 'pypi' || inputs.target == 'maven'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.versions.outputs.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cluster-server
+      - run: cargo build --locked --bin ruvio
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ruvio-server
+          path: target/debug/ruvio
+          retention-days: 1
+
+  npm:
+    needs: [versions, server-binary]
+    if: inputs.target == 'all' || inputs.target == 'npm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.versions.outputs.sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: ruvio-server
+          path: server-bin
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: chmod +x server-bin/ruvio
+      - name: Trusted publishing needs npm 11.5.1 or newer
+        run: npm install -g npm@^11.5.1 && npm --version
+      - run: npm ci
+        working-directory: clients/node
+      - name: Test against a live server
+        run: scripts/run_with_servers.sh "$PWD/server-bin/ruvio" 17400 -- npm test --prefix clients/node
+      - name: Publish (OIDC, no token)
+        working-directory: clients/node
+        run: npm publish --access public
+
+  pypi:
+    needs: [versions, server-binary]
+    if: inputs.target == 'all' || inputs.target == 'pypi'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.versions.outputs.sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: ruvio-server
+          path: server-bin
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: chmod +x server-bin/ruvio
+      - run: python -m pip install "./clients/python[test]" build twine
+      - name: Test against a live server
+        run: scripts/run_with_servers.sh "$PWD/server-bin/ruvio" 17400 -- python -m pytest -q clients/python
+      - name: Build and check the distribution
+        run: |
+          python -m build --outdir dist-py clients/python
+          python -m twine check dist-py/*
+      - name: Publish (trusted publishing, no token)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-py
+
+  maven:
+    needs: [versions, server-binary]
+    if: inputs.target == 'all' || inputs.target == 'maven'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: maven
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.versions.outputs.sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: ruvio-server
+          path: server-bin
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+      - run: chmod +x server-bin/ruvio
+      - name: Test against a live server
+        run: scripts/run_with_servers.sh "$PWD/server-bin/ruvio" 17400 -- mvn -B -f clients/java/pom.xml verify
+      - name: Sign and upload to Maven Central
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: mvn -B -f clients/java/pom.xml -P release deploy -DskipTests -Dcentral.autoPublish=${{ inputs.maven_auto_publish }}
+
+  server-binaries:
+    needs: versions
+    if: inputs.target == 'all' || inputs.target == 'server-binaries'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux-x64
+            ext: tar.gz
+          - os: ubuntu-22.04-arm
+            platform: linux-arm64
+            ext: tar.gz
+          - os: macos-latest
+            platform: macos-arm64
+            ext: tar.gz
+          - os: windows-latest
+            platform: windows-x64
+            ext: zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.versions.outputs.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: server-binaries-${{ matrix.platform }}
+      - name: Build
+        run: cargo build --locked --release --bin ruvio --bin ruvio-ctl
+      - name: Smoke test the binary
+        run: |
+          set -euo pipefail
+          bin=target/release/ruvio
+          [ -f "$bin.exe" ] && bin="$bin.exe"
+          data="$(mktemp -d)"
+          "$bin" --address 127.0.0.1:16999 --data-dir "$data" &
+          pid=$!
+          sleep 3
+          py="$(command -v python3 || command -v python)"
+          "$py" - <<'PY'
+          import socket
+          s = socket.create_connection(("127.0.0.1", 16999), timeout=5)
+          s.sendall(b"*1\r\n$4\r\nPING\r\n")
+          reply = s.recv(64)
+          assert reply == b"+PONG\r\n", reply
+          PY
+          kill "$pid" || true
+          rm -f ruvio.toml
+      - name: Package
+        run: |
+          set -euo pipefail
+          name="ruvio-${{ needs.versions.outputs.server }}-${{ matrix.platform }}"
+          mkdir -p "dist/$name"
+          for tool in ruvio ruvio-ctl; do
+            if [ -f "target/release/$tool.exe" ]; then cp "target/release/$tool.exe" "dist/$name/"; else cp "target/release/$tool" "dist/$name/"; fi
+          done
+          cp LICENSE README.md "dist/$name/"
+          cp ruvio.example.toml "dist/$name/"
+          cd dist
+          if [ "${{ matrix.ext }}" = zip ]; then
+            7z a "$name.zip" "$name" >/dev/null
+          else
+            tar -czf "$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-server-${{ matrix.platform }}
+          path: dist/ruvio-*.${{ matrix.ext }}
+
+  ui-host:
+    needs: versions
+    if: inputs.target == 'all' || inputs.target == 'ui-host'
+    permissions:
+      contents: read
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: ruvio-ui-linux-x64
+            binary: clients/ruvio-ui/target/release/ruvio-ui
+          - os: macos-latest
+            artifact: ruvio-ui-macos-arm64
+            binary: clients/ruvio-ui/target/release/ruvio-ui
+          - os: windows-latest
+            artifact: ruvio-ui-windows-x64
+            binary: clients/ruvio-ui/target/release/ruvio-ui.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.versions.outputs.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: clients/ruvio-ui/web/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/ruvio-ui
+      - name: Build the screens
+        working-directory: clients/ruvio-ui/web
+        run: npm ci && npm run build
+      - name: Build the host binary
+        run: cargo build --locked --release --manifest-path clients/ruvio-ui/Cargo.toml
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="${{ matrix.artifact }}-${{ needs.versions.outputs.ui }}"
+          mkdir -p "dist/$name"
+          cp "${{ matrix.binary }}" "dist/$name/"
+          cp clients/ruvio-ui/LICENSE "dist/$name/"
+          cd dist
+          if [ "${{ runner.os }}" = Windows ]; then
+            7z a "$name.zip" "$name" >/dev/null
+          else
+            tar -czf "$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-${{ matrix.artifact }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+
+  github-release:
+    needs: [versions, docker, docker-ui, rust-client, nuget, server-binaries, ui-host, npm, pypi, maven]
+    if: >-
+      !cancelled() &&
+      inputs.create_github_release &&
+      needs.versions.result == 'success' &&
+      (needs.docker.result == 'success' || needs.docker.result == 'skipped') &&
+      (needs.docker-ui.result == 'success' || needs.docker-ui.result == 'skipped') &&
+      (needs.rust-client.result == 'success' || needs.rust-client.result == 'skipped') &&
+      (needs.nuget.result == 'success' || needs.nuget.result == 'skipped') &&
+      (needs.server-binaries.result == 'success' || needs.server-binaries.result == 'skipped') &&
+      (needs.ui-host.result == 'success' || needs.ui-host.result == 'skipped') &&
+      (needs.npm.result == 'success' || needs.npm.result == 'skipped') &&
+      (needs.pypi.result == 'success' || needs.pypi.result == 'skipped') &&
+      (needs.maven.result == 'success' || needs.maven.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.versions.outputs.sha }}
+      - name: Collect the binaries
+        uses: actions/download-artifact@v7
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd release-assets
+          ls -1
+          for f in *.tar.gz *.zip; do
+            [ -f "$f" ] && sha256sum "$f"
+          done > SHA256SUMS
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.git_tag }}"
+          if [ -z "$tag" ]; then
+            tag="ruvio-${{ needs.versions.outputs.server }}"
+          fi
+          gh release create "$tag" --title "$tag" --notes "$(cat <<EOF
+          Server ${{ needs.versions.outputs.server }}
+          Rust client ${{ needs.versions.outputs.rust_client }}
+          C# ${{ needs.versions.outputs.csharp }}
+          UI ${{ needs.versions.outputs.ui }}
+          npm ${{ needs.versions.outputs.node }}
+          PyPI ${{ needs.versions.outputs.python }}
+          Maven ${{ needs.versions.outputs.java }}
+          EOF
+          )" release-assets/*

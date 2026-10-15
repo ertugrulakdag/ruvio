@@ -1,0 +1,55 @@
+FROM rust:1.97.1-slim-bookworm AS builder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential git pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src/bin benches \
+    && printf 'fn main() {}\n' > benches/hot_path.rs \
+    && printf 'pub fn docker_dependency_warmup() {}\n' > src/lib.rs \
+    && printf 'fn main() {}\n' > src/bin/ruvio.rs \
+    && printf 'fn main() {}\n' > src/bin/ruvio-ctl.rs
+ARG CARGO_ARGS=
+# RUSTFLAGS is exported to cargo as an env var. Default is empty (generic x86-64 /
+# aarch64 baseline). For the CI second tag `linux-v3`, build with
+#   docker build -f Dockerfile.linux --build-arg RUSTFLAGS='-C target-cpu=x86-64-v3' -t ruvio:linux-v3 .
+# Do not use target-cpu=native in release images: the host CPU may differ at run time.
+ARG RUSTFLAGS=
+RUN cargo build --locked --release $CARGO_ARGS --bin ruvio --bin ruvio-ctl
+
+COPY . .
+RUN cargo build --locked --release $CARGO_ARGS --bin ruvio --bin ruvio-ctl
+
+FROM debian:bookworm-slim
+
+LABEL org.opencontainers.image.title="Ruvio" \
+      org.opencontainers.image.description="Ruvio server: a memory-first key-value store that speaks the Redis protocol (RESP2)." \
+      org.opencontainers.image.source="https://github.com/salihcantekin/ruvio" \
+      org.opencontainers.image.url="https://salihcantekin.github.io/ruvio/" \
+      org.opencontainers.image.documentation="https://salihcantekin.github.io/ruvio/" \
+      org.opencontainers.image.licenses="AGPL-3.0-only" \
+      org.opencontainers.image.authors="Salih Cantekin"
+
+RUN useradd --system --uid 10001 --create-home ruvio \
+    && mkdir -p /data /etc/ruvio \
+    && chown ruvio:ruvio /data /etc/ruvio
+
+COPY --from=builder /src/target/release/ruvio /usr/local/bin/ruvio
+COPY --from=builder /src/target/release/ruvio-ctl /usr/local/bin/ruvio-ctl
+COPY LICENSE /usr/local/share/ruvio/LICENSE
+COPY licenses/THIRD_PARTY_NOTICES /usr/local/share/ruvio/THIRD_PARTY_NOTICES
+COPY ruvio.example.toml /etc/ruvio/ruvio.toml
+
+USER ruvio
+# Public bind with protected mode off refuses to start until RUVIO_REQUIREPASS
+# is set. Protocol CI sets RUVIO_ALLOW_UNAUTHENTICATED=true instead.
+ENV RUVIO_ADDR=0.0.0.0:6379
+ENV RUVIO_DATA_DIR=/data
+ENV RUVIO_PROTECTED_MODE=false
+ENV RUVIO_CONFIG=/data/ruvio.toml
+VOLUME ["/data"]
+EXPOSE 6379
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/usr/local/bin/ruvio"]

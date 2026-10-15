@@ -1,0 +1,96 @@
+services:
+  redis:
+    image: redis:7.4.2-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - ${REDIS_APPENDONLY:-yes}
+      - --appendfsync
+      - ${REDIS_APPENDFSYNC:-always}
+      - --latency-monitor-threshold
+      - "1"
+      - --requirepass
+      - ${REDIS_PASSWORD:-${RUVIO_PASSWORD:?Set a storage password in .env}}
+    volumes:
+      - redis-data:/data
+    networks:
+      - scenario-net
+
+  ruvio:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      RUVIO_ADDR: 0.0.0.0:6379
+      RUVIO_DATA_DIR: /data
+      RUVIO_DURABILITY: ${RUVIO_DURABILITY:-always}
+      RUVIO_PROTECTED_MODE: "false"
+      RUVIO_REQUIREPASS: ${RUVIO_PASSWORD:?Set RUVIO_PASSWORD in .env}
+    volumes:
+      - ruvio-data:/data
+    ports:
+      - "${RUVIO_BIND_IP:?Set RUVIO_BIND_IP to the SUT peer-reachable IP}:6379:6379"
+    networks:
+      - scenario-net
+
+  api:
+    build:
+      context: ../..
+      dockerfile: tests/scenario-lab/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      RUVIO_HOST: toxiproxy
+      RUVIO_PORT: "8666"
+      RUVIO_PASSWORD: ${RUVIO_PASSWORD:?Set RUVIO_PASSWORD in .env}
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-${RUVIO_PASSWORD:?Set a storage password in .env}}
+      OTEL_SERVICE_NAME: ruvio-scenario-api
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:?Set the observer peer-reachable IP in .env}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+    depends_on:
+      - ruvio
+      - toxiproxy
+      - redis
+    ports:
+      - "${API_BIND_IP:?Set API_BIND_IP to the SUT peer-reachable IP}:${API_PORT:-8080}:8080"
+    networks:
+      - scenario-net
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.11.0
+    restart: unless-stopped
+    command:
+      - -host=0.0.0.0
+      - -config=/etc/toxiproxy/config.json
+      - -proxy-metrics
+      - -runtime-metrics
+    volumes:
+      - ./sut/toxiproxy.json:/etc/toxiproxy/config.json:ro
+    ports:
+      - "${FAULT_CONTROL_BIND_IP:?Set FAULT_CONTROL_BIND_IP to the SUT peer-reachable IP}:8474:8474"
+    depends_on:
+      - ruvio
+    networks:
+      - scenario-net
+
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    profiles: ["host-metrics"]
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+)($|/)
+    volumes:
+      - /:/host:ro,rslave
+
+volumes:
+  ruvio-data:
+  redis-data:
+
+networks:
+  scenario-net:
+    driver: bridge

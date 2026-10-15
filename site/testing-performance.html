@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Performance and scale — Ruvio</title>
+  <meta name="description" content="Performance and scale with dated methods, measured results, and limits.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css?v=20261015a">
+  <link rel="stylesheet" href="vendor/highlightjs/github-dark.min.css">
+  <link rel="icon" href="images/ruvio-icon.png" type="image/png">
+  <meta property="og:image" content="https://salihcantekin.github.io/ruvio/images/ruvio-social.png">
+</head>
+<body data-page="testing-performance.html">
+  <header class="top">
+    <div class="top-inner">
+      <a class="mark" href="index.html">Ruvio</a>
+      <nav aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="start.html">Start</a>
+        <details>
+          <summary>Build</summary>
+          <div class="nav-menu">
+            <a href="compare.html">How it runs</a>
+            <a href="commands.html">Commands</a>
+            <a href="packages.html">Packages</a>
+            <a href="ui.html">Operator UI</a>
+          </div>
+        </details>
+        <details>
+          <summary>Clients</summary>
+          <div class="nav-menu">
+            <a href="clients.html">Overview</a>
+            <a href="client-rust.html">Rust</a>
+            <a href="client-csharp.html">C#</a>
+            <a href="client-go.html">Go</a>
+            <a href="client-java.html">Java</a>
+            <a href="client-python.html">Python</a>
+            <a href="client-node.html">Node.js</a>
+            <a href="examples.html">Examples</a>
+          </div>
+        </details>
+        <details>
+          <summary>Operate</summary>
+          <div class="nav-menu">
+            <a href="configuration.html">Configuration</a>
+            <a href="durability.html">Durability</a>
+            <a href="replication.html">Replication</a>
+            <a href="operations.html">Operations</a>
+          </div>
+        </details>
+        <a href="testing.html">Testing</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap evidence-layout"><article>
+  <p class="kicker">Testing · evidence · limitations</p>
+  <h1>Performance and scale</h1>
+  <nav class="evidence-tabs" aria-label="Testing topics"><a href="testing.html">Overview</a><a href="testing-correctness.html">Correctness</a><a href="testing-performance.html" aria-current="page">Performance</a><a href="testing-memory.html">Memory &amp; TTL</a><a href="testing-resilience.html">Resilience</a><a href="testing-integrations.html">Integrations</a></nav>
+
+  <p class="lede">Measured throughput is specific to workload, durability, key shape, client concurrency and hardware. No number here is a universal capacity guarantee.</p>
+  <!-- mac-2026-10-14:start -->
+  <h2 id="mac-2026-10-14">Command comparison against Redis 8.10.2 on an Apple M4 Pro · 2026-10-14</h2>
+  <p><strong>Goal:</strong> repeat the 60-command grid on the current code and keep it as a dated record next to the earlier runs. <strong>Environment:</strong> Apple M4 Pro, 12 cores, 24 GiB, macOS 26.6; no CPU pinning; Redis built with libc malloc (Homebrew); a 3 s pause between rows avoids macOS ephemeral-port exhaustion. Ruvio commit <code>eb1281c</code> (<code>cargo build --profile release</code>), one shard, <code>memory</code> durability; Redis 8.10.2.</p>
+  <p><strong>Method:</strong> <code>scripts/redis_compare_features.py</code>: <code>redis-benchmark</code>, 50 clients, pipeline 16, request counts scaled by 0.3, 3 rounds with alternating order, median requests/s.</p>
+  <p><strong>Result:</strong> 57 of 60 rows at or above 0.97×, geometric mean 1.25×; best GEOSEARCH (radius 50 km, COUNT 10) 2.48×, SETEX 2.00×, MSET (3 keys) 2.00×; lowest FILLGET (value present) 0.848×, TOUCH 0.923×, HGETALL (10-field hash) 0.966×; below 0.90×: FILLGET (value present) 0.848×. Ratios under 0.90× are highlighted.</p>
+  <div class="table-wrap"><table><thead><tr><th>Command</th><th>Ruvio req/s</th><th>Redis req/s</th><th>Ruvio / Redis</th></tr></thead><tbody>
+<tr id="mac-2026-10-14-row-get-baseline-for-scale"><td>GET (baseline, for scale)</td><td>2.14M</td><td>2.20M</td><td>0.98×</td></tr>
+<tr id="mac-2026-10-14-row-set-baseline-for-scale"><td>SET (baseline, for scale)</td><td>2.81M</td><td>1.88M</td><td>1.50×</td></tr>
+<tr id="mac-2026-10-14-row-lpos-100-elements-hit-in-the-middle"><td>LPOS (100 elements, hit in the middle)</td><td>1.58M</td><td>1.07M</td><td>1.47×</td></tr>
+<tr id="mac-2026-10-14-row-lset-100-elements"><td>LSET (100 elements)</td><td>1.88M</td><td>1.64M</td><td>1.15×</td></tr>
+<tr id="mac-2026-10-14-row-linsert-pivot-missing-scans-100"><td>LINSERT (pivot missing, scans 100)</td><td>1.29M</td><td>841k</td><td>1.53×</td></tr>
+<tr id="mac-2026-10-14-row-lrem-value-missing-scans-100"><td>LREM (value missing, scans 100)</td><td>1.30M</td><td>874k</td><td>1.49×</td></tr>
+<tr id="mac-2026-10-14-row-lmove-rotate-a-100-element-list"><td>LMOVE (rotate a 100-element list)</td><td>2.05M</td><td>1.36M</td><td>1.50×</td></tr>
+<tr id="mac-2026-10-14-row-bitfield-incrby-u8-always-writes"><td>BITFIELD INCRBY u8 (always writes)</td><td>1.88M</td><td>1.38M</td><td>1.35×</td></tr>
+<tr id="mac-2026-10-14-row-bitfield-get-u8"><td>BITFIELD GET u8</td><td>2.20M</td><td>1.61M</td><td>1.37×</td></tr>
+<tr id="mac-2026-10-14-row-setbit-1-kib-bitmap-same-bit"><td>SETBIT (1 KiB bitmap, same bit)</td><td>2.57M</td><td>1.84M</td><td>1.40×</td></tr>
+<tr id="mac-2026-10-14-row-getbit-1-kib-bitmap"><td>GETBIT (1 KiB bitmap)</td><td>2.25M</td><td>2.09M</td><td>1.08×</td></tr>
+<tr id="mac-2026-10-14-row-bitcount-1-kib-bitmap"><td>BITCOUNT (1 KiB bitmap)</td><td>2.25M</td><td>2.31M</td><td>0.98×</td></tr>
+<tr id="mac-2026-10-14-row-pfadd"><td>PFADD</td><td>2.43M</td><td>2.05M</td><td>1.19×</td></tr>
+<tr id="mac-2026-10-14-row-pfcount"><td>PFCOUNT</td><td>2.43M</td><td>2.31M</td><td>1.05×</td></tr>
+<tr id="mac-2026-10-14-row-copy-replace-64-b-string"><td>COPY ... REPLACE (64 B string)</td><td>2.09M</td><td>1.38M</td><td>1.51×</td></tr>
+<tr id="mac-2026-10-14-row-dump-64-b-string"><td>DUMP (64 B string)</td><td>1.96M</td><td>1.61M</td><td>1.22×</td></tr>
+<tr id="mac-2026-10-14-row-expiretime"><td>EXPIRETIME</td><td>2.50M</td><td>2.37M</td><td>1.06×</td></tr>
+<tr id="mac-2026-10-14-row-touch"><td>TOUCH</td><td>2.31M</td><td>2.50M</td><td>0.92×</td></tr>
+<tr id="mac-2026-10-14-row-object-encoding"><td>OBJECT ENCODING</td><td>2.73M</td><td>2.09M</td><td>1.30×</td></tr>
+<tr id="mac-2026-10-14-row-memory-usage"><td>MEMORY USAGE</td><td>2.43M</td><td>2.09M</td><td>1.16×</td></tr>
+<tr id="mac-2026-10-14-row-getrange"><td>GETRANGE</td><td>2.57M</td><td>1.88M</td><td>1.37×</td></tr>
+<tr id="mac-2026-10-14-row-setrange"><td>SETRANGE</td><td>2.43M</td><td>1.91M</td><td>1.27×</td></tr>
+<tr id="mac-2026-10-14-row-setex"><td>SETEX</td><td>2.50M</td><td>1.25M</td><td>2.00×</td></tr>
+<tr id="mac-2026-10-14-row-mset-3-keys"><td>MSET (3 keys)</td><td>2.20M</td><td>1.10M</td><td>2.00×</td></tr>
+<tr id="mac-2026-10-14-row-mget-3-keys"><td>MGET (3 keys)</td><td>1.84M</td><td>1.53M</td><td>1.20×</td></tr>
+<tr id="mac-2026-10-14-row-del-missing-key"><td>DEL (missing key)</td><td>2.37M</td><td>2.25M</td><td>1.05×</td></tr>
+<tr id="mac-2026-10-14-row-exists"><td>EXISTS</td><td>2.50M</td><td>2.20M</td><td>1.14×</td></tr>
+<tr id="mac-2026-10-14-row-type"><td>TYPE</td><td>2.37M</td><td>2.31M</td><td>1.03×</td></tr>
+<tr id="mac-2026-10-14-row-ttl"><td>TTL</td><td>2.37M</td><td>2.14M</td><td>1.11×</td></tr>
+<tr id="mac-2026-10-14-row-pttl"><td>PTTL</td><td>2.25M</td><td>2.14M</td><td>1.05×</td></tr>
+<tr id="mac-2026-10-14-row-persist-key-without-ttl"><td>PERSIST (key without TTL)</td><td>2.50M</td><td>2.14M</td><td>1.17×</td></tr>
+<tr id="mac-2026-10-14-row-expire-key-with-ttl"><td>EXPIRE (key with TTL)</td><td>2.31M</td><td>1.70M</td><td>1.36×</td></tr>
+<tr id="mac-2026-10-14-row-append-1-byte"><td>APPEND (1 byte)</td><td>2.43M</td><td>2.09M</td><td>1.16×</td></tr>
+<tr id="mac-2026-10-14-row-incrbyfloat"><td>INCRBYFLOAT</td><td>1.34M</td><td>1.20M</td><td>1.12×</td></tr>
+<tr id="mac-2026-10-14-row-hset-existing-field"><td>HSET (existing field)</td><td>2.50M</td><td>1.84M</td><td>1.36×</td></tr>
+<tr id="mac-2026-10-14-row-hget"><td>HGET</td><td>2.57M</td><td>1.91M</td><td>1.34×</td></tr>
+<tr id="mac-2026-10-14-row-hmget-2-fields"><td>HMGET (2 fields)</td><td>2.00M</td><td>1.67M</td><td>1.20×</td></tr>
+<tr id="mac-2026-10-14-row-hstrlen"><td>HSTRLEN</td><td>2.50M</td><td>1.96M</td><td>1.28×</td></tr>
+<tr id="mac-2026-10-14-row-lpush"><td>LPUSH</td><td>2.09M</td><td>1.76M</td><td>1.19×</td></tr>
+<tr id="mac-2026-10-14-row-llen"><td>LLEN</td><td>2.31M</td><td>2.31M</td><td>1.00×</td></tr>
+<tr id="mac-2026-10-14-row-lrange-0-2"><td>LRANGE 0 2</td><td>1.88M</td><td>1.67M</td><td>1.13×</td></tr>
+<tr id="mac-2026-10-14-row-sadd-existing-member"><td>SADD (existing member)</td><td>2.37M</td><td>2.09M</td><td>1.13×</td></tr>
+<tr id="mac-2026-10-14-row-sismember"><td>SISMEMBER</td><td>2.50M</td><td>2.25M</td><td>1.11×</td></tr>
+<tr id="mac-2026-10-14-row-srandmember"><td>SRANDMEMBER</td><td>2.43M</td><td>2.00M</td><td>1.22×</td></tr>
+<tr id="mac-2026-10-14-row-zadd-existing-member-same-score"><td>ZADD (existing member, same score)</td><td>2.14M</td><td>1.53M</td><td>1.40×</td></tr>
+<tr id="mac-2026-10-14-row-zincrby"><td>ZINCRBY</td><td>1.58M</td><td>1.38M</td><td>1.14×</td></tr>
+<tr id="mac-2026-10-14-row-zscore"><td>ZSCORE</td><td>2.25M</td><td>1.80M</td><td>1.25×</td></tr>
+<tr id="mac-2026-10-14-row-rename-same-key"><td>RENAME (same key)</td><td>2.50M</td><td>1.96M</td><td>1.28×</td></tr>
+<tr id="mac-2026-10-14-row-publish-no-subscribers"><td>PUBLISH (no subscribers)</td><td>2.57M</td><td>2.25M</td><td>1.14×</td></tr>
+<tr id="mac-2026-10-14-row-hget-10-field-hash"><td>HGET (10-field hash)</td><td>2.31M</td><td>1.73M</td><td>1.33×</td></tr>
+<tr id="mac-2026-10-14-row-hset-10-field-hash-existing-field"><td>HSET (10-field hash, existing field)</td><td>1.91M</td><td>1.48M</td><td>1.30×</td></tr>
+<tr id="mac-2026-10-14-row-hdel-10-field-hash-missing-field"><td>HDEL (10-field hash, missing field)</td><td>1.96M</td><td>1.67M</td><td>1.17×</td></tr>
+<tr id="mac-2026-10-14-row-hgetall-10-field-hash"><td>HGETALL (10-field hash)</td><td>763k</td><td>789k</td><td>0.97×</td></tr>
+<tr id="mac-2026-10-14-row-lindex-20-item-list"><td>LINDEX (20-item list)</td><td>2.14M</td><td>1.91M</td><td>1.12×</td></tr>
+<tr id="mac-2026-10-14-row-lrange-0-9-20-item-list"><td>LRANGE 0 9 (20-item list)</td><td>1.18M</td><td>1.18M</td><td>1.00×</td></tr>
+<tr id="mac-2026-10-14-row-lset-20-item-list"><td>LSET (20-item list)</td><td>2.20M</td><td>1.67M</td><td>1.32×</td></tr>
+<tr id="mac-2026-10-14-row-geoadd"><td>GEOADD</td><td>1.94M</td><td>1.11M</td><td>1.74×</td></tr>
+<tr id="mac-2026-10-14-row-geosearch-radius-50-km-count-10"><td>GEOSEARCH (radius 50 km, COUNT 10)</td><td>44k</td><td>18k</td><td>2.48×</td></tr>
+<tr id="mac-2026-10-14-row-getex-set-a-100-s-deadline"><td>GETEX (set a 100 s deadline)</td><td>2.37M</td><td>1.38M</td><td>1.71×</td></tr>
+<tr id="mac-2026-10-14-row-fillget-value-present"><td>FILLGET (value present)</td><td>1.96M</td><td>2.31M</td><td class="lag">0.85×</td></tr>
+</tbody></table></div>
+  <p><strong>Limits:</strong> 3 rounds of a short run; single rows move by about ±10% between runs on this machine.</p>
+  <p class="links"><a href="data/mac-2026-10-14.json">All samples and environment (JSON)</a></p>
+<!-- mac-2026-10-14:end -->
+  <!-- linux-2026-10-14:start -->
+  <h2 id="linux-2026-10-14">Command comparison against Redis 8.10.2 on a 2-vCPU Linux server · 2026-10-14</h2>
+  <p><strong>Goal:</strong> repeat the 60-command grid on the current code and keep it as a dated record next to the earlier runs. <strong>Environment:</strong> AMD EPYC 9354P KVM guest, 2 vCPU, Linux 6.8; Ruvio and Redis each alone on cpu 0, redis-benchmark on cpu 1 (scripts/pinned_run.py). Ruvio commit <code>eb1281c</code> (<code>cargo build --profile release</code>), one shard, <code>memory</code> durability; Redis 8.10.2.</p>
+  <p><strong>Method:</strong> <code>scripts/redis_compare_features.py</code>: <code>redis-benchmark</code>, 50 clients, pipeline 16, request counts scaled by 0.3, 3 rounds with alternating order, median requests/s.</p>
+  <p><strong>Result:</strong> 49 of 60 rows at or above 0.97×, geometric mean 1.09×; best DUMP (64 B string) 2.15×, LINSERT (pivot missing, scans 100) 1.88×, LREM (value missing, scans 100) 1.67×; lowest HGETALL (10-field hash) 0.872×, TOUCH 0.890×, GETBIT (1 KiB bitmap) 0.898×; below 0.90×: HGETALL (10-field hash) 0.872×, TOUCH 0.890×, GETBIT (1 KiB bitmap) 0.898×. Ratios under 0.90× are highlighted.</p>
+  <div class="table-wrap"><table><thead><tr><th>Command</th><th>Ruvio req/s</th><th>Redis req/s</th><th>Ruvio / Redis</th></tr></thead><tbody>
+<tr id="linux-2026-10-14-row-get-baseline-for-scale"><td>GET (baseline, for scale)</td><td>841k</td><td>826k</td><td>1.02×</td></tr>
+<tr id="linux-2026-10-14-row-set-baseline-for-scale"><td>SET (baseline, for scale)</td><td>874k</td><td>703k</td><td>1.24×</td></tr>
+<tr id="linux-2026-10-14-row-lpos-100-elements-hit-in-the-middle"><td>LPOS (100 elements, hit in the middle)</td><td>643k</td><td>457k</td><td>1.41×</td></tr>
+<tr id="linux-2026-10-14-row-lset-100-elements"><td>LSET (100 elements)</td><td>687k</td><td>692k</td><td>0.99×</td></tr>
+<tr id="linux-2026-10-14-row-linsert-pivot-missing-scans-100"><td>LINSERT (pivot missing, scans 100)</td><td>789k</td><td>421k</td><td>1.88×</td></tr>
+<tr id="linux-2026-10-14-row-lrem-value-missing-scans-100"><td>LREM (value missing, scans 100)</td><td>789k</td><td>474k</td><td>1.67×</td></tr>
+<tr id="linux-2026-10-14-row-lmove-rotate-a-100-element-list"><td>LMOVE (rotate a 100-element list)</td><td>763k</td><td>625k</td><td>1.22×</td></tr>
+<tr id="linux-2026-10-14-row-bitfield-incrby-u8-always-writes"><td>BITFIELD INCRBY u8 (always writes)</td><td>796k</td><td>709k</td><td>1.12×</td></tr>
+<tr id="linux-2026-10-14-row-bitfield-get-u8"><td>BITFIELD GET u8</td><td>726k</td><td>744k</td><td>0.98×</td></tr>
+<tr id="linux-2026-10-14-row-setbit-1-kib-bitmap-same-bit"><td>SETBIT (1 KiB bitmap, same bit)</td><td>826k</td><td>849k</td><td>0.97×</td></tr>
+<tr id="linux-2026-10-14-row-getbit-1-kib-bitmap"><td>GETBIT (1 KiB bitmap)</td><td>763k</td><td>849k</td><td class="lag">0.90×</td></tr>
+<tr id="linux-2026-10-14-row-bitcount-1-kib-bitmap"><td>BITCOUNT (1 KiB bitmap)</td><td>732k</td><td>732k</td><td>1.00×</td></tr>
+<tr id="linux-2026-10-14-row-pfadd"><td>PFADD</td><td>703k</td><td>744k</td><td>0.95×</td></tr>
+<tr id="linux-2026-10-14-row-pfcount"><td>PFCOUNT</td><td>826k</td><td>841k</td><td>0.98×</td></tr>
+<tr id="linux-2026-10-14-row-copy-replace-64-b-string"><td>COPY ... REPLACE (64 B string)</td><td>849k</td><td>625k</td><td>1.36×</td></tr>
+<tr id="linux-2026-10-14-row-dump-64-b-string"><td>DUMP (64 B string)</td><td>726k</td><td>338k</td><td>2.15×</td></tr>
+<tr id="linux-2026-10-14-row-expiretime"><td>EXPIRETIME</td><td>833k</td><td>818k</td><td>1.02×</td></tr>
+<tr id="linux-2026-10-14-row-touch"><td>TOUCH</td><td>709k</td><td>796k</td><td class="lag">0.89×</td></tr>
+<tr id="linux-2026-10-14-row-object-encoding"><td>OBJECT ENCODING</td><td>738k</td><td>738k</td><td>1.00×</td></tr>
+<tr id="linux-2026-10-14-row-memory-usage"><td>MEMORY USAGE</td><td>709k</td><td>744k</td><td>0.95×</td></tr>
+<tr id="linux-2026-10-14-row-getrange"><td>GETRANGE</td><td>811k</td><td>756k</td><td>1.07×</td></tr>
+<tr id="linux-2026-10-14-row-setrange"><td>SETRANGE</td><td>865k</td><td>811k</td><td>1.07×</td></tr>
+<tr id="linux-2026-10-14-row-setex"><td>SETEX</td><td>841k</td><td>682k</td><td>1.23×</td></tr>
+<tr id="linux-2026-10-14-row-mset-3-keys"><td>MSET (3 keys)</td><td>726k</td><td>625k</td><td>1.16×</td></tr>
+<tr id="linux-2026-10-14-row-mget-3-keys"><td>MGET (3 keys)</td><td>692k</td><td>643k</td><td>1.08×</td></tr>
+<tr id="linux-2026-10-14-row-del-missing-key"><td>DEL (missing key)</td><td>756k</td><td>826k</td><td>0.92×</td></tr>
+<tr id="linux-2026-10-14-row-exists"><td>EXISTS</td><td>738k</td><td>804k</td><td>0.92×</td></tr>
+<tr id="linux-2026-10-14-row-type"><td>TYPE</td><td>709k</td><td>714k</td><td>0.99×</td></tr>
+<tr id="linux-2026-10-14-row-ttl"><td>TTL</td><td>750k</td><td>796k</td><td>0.94×</td></tr>
+<tr id="linux-2026-10-14-row-pttl"><td>PTTL</td><td>826k</td><td>826k</td><td>1.00×</td></tr>
+<tr id="linux-2026-10-14-row-persist-key-without-ttl"><td>PERSIST (key without TTL)</td><td>738k</td><td>687k</td><td>1.07×</td></tr>
+<tr id="linux-2026-10-14-row-expire-key-with-ttl"><td>EXPIRE (key with TTL)</td><td>769k</td><td>596k</td><td>1.29×</td></tr>
+<tr id="linux-2026-10-14-row-append-1-byte"><td>APPEND (1 byte)</td><td>588k</td><td>471k</td><td>1.25×</td></tr>
+<tr id="linux-2026-10-14-row-incrbyfloat"><td>INCRBYFLOAT</td><td>492k</td><td>464k</td><td>1.06×</td></tr>
+<tr id="linux-2026-10-14-row-hset-existing-field"><td>HSET (existing field)</td><td>833k</td><td>756k</td><td>1.10×</td></tr>
+<tr id="linux-2026-10-14-row-hget"><td>HGET</td><td>720k</td><td>677k</td><td>1.06×</td></tr>
+<tr id="linux-2026-10-14-row-hmget-2-fields"><td>HMGET (2 fields)</td><td>647k</td><td>616k</td><td>1.05×</td></tr>
+<tr id="linux-2026-10-14-row-hstrlen"><td>HSTRLEN</td><td>818k</td><td>756k</td><td>1.08×</td></tr>
+<tr id="linux-2026-10-14-row-lpush"><td>LPUSH</td><td>657k</td><td>600k</td><td>1.09×</td></tr>
+<tr id="linux-2026-10-14-row-llen"><td>LLEN</td><td>687k</td><td>672k</td><td>1.02×</td></tr>
+<tr id="linux-2026-10-14-row-lrange-0-2"><td>LRANGE 0 2</td><td>634k</td><td>638k</td><td>0.99×</td></tr>
+<tr id="linux-2026-10-14-row-sadd-existing-member"><td>SADD (existing member)</td><td>714k</td><td>692k</td><td>1.03×</td></tr>
+<tr id="linux-2026-10-14-row-sismember"><td>SISMEMBER</td><td>818k</td><td>703k</td><td>1.16×</td></tr>
+<tr id="linux-2026-10-14-row-srandmember"><td>SRANDMEMBER</td><td>818k</td><td>818k</td><td>1.00×</td></tr>
+<tr id="linux-2026-10-14-row-zadd-existing-member-same-score"><td>ZADD (existing member, same score)</td><td>857k</td><td>783k</td><td>1.10×</td></tr>
+<tr id="linux-2026-10-14-row-zincrby"><td>ZINCRBY</td><td>672k</td><td>577k</td><td>1.16×</td></tr>
+<tr id="linux-2026-10-14-row-zscore"><td>ZSCORE</td><td>818k</td><td>796k</td><td>1.03×</td></tr>
+<tr id="linux-2026-10-14-row-rename-same-key"><td>RENAME (same key)</td><td>818k</td><td>744k</td><td>1.10×</td></tr>
+<tr id="linux-2026-10-14-row-publish-no-subscribers"><td>PUBLISH (no subscribers)</td><td>738k</td><td>769k</td><td>0.96×</td></tr>
+<tr id="linux-2026-10-14-row-hget-10-field-hash"><td>HGET (10-field hash)</td><td>796k</td><td>709k</td><td>1.12×</td></tr>
+<tr id="linux-2026-10-14-row-hset-10-field-hash-existing-field"><td>HSET (10-field hash, existing field)</td><td>709k</td><td>672k</td><td>1.06×</td></tr>
+<tr id="linux-2026-10-14-row-hdel-10-field-hash-missing-field"><td>HDEL (10-field hash, missing field)</td><td>662k</td><td>657k</td><td>1.01×</td></tr>
+<tr id="linux-2026-10-14-row-hgetall-10-field-hash"><td>HGETALL (10-field hash)</td><td>398k</td><td>457k</td><td class="lag">0.87×</td></tr>
+<tr id="linux-2026-10-14-row-lindex-20-item-list"><td>LINDEX (20-item list)</td><td>865k</td><td>833k</td><td>1.04×</td></tr>
+<tr id="linux-2026-10-14-row-lrange-0-9-20-item-list"><td>LRANGE 0 9 (20-item list)</td><td>517k</td><td>492k</td><td>1.05×</td></tr>
+<tr id="linux-2026-10-14-row-lset-20-item-list"><td>LSET (20-item list)</td><td>811k</td><td>789k</td><td>1.03×</td></tr>
+<tr id="linux-2026-10-14-row-geoadd"><td>GEOADD</td><td>789k</td><td>577k</td><td>1.37×</td></tr>
+<tr id="linux-2026-10-14-row-geosearch-radius-50-km-count-10"><td>GEOSEARCH (radius 50 km, COUNT 10)</td><td>15k</td><td>11k</td><td>1.40×</td></tr>
+<tr id="linux-2026-10-14-row-getex-set-a-100-s-deadline"><td>GETEX (set a 100 s deadline)</td><td>634k</td><td>657k</td><td>0.96×</td></tr>
+<tr id="linux-2026-10-14-row-fillget-value-present"><td>FILLGET (value present)</td><td>672k</td><td>720k</td><td>0.93×</td></tr>
+</tbody></table></div>
+  <p><strong>Limits:</strong> 3 rounds of a short run; single rows move by about ±10% between runs on this machine.</p>
+  <p class="links"><a href="data/linux-hostinger-2026-10-14.json">All samples and environment (JSON)</a></p>
+<!-- linux-2026-10-14:end -->
+  <!-- azure-2026-10-11:start -->
+  
+<section class="panel">
+<h2 id="azure-2026-10-11">Linux x86 comparison against Redis 8.10.2 on a 4-core VM · 2026-10-11</h2>
+  <p><strong>Goal:</strong> repeat the speed comparison on a Linux machine with enough cores to keep server and load generator apart, with a fast data disk for the durability rows, and measure what changed in the WAL and the cross-shard path since the last run. <strong>Environment:</strong> Azure VM, AMD EPYC 7763 (virtualized), 8 vCPU = 4 cores x 2 threads, 31 GiB, Ubuntu 24.04, kernel 6.17.0-azure; data disk Premium SSD v2 32 GiB (16,000 IOPS, 400 MB/s, host caching none) with ext4; OS disk Standard SSD.</p>
+      <p>Native processes only (no Docker). Ruvio commit <code>5520164</code> (<code>cargo build --release</code>); Redis 8.10.2 built from source (jemalloc 5.3.0); redis-benchmark is the 8.10.2 binary from the same build.</p>
+  <p><strong>Method:</strong> 60 commands from <code>scripts/redis_compare_features.py</code> run through <code>scripts/pinned_run.py</code>: <code>redis-benchmark</code> 8.10.2, 50 clients, pipeline 16, 64-byte values, five rounds with alternating order, median requests/s.</p>
+      <p>Ruvio and Redis each run alone on cpu 0 (core 0, its hyper-thread idle), the load generator on cpus 2 and 4 (two other cores), one shard, <code>memory</code> durability. Concurrency, durability and multi-shard rows: <code>scripts/bench_concurrency_durability.py</code>, five alternating rounds, median req/s and p99 (<code>redis-benchmark --threads 2</code>, 64-byte values, 100,000 random keys).</p>
+      <p>Single-shard rows: server on cpu 0, client on cpus 2 and 4. Ruvio 2- and 4-shard rows: shards on cpus 0,2 and 0,2,4,6 and the client on the hyper-thread siblings 1,3,5,7. Redis is always one process (it is single-threaded) on cpu 0. <code>always</code> rows: Ruvio <code>--durability always</code> against Redis <code>appendonly yes</code>, <code>appendfsync always</code>, both on the Premium SSD v2 data disk.</p>
+  <h3 id="azure-commands">Command throughput</h3>
+  <p><strong>Result:</strong> 59 of 60 rows at or above 0.97×, geometric mean 1.22×; best DUMP (64 B string) 2.15×, LINSERT (pivot missing, scans 100) 1.88×, LREM (value missing, scans 100) 1.79×; lowest FILLGET (value present) 0.96×, HGETALL (10-field hash) 0.97×, LRANGE 0 9 (20-item list) 0.97×; below 0.90×: none. Ratios under 0.90× are highlighted (none).</p>
+  <div class="table-wrap"><table><thead><tr><th>Command</th><th>Ruvio req/s</th><th>Redis req/s</th><th>Ruvio / Redis</th></tr></thead><tbody>
+<tr id="azure-row-get-baseline-for-scale"><td>GET (baseline, for scale)</td><td>1.20M</td><td>1.12M</td><td>1.08×</td></tr>
+<tr id="azure-row-set-baseline-for-scale"><td>SET (baseline, for scale)</td><td>1.21M</td><td>917k</td><td>1.32×</td></tr>
+<tr id="azure-row-lpos-100-elements-hit-in-the-middle"><td>LPOS (100 elements, hit in the middle)</td><td>817k</td><td>548k</td><td>1.49×</td></tr>
+<tr id="azure-row-lset-100-elements"><td>LSET (100 elements)</td><td>920k</td><td>826k</td><td>1.11×</td></tr>
+<tr id="azure-row-linsert-pivot-missing-scans-100"><td>LINSERT (pivot missing, scans 100)</td><td>904k</td><td>480k</td><td>1.88×</td></tr>
+<tr id="azure-row-lrem-value-missing-scans-100"><td>LREM (value missing, scans 100)</td><td>896k</td><td>500k</td><td>1.79×</td></tr>
+<tr id="azure-row-lmove-rotate-a-100-element-list"><td>LMOVE (rotate a 100-element list)</td><td>1.03M</td><td>730k</td><td>1.41×</td></tr>
+<tr id="azure-row-bitfield-incrby-u8-always-writes"><td>BITFIELD INCRBY u8 (always writes)</td><td>952k</td><td>809k</td><td>1.18×</td></tr>
+<tr id="azure-row-bitfield-get-u8"><td>BITFIELD GET u8</td><td>1.11M</td><td>929k</td><td>1.19×</td></tr>
+<tr id="azure-row-setbit-1-kib-bitmap-same-bit"><td>SETBIT (1 KiB bitmap, same bit)</td><td>1.24M</td><td>1.01M</td><td>1.24×</td></tr>
+<tr id="azure-row-getbit-1-kib-bitmap"><td>GETBIT (1 KiB bitmap)</td><td>1.25M</td><td>1.08M</td><td>1.16×</td></tr>
+<tr id="azure-row-bitcount-1-kib-bitmap"><td>BITCOUNT (1 KiB bitmap)</td><td>1.18M</td><td>1.08M</td><td>1.09×</td></tr>
+<tr id="azure-row-pfadd"><td>PFADD</td><td>1.22M</td><td>1.05M</td><td>1.17×</td></tr>
+<tr id="azure-row-pfcount"><td>PFCOUNT</td><td>1.27M</td><td>1.14M</td><td>1.11×</td></tr>
+<tr id="azure-row-copy-replace-64-b-string"><td>COPY ... REPLACE (64 B string)</td><td>1.15M</td><td>708k</td><td>1.63×</td></tr>
+<tr id="azure-row-dump-64-b-string"><td>DUMP (64 B string)</td><td>898k</td><td>418k</td><td>2.15×</td></tr>
+<tr id="azure-row-expiretime"><td>EXPIRETIME</td><td>1.26M</td><td>1.15M</td><td>1.10×</td></tr>
+<tr id="azure-row-touch"><td>TOUCH</td><td>1.27M</td><td>1.15M</td><td>1.10×</td></tr>
+<tr id="azure-row-object-encoding"><td>OBJECT ENCODING</td><td>1.23M</td><td>1.05M</td><td>1.18×</td></tr>
+<tr id="azure-row-memory-usage"><td>MEMORY USAGE</td><td>1.25M</td><td>1.08M</td><td>1.15×</td></tr>
+<tr id="azure-row-getrange"><td>GETRANGE</td><td>1.23M</td><td>1000k</td><td>1.23×</td></tr>
+<tr id="azure-row-setrange"><td>SETRANGE</td><td>1.27M</td><td>987k</td><td>1.28×</td></tr>
+<tr id="azure-row-setex"><td>SETEX</td><td>1.19M</td><td>688k</td><td>1.73×</td></tr>
+<tr id="azure-row-mset-3-keys"><td>MSET (3 keys)</td><td>1.06M</td><td>610k</td><td>1.74×</td></tr>
+<tr id="azure-row-mget-3-keys"><td>MGET (3 keys)</td><td>1.03M</td><td>813k</td><td>1.27×</td></tr>
+<tr id="azure-row-del-missing-key"><td>DEL (missing key)</td><td>1.23M</td><td>1.19M</td><td>1.04×</td></tr>
+<tr id="azure-row-exists"><td>EXISTS</td><td>1.28M</td><td>1.14M</td><td>1.13×</td></tr>
+<tr id="azure-row-type"><td>TYPE</td><td>1.25M</td><td>1.11M</td><td>1.13×</td></tr>
+<tr id="azure-row-ttl"><td>TTL</td><td>1.22M</td><td>1.13M</td><td>1.08×</td></tr>
+<tr id="azure-row-pttl"><td>PTTL</td><td>1.21M</td><td>1.13M</td><td>1.08×</td></tr>
+<tr id="azure-row-persist-key-without-ttl"><td>PERSIST (key without TTL)</td><td>1.29M</td><td>1.09M</td><td>1.18×</td></tr>
+<tr id="azure-row-expire-key-with-ttl"><td>EXPIRE (key with TTL)</td><td>1.06M</td><td>872k</td><td>1.21×</td></tr>
+<tr id="azure-row-append-1-byte"><td>APPEND (1 byte)</td><td>1.01M</td><td>997k</td><td>1.02×</td></tr>
+<tr id="azure-row-incrbyfloat"><td>INCRBYFLOAT</td><td>694k</td><td>505k</td><td>1.37×</td></tr>
+<tr id="azure-row-hset-existing-field"><td>HSET (existing field)</td><td>1.08M</td><td>890k</td><td>1.21×</td></tr>
+<tr id="azure-row-hget"><td>HGET</td><td>1.26M</td><td>1.02M</td><td>1.23×</td></tr>
+<tr id="azure-row-hmget-2-fields"><td>HMGET (2 fields)</td><td>1.09M</td><td>901k</td><td>1.22×</td></tr>
+<tr id="azure-row-hstrlen"><td>HSTRLEN</td><td>1.28M</td><td>1.05M</td><td>1.22×</td></tr>
+<tr id="azure-row-lpush"><td>LPUSH</td><td>943k</td><td>901k</td><td>1.05×</td></tr>
+<tr id="azure-row-llen"><td>LLEN</td><td>1.27M</td><td>1.12M</td><td>1.14×</td></tr>
+<tr id="azure-row-lrange-0-2"><td>LRANGE 0 2</td><td>1.05M</td><td>898k</td><td>1.17×</td></tr>
+<tr id="azure-row-sadd-existing-member"><td>SADD (existing member)</td><td>1.08M</td><td>1.02M</td><td>1.06×</td></tr>
+<tr id="azure-row-sismember"><td>SISMEMBER</td><td>1.27M</td><td>1.01M</td><td>1.26×</td></tr>
+<tr id="azure-row-srandmember"><td>SRANDMEMBER</td><td>1.02M</td><td>997k</td><td>1.03×</td></tr>
+<tr id="azure-row-zadd-existing-member-same-score"><td>ZADD (existing member, same score)</td><td>1.12M</td><td>917k</td><td>1.22×</td></tr>
+<tr id="azure-row-zincrby"><td>ZINCRBY</td><td>829k</td><td>662k</td><td>1.25×</td></tr>
+<tr id="azure-row-zscore"><td>ZSCORE</td><td>1.20M</td><td>1.01M</td><td>1.19×</td></tr>
+<tr id="azure-row-rename-same-key"><td>RENAME (same key)</td><td>1.26M</td><td>1.01M</td><td>1.25×</td></tr>
+<tr id="azure-row-publish-no-subscribers"><td>PUBLISH (no subscribers)</td><td>1.28M</td><td>1.28M</td><td>1.00×</td></tr>
+<tr id="azure-row-hget-10-field-hash"><td>HGET (10-field hash)</td><td>1.20M</td><td>968k</td><td>1.24×</td></tr>
+<tr id="azure-row-hset-10-field-hash-existing-field"><td>HSET (10-field hash, existing field)</td><td>1.02M</td><td>852k</td><td>1.19×</td></tr>
+<tr id="azure-row-hdel-10-field-hash-missing-field"><td>HDEL (10-field hash, missing field)</td><td>1.04M</td><td>990k</td><td>1.05×</td></tr>
+<tr id="azure-row-hgetall-10-field-hash"><td>HGETALL (10-field hash)</td><td>524k</td><td>540k</td><td>0.97×</td></tr>
+<tr id="azure-row-lindex-20-item-list"><td>LINDEX (20-item list)</td><td>1.19M</td><td>968k</td><td>1.23×</td></tr>
+<tr id="azure-row-lrange-0-9-20-item-list"><td>LRANGE 0 9 (20-item list)</td><td>721k</td><td>743k</td><td>0.97×</td></tr>
+<tr id="azure-row-lset-20-item-list"><td>LSET (20-item list)</td><td>1.07M</td><td>904k</td><td>1.19×</td></tr>
+<tr id="azure-row-geoadd"><td>GEOADD</td><td>909k</td><td>656k</td><td>1.39×</td></tr>
+<tr id="azure-row-geosearch-radius-50-km-count-10"><td>GEOSEARCH (radius 50 km, COUNT 10)</td><td>14k</td><td>10k</td><td>1.31×</td></tr>
+<tr id="azure-row-getex-set-a-100-s-deadline"><td>GETEX (set a 100 s deadline)</td><td>971k</td><td>804k</td><td>1.21×</td></tr>
+<tr id="azure-row-fillget-value-present"><td>FILLGET (value present)</td><td>1.11M</td><td>1.16M</td><td>0.96×</td></tr>
+</tbody></table></div>
+  <h3 id="azure-durability">Concurrency, durability and Ruvio shards</h3>
+  <p><strong>Result:</strong> With pipelining and 200 clients Ruvio is 1.11–1.43× Redis with the lower p99. <code>always</code> (fsync) durability is where Ruvio leads most: 2.67× at 50 clients, 1.50× at 200 clients and 2.33× at pipeline 16. Two changes since the last run explain it: the WAL fills each preallocated chunk with zeros ahead of the write cursor on a helper thread (an <code>fdatasync</code> of written blocks cost 0.8 ms instead of 2.0 ms on this disk), and a sync worker lets the shard keep executing while the sync runs.</p>
+      <p>The un-pipelined rows are client-bound: the load generator tops out near 110–120k req/s on this host for both servers (identical GET numbers), so they show the p99 tail, not server capacity. More Ruvio shards lift pipelined SET from 1.14M to 1.33M req/s at 2 shards; at 4 shards the client, which shares cores with the shards, is the limit.</p>
+      <p>With <code>always</code>, 2 shards and 200 clients at pipeline 16 Ruvio is at parity with Redis (1.00×): extra shards do not help there because disk flush latency, not shard CPU, is the limit.</p>
+  <div class="table-wrap"><table><thead><tr><th>Scenario</th><th>Ruvio shards</th><th>Ruvio req/s (p99)</th><th>Redis req/s (p99)</th><th>Ruvio / Redis</th></tr></thead><tbody>
+<tr id="azure-row-set-50-clients-no-pipeline"><td>SET, 50 clients, no pipeline</td><td>1</td><td>114k (0.49 ms)</td><td>109k (0.75 ms)</td><td>1.05×</td></tr>
+<tr id="azure-row-get-50-clients-no-pipeline"><td>GET, 50 clients, no pipeline</td><td>1</td><td>120k (0.46 ms)</td><td>120k (0.69 ms)</td><td>1.00×</td></tr>
+<tr id="azure-row-set-200-clients-no-pipeline"><td>SET, 200 clients, no pipeline</td><td>1</td><td>114k (1.83 ms)</td><td>109k (3.23 ms)</td><td>1.05×</td></tr>
+<tr id="azure-row-get-200-clients-no-pipeline"><td>GET, 200 clients, no pipeline</td><td>1</td><td>120k (1.70 ms)</td><td>120k (2.98 ms)</td><td>1.00×</td></tr>
+<tr id="azure-row-set-200-clients-pipeline-16"><td>SET, 200 clients, pipeline 16</td><td>1</td><td>1.14M (3.07 ms)</td><td>799k (5.88 ms)</td><td>1.43×</td></tr>
+<tr id="azure-row-hset-200-clients-pipeline-16"><td>HSET, 200 clients, pipeline 16</td><td>1</td><td>888k (4.08 ms)</td><td>798k (6.05 ms)</td><td>1.11×</td></tr>
+<tr id="azure-row-set-durability-always-fsync-50-clients"><td>SET, durability always (fsync), 50 clients</td><td>1</td><td>40k (3.34 ms)</td><td>15k (7.40 ms)</td><td>2.67×</td></tr>
+<tr id="azure-row-set-durability-always-fsync-200-clients"><td>SET, durability always (fsync), 200 clients</td><td>1</td><td>67k (5.37 ms)</td><td>44k (8.58 ms)</td><td>1.50×</td></tr>
+<tr id="azure-row-set-durability-always-fsync-50-clients-pipeline-16"><td>SET, durability always (fsync), 50 clients, pipeline 16</td><td>1</td><td>399k (5.45 ms)</td><td>171k (9.50 ms)</td><td>2.33×</td></tr>
+<tr id="azure-row-set-200-clients-pipeline-16-ruvio-2-shards"><td>SET, 200 clients, pipeline 16, Ruvio 2 shards</td><td>2</td><td>1.33M (3.13 ms)</td><td>799k (6.05 ms)</td><td>1.67×</td></tr>
+<tr id="azure-row-set-200-clients-pipeline-16-ruvio-4-shards"><td>SET, 200 clients, pipeline 16, Ruvio 4 shards</td><td>4</td><td>1.33M (1.29 ms)</td><td>799k (5.90 ms)</td><td>1.66×</td></tr>
+<tr id="azure-row-get-200-clients-pipeline-16-ruvio-2-shards"><td>GET, 200 clients, pipeline 16, Ruvio 2 shards</td><td>2</td><td>1.33M (2.70 ms)</td><td>1.14M (4.13 ms)</td><td>1.17×</td></tr>
+<tr id="azure-row-set-durability-always-200-clients-pipeline-16-ruvio-2-shards"><td>SET, durability always, 200 clients, pipeline 16, Ruvio 2 shards</td><td>2</td><td>299k (15.15 ms)</td><td>299k (16.51 ms)</td><td>1.00×</td></tr>
+</tbody></table></div>
+  <p><strong>Limits:</strong> one VM, one CPU model (virtualized AMD EPYC 7763), native processes only, loopback, 64-byte values, short runs, five rounds. The data disk is network-attached (an <code>fdatasync</code> costs about 0.8 ms); a local NVMe disk would change every <code>always</code> row for both servers.</p>
+      <p>Server and load generator share the VM, so absolute numbers describe this host; compare the two servers with each other only.</p>
+  <p class="links"><a href="data/x86-azure-2026-10-11.json">All samples and environment (JSON)</a> <a href="https://github.com/salihcantekin/ruvio/blob/main/scripts/render_azure_pages.py">How this section is generated</a></p>
+<!-- azure-2026-10-11:end -->
+  <!-- x86-2026-10-10:start -->
+</section>
+
+<section class="panel">
+<h2>x86 Linux comparison against Redis 8.10.2 · native and Docker · 2026-10-10</h2>
+  <p><strong>Goal:</strong> repeat the Redis comparison on Linux x86 with real hardware counters, the latest Redis, and both a native process and containers. <strong>Environment:</strong> AMD EPYC 9354P (Zen 4), a KVM guest with 2 vCPU (L1i 64 KiB per core), 8 GB, Ubuntu 24.04, kernel 6.8; Ruvio release builds (LTO), the commit is named in each section; the container runs use an image built from the project's <code>Dockerfile</code> and the native runs the same source built with <code>cargo build --release</code>; Redis 8.10.2 built from source for the native runs (jemalloc 5.3.0) and the <code>redis:8.10.2</code> image for the Docker runs.</p>
+      <p>One shard, <code>memory</code> durability unless stated. Server on cpu 1 (<code>taskset</code> or <code>--cpuset-cpus</code>), <code>redis-benchmark</code> 8.10.2 on cpu 0, Docker with <code>--network host</code>.</p>
+  <p><strong>Method:</strong> 60 commands from <code>scripts/redis_compare_features.py</code>: <code>redis-benchmark</code>, 50 clients, pipeline 16, 64-byte values, 300,000 requests per command, five rounds with alternating order, median requests/s. The throughput table and the memory "after" columns come from the final code of this day (<code>1291229</code>); the concurrency, durability and hardware-counter sections below were measured on an earlier build of the same day (<code>d99356e</code>) before the memory changes.</p>
+      <p>The VM also hosted an unrelated idle container stack (load about 0), so the samples of one cell often differ by 10 to 25% (all samples are in the JSON); differences inside about ±10% are not conclusions. SETRANGE is the one row below Redis in both setups, but the hardware-counter run below shows Ruvio using fewer cycles for it, so treat it as unresolved.</p>
+  <h3>Command throughput</h3>
+  <p><strong>Result:</strong> native: 49 of 60 rows at or above 0.97×, geometric mean 1.08×; best DUMP (64 B string) 2.27×, LINSERT (pivot missing, scans 100) 1.73×, LREM (value missing, scans 100) 1.56×; below 0.90×: OBJECT ENCODING 0.89×. Docker: 55 of 60 rows at or above 0.97×, geometric mean 1.07×; best LINSERT (pivot missing, scans 100) 1.63×, LREM (value missing, scans 100) 1.49×, GEOSEARCH (radius 50 km, COUNT 10) 1.41×; below 0.90×: TTL 0.85×. Ratios under 0.90× are highlighted.</p>
+  <div class="table-wrap"><table><thead><tr><th rowspan="2">Command</th><th colspan="3">Native process</th><th colspan="3">Docker containers</th></tr><tr><th>Ruvio req/s</th><th>Redis req/s</th><th>Ruvio / Redis</th><th>Ruvio req/s</th><th>Redis req/s</th><th>Ruvio / Redis</th></tr></thead><tbody>
+<tr><td>GET (baseline, for scale)</td><td>759k</td><td>802k</td><td>0.95×</td><td>694k</td><td>708k</td><td>0.98×</td></tr>
+<tr><td>SET (baseline, for scale)</td><td>713k</td><td>679k</td><td>1.05×</td><td>750k</td><td>652k</td><td>1.15×</td></tr>
+<tr><td>LPOS (100 elements, hit in the middle)</td><td>750k</td><td>506k</td><td>1.48×</td><td>638k</td><td>475k</td><td>1.34×</td></tr>
+<tr><td>LSET (100 elements)</td><td>671k</td><td>642k</td><td>1.04×</td><td>674k</td><td>665k</td><td>1.01×</td></tr>
+<tr><td>LINSERT (pivot missing, scans 100)</td><td>806k</td><td>466k</td><td>1.73×</td><td>732k</td><td>448k</td><td>1.63×</td></tr>
+<tr><td>LREM (value missing, scans 100)</td><td>752k</td><td>483k</td><td>1.56×</td><td>662k</td><td>444k</td><td>1.49×</td></tr>
+<tr><td>LMOVE (rotate a 100-element list)</td><td>704k</td><td>637k</td><td>1.11×</td><td>765k</td><td>602k</td><td>1.27×</td></tr>
+<tr><td>BITFIELD INCRBY u8 (always writes)</td><td>777k</td><td>769k</td><td>1.01×</td><td>642k</td><td>611k</td><td>1.05×</td></tr>
+<tr><td>BITFIELD GET u8</td><td>696k</td><td>676k</td><td>1.03×</td><td>686k</td><td>641k</td><td>1.07×</td></tr>
+<tr><td>SETBIT (1 KiB bitmap, same bit)</td><td>723k</td><td>759k</td><td>0.95×</td><td>775k</td><td>674k</td><td>1.15×</td></tr>
+<tr><td>GETBIT (1 KiB bitmap)</td><td>728k</td><td>718k</td><td>1.01×</td><td>620k</td><td>629k</td><td>0.99×</td></tr>
+<tr><td>BITCOUNT (1 KiB bitmap)</td><td>877k</td><td>852k</td><td>1.03×</td><td>767k</td><td>789k</td><td>0.97×</td></tr>
+<tr><td>PFADD</td><td>703k</td><td>714k</td><td>0.98×</td><td>824k</td><td>719k</td><td>1.15×</td></tr>
+<tr><td>PFCOUNT</td><td>752k</td><td>767k</td><td>0.98×</td><td>794k</td><td>806k</td><td>0.98×</td></tr>
+<tr><td>COPY ... REPLACE (64 B string)</td><td>811k</td><td>671k</td><td>1.21×</td><td>779k</td><td>642k</td><td>1.21×</td></tr>
+<tr><td>DUMP (64 B string)</td><td>765k</td><td>337k</td><td>2.27×</td><td>726k</td><td>688k</td><td>1.06×</td></tr>
+<tr><td>EXPIRETIME</td><td>826k</td><td>855k</td><td>0.97×</td><td>748k</td><td>817k</td><td>0.92×</td></tr>
+<tr><td>TOUCH</td><td>829k</td><td>792k</td><td>1.05×</td><td>763k</td><td>708k</td><td>1.08×</td></tr>
+<tr><td>OBJECT ENCODING</td><td>721k</td><td>811k</td><td class="lag">0.89×</td><td>765k</td><td>686k</td><td>1.11×</td></tr>
+<tr><td>MEMORY USAGE</td><td>809k</td><td>811k</td><td>1.00×</td><td>820k</td><td>718k</td><td>1.14×</td></tr>
+<tr><td>GETRANGE</td><td>775k</td><td>800k</td><td>0.97×</td><td>800k</td><td>730k</td><td>1.10×</td></tr>
+<tr><td>SETRANGE</td><td>741k</td><td>726k</td><td>1.02×</td><td>829k</td><td>773k</td><td>1.07×</td></tr>
+<tr><td>SETEX</td><td>809k</td><td>617k</td><td>1.31×</td><td>709k</td><td>591k</td><td>1.20×</td></tr>
+<tr><td>MSET (3 keys)</td><td>686k</td><td>601k</td><td>1.14×</td><td>677k</td><td>571k</td><td>1.19×</td></tr>
+<tr><td>MGET (3 keys)</td><td>670k</td><td>716k</td><td>0.94×</td><td>640k</td><td>556k</td><td>1.15×</td></tr>
+<tr><td>DEL (missing key)</td><td>813k</td><td>802k</td><td>1.01×</td><td>789k</td><td>800k</td><td>0.99×</td></tr>
+<tr><td>EXISTS</td><td>809k</td><td>677k</td><td>1.19×</td><td>794k</td><td>777k</td><td>1.02×</td></tr>
+<tr><td>TYPE</td><td>719k</td><td>728k</td><td>0.99×</td><td>767k</td><td>726k</td><td>1.06×</td></tr>
+<tr><td>TTL</td><td>789k</td><td>713k</td><td>1.11×</td><td>701k</td><td>829k</td><td class="lag">0.85×</td></tr>
+<tr><td>PTTL</td><td>761k</td><td>733k</td><td>1.04×</td><td>709k</td><td>708k</td><td>1.00×</td></tr>
+<tr><td>PERSIST (key without TTL)</td><td>813k</td><td>802k</td><td>1.01×</td><td>831k</td><td>817k</td><td>1.02×</td></tr>
+<tr><td>EXPIRE (key with TTL)</td><td>711k</td><td>686k</td><td>1.04×</td><td>817k</td><td>789k</td><td>1.04×</td></tr>
+<tr><td>APPEND (1 byte)</td><td>743k</td><td>732k</td><td>1.01×</td><td>817k</td><td>763k</td><td>1.07×</td></tr>
+<tr><td>INCRBYFLOAT</td><td>637k</td><td>463k</td><td>1.38×</td><td>575k</td><td>499k</td><td>1.15×</td></tr>
+<tr><td>HSET (existing field)</td><td>708k</td><td>665k</td><td>1.06×</td><td>798k</td><td>787k</td><td>1.01×</td></tr>
+<tr><td>HGET</td><td>815k</td><td>785k</td><td>1.04×</td><td>794k</td><td>817k</td><td>0.97×</td></tr>
+<tr><td>HMGET (2 fields)</td><td>739k</td><td>723k</td><td>1.02×</td><td>661k</td><td>668k</td><td>0.99×</td></tr>
+<tr><td>HSTRLEN</td><td>761k</td><td>792k</td><td>0.96×</td><td>743k</td><td>721k</td><td>1.03×</td></tr>
+<tr><td>LPUSH</td><td>737k</td><td>779k</td><td>0.95×</td><td>696k</td><td>682k</td><td>1.02×</td></tr>
+<tr><td>LLEN</td><td>840k</td><td>843k</td><td>1.00×</td><td>709k</td><td>708k</td><td>1.00×</td></tr>
+<tr><td>LRANGE 0 2</td><td>642k</td><td>634k</td><td>1.01×</td><td>708k</td><td>686k</td><td>1.03×</td></tr>
+<tr><td>SADD (existing member)</td><td>804k</td><td>767k</td><td>1.05×</td><td>713k</td><td>694k</td><td>1.03×</td></tr>
+<tr><td>SISMEMBER</td><td>718k</td><td>711k</td><td>1.01×</td><td>758k</td><td>798k</td><td>0.95×</td></tr>
+<tr><td>SRANDMEMBER</td><td>789k</td><td>721k</td><td>1.09×</td><td>800k</td><td>761k</td><td>1.05×</td></tr>
+<tr><td>ZADD (existing member, same score)</td><td>802k</td><td>802k</td><td>1.00×</td><td>771k</td><td>777k</td><td>0.99×</td></tr>
+<tr><td>ZINCRBY</td><td>673k</td><td>601k</td><td>1.12×</td><td>691k</td><td>611k</td><td>1.13×</td></tr>
+<tr><td>ZSCORE</td><td>826k</td><td>800k</td><td>1.03×</td><td>802k</td><td>777k</td><td>1.03×</td></tr>
+<tr><td>RENAME (same key)</td><td>809k</td><td>798k</td><td>1.01×</td><td>833k</td><td>804k</td><td>1.04×</td></tr>
+<tr><td>PUBLISH (no subscribers)</td><td>847k</td><td>860k</td><td>0.99×</td><td>748k</td><td>759k</td><td>0.99×</td></tr>
+<tr><td>HGET (10-field hash)</td><td>781k</td><td>817k</td><td>0.96×</td><td>733k</td><td>743k</td><td>0.99×</td></tr>
+<tr><td>HSET (10-field hash, existing field)</td><td>732k</td><td>686k</td><td>1.07×</td><td>781k</td><td>792k</td><td>0.99×</td></tr>
+<tr><td>HDEL (10-field hash, missing field)</td><td>726k</td><td>713k</td><td>1.02×</td><td>767k</td><td>759k</td><td>1.01×</td></tr>
+<tr><td>HGETALL (10-field hash)</td><td>428k</td><td>460k</td><td>0.93×</td><td>397k</td><td>365k</td><td>1.09×</td></tr>
+<tr><td>LINDEX (20-item list)</td><td>831k</td><td>820k</td><td>1.01×</td><td>730k</td><td>748k</td><td>0.98×</td></tr>
+<tr><td>LRANGE 0 9 (20-item list)</td><td>503k</td><td>502k</td><td>1.00×</td><td>496k</td><td>493k</td><td>1.00×</td></tr>
+<tr><td>LSET (20-item list)</td><td>704k</td><td>649k</td><td>1.08×</td><td>683k</td><td>708k</td><td>0.97×</td></tr>
+<tr><td>GEOADD</td><td>707k</td><td>599k</td><td>1.18×</td><td>766k</td><td>559k</td><td>1.37×</td></tr>
+<tr><td>GEOSEARCH (radius 50 km, COUNT 10)</td><td>16k</td><td>11k</td><td>1.43×</td><td>16k</td><td>12k</td><td>1.41×</td></tr>
+<tr><td>GETEX (set a 100 s deadline)</td><td>741k</td><td>667k</td><td>1.11×</td><td>701k</td><td>714k</td><td>0.98×</td></tr>
+<tr><td>FILLGET (value present)</td><td>677k</td><td>730k</td><td>0.93×</td><td>756k</td><td>794k</td><td>0.95×</td></tr>
+</tbody></table></div>
+  <h3>Concurrency and durability</h3>
+  <p><strong>Method:</strong> <code>redis-benchmark -t set|get</code> or <code>HSET</code>, 64-byte values, 100,000 random keys, three alternating rounds, median req/s and p99. Unpipelined rows are client-bound on this 2-vCPU host (about 50k req/s), so they show the latency tail rather than server capacity. <code>always</code> is Ruvio <code>--durability always</code> against Redis <code>appendonly yes</code> with <code>appendfsync always</code>, on the VM's virtual disk.</p>
+  <div class="table-wrap"><table><thead><tr><th rowspan="2">Scenario</th><th colspan="3">Native process</th><th colspan="3">Docker containers</th></tr><tr><th>Ruvio req/s (p99)</th><th>Redis req/s (p99)</th><th>Ruvio / Redis</th><th>Ruvio req/s (p99)</th><th>Redis req/s (p99)</th><th>Ruvio / Redis</th></tr></thead><tbody>
+<tr><td>SET, 50 clients, no pipeline</td><td>48k (0.85 ms)</td><td>50k (0.97 ms)</td><td>0.97×</td><td>50k (0.78 ms)</td><td>49k (0.87 ms)</td><td>1.02×</td></tr>
+<tr><td>GET, 50 clients, no pipeline</td><td>52k (0.74 ms)</td><td>50k (0.91 ms)</td><td>1.04×</td><td>50k (0.81 ms)</td><td>49k (1.04 ms)</td><td>1.01×</td></tr>
+<tr><td>SET, 200 clients, no pipeline</td><td>50k (2.94 ms)</td><td>50k (3.46 ms)</td><td>1.01×</td><td>49k (2.96 ms)</td><td>46k (3.62 ms)</td><td>1.07×</td></tr>
+<tr><td>GET, 200 clients, no pipeline</td><td>49k (2.82 ms)</td><td>49k (3.33 ms)</td><td>0.99×</td><td>49k (2.82 ms)</td><td>50k (2.82 ms)</td><td>0.98×</td></tr>
+<tr><td>SET, 200 clients, pipeline 16</td><td>733k (5.05 ms)</td><td>618k (7.50 ms)</td><td>1.19×</td><td>757k (5.49 ms)</td><td>625k (7.57 ms)</td><td>1.21×</td></tr>
+<tr><td>HSET, 200 clients, pipeline 16</td><td>689k (6.37 ms)</td><td>648k (7.09 ms)</td><td>1.06×</td><td>674k (6.93 ms)</td><td>641k (7.39 ms)</td><td>1.05×</td></tr>
+<tr><td>SET, durability always (fsync), 50 clients</td><td>18k (4.61 ms)</td><td>25k (3.53 ms)</td><td class="lag">0.73×</td><td>15k (6.66 ms)</td><td>23k (4.61 ms)</td><td class="lag">0.63×</td></tr>
+<tr><td>SET, durability always (fsync), 50 clients, pipeline 16</td><td>218k (6.02 ms)</td><td>264k (4.60 ms)</td><td class="lag">0.83×</td><td>197k (8.49 ms)</td><td>218k (7.21 ms)</td><td class="lag">0.90×</td></tr>
+</tbody></table></div>
+  <p><strong>Interpretation:</strong> with pipelining and 200 clients Ruvio is about 1.05–1.2× Redis and has the lower p99. With <code>always</code> durability Ruvio is behind Redis (0.63–0.90× across the two runs); the cause has not been investigated. Highlighted cells are under 0.95×.</p>
+  <h3>Hardware counters per request (native)</h3>
+  <p><strong>Method:</strong> <code>perf stat -p &lt;server pid&gt;</code> over one million requests of each command (50 clients, pipeline 16; user plus kernel, so cycles include the network system calls). Cycles, instructions, L1 instruction-cache load misses and branch misses divided by requests.</p>
+  <div class="table-wrap"><table><thead><tr><th rowspan="2">Command</th><th colspan="2">Cycles</th><th colspan="2">Instructions</th><th colspan="2">L1i misses</th><th colspan="2">Branch misses</th></tr><tr><th>Ruvio</th><th>Redis</th><th>Ruvio</th><th>Redis</th><th>Ruvio</th><th>Redis</th><th>Ruvio</th><th>Redis</th></tr></thead><tbody>
+<tr><td>GET</td><td>3938</td><td>4955</td><td>3050</td><td>5504</td><td>4.7</td><td>6.0</td><td>37.2</td><td>37.2</td></tr>
+<tr><td>SET</td><td>3764</td><td>4851</td><td>3318</td><td>7094</td><td>6.0</td><td>7.0</td><td>35.9</td><td>36.9</td></tr>
+<tr><td>INCR</td><td>4410</td><td>4508</td><td>4103</td><td>5979</td><td>4.7</td><td>6.4</td><td>36.6</td><td>37.1</td></tr>
+<tr><td>HSET</td><td>4586</td><td>4934</td><td>5479</td><td>7255</td><td>6.9</td><td>6.7</td><td>36.0</td><td>37.3</td></tr>
+<tr><td>HGET</td><td>4657</td><td>4608</td><td>4132</td><td>6490</td><td>5.1</td><td>6.1</td><td>35.8</td><td>36.1</td></tr>
+<tr><td>LPUSH</td><td>4479</td><td>4318</td><td>6155</td><td>6843</td><td>8.0</td><td>6.7</td><td>35.5</td><td>36.0</td></tr>
+<tr><td>LLEN</td><td>3633</td><td>4610</td><td>3914</td><td>5583</td><td>4.7</td><td>6.1</td><td>35.2</td><td>37.7</td></tr>
+<tr><td>EXPIRE</td><td>4149</td><td>5065</td><td>5723</td><td>7862</td><td>5.5</td><td>6.9</td><td>35.6</td><td>36.2</td></tr>
+<tr><td>EXISTS</td><td>3689</td><td>4044</td><td>3956</td><td>5549</td><td>4.9</td><td>6.0</td><td>34.9</td><td>36.6</td></tr>
+<tr><td>TTL</td><td>4555</td><td>4733</td><td>4758</td><td>5489</td><td>4.7</td><td>6.1</td><td>34.9</td><td>37.0</td></tr>
+<tr><td>SETEX</td><td>4141</td><td>5764</td><td>4976</td><td>10020</td><td>4.9</td><td>9.5</td><td>37.3</td><td>40.9</td></tr>
+<tr><td>ZADD</td><td>3987</td><td>4869</td><td>5062</td><td>7427</td><td>4.9</td><td>7.0</td><td>35.0</td><td>37.7</td></tr>
+<tr><td>TOUCH</td><td>3682</td><td>4577</td><td>3943</td><td>5278</td><td>4.7</td><td>6.1</td><td>35.2</td><td>37.5</td></tr>
+<tr><td>SETRANGE</td><td>4374</td><td>4826</td><td>4315</td><td>6886</td><td>5.1</td><td>6.4</td><td>36.7</td><td>37.0</td></tr>
+<tr><td>BITFIELD INCRBY</td><td>4462</td><td>5468</td><td>6541</td><td>8792</td><td>5.3</td><td>7.1</td><td>34.6</td><td>37.6</td></tr>
+<tr><td>COPY</td><td>4259</td><td>5563</td><td>5214</td><td>10060</td><td>5.0</td><td>9.0</td><td>34.8</td><td>37.8</td></tr>
+<tr><td>MSET</td><td>4001</td><td>5953</td><td>5927</td><td>12839</td><td>5.0</td><td>7.4</td><td>35.3</td><td>36.8</td></tr>
+<tr><td>PUBLISH</td><td>4130</td><td>4941</td><td>3814</td><td>4867</td><td>5.2</td><td>5.5</td><td>36.3</td><td>38.2</td></tr>
+</tbody></table></div>
+  <p><strong>Interpretation:</strong> across the 18 commands Ruvio executes fewer instructions in 18, fewer cycles in 16 and fewer L1i misses in 16. L1i misses are 4–9 per request for both servers; the 145-versus-2 gap measured earlier with a simulated 32 KiB cache is not present on this 64 KiB-L1i core.</p>
+  <p><strong>Limits:</strong> one VM, 2 vCPU, one CPU model (not Intel, not bare metal), one shard, 64-byte values, fixed keys, loopback, short runs (no soak, no tail-latency study at fixed offered load). Docker used host networking, so the container network path is not measured. Docker runs have no hardware counters. A passing comparison here is not a capacity guarantee.</p>
+  <p class="links"><a href="data/x86-linux-2026-10-10.json">All samples and environment (JSON)</a> <a href="https://github.com/salihcantekin/ruvio/blob/main/scripts/render_x86_pages.py">How this section is generated</a></p>
+<!-- x86-2026-10-10:end -->
+</section>
+
+<section class="panel">
+<h2 id="mac-2026-10-07">17-command Redis comparison · 2026-10-07</h2>
+  <p><strong>Goal:</strong> compare native throughput across common commands, including list, set, hash and sorted-set operations. <strong>Environment:</strong> Apple M4 Pro, 12 cores, 24 GiB, macOS 26.6.2 arm64; native Ruvio 0.2.10 release rebuilt from <code>203f4fc</code> plus uncommitted TTL deadline-index accounting changes; Redis 8.10.2.</p>
+      <p>Both are separate loopback processes: Ruvio one shard with <code>memory</code> durability; Redis RDB and AOF disabled. This build is <strong>not</strong> identifiable by the commit alone.</p>
+  <p><strong>Method:</strong> <code>redis-benchmark</code>, 50 clients, pipeline 16, 64-byte values, three rounds per command with alternating measurement order. Each server stays running across rounds; the table reports median requests/s. Most commands ran 1,000,000 requests per round; LRANGE 100/300/500/600 ran 200k/100k/60k/50k, and MSET ran 500k. <code>LLEN</code> verified that both servers' LRANGE reads used nonempty lists (200k/300k/360k/410k elements in round one). The full comparison, including a separate string-memory load, took 75.8 s.</p>
+  <div class="table-wrap"><table><thead><tr><th>Command</th><th>Ruvio median req/s</th><th>Redis median req/s</th><th>Ruvio / Redis</th></tr></thead><tbody>
+   <tr><td>PING (bulk)</td><td>2.67M</td><td>2.67M</td><td>1.00×</td></tr>
+   <tr><td>SET</td><td>2.61M</td><td>2.16M</td><td>1.21×</td></tr>
+   <tr><td>GET</td><td>2.74M</td><td>2.38M</td><td>1.15×</td></tr>
+   <tr><td>INCR</td><td>2.88M</td><td>2.57M</td><td>1.12×</td></tr>
+   <tr><td>LPUSH</td><td>2.18M</td><td>1.79M</td><td>1.22×</td></tr>
+   <tr><td>RPUSH</td><td>2.21M</td><td>1.88M</td><td>1.17×</td></tr>
+   <tr><td>LPOP</td><td>2.02M</td><td>1.74M</td><td>1.16×</td></tr>
+   <tr><td>RPOP</td><td>2.03M</td><td>1.80M</td><td>1.13×</td></tr>
+   <tr><td>SADD</td><td>2.28M</td><td>2.35M</td><td>0.97×</td></tr>
+   <tr><td>HSET</td><td>2.17M</td><td>1.82M</td><td>1.19×</td></tr>
+   <tr><td>SPOP</td><td>2.51M</td><td>2.77M</td><td>0.91×</td></tr>
+   <tr><td>ZADD</td><td>2.30M</td><td>1.88M</td><td>1.22×</td></tr>
+   <tr><td>LRANGE 100</td><td>0.22M</td><td>0.22M</td><td>1.00×</td></tr>
+   <tr><td>LRANGE 300</td><td>0.08M</td><td>0.07M</td><td>1.04×</td></tr>
+   <tr><td>LRANGE 500</td><td>0.04M</td><td>0.04M</td><td>1.03×</td></tr>
+   <tr><td>LRANGE 600</td><td>0.04M</td><td>0.03M</td><td>1.15×</td></tr>
+   <tr><td>MSET</td><td>1.40M</td><td>0.43M</td><td>3.27×</td></tr>
+  </tbody></table></div>
+  <p><strong>Interpretation:</strong> Ruvio leads SET, GET, INCR and MSET in this workload; Redis leads SADD and SPOP, with SADD inside the approximate ±10% host-variation tie band. Ratios use unrounded rates. <strong>Limit:</strong> mostly fixed-key pipelined loopback throughput is not production throughput, tail latency, durability throughput, TTL churn or a many-key scaling test.</p>
+      <p>These are three local rounds on one unpinned machine, not confidence intervals. See the <a href="testing-memory.html">separate memory and churn results</a> for the same build.</p>
+  <p class="links"><a href="data/redis-compare-2026-10-07.json">Full per-round data and environment (JSON)</a></p>
+</section>
+
+<section class="panel">
+<h2>Four-core bare-metal baseline · 2026-09-28</h2>
+  <p><strong>Environment:</strong> pinned Cherry EPYC 7313P Ubuntu host, four Ruvio shards versus four Redis 8.10.2 processes, both <code>memory</code> durability, 25 clients and 500k requests per shard, pipeline 16, 64 bytes; five matrix samples. <strong>Result:</strong> aggregate SET medians 3.05M/s versus 2.49M/s; GET 3.21M/s versus 3.26M/s. <strong>Limit:</strong> historical pre-WAL-change build, not today's binary or a Redis Cluster comparison. Multi-shard p99 is the slowest shard, not an aggregate latency percentile.</p>
+  <p><a href="https://github.com/salihcantekin/ruvio/blob/main/docs/BARE_METAL.md">Bare-metal setup, full matrix and 15-minute soaks</a></p>
+</section>
+</article></main>
+  <footer class="foot"><div class="foot-inner">Test evidence is dated and scoped: a passing container scenario is not a durability certification.</div></footer>
+  <script src="js/versions.js?v=20261013j"></script>
+  <script src="vendor/highlightjs/highlight.min.js"></script>
+  <footer class="site-foot">
+    <div class="site-foot-inner">
+      <div class="site-foot-brand">
+        <img src="images/ruvio-mark.png?v=20261015b" alt="" width="36" height="36">
+        <div>
+          <strong>Ruvio</strong>
+          <span>One RESP process. The shard that owns the key does the work.</span>
+          <small>Server AGPL-3.0 · Clients MIT</small>
+        </div>
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/salihcantekin/ruvio/tree/main/docs">Docs</a>
+        <a href="https://github.com/salihcantekin/ruvio">GitHub</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="js/chrome.js?v=20261015a"></script>
+</body>
+</html>

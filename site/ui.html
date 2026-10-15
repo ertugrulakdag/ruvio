@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UI — Ruvio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css?v=20261015a">
+  <link rel="stylesheet" href="vendor/highlightjs/github-dark.min.css">
+  <link rel="icon" href="images/ruvio-icon.png" type="image/png">
+  <meta property="og:image" content="https://salihcantekin.github.io/ruvio/images/ruvio-social.png">
+</head>
+<body data-page="ui.html">
+  <header class="top">
+    <div class="top-inner">
+      <a class="mark" href="index.html">Ruvio</a>
+      <nav aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="start.html">Start</a>
+        <details>
+          <summary>Build</summary>
+          <div class="nav-menu">
+            <a href="compare.html">How it runs</a>
+            <a href="commands.html">Commands</a>
+            <a href="packages.html">Packages</a>
+            <a href="ui.html">Operator UI</a>
+          </div>
+        </details>
+        <details>
+          <summary>Clients</summary>
+          <div class="nav-menu">
+            <a href="clients.html">Overview</a>
+            <a href="client-rust.html">Rust</a>
+            <a href="client-csharp.html">C#</a>
+            <a href="client-go.html">Go</a>
+            <a href="client-java.html">Java</a>
+            <a href="client-python.html">Python</a>
+            <a href="client-node.html">Node.js</a>
+            <a href="examples.html">Examples</a>
+          </div>
+        </details>
+        <details>
+          <summary>Operate</summary>
+          <div class="nav-menu">
+            <a href="configuration.html">Configuration</a>
+            <a href="durability.html">Durability</a>
+            <a href="replication.html">Replication</a>
+            <a href="operations.html">Operations</a>
+          </div>
+        </details>
+        <a href="testing.html">Testing</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap layout">
+    <nav class="side">
+      <a href="#install">Install</a>
+      <a href="#signin">Sign in</a>
+      <a href="#shards">Shards</a>
+      <a href="#screens">Screens</a>
+      <a href="#users">Users</a>
+    </nav>
+    <article>
+      <h1>Operator UI</h1>
+      <p>Ruvio UI is a browser for one running server. The page talks HTTP to a small process. That process talks RESP through <code>ruvio-client</code>. There is no second database of portal accounts. The user and password on the sign-in form are the server’s ACL identity.</p>
+      <figure class="shot">
+        <img src="images/ui-overview.png" alt="Overview showing two shards, key counts, and persistence">
+        <figcaption>Overview is the first screen. It sums the shards that answered and shows each owner’s keys, store memory, and persistence.</figcaption>
+      </figure>
+
+      
+<section class="panel">
+<h2 id="install">Install and run</h2>
+      <p>The image is <a href="https://hub.docker.com/r/salihcantekin/ruvio-ui">salihcantekin/ruvio-ui</a>. <code>linux</code> and <code>latest</code> are the same bits. Docker selects amd64 or arm64. <code>RUVIO_UI_TARGET_HOST</code> and <code>RUVIO_UI_TARGET_PORT</code> are the Ruvio server, the same host and port as <code>RUVIO_ADDR</code>.</p>
+      <p>A default server is <code>127.0.0.1:6379</code>. If Ruvio listens somewhere else, put that address here. Port <code>8080</code> is only the UI.</p>
+<pre>docker pull salihcantekin/ruvio-ui:linux
+docker run --rm -p 8080:8080 \
+  -e RUVIO_UI_TARGET_HOST=127.0.0.1 \
+  -e RUVIO_UI_TARGET_PORT=6379 \
+  salihcantekin/ruvio-ui:linux</pre>
+      <p>Open <a href="http://127.0.0.1:8080">http://127.0.0.1:8080</a>. The form is filled with that Ruvio address. Leave User and Password empty when that server has no <code>requirepass</code>, then press Enter. A checkout can still build the same image with <code>docker compose up --build</code> in <code>clients/ruvio-ui</code>.</p>
+      <p>The same binary, without Docker, needs Node and Rust:</p>
+<pre>cd clients/ruvio-ui/web
+npm install
+npm run build
+cd ..
+cargo run --release</pre>
+      <p>If <code>8080</code> is already taken, bind another port: <code>RUVIO_UI_ADDR=127.0.0.1:8081 cargo run --release</code>. <code>RUVIO_UI_TARGET_HOST</code>, <code>RUVIO_UI_TARGET_PORT</code>, and <code>RUVIO_UI_TARGET_PASSWORD</code> pre-fill the form. They do not skip Enter.</p>
+</section>
+
+<section class="panel">
+<h2 id="signin">Who the sign-in user is</h2>
+      <p>An empty user and an empty password send no <code>AUTH</code>. The connection is the built-in <code>default</code> user. With no <code>requirepass</code>, that user is on, has no password, and can run every command (<code>on nopass ~* +@all</code>).</p>
+      <p>A password alone sends <code>AUTH password</code>, which signs in as <code>default</code>. A user and a password send <code>AUTH user password</code>.</p>
+      <p><code>default</code> always exists. <code>requirepass</code> in <code>ruvio.toml</code>, or <code>RUVIO_REQUIREPASS</code>, is that user’s password. Extra users that should survive a restart go in the file:</p>
+<pre>[[security.users]]
+name = "app"
+rules = "on &gt;app-secret ~app:* +@read +ping +auth +info"</pre>
+      <p><code>on</code> enables the account, <code>&gt;app-secret</code> sets the password, <code>~app:*</code> limits keys, and <code>+@read</code> limits commands. The process reads this list at startup. See <a href="configuration.html#security">Configuration</a>.</p>
+</section>
+
+<section class="panel">
+<h2 id="shards">Shards</h2>
+      <p>After sign-in, every screen shares the shard bar. <strong>All shards</strong> uses the cluster client: a keyed command follows the slot, and <code>SCAN</code> keeps walking until the page is full or every shard has been visited. Picking one shard pins Data, Tasks, and Pub/Sub to that node. A <code>SCAN</code> on one node returns only that node’s keys.</p>
+</section>
+
+<section class="panel">
+<h2 id="screens">What you can do</h2>
+      <p>Overview refreshes shard health. Data finds keys and opens the value. Tasks is the command desk: locking, conditional writes, rate limits, idempotency, inventory, sliding sessions, delayed jobs, and the change feed, next to the usual data-type forms. Pub/Sub subscribes and publishes on the selected scope. Session activity at the bottom stays closed until you open it. Each line is one client call and how long it took.</p>
+      <figure class="shot">
+        <img src="images/ui-data-2.png" alt="Data screen listing keys from both shards and the value of user:ada">
+        <figcaption>Data lists keys from every shard when All shards is selected. Open a key to read its type and value.</figcaption>
+      </figure>
+</section>
+
+<section class="panel">
+<h2 id="users">Managing users</h2>
+      <p>The ACL screen sends <code>ACL LIST</code>, <code>ACL USERS</code>, <code>ACL WHOAMI</code>, <code>ACL GETUSER</code>, and <code>ACL SETUSER</code>. <code>ACL SETUSER</code> changes the running process. A restart drops those changes and loads <code>[[security.users]]</code> again.</p>
+      <p>Put a user in the TOML file when it must still be there after the next start. <code>ACL SETUSER</code> is refused while replication is on, because that directory is not part of the snapshot.</p>
+      <figure class="shot">
+        <img src="images/ui-acl.png" alt="ACL screen listing the default user and the form that updates live rules">
+        <figcaption>ACL lists the live users. This server has only <code>default</code>. A change here lasts until restart.</figcaption>
+      </figure>
+</section>
+</article>
+  </main>
+  <footer class="foot"><div class="foot-inner">Install notes also live in <code>clients/ruvio-ui/README.md</code> and <code>docs/SETUP.md</code>.</div></footer>
+  <script src="js/versions.js?v=20261013j"></script>
+  <script src="vendor/highlightjs/highlight.min.js"></script>
+  <footer class="site-foot">
+    <div class="site-foot-inner">
+      <div class="site-foot-brand">
+        <img src="images/ruvio-mark.png?v=20261015b" alt="" width="36" height="36">
+        <div>
+          <strong>Ruvio</strong>
+          <span>One RESP process. The shard that owns the key does the work.</span>
+          <small>Server AGPL-3.0 · Clients MIT</small>
+        </div>
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/salihcantekin/ruvio/tree/main/docs">Docs</a>
+        <a href="https://github.com/salihcantekin/ruvio">GitHub</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="js/chrome.js?v=20261015a"></script>
+</body>
+</html>

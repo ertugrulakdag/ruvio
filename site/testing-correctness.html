@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Correctness and compatibility — Ruvio</title>
+  <meta name="description" content="Correctness and compatibility with dated methods, measured results, and limits.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css?v=20261015a">
+  <link rel="stylesheet" href="vendor/highlightjs/github-dark.min.css">
+  <link rel="icon" href="images/ruvio-icon.png" type="image/png">
+  <meta property="og:image" content="https://salihcantekin.github.io/ruvio/images/ruvio-social.png">
+</head>
+<body data-page="testing-correctness.html">
+  <header class="top">
+    <div class="top-inner">
+      <a class="mark" href="index.html">Ruvio</a>
+      <nav aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="start.html">Start</a>
+        <details>
+          <summary>Build</summary>
+          <div class="nav-menu">
+            <a href="compare.html">How it runs</a>
+            <a href="commands.html">Commands</a>
+            <a href="packages.html">Packages</a>
+            <a href="ui.html">Operator UI</a>
+          </div>
+        </details>
+        <details>
+          <summary>Clients</summary>
+          <div class="nav-menu">
+            <a href="clients.html">Overview</a>
+            <a href="client-rust.html">Rust</a>
+            <a href="client-csharp.html">C#</a>
+            <a href="client-go.html">Go</a>
+            <a href="client-java.html">Java</a>
+            <a href="client-python.html">Python</a>
+            <a href="client-node.html">Node.js</a>
+            <a href="examples.html">Examples</a>
+          </div>
+        </details>
+        <details>
+          <summary>Operate</summary>
+          <div class="nav-menu">
+            <a href="configuration.html">Configuration</a>
+            <a href="durability.html">Durability</a>
+            <a href="replication.html">Replication</a>
+            <a href="operations.html">Operations</a>
+          </div>
+        </details>
+        <a href="testing.html">Testing</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap evidence-layout"><article>
+  <p class="kicker">Testing · evidence · limitations</p>
+  <h1>Correctness and compatibility</h1>
+  <nav class="evidence-tabs" aria-label="Testing topics"><a href="testing.html">Overview</a><a href="testing-correctness.html" aria-current="page">Correctness</a><a href="testing-performance.html">Performance</a><a href="testing-memory.html">Memory &amp; TTL</a><a href="testing-resilience.html">Resilience</a><a href="testing-integrations.html">Integrations</a></nav>
+
+  <p class="lede">What we check for protocol behavior and client correctness. Workflow coverage describes tests that can run, not proof that every test passed on the current revision.</p>
+  
+<section class="panel">
+<h2>Automatic gate versus extended checks</h2>
+  <p><strong>Scope:</strong> <code>pr-gate.yml</code> runs on pull requests and pushes to <code>main</code> on Ubuntu. It checks Rust formatting and core tests, benchmark-regression units, first-party Rust and .NET client tests, a two-shard routing smoke, and live Rust client routing.</p>
+      <p>The extended <code>ci.yml</code> and integration-package workflows remain manually dispatched. <strong>Outcome:</strong> these are configured checks; consult the linked workflow run for results on a specific commit. <strong>Limit:</strong> a passing smoke test is not a compatibility or production-readiness certification.</p>
+  <p class="links"><a href="https://github.com/salihcantekin/ruvio/blob/main/.github/workflows/pr-gate.yml">Automatic gate source</a> <a href="https://github.com/salihcantekin/ruvio/blob/main/.github/workflows/ci.yml">Extended workflow</a> <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/TESTING.md">Test guide</a></p>
+</section>
+
+<section class="panel">
+<h2>Reproduce locally</h2>
+  <p>From a checkout of the revision under test, run <code>./scripts/test.sh</code> on macOS/Linux/WSL or <code>.\scripts\test.ps1</code> on Windows. The default covers formatting, Rust all-target tests and store smoke; <code>--clippy</code> is optional. Run the live-client tests with their documented server prerequisites. Results here intentionally do not attach a passing count from an older checkout to today's HEAD.</p>
+  <div class="callout warn">Supported-command Redis differential checks and multi-platform checks are in the manual extended workflow, not in every push gate. See the workflow definitions for the actual matrix and commands.</div>
+</section>
+</article></main>
+  <footer class="foot"><div class="foot-inner">Test evidence is dated and scoped: a passing container scenario is not a durability certification.</div></footer>
+  <script src="js/versions.js?v=20261013j"></script>
+  <script src="vendor/highlightjs/highlight.min.js"></script>
+  <footer class="site-foot">
+    <div class="site-foot-inner">
+      <div class="site-foot-brand">
+        <img src="images/ruvio-mark.png?v=20261015b" alt="" width="36" height="36">
+        <div>
+          <strong>Ruvio</strong>
+          <span>One RESP process. The shard that owns the key does the work.</span>
+          <small>Server AGPL-3.0 · Clients MIT</small>
+        </div>
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/salihcantekin/ruvio/tree/main/docs">Docs</a>
+        <a href="https://github.com/salihcantekin/ruvio">GitHub</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="js/chrome.js?v=20261015a"></script>
+</body>
+</html>

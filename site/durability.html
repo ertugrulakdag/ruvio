@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Durability — Ruvio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css?v=20261015a">
+  <link rel="stylesheet" href="vendor/highlightjs/github-dark.min.css">
+  <link rel="icon" href="images/ruvio-icon.png" type="image/png">
+  <meta property="og:image" content="https://salihcantekin.github.io/ruvio/images/ruvio-social.png">
+</head>
+<body data-page="durability.html">
+    <header class="top">
+    <div class="top-inner">
+      <a class="mark" href="index.html">Ruvio</a>
+      <nav aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="start.html">Start</a>
+        <details>
+          <summary>Build</summary>
+          <div class="nav-menu">
+            <a href="compare.html">How it runs</a>
+            <a href="commands.html">Commands</a>
+            <a href="packages.html">Packages</a>
+            <a href="ui.html">Operator UI</a>
+          </div>
+        </details>
+        <details>
+          <summary>Clients</summary>
+          <div class="nav-menu">
+            <a href="clients.html">Overview</a>
+            <a href="client-rust.html">Rust</a>
+            <a href="client-csharp.html">C#</a>
+            <a href="client-go.html">Go</a>
+            <a href="client-java.html">Java</a>
+            <a href="client-python.html">Python</a>
+            <a href="client-node.html">Node.js</a>
+            <a href="examples.html">Examples</a>
+          </div>
+        </details>
+        <details>
+          <summary>Operate</summary>
+          <div class="nav-menu">
+            <a href="configuration.html">Configuration</a>
+            <a href="durability.html">Durability</a>
+            <a href="replication.html">Replication</a>
+            <a href="operations.html">Operations</a>
+          </div>
+        </details>
+        <a href="testing.html">Testing</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap layout">
+    <nav class="side">
+      <a href="#profiles">Profiles</a>
+      <a href="#always-linux">Fast <code>always</code> on Linux</a>
+      <a href="#order">Order</a>
+      <a href="#files">Files</a>
+      <a href="#checkpoints">Checkpoints</a>
+      <a href="#hot">Hot keys</a>
+    </nav>
+    <article>
+      <h1>Durability</h1>
+      <p>You choose how much a crash can lose. Redis RDB and AOF files are not readable. The formats are Ruvio's own: WAL magic <code>RUVWAL01</code>, snapshot magic <code>RUVSNP01</code>.</p>
+      
+<section class="panel">
+<h2 id="profiles">Profiles</h2>
+      <table>
+        <thead><tr><th>Profile</th><th>What a crash can lose</th></tr></thead>
+        <tbody>
+          <tr><td><code>memory</code></td><td>The whole dataset. This is the default. No WAL.</td></tr>
+          <tr><td><code>snapshot</code></td><td>Writes since the last completed checkpoint.</td></tr>
+          <tr><td><code>everysec</code></td><td>About one sync interval. The client is acknowledged after the append, and the file is synced on <code>sync_interval_ms</code> (default 1000).</td></tr>
+          <tr><td><code>always</code></td><td>The record is synced before it is applied and before the reply.</td></tr>
+        </tbody>
+      </table>
+</section>
+
+<section class="panel">
+<h2 id="always-linux">Making <code>always</code> fast on Linux</h2>
+      <p><code>always</code> has to wait for the disk, so Ruvio does three things to keep that wait short. They need no setting except the first, which defaults to on where it helps.</p>
+      <ul>
+        <li><strong>Group commit.</strong> All clients whose commands arrived together share one <code>fdatasync</code>; replies are sent after it returns.</li>
+        <li><strong>Sync worker</strong> (<code>sync_worker = auto | on | off</code>, see <a href="configuration.html#persistence">Configuration</a>). The fsync runs on a helper thread, so the shard keeps serving other clients while the disk works. <code>auto</code> enables it on Linux with <code>always</code>, one shard and no <code>hot_keys</code>. If the disk fails or fills, reads and <code>PING</code> are still answered and writes return <code>MISCONF</code>; no acknowledged key is lost.</li>
+        <li><strong>Zero-filled WAL segments (Linux).</strong> The WAL file is extended in 4 MiB chunks that a helper thread fills with real zeros ahead of the write position. Syncing blocks that already hold data costs about 0.8 ms instead of 2.0 ms on ext4 with a network SSD, because the filesystem does not have to convert unwritten extents. On a full disk or a filesystem without <code>fallocate</code> the WAL falls back to growing the file.</li>
+      </ul>
+      <p>Measured against Redis <code>appendfsync always</code> on a 4-core Linux VM with a Premium SSD data disk: 1.5 to 2.7 times Redis, depending on clients and pipelining (<a href="testing-performance.html">Performance</a>). A single shard is the recommended shape for <code>always</code>: with more shards the flush latency of the disk, not shard CPU, is the limit.</p>
+</section>
+
+<section class="panel">
+<h2 id="order">Validate, record, apply, reply</h2>
+      <ol class="steps">
+        <li><strong>Validate</strong><span>The command is checked before anything changes.</span></li>
+        <li><strong>Record</strong><span>In WAL-backed profiles the change is appended to the WAL. Under <code>always</code> it is synced before it is applied.</span></li>
+        <li><strong>Apply</strong><span>The in-memory value is updated.</span></li>
+        <li><strong>Reply</strong><span>The client gets its answer.</span></li>
+      </ol>
+      <div class="keypoint"><p>If the log cannot accept the record, the in-memory value stays as it was. Further mutations on that shard return <code>MISCONF</code>.</p></div>
+      <p>WAL-backed profiles take an exclusive lock on <code>&lt;data_dir&gt;/LOCK</code> before they listen.</p>
+</section>
+
+<section class="panel">
+<h2 id="files">On disk</h2>
+      <ul>
+        <li><code>LOCK</code> — one owner of the directory.</li>
+        <li><code>CURRENT</code> — the published checkpoint generation.</li>
+        <li><code>CLOCK</code> — the last-seen clock floor.</li>
+        <li><code>checkpoints/&lt;generation&gt;/</code> — shard snapshots and a manifest. Digests are BLAKE3.</li>
+        <li><code>wal/shard-NNNN/</code> — per-shard segments. Records carry CRC32C.</li>
+      </ul>
+      <p><code>ruvio-ctl check</code> and <code>inspect</code> read those files without taking <code>LOCK</code> and without truncating a torn tail. <code>ruvio-ctl backup</code> locks the source and copies <code>CURRENT</code>, <code>CLOCK</code>, <code>checkpoints/</code>, and <code>wal/</code>. <code>restore</code> refuses a destination that already has those files unless <code>--force</code> is set.</p>
+</section>
+
+<section class="panel">
+<h2 id="checkpoints">Checkpoints</h2>
+      <p><code>SAVE</code> and <code>BGSAVE</code> publish a checkpoint on the shard worker, write <code>CLOCK</code>, then delete WAL segments covered by that checkpoint. <code>BGSAVE</code> does not fork. It does the same in-process work and replies <code>Background saving started</code> after the work completes.</p>
+      <p><code>snapshot_interval_ms</code> schedules a checkpoint after that interval when at least <code>snapshot_min_mutations</code> mutating commands have run. <code>0</code> mutations means any mutation. <code>snapshot_interval_ms = 0</code> disables the scheduler. <code>SAVE</code> still works. Recovery uses <code>max(CLOCK, checkpoint.created_at)</code> so TTLs do not look expired if the wall clock moves backwards.</p>
+</section>
+
+<section class="panel">
+<h2 id="hot">Hot keys in the checkpoint</h2>
+      <p>A matching <code>hot_keys</code> glob is a process-wide string, not a shard key. <code>SAVE</code> writes that partition into the same checkpoint (shard id equals the shard count). Recovery loads it. Enable the prefix on empty data. Existing shard keys are not migrated.</p>
+</section>
+</article>
+  </main>
+  <footer class="foot"><div class="foot-inner">Layout and recovery detail: <code>docs/STORAGE_LAYOUT.md</code> and <code>docs/RECOVERY.md</code>.</div></footer>
+  <script src="js/versions.js?v=20261013j"></script>
+  <script src="vendor/highlightjs/highlight.min.js"></script>
+  <footer class="site-foot">
+    <div class="site-foot-inner">
+      <div class="site-foot-brand">
+        <img src="images/ruvio-mark.png?v=20261015b" alt="" width="36" height="36">
+        <div>
+          <strong>Ruvio</strong>
+          <span>One RESP process. The shard that owns the key does the work.</span>
+          <small>Server AGPL-3.0 · Clients MIT</small>
+        </div>
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/salihcantekin/ruvio/tree/main/docs">Docs</a>
+        <a href="https://github.com/salihcantekin/ruvio">GitHub</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="js/chrome.js?v=20261015a"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+.git
+**/.git
+**/bin
+**/obj
+**/node_modules
+target
+**/target

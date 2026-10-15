@@ -1,0 +1,18 @@
+diff --git a/src/engine/transaction.rs b/src/engine/transaction.rs
+index a417ef7..572c907 100644
+--- a/src/engine/transaction.rs
++++ b/src/engine/transaction.rs
+@@ -97,8 +97,11 @@ pub fn execute_transaction_in<C: Clock, I: StorageIndex, S: MutationSink, W: Lis
+         // `MOVE` target) is logged ahead of the batch, so replay finds the target free.
+         let recorded = record_removals(shard, sink).and_then(|()| {
+             sink.select_database(database);
+-            sink.record_now(Mutation::Transaction {
+-                mutations: &collected.mutations,
++            // One record per queued command: replicas and replay apply each on its own.
++            collected.mutations.iter().try_for_each(|mutation| {
++                sink.record_now(Mutation::Transaction {
++                    mutations: std::slice::from_ref(mutation),
++                })
+             })
+         });
+ 

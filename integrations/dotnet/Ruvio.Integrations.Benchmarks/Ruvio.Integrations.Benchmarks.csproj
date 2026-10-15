@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
+    <ProjectReference Include="../Ruvio.AspNetCore.DistributedLock/Ruvio.AspNetCore.DistributedLock.csproj" />
+    <ProjectReference Include="../Ruvio.Extensions.Caching/Ruvio.Extensions.Caching.csproj" />
+    <ProjectReference Include="../Ruvio.AspNetCore.OutputCaching/Ruvio.AspNetCore.OutputCaching.csproj" />
+    <ProjectReference Include="../Ruvio.AspNetCore.Idempotency/Ruvio.AspNetCore.Idempotency.csproj" />
+    <ProjectReference Include="../Ruvio.AspNetCore.RateLimiting/Ruvio.AspNetCore.RateLimiting.csproj" />
+  </ItemGroup>
+</Project>

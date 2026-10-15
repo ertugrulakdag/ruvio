@@ -1,0 +1,215 @@
+// SPDX-License-Identifier: MIT
+package io.github.salihcantekin.ruvio;
+
+import io.github.salihcantekin.ruvio.commands.RuvioCommands;
+import io.github.salihcantekin.ruvio.internal.ClusterNode;
+import io.github.salihcantekin.ruvio.internal.ClusterRouter;
+import io.github.salihcantekin.ruvio.internal.Connection;
+import io.github.salihcantekin.ruvio.internal.Frame;
+import io.github.salihcantekin.ruvio.internal.Link;
+import io.github.salihcantekin.ruvio.internal.Request;
+import io.github.salihcantekin.ruvio.internal.RespOut;
+import io.github.salihcantekin.ruvio.internal.RoutedRequest;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.concurrent.CompletableFuture;
+
+/**
+ * Explicit pipeline: typed commands are encoded into a private buffer and their futures complete
+ * only after {@link #flush()} sends the whole batch in one write. Not thread safe; reuse after
+ * flush is allowed. Do not wait on a pipeline future before flushing it.
+ */
+public final class Pipeline<K, V> extends RuvioCommands<K, V> {
+    private final Link link;
+    private final RespOut out = new RespOut(4096);
+    private Request<?>[] pending = new Request<?>[16];
+    private int count;
+    private int mark;
+
+    // Cluster mode: commands are routed when queued and grouped per node; each group is one write.
+    private final ClusterRouter router;
+    private final Frame frame;
+    private final ArrayList<Group> groups;
+    private final ClusterRouter.Sink grouping;
+
+    Pipeline(Link link, ClusterRouter router, RuvioCodec<K> keys, RuvioCodec<V> values) {
+        super(keys, values);
+        this.link = link;
+        this.router = router;
+        if (router != null) {
+            this.routed = true;
+            this.frame = new Frame();
+            this.groups = new ArrayList<>(4);
+            this.grouping = this::group;
+        } else {
+            this.frame = null;
+            this.groups = null;
+            this.grouping = null;
+        }
+    }
+
+    @Override
+    protected RespOut begin() {
+        if (router != null) {
+            frame.reset();
+            return frame.out;
+        }
+        mark = out.pos;
+        return out;
+    }
+
+    @Override
+    protected void abort(RespOut o) {
+        if (router == null) {
+            o.pos = mark;
+        }
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    protected <T> CompletableFuture<T> end(RespOut o, Request<T> request) {
+        if (count == pending.length) {
+            pending = Arrays.copyOf(pending, count << 1);
+        }
+        if (router != null) {
+            router.dispatch(frame, (RoutedRequest<T>) request, grouping);
+        }
+        pending[count++] = request;
+        return request;
+    }
+
+    private void group(ClusterNode node, byte[] buf, int off, int len, RoutedRequest<?> request) {
+        Group g = null;
+        for (int i = 0; i < groups.size(); i++) {
+            if (groups.get(i).node == node) {
+                g = groups.get(i);
+                break;
+            }
+        }
+        if (g == null) {
+            g = new Group(node);
+            groups.add(g);
+        }
+        g.add(buf, off, len, request);
+    }
+
+    /** The commands of one flush that go to the same node: their frames and requests, in queue order. */
+    private static final class Group {
+        final ClusterNode node;
+        final RespOut out = new RespOut(1024);
+        Request<?>[] requests = new Request<?>[16];
+        int n;
+
+        Group(ClusterNode node) {
+            this.node = node;
+        }
+
+        void add(byte[] buf, int off, int len, Request<?> r) {
+            if (n == requests.length) {
+                requests = Arrays.copyOf(requests, n << 1);
+            }
+            requests[n++] = r;
+            out.raw(buf, off, len);
+        }
+
+        void reset() {
+            Arrays.fill(requests, 0, n, null);
+            n = 0;
+            out.reset();
+            if (out.buf.length > (1 << 20)) {
+                out.buf = new byte[1024];
+            }
+        }
+    }
+
+    /** Number of commands buffered and not yet flushed. */
+    public int size() {
+        return count;
+    }
+
+    /** Sends every buffered command in one write. Returns the number sent. */
+    public int flush() {
+        if (count == 0) {
+            return 0;
+        }
+        if (router != null) {
+            return flushCluster();
+        }
+        Connection c = link.get();
+        RespOut o = c.begin();
+        try {
+            o.raw(out.buf, 0, out.pos);
+        } catch (RuntimeException e) {
+            c.abort();
+            throw e;
+        }
+        int n = count;
+        try {
+            c.endMany(pending, n);
+        } catch (RuntimeException e) {
+            for (int i = 0; i < n; i++) {
+                pending[i].fail(e);
+            }
+            throw e;
+        } finally {
+            Arrays.fill(pending, 0, n, null);
+            count = 0;
+            out.reset();
+            if (out.buf.length > (1 << 20)) {
+                out.buf = new byte[4096];
+            }
+        }
+        return n;
+    }
+
+    private int flushCluster() {
+        int n = count;
+        RuntimeException first = null;
+        for (Group g : groups) {
+            if (g.n == 0) {
+                continue;
+            }
+            try {
+                Connection c = g.node.link.get();
+                RespOut o = c.begin();
+                try {
+                    o.raw(g.out.buf, 0, g.out.pos);
+                } catch (RuntimeException e) {
+                    c.abort();
+                    throw e;
+                }
+                c.endMany(g.requests, g.n);
+            } catch (RuntimeException e) {
+                for (int i = 0; i < g.n; i++) {
+                    g.requests[i].fail(e);
+                }
+                if (first == null) {
+                    first = e;
+                }
+            } finally {
+                g.reset();
+            }
+        }
+        groups.clear();
+        Arrays.fill(pending, 0, n, null);
+        count = 0;
+        if (first != null) {
+            throw first;
+        }
+        return n;
+    }
+
+    /** Flushes and waits for every reply. Failures stay on the individual futures. */
+    public void sync() {
+        Request<?>[] sent = Arrays.copyOf(pending, count);
+        flush();
+        for (Request<?> r : sent) {
+            try {
+                r.join();
+            } catch (RuntimeException ignored) {
+                // reported through the command's own future
+            }
+        }
+    }
+}

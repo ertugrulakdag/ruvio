@@ -1,0 +1,3047 @@
+{
+  "version": 1,
+  "product": "ruvio",
+  "protocol": {
+    "baseline": "RESP2",
+    "resp3": true,
+    "inline_commands": true,
+    "pubsub": true,
+    "binary_safe": true,
+    "pipelining": true
+  },
+  "client_coverage": [
+    "APPEND",
+    "DEL",
+    "EVAL",
+    "EXEC",
+    "EXPIRE",
+    "GET",
+    "HGET",
+    "HGETALL",
+    "HSET",
+    "INCR",
+    "LPUSH",
+    "LRANGE",
+    "MGET",
+    "MSET",
+    "MULTI",
+    "PING",
+    "SADD",
+    "SET",
+    "SMEMBERS",
+    "STRLEN",
+    "TTL",
+    "ZADD",
+    "ZRANGE"
+  ],
+  "commands": [
+    {
+      "name": "RUVIO",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "No arguments replies PONG is taken. OWNER names the shard rule. Any other argument is an error.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "PING",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HELLO",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "HELLO and HELLO 2 or 3. AUTH username password and SETNAME are accepted after the version. An unknown version returns NOPROTO and changes nothing. Attributes are not produced.",
+      "coverage": [
+        "src/runtime/session.rs"
+      ]
+    },
+    {
+      "name": "AUTH",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Default user or configured ACL users. AUTH username password is supported.",
+      "coverage": [
+        "src/runtime/session.rs"
+      ]
+    },
+    {
+      "name": "ACL WHOAMI",
+      "family": "acl",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "The name copied at the last AUTH.",
+      "coverage": [
+        "src/acl.rs",
+        "src/protocol.rs"
+      ]
+    },
+    {
+      "name": "ACL USERS",
+      "family": "acl",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Live directory, including ACL SETUSER users until restart.",
+      "coverage": [
+        "src/acl.rs"
+      ]
+    },
+    {
+      "name": "ACL LIST",
+      "family": "acl",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Passwords are redacted. Includes ACL SETUSER users until restart.",
+      "coverage": [
+        "src/acl.rs"
+      ]
+    },
+    {
+      "name": "ACL GETUSER",
+      "family": "acl",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Flat bulk fields. Passwords are counted, not echoed. Reads the live directory.",
+      "coverage": [
+        "src/acl.rs"
+      ]
+    },
+    {
+      "name": "ACL CAT",
+      "family": "acl",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Ruvio command categories only.",
+      "coverage": [
+        "src/acl.rs"
+      ]
+    },
+    {
+      "name": "ACL SETUSER",
+      "family": "acl",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Incremental rules. A new user starts off with no password, commands, or keys. A failed rule changes nothing. Open connections keep the rules from their last AUTH. ACL SAVE writes the live directory when security.acl_file is set. Rules must be UTF-8.",
+      "coverage": [
+        "src/protocol/parse/admin.rs",
+        "src/acl.rs",
+        "src/protocol.rs"
+      ]
+    },
+    {
+      "name": "ACL LOAD",
+      "family": "acl",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Replaces the live directory from security.acl_file. A missing path or a bad line changes nothing. Open connections keep the rules from their last AUTH. GET and SET do not read the file.",
+      "coverage": [
+        "src/acl.rs",
+        "src/protocol.rs"
+      ]
+    },
+    {
+      "name": "ACL SAVE",
+      "family": "acl",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Writes the live directory to security.acl_file, including passwords. ACL LIST stays redacted. A missing path changes nothing.",
+      "coverage": [
+        "src/acl.rs",
+        "src/protocol.rs"
+      ]
+    },
+    {
+      "name": "GET",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "WRONGTYPE on a non-string key.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SETV",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Writes a versioned string. The first call with no version creates version 1. A later call must pass the current version and receives the next one. A mismatch returns an error and does not change the value. A plain SET replaces the versioned string. The version is stored only on keys written with SETV, and that write is a WAL record.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "TAKE",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Subtracts a positive count from an integer when the key holds at least that many. Returns the remainder. A missing key or a shortfall returns a null bulk and does not create or change the key. The successful subtraction is the same integer WAL record as INCR. A non-integer is WRONGTYPE.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "DELEX",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Ruvio extension. `DELEX key IFEQ value` deletes the string only when it equals `value` and returns 1, otherwise 0. A missing key returns 0; another type is WRONGTYPE. The delete is the ordinary `DEL` WAL record.",
+      "coverage": [
+        "src/engine/tests/conditional.rs"
+      ]
+    },
+    {
+      "name": "GETEX",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Returns the string and sets its deadline to now plus the given milliseconds. A missing key returns a null bulk and stores nothing. GET does not move a deadline. The deadline is the existing expire WAL record. A non-string is WRONGTYPE.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "LIMIT",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Fixed window on one key. Returns the remaining allowance after this call, or a null bulk when the window is full. The counter is not incremented on rejection. The window is the key deadline, so an unused window disappears. A plain key does not store a limit. The accepted call is a WAL record. GET of a limit is WRONGTYPE.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "IDEM",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "IDEM key BEGIN fingerprint owner ttl_ms atomically reserves a missing key or returns pending, conflict, or completed with the binary result. IDEM key COMPLETE fingerprint owner result publishes only for the matching live owner. Identical completion is acknowledged without rewriting; changed results are refused. Neither retries nor completion renew the original TTL. Tokens are 1-128 bytes, retention is 1 ms-7 days, and result is at most 4 MiB (also subject to protocol limits including the packed metadata). Uses the existing string layout with an internal packed record; do not modify it with string/expiry commands. Each state transition and its deadline is one WAL record. Not exactly-once for external effects.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine/idempotency.rs"
+      ]
+    },
+    {
+      "name": "ONCE",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "First call returns 1 and keeps the key until the TTL. A later call returns 0 and does not refresh the TTL. After the deadline the next call is first again. The marker exists only on keys written with ONCE. The first call is a WAL record. GET of an once key is WRONGTYPE.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "LEASE",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Acquires a shard-owned lease. Returns a new fencing token, or a null bulk when the lease is still held. Expiry and RELEASE keep the token so the next LEASE continues the sequence. DEL starts a new key at token 1. The grant is a WAL record. GET of a lease is WRONGTYPE. Unused keys do not store a lease.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "SEMAPHORE",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "SEMAPHORE key max ttl_ms returns a token while fewer than max holders are live, or a null bulk when full. Each holder has its own TTL. RELEASE key token frees one slot. The key stores 16 bytes per live holder and goes away with the last one. Grant and release are WAL records. GET of a semaphore is WRONGTYPE.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "RELEASE",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Releases a lease when the token matches the current holder. Returns 1 or 0. A mismatch leaves the holder in place. The key keeps the token so the next LEASE continues the sequence. The release is a WAL record.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "CHANGES",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "CHANGES START arms an in-memory feed on this shard and returns the cursor. CHANGES cursor reads notes after that cursor, at most 1024. Nothing is recorded before START. The feed is not a second copy of the WAL and is empty after restart.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "SET",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Supports EX, PX, EXAT, PXAT, KEEPTTL, NX, XX, and GET. GET returns the previous string and refuses a non-string. `SET key value IFEQ expected [EX|PX|EXAT|PXAT|KEEPTTL]` (Ruvio extension) writes only when the string equals `expected` and answers nil otherwise; it does not combine with NX, XX or GET.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py",
+        "src/engine/tests/conditional.rs"
+      ]
+    },
+    {
+      "name": "MGET",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Nil bulk for a missing or wrong-type key. Same-slot keys in multi-shard mode.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "MSET",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Clears TTL. Same-slot keys in multi-shard mode.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "GETSET",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Clears TTL. WRONGTYPE on a non-string key.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "APPEND",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Keeps an existing TTL.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "STRLEN",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "INCR",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Signed 64-bit decimal integers.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "DECR",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Signed 64-bit decimal integers.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "INCRBY",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Signed 64-bit decimal integers. INCRBY key n MAX limit returns a null bulk and writes nothing when the result would pass limit.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "DECRBY",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Signed 64-bit decimal integers.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "DEL",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Same-slot keys in multi-shard mode.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "UNLINK",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Synchronous, identical to DEL.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "EXISTS",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Same-slot keys in multi-shard mode.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "TYPE",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "RENAME",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Same-slot keys in multi-shard mode.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SCAN",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Shard-local. Cursors walk sorted live keys, not Redis dict cursors.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "DBSIZE",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Shard-local. Counts keys in the selected logical database.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SELECT",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Indexes 0 through databases - 1 (16 by default, at most 256). Cluster mode allows only 0. Each database is its own map in the shard; WAL records carry the database. Routing hashes the user key. Not scriptable.",
+      "coverage": [
+        "src/runtime/session.rs",
+        "src/runtime/evented.rs"
+      ]
+    },
+    {
+      "name": "FLUSHDB",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Clears the selected database on every shard. ASYNC runs synchronously. One WAL record. Allowed inside MULTI; refused in scripts.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/runtime/evented.rs",
+        "src/protocol/tests.rs"
+      ]
+    },
+    {
+      "name": "FLUSHALL",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Clears every database. ASYNC runs synchronously. One WAL record. Allowed inside MULTI; refused in scripts.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/runtime/evented.rs"
+      ]
+    },
+    {
+      "name": "SWAPDB",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "O(1) map exchange, one WAL record. Allowed inside MULTI; refused in cluster mode and in scripts. Does not wake clients blocked on keys that now exist.",
+      "coverage": [
+        "src/runtime/session.rs",
+        "src/runtime/evented.rs"
+      ]
+    },
+    {
+      "name": "MOVE",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "One WAL record. Refused in cluster mode and in scripts. Returns 0 when the key is missing or the target already has it.",
+      "coverage": [
+        "src/runtime/session.rs",
+        "src/runtime/evented.rs"
+      ]
+    },
+    {
+      "name": "EXPIRE",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "A relative expire of zero or less deletes the key and returns 1, as Redis does.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "PEXPIRE",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "A relative expire of zero or less deletes the key and returns 1, as Redis does.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "EXPIREAT",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "A deadline in the past leaves the key absent and still replies OK.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "PEXPIREAT",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "A deadline in the past leaves the key absent and still replies OK.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "TTL",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "PTTL",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "PERSIST",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "LPUSH",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "LPUSHCAP",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Ruvio extension. `LPUSHCAP key cap value...` pushes like `LPUSH`, then drops items from the tail until at most `cap` remain, and returns the new length. A list already over `cap` takes one trim record; otherwise each dropped item is a pop record.",
+      "coverage": [
+        "src/engine/tests/conditional.rs"
+      ]
+    },
+    {
+      "name": "RPUSHCAP",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Ruvio extension. `RPUSHCAP key cap value...` pushes like `RPUSH`, then drops items from the head until at most `cap` remain, and returns the new length.",
+      "coverage": [
+        "src/engine/tests/conditional.rs"
+      ]
+    },
+    {
+      "name": "RPUSH",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "LPOP",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Optional positive COUNT returns an array. An empty list returns nil. Each popped element is its own list-pop record.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "RPOP",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Optional positive COUNT returns an array. An empty list returns nil. Each popped element is its own list-pop record.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "LLEN",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "LINDEX",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "LRANGE",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "LTRIM",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "BLPOP",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Shard-local. At most 1,024 blocked clients per shard.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "BRPOP",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Shard-local. At most 1,024 blocked clients per shard.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "SADD",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SREM",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SISMEMBER",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SCARD",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SMEMBERS",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Replies are sorted.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "SINTER",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Replies are sorted. Same-slot keys in multi-shard mode.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "SUNION",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Replies are sorted. Same-slot keys in multi-shard mode.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "SDIFF",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Replies are sorted. Same-slot keys in multi-shard mode.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "SINTERSTORE",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Same-slot keys in multi-shard mode.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SUNIONSTORE",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Same-slot keys in multi-shard mode.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "SDIFFSTORE",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Same-slot keys in multi-shard mode.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "SMOVE",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Same-slot keys in multi-shard mode.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SPOP",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "One member without a count, or an array with a count. The removed members are recorded so recovery does not draw again.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SRANDMEMBER",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Does not remove members. No count returns one bulk or nil. A positive count returns distinct members up to the set size. A negative count may repeat. Count 0 is an empty array.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "HSET",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Compact pairs until 64 fields or a 64-byte field/value.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HGET",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HDEL",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HLEN",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HGETALL",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Enumeration order is unspecified, as in Redis.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HMGET",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HEXISTS",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HKEYS",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Enumeration order is unspecified, as in Redis.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HVALS",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Enumeration order is unspecified, as in Redis.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HINCRBY",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Stores the decimal result. Non-integers and overflow are rejected without a write.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HSETNX",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Returns 1 and records one field when the field is missing. Returns 0 with no write when the field exists.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "HSTRLEN",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Returns the field length, or 0 when the key or field is missing.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "HSCAN",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Cursor pages follow storage order. MATCH and COUNT are supported. A missing key returns cursor 0 and an empty array.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "HEXPIRE",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "NX, XX, GT, and LT. Replies per field: -2 missing, 0 condition not met, 1 set, 2 deleted by a zero or past time. Absolute deadline up to 2^46-1 ms. HSET and HDEL drop a field TTL; HINCRBY keeps it.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HPEXPIRE",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Milliseconds. Same replies and conditions as HEXPIRE.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HEXPIREAT",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Unix seconds. A past time deletes the field (reply 2).",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HPEXPIREAT",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Unix milliseconds. A past time deletes the field (reply 2).",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HTTL",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Seconds, rounded up. -1 for a field without a TTL. Missing field or key is -2. A hash with no field TTL pays nothing; the first TTL moves it to a timed form, the last HPERSIST moves it back.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HPTTL",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Milliseconds. -1 for a field without a TTL. Missing field or key is -2. A hash with no field TTL pays nothing; the first TTL moves it to a timed form, the last HPERSIST moves it back.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "HEXPIRETIME",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Unix seconds, rounded up. -1 for a field without a TTL.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HPEXPIRETIME",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Unix milliseconds. -1 for a field without a TTL.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HPERSIST",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "1 removed a TTL, -1 had none, -2 missing.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZADD",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "NX, XX, GT, LT, CH, and INCR. Without CH the reply counts new members. INCR returns the new score or nil. GT and LT still add a missing member.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZRANGE",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "WITHSCORES, BYSCORE, BYLEX, REV, and LIMIT. BYSCORE and BYLEX accept LIMIT. A negative LIMIT count returns the rest of the range.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZREVRANGE",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "WITHSCORES is supported.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZRANGEBYSCORE",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Supports -inf/+inf, exclusive ( bounds, and LIMIT. A negative LIMIT count returns the rest of the range.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZRANGEBYLEX",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Bounds are -, +, [member, and (member. Member order ignores the score. LIMIT is supported. A negative count returns the rest of the range.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "ZREVRANGEBYLEX",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "The first bound is the high member and the second is the low member. Same bound and LIMIT rules as ZRANGEBYLEX.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "ZREM",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZINCRBY",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Records the resulting score.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZCARD",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZSCORE",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZRANK",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZREVRANK",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZPOPMIN",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Optional count. A flat member, score array; empty array for a missing key or count 0. Recorded as one ZREM of the popped members.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZPOPMAX",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Highest scores first. Same reply and record as ZPOPMIN.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "BZPOPMIN",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Shard-local, like BLPOP. Replies key, member, score. ZADD, ZINCRBY, and GEOADD serve the oldest waiting client. At most 1,024 blocked clients per shard.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "BZPOPMAX",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Highest score. Otherwise as BZPOPMIN.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "ZREMRANGEBYRANK",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Negative ranks count from the end. Recorded as one ZREM.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZREMRANGEBYSCORE",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "-inf/+inf and exclusive ( bounds. Recorded as one ZREM.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZREMRANGEBYLEX",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "-, +, [member, and (member. Recorded as one ZREM.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "GEOADD",
+      "family": "geo",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "One sorted set. Score is the 52-bit geohash. NX, XX, and CH.",
+      "coverage": [
+        "src/protocol.rs"
+      ]
+    },
+    {
+      "name": "GEODIST",
+      "family": "geo",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Units M, KM, FT, and MI. Missing member is nil.",
+      "coverage": [
+        "src/protocol.rs"
+      ]
+    },
+    {
+      "name": "GEOHASH",
+      "family": "geo",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "11-character string. The last character is 0.",
+      "coverage": [
+        "src/protocol.rs"
+      ]
+    },
+    {
+      "name": "GEOPOS",
+      "family": "geo",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Missing member is nil.",
+      "coverage": [
+        "src/protocol.rs"
+      ]
+    },
+    {
+      "name": "GEOSEARCH",
+      "family": "geo",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "FROMMEMBER, FROMLONLAT, BYRADIUS, BYBOX, ASC, DESC, COUNT, ANY, WITHDIST, WITHHASH, WITHCOORD.",
+      "coverage": [
+        "src/protocol.rs"
+      ]
+    },
+    {
+      "name": "GEOSEARCHSTORE",
+      "family": "geo",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Replaces the destination sorted set. STOREDIST stores the distance.",
+      "coverage": [
+        "src/protocol.rs"
+      ]
+    },
+    {
+      "name": "GEORADIUS",
+      "family": "geo",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "STORE and STOREDIST replace the destination. Same-slot when storing.",
+      "coverage": [
+        "src/protocol.rs"
+      ]
+    },
+    {
+      "name": "GEORADIUSBYMEMBER",
+      "family": "geo",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "STORE and STOREDIST replace the destination. Same-slot when storing.",
+      "coverage": [
+        "src/protocol.rs"
+      ]
+    },
+    {
+      "name": "BF.RESERVE",
+      "family": "bloom",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "RedisBloom wire shape: `BF.RESERVE key error capacity [EXPANSION n | NONSCALING]`. Filters scale by default (each new layer is `expansion` times larger with half the error rate); a layer above 64 MiB is refused. Not certified module compatibility.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "src/engine/tests/bloom.rs"
+      ]
+    },
+    {
+      "name": "BF.ADD",
+      "family": "bloom",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "RedisBloom wire shape. A missing key becomes a scalable filter (error 0.01, capacity 100, expansion 2). A full non-scaling filter answers an error. Not certified module compatibility.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "src/engine/tests/bloom.rs"
+      ]
+    },
+    {
+      "name": "BF.MADD",
+      "family": "bloom",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "RedisBloom wire shape. One reply per item (1 added, 0 present, or an error element when a non-scaling filter is full). One WAL record for the whole batch.",
+      "coverage": [
+        "src/engine/tests/bloom.rs"
+      ]
+    },
+    {
+      "name": "BF.INSERT",
+      "family": "bloom",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "RedisBloom wire shape: `CAPACITY`, `ERROR`, `EXPANSION`, `NOCREATE`, `NONSCALING`, `ITEMS`. The creation options apply only when the key is new. `NOCREATE` on a missing key answers `ERR not found`.",
+      "coverage": [
+        "src/engine/tests/bloom.rs"
+      ]
+    },
+    {
+      "name": "BF.INFO",
+      "family": "bloom",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "RedisBloom wire shape: Capacity, Size, Number of filters, Number of items inserted, Expansion rate (nil for a non-scaling filter); or one field by name. Size is the bit arrays plus the filter header.",
+      "coverage": [
+        "src/engine/tests/bloom.rs"
+      ]
+    },
+    {
+      "name": "BF.CARD",
+      "family": "bloom",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Items added so far (counted when an item sets a new bit); 0 for a missing key.",
+      "coverage": [
+        "src/engine/tests/bloom.rs"
+      ]
+    },
+    {
+      "name": "BF.EXISTS",
+      "family": "bloom",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "RedisBloom wire shape; not certified module compatibility.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "BF.MEXISTS",
+      "family": "bloom",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "RedisBloom wire shape. A missing key answers 0 for every item.",
+      "coverage": [
+        "src/engine/tests/bloom.rs"
+      ]
+    },
+    {
+      "name": "JSON.GET",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Optional path defaults to $. Supports only simple .field and [N] paths; not full RedisJSON.",
+      "coverage": [
+        "src/protocol/tests.rs"
+      ]
+    },
+    {
+      "name": "JSON.INDEX",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Ruvio extension (no RedisJSON/RediSearch equivalent): JSON.INDEX CREATE name PREFIX p PATH $.field [TYPE string|number|bool] | DROP name | LIST. Exact equality on one field only; database 0 only. Definitions are stored as reserved keys (visible to KEYS/DBSIZE) and dropped by FLUSHDB 0 / FLUSHALL; postings are rebuilt incrementally at startup.",
+      "coverage": [
+        "src/engine/tests/json.rs",
+        "src/json_index.rs"
+      ]
+    },
+    {
+      "name": "JSON.FIND",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Ruvio extension: JSON.FIND name VALUE v [COUNT n<=1000] [AFTER key] returns matching keys in ascending order; ERR index is building until the first build finishes. Runs on every shard and is merged.",
+      "coverage": [
+        "src/engine/tests/json.rs"
+      ]
+    },
+    {
+      "name": "JSON.MGET",
+      "family": "json",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "One path for every key, as MGET: all keys must share a slot. A missing key or a key of another type gives null.",
+      "coverage": [
+        "src/engine/tests/json.rs"
+      ]
+    },
+    {
+      "name": "JSON.SET",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Whole-document updates; only existing intermediate nodes; maximum resulting document 16 MiB. `NX` / `XX` as a fourth argument write only when the path is missing / present, and answer null otherwise.",
+      "coverage": [
+        "src/protocol/tests.rs",
+        "src/engine/tests/json_ops_more.rs"
+      ]
+    },
+    {
+      "name": "JSON.DEL",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Optional path defaults to $; returns 1 for a removed field, element, or root.",
+      "coverage": [
+        "src/protocol/tests.rs"
+      ]
+    },
+    {
+      "name": "XADD",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Auto id is * or ms-*. Explicit ids are ms-seq. DELAY holds the new entry from XREADGROUP until that many milliseconds pass. The hold is a WAL record and a snapshot trailer, written only when a delay is set. A millisecond behind the top id is rejected. MAXLEN and MINID, including ~ and =, both trim exactly. They cannot be combined. NOMKSTREAM returns a null bulk and does not create a missing key. The assigned id is the WAL record. The approximate trim option LIMIT is not accepted.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XLEN",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Returns 0 for a missing key.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XRANGE",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "start and end are -, +, or ms-seq. COUNT limits the reply. No exclusive bounds.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XREVRANGE",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "end then start, like Redis. COUNT keeps the newest matches. No exclusive bounds.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XREAD",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "COUNT and STREAMS. Id is exclusive; 0 means 0-0 and $ means the current end. BLOCK waits on this shard and does not remove entries. BLOCK 0 waits until an entry or shutdown. This command does not read a consumer group.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XDEL",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Many ids. A repeated id counts once. The stream key and its last id remain after the last entry is deleted.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XSETID",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Sets the last generated id without adding an entry. The id must be greater than or equal to the current top id. A missing key is an error. ENTRIESADDED and MAXDELETEDID are not accepted.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XTRIM",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "MAXLEN and MINID, including ~ and =, both trim exactly. MINID drops entries below the id and keeps that id. The approximate trim option LIMIT is not accepted.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XGROUP CREATE",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Creates one group at $, 0, or an explicit id. MKSTREAM creates an empty stream when the key is missing.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XGROUP CREATECONSUMER",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Registers a consumer before it has a pending entry. Returns 1 when the name is new and 0 when that group already has it. The name stays after its pending entries are acknowledged.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XREADGROUP",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "One stream and the > id only. COUNT limits the new entries. BLOCK waits on this shard until a later XADD and delivers that id to the oldest waiting consumer of the group. BLOCK 0 waits until an entry or shutdown. NOACK advances the group id and does not add a pending entry.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XGROUP DESTROY",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Returns 1 when the group is removed and 0 when it is already gone. A blocked XREADGROUP on that group receives NOGROUP.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XGROUP SETID",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Moves the group id to $, 0, or an explicit id. Pending entries stay as they are.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XGROUP DELCONSUMER",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Returns how many pending entries that consumer held. A missing consumer returns 0. A missing group is NOGROUP.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XACK",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Many ids. A repeated id counts once. Removes the id from that group's pending list and leaves the stream entry stored.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XPENDING",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "No arguments after the group returns the summary: count, smallest id, greatest id, and consumers sorted by name. An empty group returns 0, two nils, and an empty array. The extended form is optional IDLE, an inclusive start, an inclusive end, a count, and an optional consumer. Each row is the id, consumer, idle milliseconds, and delivery count.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XAUTOCLAIM",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Scans pending ids after the start id. Claims those idle for at least min-idle milliseconds, up to COUNT, which defaults to the rest of the list. JUSTID returns ids. The reply is the next start id, the claimed entries, and ids dropped because the stream entry is gone. The next start id is 0-0 when the scan finishes.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XCLAIM",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Claims pending ids idle for at least min-idle milliseconds. IDLE, TIME, RETRYCOUNT, FORCE, JUSTID, and LASTID are accepted. IDLE and TIME cannot be combined. FORCE claims an id that is in the stream but not pending and does not move the group cursor. LASTID sets that cursor. A repeated id is claimed once. An id deleted from the stream is dropped from the pending list and is not returned. JUSTID returns only the claimed ids.",
+      "coverage": [
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XINFO STREAM",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Reports length, last-generated-id, groups, and the first and last entries. Does not report a radix tree or entries-added. A missing key is an error.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XINFO GROUPS",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Reports name, consumers, pending, last-delivered-id, and lag. Consumers are the distinct names on the pending list.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "XINFO CONSUMERS",
+      "family": "streams",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Lists pending consumers with pending count and idle time since the latest delivery. A consumer with an empty pending list is not stored.",
+      "coverage": [
+        "src/protocol.rs",
+        "src/engine.rs"
+      ]
+    },
+    {
+      "name": "INFO",
+      "family": "introspection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "INFO prometheus returns Prometheus text.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/cluster_smoke.py"
+      ]
+    },
+    {
+      "name": "WAIT",
+      "family": "replication",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Blocks only the calling client until N replicas have synced this shard's wal_last_sequence to disk, or the timeout. Timeout 0 waits until shutdown. The integer reply is how many replicas reached that sequence. A missing replica does not drop the write. Off and replica roles return 0. Not queued inside MULTI and not scriptable.",
+      "coverage": [
+        "src/protocol.rs"
+      ]
+    },
+    {
+      "name": "CONFIG GET",
+      "family": "introspection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Lists Ruvio settings with requirepass redacted. CONFIG SET is not supported.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "src/protocol/tests.rs"
+      ]
+    },
+    {
+      "name": "SAVE",
+      "family": "introspection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "In-process checkpoint.",
+      "coverage": [
+        "src/protocol/tests.rs"
+      ]
+    },
+    {
+      "name": "BGSAVE",
+      "family": "introspection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "In-process, not a fork.",
+      "coverage": [
+        "src/protocol.rs"
+      ]
+    },
+    {
+      "name": "MULTI",
+      "family": "transactions",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Same-slot, shard-local only. At most 1,024 queued commands.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "EXEC",
+      "family": "transactions",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "A command refused while queueing (unknown, wrong arity, NOPERM, CROSSSLOT or MOVED, not allowed in MULTI, queue full) makes EXEC reply EXECABORT and discard the queue. Invalid arguments, such as MOVE or SWAPDB to a missing database, fail only that command at EXEC. One WAL Transaction record. Empty EXEC is *0; a dirty WATCH is *-1.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "DISCARD",
+      "family": "transactions",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Drops the queue and leaves watches.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "WATCH",
+      "family": "transactions",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "At most 128 watched keys. A mutation by any connection, including the watcher, aborts EXEC.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "UNWATCH",
+      "family": "transactions",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "EVAL",
+      "family": "scripts",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Lua 5.1 sandbox. Declared keys must be same-slot; a script with no keys runs on the connection's shard. Writes are one WAL batch.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "EVALSHA",
+      "family": "scripts",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Cache is per shard and memory-only. Restart is NOSCRIPT. Same key rules as EVAL.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "SCRIPT LOAD",
+      "family": "scripts",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Cache is not durable.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "SCRIPT EXISTS",
+      "family": "scripts",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "SCRIPT FLUSH",
+      "family": "scripts",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "SCRIPT KILL",
+      "family": "scripts",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Returns NOTBUSY when no script is running.",
+      "coverage": [
+        "scripts/resp_conformance.py"
+      ]
+    },
+    {
+      "name": "FCALL",
+      "family": "scripts",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Runs a memory-only FUNCTION LOAD body. Same key rules as EVAL. Lua is not replayed.",
+      "coverage": [
+        "src/script.rs"
+      ]
+    },
+    {
+      "name": "FUNCTION LOAD",
+      "family": "scripts",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Stores one named Lua body on the shard. Not a Redis library shebang. Lost on restart.",
+      "coverage": [
+        "src/script.rs"
+      ]
+    },
+    {
+      "name": "FUNCTION LIST",
+      "family": "scripts",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Returns loaded function names in byte order.",
+      "coverage": [
+        "src/script.rs"
+      ]
+    },
+    {
+      "name": "FUNCTION DELETE",
+      "family": "scripts",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Removes one memory-only function. Returns 1 or 0.",
+      "coverage": [
+        "src/script.rs"
+      ]
+    },
+    {
+      "name": "CLUSTER SLOTS",
+      "family": "cluster",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Static topology of the shards in one process. Hosts and ports come from advertised_host and advertised_port.",
+      "coverage": [
+        "scripts/cluster_smoke.py"
+      ]
+    },
+    {
+      "name": "CLUSTER NODES",
+      "family": "cluster",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Static topology of the shards in one process. Hosts and ports come from advertised_host and advertised_port.",
+      "coverage": [
+        "scripts/cluster_smoke.py"
+      ]
+    },
+    {
+      "name": "CLUSTER SHARDS",
+      "family": "cluster",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Static topology of the shards in one process. Every shard is a primary.",
+      "coverage": [
+        "scripts/cluster_smoke.py"
+      ]
+    },
+    {
+      "name": "CLUSTER INFO",
+      "family": "cluster",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "cluster_state is always ok; every slot is assigned.",
+      "coverage": [
+        "scripts/cluster_smoke.py"
+      ]
+    },
+    {
+      "name": "CLUSTER MYID",
+      "family": "cluster",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "The id of the receiving shard.",
+      "coverage": [
+        "scripts/cluster_smoke.py"
+      ]
+    },
+    {
+      "name": "CLUSTER KEYSLOT",
+      "family": "cluster",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Also available with one shard.",
+      "coverage": [
+        "scripts/cluster_smoke.py"
+      ]
+    },
+    {
+      "name": "READONLY",
+      "family": "cluster",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Returns OK in cluster mode. There are no replicas to read from.",
+      "coverage": [
+        "scripts/cluster_smoke.py"
+      ]
+    },
+    {
+      "name": "READWRITE",
+      "family": "cluster",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Returns OK in cluster mode.",
+      "coverage": [
+        "scripts/cluster_smoke.py"
+      ]
+    },
+    {
+      "name": "SPUBLISH",
+      "family": "pubsub",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Delivered only to subscribers of that channel on this slot. Not stored and not durable. A full subscriber queue disconnects that subscriber.",
+      "coverage": [
+        "src/protocol/parse/commands.rs"
+      ]
+    },
+    {
+      "name": "SSUBSCRIBE",
+      "family": "pubsub",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Puts the connection in Pub/Sub mode. Replies are RESP2 arrays. No pattern subscribe.",
+      "coverage": [
+        "src/runtime/session.rs"
+      ]
+    },
+    {
+      "name": "SUNSUBSCRIBE",
+      "family": "pubsub",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "No arguments unsubscribes every channel on this connection. An unknown channel still returns the current count.",
+      "coverage": [
+        "src/runtime/session.rs"
+      ]
+    },
+    {
+      "name": "PUBLISH",
+      "family": "pubsub",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Delivers on this shard to exact SUBSCRIBE clients and matching PSUBSCRIBE patterns. Not stored and not written to the WAL. Other shards do not receive it. A full subscriber queue disconnects that subscriber.",
+      "coverage": [
+        "src/protocol/direct.rs"
+      ]
+    },
+    {
+      "name": "SUBSCRIBE",
+      "family": "pubsub",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Exact channels on this shard. The reply count is classic channels plus patterns on the connection. After a subscription the connection accepts SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE, SSUBSCRIBE, SUNSUBSCRIBE, and PING.",
+      "coverage": [
+        "src/runtime/session.rs"
+      ]
+    },
+    {
+      "name": "UNSUBSCRIBE",
+      "family": "pubsub",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "No arguments drops every exact classic channel on this connection and leaves patterns in place.",
+      "coverage": [
+        "src/runtime/session.rs"
+      ]
+    },
+    {
+      "name": "PSUBSCRIBE",
+      "family": "pubsub",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Patterns use * and ?. Character classes are not supported. A match is delivered as pmessage. Keyspace notices stay on exact SSUBSCRIBE channels.",
+      "coverage": [
+        "src/runtime/session.rs"
+      ]
+    },
+    {
+      "name": "PUNSUBSCRIBE",
+      "family": "pubsub",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "No arguments drops every pattern on this connection and leaves exact channels in place.",
+      "coverage": [
+        "src/runtime/session.rs"
+      ]
+    },
+    {
+      "name": "CLIENT GETNAME",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Empty when the connection has no name.",
+      "coverage": [
+        "src/runtime/session.rs"
+      ]
+    },
+    {
+      "name": "CLIENT SETNAME",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "An empty name clears it. The name is not durable.",
+      "coverage": [
+        "src/runtime/session.rs"
+      ]
+    },
+    {
+      "name": "CLIENT TRACKING",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "ON or OFF only, and ON requires RESP3. Records GET and MGET on this shard, including misses. A completed write pushes one invalidate and forgets the key. No REDIRECT, BCAST, PREFIX, OPTIN, OPTOUT, or NOLOOP. Not cross-shard. A blocked BLPOP that pops later is not invalidated. A full push queue disconnects that connection.",
+      "coverage": [
+        "src/runtime/session.rs"
+      ]
+    },
+    {
+      "name": "SSCAN",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Cursor is a position in member order. MATCH and COUNT are supported; a missing key returns cursor 0 and an empty array.",
+      "coverage": [
+        "src/engine/tests/misc.rs"
+      ]
+    },
+    {
+      "name": "ZSCAN",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Cursor is a position in score order. MATCH and COUNT are supported; a missing key returns cursor 0 and an empty array.",
+      "coverage": [
+        "src/engine/tests/misc.rs"
+      ]
+    },
+    {
+      "name": "JSON.MERGE",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "RFC 7396 merge patch at a simple path; not RFC 6902 JSON Patch.",
+      "coverage": [
+        "src/protocol/parse/commands.rs"
+      ]
+    },
+    {
+      "name": "JSON.TYPE",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Returns object, array, string, integer, number, boolean or null for the value at a simple path; null reply when the key or path is absent.",
+      "coverage": [
+        "src/engine/tests/json.rs"
+      ]
+    },
+    {
+      "name": "JSON.STRLEN",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Byte length of a string value; WRONGTYPE for other values. Simple paths only.",
+      "coverage": [
+        "src/engine/tests/json.rs"
+      ]
+    },
+    {
+      "name": "JSON.ARRLEN",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Element count of an array value; WRONGTYPE for other values. Simple paths only.",
+      "coverage": [
+        "src/engine/tests/json.rs"
+      ]
+    },
+    {
+      "name": "JSON.OBJKEYS",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Object member names in document order; WRONGTYPE for other values. Simple paths only.",
+      "coverage": [
+        "src/engine/tests/json.rs"
+      ]
+    },
+    {
+      "name": "JSON.NUMINCRBY",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Adds a number to a number value and returns the new value as a bulk string. Integer arithmetic when both are integers that do not overflow, otherwise a finite double. Logged as a path write of the computed value.",
+      "coverage": [
+        "src/engine/tests/json.rs"
+      ]
+    },
+    {
+      "name": "JSON.TOGGLE",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Flips a boolean value and returns 1 for true, 0 for false. Logged as a path write.",
+      "coverage": [
+        "src/engine/tests/json.rs"
+      ]
+    },
+    {
+      "name": "JSON.ARRAPPEND",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Appends one or more JSON values to an array and returns the new length. Logged as a path write of the whole array.",
+      "coverage": [
+        "src/engine/tests/json.rs"
+      ]
+    },
+    {
+      "name": "JSON.CLEAR",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Empties an array or object, sets a number to 0, and returns how many values changed (0 when already empty or not clearable).",
+      "coverage": [
+        "src/engine/tests/json.rs"
+      ]
+    },
+    {
+      "name": "JSON.OBJLEN",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Number of members of the object at the path; null when the key or path is missing.",
+      "coverage": [
+        "src/engine/tests/json_ops_more.rs"
+      ]
+    },
+    {
+      "name": "JSON.STRAPPEND",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "`JSON.STRAPPEND key path json-string`. The path is required. Returns the new string length in bytes.",
+      "coverage": [
+        "src/engine/tests/json_ops_more.rs"
+      ]
+    },
+    {
+      "name": "JSON.NUMMULTBY",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "`JSON.NUMMULTBY key path number`. The path is required. Integers stay integers unless the product overflows. A non-finite result is refused.",
+      "coverage": [
+        "src/engine/tests/json_ops_more.rs"
+      ]
+    },
+    {
+      "name": "JSON.ARRINSERT",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "`JSON.ARRINSERT key path index value...`. A negative index counts from the end; an index outside 0..=length is an error. The path is required. Logged as a path write of the whole array.",
+      "coverage": [
+        "src/engine/tests/json_ops_more.rs"
+      ]
+    },
+    {
+      "name": "JSON.ARRPOP",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "`JSON.ARRPOP key [path [index]]`. Default index -1; an index outside the array is clamped; an empty array answers null. Logged as a path write of the whole array.",
+      "coverage": [
+        "src/engine/tests/json_ops_more.rs"
+      ]
+    },
+    {
+      "name": "JSON.ARRTRIM",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "`JSON.ARRTRIM key path start stop`, inclusive, negative from the end; a reversed or past-the-end range empties the array. Returns the new length.",
+      "coverage": [
+        "src/engine/tests/json_ops_more.rs"
+      ]
+    },
+    {
+      "name": "JSON.ARRINDEX",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "`JSON.ARRINDEX key path scalar [start [stop]]`. Scalars only; a stop of 0 means the end; 1 and 1.0 are different values. Returns -1 when absent.",
+      "coverage": [
+        "src/engine/tests/json_ops_more.rs"
+      ]
+    },
+    {
+      "name": "JSON.FORGET",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Alias of JSON.DEL.",
+      "coverage": [
+        "src/protocol/table.rs"
+      ]
+    },
+    {
+      "name": "JMERGE",
+      "family": "json",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Alias of JSON.MERGE.",
+      "coverage": [
+        "src/protocol/table.rs"
+      ]
+    },
+    {
+      "name": "COMMAND",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "COMMAND, COMMAND COUNT, COMMAND INFO [name ...] and COMMAND DOCS [name ...] read the command table. INFO entries use the Redis 7 shape with empty tips, key specs and subcommands; DOCS entries are empty maps. Key positions and arity of Ruvio-native commands are informational.",
+      "coverage": [
+        "src/engine/tests/misc.rs"
+      ]
+    },
+    {
+      "name": "SETBIT",
+      "family": "bitmap",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Bitmap limited to 16 MiB (offset < 134,217,728); each call rewrites the value, O(value size). Keeps an existing TTL.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "BITFIELD",
+      "family": "bitmap",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "GET, SET, INCRBY and OVERFLOW WRAP|SAT|FAIL on i1..i64 and u1..u63 fields (offset or #n). Field must end below 134,217,728 bits (16 MiB bitmap). A write rewrites the whole value, O(value size), and keeps an existing TTL.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "BITFIELD_RO",
+      "family": "bitmap",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "GET only, same field types and limits as BITFIELD.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "GETBIT",
+      "family": "bitmap",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Offsets up to 2^32-1.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "BITCOUNT",
+      "family": "bitmap",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "BITPOS",
+      "family": "bitmap",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "BITOP",
+      "family": "bitmap",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "AND, OR, XOR, NOT. Result limited to 16 MiB.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "PFADD",
+      "family": "hyperloglog",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Dense encoding only (12,304-byte string); every call rewrites the value. Estimates match Redis 7.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "PFCOUNT",
+      "family": "hyperloglog",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Multiple keys return the union estimate without storing it.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "PFMERGE",
+      "family": "hyperloglog",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "The destination takes part in the union, as in Redis.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "FILLGET",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Ruvio command. Replies HIT, FILL, BUSY or STALE. Markers are memory only and expire after fill_ms. WAIT wait_ms holds a caller that would get BUSY (retry every 5 ms, like BLMOVE) until the filler writes, the marker lapses (the waiter then becomes the filler) or the wait ends with BUSY; it is refused inside MULTI and scripts.",
+      "coverage": [
+        "scripts/fill_stampede.py"
+      ]
+    },
+    {
+      "name": "FILLSET",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Ruvio command. Needs the live token from FILLGET; SWR keeps the value stale_ms past its fresh period. The soft expiry is not persisted.",
+      "coverage": [
+        "scripts/fill_stampede.py"
+      ]
+    },
+    {
+      "name": "SETEX",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Same as SET with EX.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "PSETEX",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Same as SET with PX.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SETNX",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Returns 1 or 0.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "GETDEL",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Not a list or other type: WRONGTYPE.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "MSETNX",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "All-or-nothing. Same-slot keys in multi-shard mode.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "INCRBYFLOAT",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Computed in double precision and printed with 15 significant digits; Redis uses long double, so results with more digits can differ in the last places (Redis prints 153.10000000000000001 where Ruvio prints 153.1). Keeps the TTL.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "GETRANGE",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "A range wholly before the start of the string returns an empty string (Redis 7.0 returns the first byte).",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SUBSTR",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Alias of GETRANGE.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SETRANGE",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "String limited to 16 MiB; each call rewrites the value, O(value size). Keeps the TTL.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SMISMEMBER",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "SINTERCARD",
+      "family": "sets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Same-slot keys in multi-shard mode.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZCOUNT",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZLEXCOUNT",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZMSCORE",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZUNIONSTORE",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Inputs may be sorted sets or sets (score 1). Same-slot keys in multi-shard mode. An empty result removes the destination.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZINTERSTORE",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Inputs may be sorted sets or sets (score 1). Same-slot keys in multi-shard mode. An empty result removes the destination.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZDIFFSTORE",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Same-slot keys in multi-shard mode. An empty result removes the destination.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZUNION",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Inputs may be sorted sets or sets (score 1). Same-slot keys in multi-shard mode. WITHSCORES is a flat array in both protocols.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZINTER",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Inputs may be sorted sets or sets (score 1). Same-slot keys in multi-shard mode. WITHSCORES is a flat array in both protocols.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZDIFF",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Same-slot keys in multi-shard mode. WITHSCORES is a flat array in both protocols.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ZRANDMEMBER",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Pseudo-random; reads the whole set, O(N). WITHSCORES is a flat array in both protocols.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HRANDFIELD",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Pseudo-random; reads the whole hash, O(N). WITHVALUES is a flat array in both protocols.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "HINCRBYFLOAT",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Computed in double precision and printed with 15 significant digits (Redis uses long double). Keeps a field TTL.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "LINSERT",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Rewrites the list (O(N)); the WAL records the whole list as one atomic transaction.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "LSET",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Rewrites the list (O(N)); the WAL records the whole list as one atomic transaction.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "LREM",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Rewrites the list (O(N)); the WAL records the whole list as one atomic transaction.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "LPOS",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Read-only, O(N).",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "LMOVE",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Atomic: the move is one WAL transaction.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "RPOPLPUSH",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "ACL category and name follow LMOVE (`+lmove` allows it).",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "BLMOVE",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Retries every 5 ms instead of parking a waiter; not allowed in MULTI or scripts. Counts against the 1,024 blocked-client limit.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "LPUSHX",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "RPUSHX",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "LMPOP",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "BLMPOP",
+      "family": "lists",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Retries every 5 ms instead of parking a waiter; not allowed in MULTI or scripts. Counts against the 1,024 blocked-client limit.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "KEYS",
+      "family": "keyspace",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Walks the database in one call, so it refuses databases above 100,000 keys per shard (use SCAN). Glob supports `*`, `?`, `[abc]`, `[^a-z]` and `\\\\` escapes. With several shards the arrays are joined.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "RANDOMKEY",
+      "family": "keyspace",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Starts at a pseudo-random slot of the key index, so it is not uniform. With several shards it picks a random non-nil answer.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "TOUCH",
+      "family": "keyspace",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Counts existing keys; does not update the access time used by eviction. Keys must share a shard, like EXISTS.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "RENAMENX",
+      "family": "keyspace",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "EXPIRETIME",
+      "family": "keyspace",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "PEXPIRETIME",
+      "family": "keyspace",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "COPY",
+      "family": "keyspace",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Strings, lists, sets, hashes and sorted sets, with their TTL. The `DB` option, streams, JSON, bloom filters and hashes with field TTLs are refused. Copies the whole value (O(N)) as one atomic WAL transaction.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "ECHO",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "OBJECT",
+      "family": "keyspace",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "`ENCODING`, `IDLETIME` and `FREQ` only. `ENCODING` names what Redis 7.0 would report (int, embstr, raw, quicklist, intset, hashtable, listpack, skiplist, stream), not the physical layout. `IDLETIME` needs an LRU `maxmemory-policy` and `FREQ` needs `allkeys-lfu`; otherwise they return an error (Redis tracks idle time under every policy). An unknown subcommand gets a generic error without the subcommand name.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "MEMORY",
+      "family": "keyspace",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "`USAGE key [SAMPLES n]` only; the size is exact and counts the key, value and collection storage the memory budget charges, plus the fixed entry overhead. It is not comparable byte for byte with Redis.",
+      "coverage": [
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
+      "name": "CLIENT ID",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Connection ids are per shard; with several shards two connections can share an id. Inside MULTI it answers at once instead of queueing.",
+      "coverage": [
+        "src/runtime/session.rs"
+      ]
+    },
+    {
+      "name": "CLIENT LIST",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Each shard knows only its own connections; with several shards the reply covers the shard that got the command, and ids repeat across shards. Reports id, addr, laddr, name, age, db, multi, resp and user; `idle` is always 0 and the buffer and memory fields are left out. `TYPE` is validated but not used as a filter.",
+      "coverage": [
+        "src/runtime/evented/clients.rs"
+      ]
+    },
+    {
+      "name": "CLIENT INFO",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "The calling connection's `CLIENT LIST` line. Each shard knows only its own connections; with several shards the reply covers the shard that got the command, and ids repeat across shards.",
+      "coverage": [
+        "src/runtime/evented/clients.rs"
+      ]
+    },
+    {
+      "name": "CLIENT KILL",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "`ID`, `ADDR`, `SKIPME` and the legacy `addr` form; `USER`, `LADDR` and `TYPE` filters are refused. Each shard knows only its own connections; with several shards the reply covers the shard that got the command, and ids repeat across shards.",
+      "coverage": [
+        "src/runtime/evented/clients.rs"
+      ]
+    },
+    {
+      "name": "SLOWLOG",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "`GET`, `LEN`, `RESET`. Only commands that take the generic dispatcher are timed (not GET, SET, INCR, PING on the fast path) and blocking commands are skipped. An entry holds the command name and its first key (128 bytes), not every argument. Per shard; set `slowlog_threshold_micros` and `slowlog_max_len` in the config file or environment, not with CONFIG SET.",
+      "coverage": [
+        "src/runtime/evented/clients.rs"
+      ]
+    },
+    {
+      "name": "LATENCY",
+      "family": "connection",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "`LATEST` only, and it is always empty: Ruvio records no latency-spike events. Use `INFO latencystats`.",
+      "coverage": [
+        "src/runtime/evented/clients.rs"
+      ]
+    },
+    {
+      "name": "DUMP",
+      "family": "keyspace",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Ruvio's own payload (`RVD1` plus a checksummed WAL record), not Redis RDB: only Ruvio's RESTORE reads it. Strings, lists, sets, hashes and sorted sets; streams, JSON, bloom filters and hashes with field TTLs are refused. The TTL is not part of the payload.",
+      "coverage": [
+        "scripts/dump_restore_check.py"
+      ]
+    },
+    {
+      "name": "RESTORE",
+      "family": "keyspace",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Reads only Ruvio's DUMP payload. `REPLACE` and `ABSTTL` work; `IDLETIME` and `FREQ` are accepted and ignored. A past `ABSTTL` deadline creates nothing. One atomic WAL transaction.",
+      "coverage": [
+        "scripts/dump_restore_check.py"
+      ]
+    }
+  ],
+  "unsupported": [
+    {
+      "name": "CONFIG SET",
+      "reason": "Runtime mutation of process settings is not supported."
+    }
+  ],
+  "clients": [
+    {
+      "id": "ruvio-client",
+      "language": "Rust",
+      "library": "ruvio-client",
+      "package": "ruvio-client",
+      "version": "0.2.4",
+      "protocol": "RESP2",
+      "suite": "clients/ruvio-client/src/commands.rs"
+    },
+    {
+      "id": "ruvio-csharp",
+      "language": "C#",
+      "library": "Ruvio.Client",
+      "package": "Ruvio.Client",
+      "version": "0.2.6",
+      "protocol": "RESP2",
+      "suite": "clients/csharp/Ruvio.Client/Commands/Commands.cs"
+    }
+  ]
+}

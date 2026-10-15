@@ -1,0 +1,15 @@
+diff --git a/src/store/expire.rs b/src/store/expire.rs
+index 184f14f..3086e07 100644
+--- a/src/store/expire.rs
++++ b/src/store/expire.rs
+@@ -843,7 +843,9 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
+ 
+         self.discard_value(entry.value, before);
+         self.note_expired(cause);
+-        if self.removals.on {
++        // Active expiry runs in the maintenance tick; only a write that finds the key
++        // expired needs its delete logged ahead of it.
++        if self.removals.on && matches!(cause, ExpireCause::Passive) {
+             self.removals.pending.push((self.active, key.into()));
+         }
+         self.reconcile_entry_charge(before, key);

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>0.1.1</Version>
+    <Authors>Salih Cantekin</Authors>
+    <Description>Append-only ASP.NET Core Data Protection key-ring storage on Ruvio.</Description>
+    <PackageId>Ruvio.AspNetCore.DataProtection</PackageId>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>ruvio-icon.png</PackageIcon>
+    <PackageTags>ruvio;aspnetcore;dataprotection</PackageTags>
+    <RepositoryUrl>https://github.com/salihcantekin/ruvio</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://salihcantekin.github.io/ruvio/</PackageProjectUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../../../clients/csharp/Ruvio.Client/Ruvio.Client.csproj" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../../../brand/ruvio-icon-square.png" Pack="true" PackagePath="ruvio-icon.png" />
+    <InternalsVisibleTo Include="Ruvio.AspNetCore.DataProtection.Tests" />
+  </ItemGroup>
+</Project>

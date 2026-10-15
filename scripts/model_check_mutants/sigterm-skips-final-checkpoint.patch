@@ -1,0 +1,25 @@
+diff --git a/src/runtime/evented/mod.rs b/src/runtime/evented/mod.rs
+index e85fb25..e43da41 100644
+--- a/src/runtime/evented/mod.rs
++++ b/src/runtime/evented/mod.rs
+@@ -1151,10 +1151,16 @@ async fn serve_async(
+ 
+     // Even with a failed log the checkpoint can still save the data held in memory. It is
+     // tried once more: the cause may have passed (space freed, a transient I/O error).
+-    let saved = publish_checkpoint(&state).or_else(|error| {
+-        warn!(%error, "final checkpoint failed; trying once more");
+-        publish_checkpoint(&state)
+-    });
++    // A clean final flush leaves every write in the log: the checkpoint is only needed
++    // when the log failed.
++    let saved = if flushed.is_ok() {
++        Ok(())
++    } else {
++        publish_checkpoint(&state).or_else(|error| {
++            warn!(%error, "final checkpoint failed; trying once more");
++            publish_checkpoint(&state)
++        })
++    };
+ 
+     if let Err(error) = saved {
+         // Without a log that replays them, writes since the last published checkpoint are

@@ -1,0 +1,768 @@
+using System.Buffers;
+using System.Diagnostics;
+using System.Threading.Channels;
+using System.Threading.Tasks.Sources;
+
+namespace Ruvio.Client;
+
+internal sealed class CommandMultiplexer
+{
+    private readonly Stream _stream;
+    private readonly RespReader _reader;
+    private readonly SemaphoreSlim _capacity;
+    private readonly Channel<Request> _outgoing;
+    private readonly Channel<Request> _pending;
+    private readonly Task _receiver;
+    private readonly Request?[] _pool;
+    private readonly bool _coalesceWrites;
+    private int _pooled;
+    // Requests in the write path. The 0->1 transition starts the single writer loop, which exits when the count returns to 0.
+    private int _scheduled;
+    private TaskCompletionSource? _writerStopped;
+    private Exception? _failure;
+
+    internal CommandMultiplexer(Stream stream, RespReader reader, int capacity, bool coalesceWrites = true)
+    {
+        _stream = stream;
+        _coalesceWrites = coalesceWrites;
+        _reader = reader;
+        _capacity = new SemaphoreSlim(capacity, capacity);
+        _pool = new Request?[Math.Min(capacity, 1024)];
+        // Bounded at the same capacity as _capacity, so a slow socket pushes back on callers instead of growing a queue.
+        _outgoing = Channel.CreateBounded<Request>(new BoundedChannelOptions(capacity)
+        {
+            SingleReader = true,
+            AllowSynchronousContinuations = true,
+        });
+
+        _pending = Channel.CreateBounded<Request>(new BoundedChannelOptions(capacity)
+        {
+            SingleReader = true,
+            SingleWriter = true,
+            AllowSynchronousContinuations = true,
+        });
+
+        _receiver = ReadLoopAsync();
+    }
+
+    internal bool IsBroken => Volatile.Read(ref _failure) is not null;
+
+    internal ValueTask<IReadOnlyList<RespValue>> SendAsync(
+        IReadOnlyList<IReadOnlyList<string>> commands, CancellationToken token)
+    {
+        Request? request = Admit(commands.Count, token, out Exception? error);
+        if (request is null) return ValueTask.FromException<IReadOnlyList<RespValue>>(error!);
+        request.SetCommands(commands);
+        return request.SubmitMany(this);
+    }
+
+    internal ValueTask<RespValue> SendCommandAsync(in RespCommand command, CancellationToken token)
+    {
+        Request? request = Admit(1, token, out Exception? error);
+        if (request is null) return ValueTask.FromException<RespValue>(error!);
+        request.SetCommand(command);
+        return request.SubmitOne(this);
+    }
+
+    internal ValueTask<RespValue> SendAsync(IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken token)
+    {
+        Request? request = Admit(1, token, out Exception? error);
+        if (request is null) return ValueTask.FromException<RespValue>(error!);
+        request.SetArguments(arguments);
+        return request.SubmitOne(this);
+    }
+
+    internal ValueTask<IReadOnlyList<RespValue>> SendAsync(
+        ReadOnlyMemory<byte> payload, int replies, CancellationToken token)
+    {
+        Request? request = Admit(replies, token, out Exception? error);
+        if (request is null) return ValueTask.FromException<IReadOnlyList<RespValue>>(error!);
+        request.SetPayload(payload);
+        return request.SubmitMany(this);
+    }
+
+    private Request? Admit(int replies, CancellationToken token, out Exception? error)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(replies);
+        error = token.IsCancellationRequested ? new OperationCanceledException(token)
+            : IsBroken ? Failure() : null;
+        if (error is not null) return null;
+
+        Request request = Rent();
+        request.Initialize(replies, token);
+        return request;
+    }
+
+    /// <summary>
+    /// Publishes an admitted request. Returns false when the request was not published;
+    /// the caller then completes it with <paramref name="error"/> and the request was never seen by the pipeline.
+    /// </summary>
+    private bool TryPublish(Request request, out Exception? error)
+    {
+        error = null;
+        if (!_capacity.Wait(0))
+            return false;
+
+        if (!PublishAdmitted(request, out error))
+        {
+            request.DisposePayload();
+            _capacity.Release();
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool PublishAdmitted(Request request, out Exception? error)
+    {
+        error = null;
+        try
+        {
+            ThrowIfBroken();
+            request.PreparePayload();
+        }
+        catch (Exception exception)
+        {
+            error = exception;
+            return false;
+        }
+
+        // Reserve ownership before publishing: the active writer cannot go idle
+        // while another producer is about to enqueue its command.
+        if (Interlocked.Increment(ref _scheduled) == 1)
+        {
+            _ = WriteLoopAsync(request);
+            return true;
+        }
+
+        if (_outgoing.Writer.TryWrite(request))
+            return true;
+
+        WriterFinished();
+        error = IsBroken ? Failure() : new InvalidOperationException("Admitted request exceeded the writer queue capacity.");
+        return false;
+    }
+
+    /// <summary>Slow path when all in-flight slots are taken: wait for a slot, then publish.</summary>
+    private async ValueTask PublishWhenAvailableAsync(Request request)
+    {
+        bool published = false;
+        try
+        {
+            await _capacity.WaitAsync(request.Token).ConfigureAwait(false);
+            if (!PublishAdmitted(request, out Exception? error))
+            {
+                _capacity.Release();
+                throw error!;
+            }
+
+            published = true;
+        }
+        catch (Exception error) when (!published)
+        {
+            request.DisposePayload();
+            request.FailUnpublished(error is OperationCanceledException && request.Token.IsCancellationRequested
+                ? new OperationCanceledException(request.Token)
+                : error);
+            return;
+        }
+
+    }
+
+    private Request Rent()
+    {
+        lock (_pool)
+        {
+            if (_pooled > 0)
+            {
+                Request request = _pool[--_pooled]!;
+                _pool[_pooled] = null;
+                return request;
+            }
+        }
+
+        return new Request();
+    }
+
+    private void Return(Request request)
+    {
+        request.Reset();
+        lock (_pool)
+        {
+            if (_pooled < _pool.Length)
+                _pool[_pooled++] = request;
+        }
+    }
+
+    private async Task WriteLoopAsync(Request first)
+    {
+        Request? current = first;
+        bool pending = false;
+
+        try
+        {
+            while (current is not null)
+            {
+                Request request = current;
+                pending = false;
+                ThrowIfBroken();
+
+                if (request.Token.IsCancellationRequested)
+                {
+                    request.TryCancel();
+                    request.DisposePayload();
+                    Finish(request);
+                    current = null;
+                    current = await NextWriteAsync().ConfigureAwait(false);
+                    continue;
+                }
+
+                PooledFrame encoded;
+
+                try
+                {
+                    long encodeStarted = RuvioSocket.PhaseMetricsEnabled ? Stopwatch.GetTimestamp() : 0;
+                    encoded = request.Encode();
+                    if (encodeStarted != 0) RuvioSocket.RecordSocketPhase("encode", encodeStarted);
+                }
+                catch (Exception error)
+                {
+                    request.TryFail(error);
+                    request.DisposePayload();
+                    Finish(request);
+                    current = null;
+                    current = await NextWriteAsync().ConfigureAwait(false);
+
+                    continue;
+                }
+
+                using PooledFrame frame = encoded;
+                using (var activity = RuvioSocket.StartPhase("queue", request.Parent, request.QueuedAt))
+                    RuvioSocket.RecordSocketPhase("queue", request.QueuedAt);
+
+                request.SentAt = Stopwatch.GetTimestamp();
+                // The reader may complete and recycle the request once it is pending.
+                Activity? parent = request.Parent;
+                await _pending.Writer.WriteAsync(request).ConfigureAwait(false);
+                pending = true;
+                long started = Stopwatch.GetTimestamp();
+
+                using (var activity = RuvioSocket.StartPhase("write", parent))
+                {
+                    try
+                    {
+                        if (_coalesceWrites && frame.Length < 64 * 1024 && _outgoing.Reader.TryRead(out Request? next))
+                            await WriteQueuedBatchAsync(frame, next).ConfigureAwait(false);
+                        else
+                        {
+                            await _stream.WriteAsync(frame.Buffer.AsMemory(0, frame.Length)).ConfigureAwait(false);
+                            RuvioSocket.RecordSocketWrite(frame.Length);
+                        }
+                    }
+                    finally
+                    {
+                        RuvioSocket.RecordSocketPhase("write", started);
+                    }
+                }
+                current = null;
+                current = await NextWriteAsync().ConfigureAwait(false);
+            }
+        }
+        catch (Exception error)
+        {
+            Fail(error);
+            if (current is not null && !pending)
+            {
+                current.TryFail(Failure(closedBeforeReply: true));
+                current.DisposePayload();
+                Finish(current);
+            }
+
+            if (current is not null)
+                WriterFinished();
+
+            while (_outgoing.Reader.TryRead(out Request? request))
+            {
+                request.TryFail(Failure(closedBeforeReply: true));
+                request.DisposePayload();
+                Finish(request);
+                WriterFinished();
+            }
+        }
+    }
+
+    private async Task WriteQueuedBatchAsync(PooledFrame first, Request next)
+    {
+        byte[]? buffer = null;
+        int length = first.Length;
+        Request? current = next;
+        int consumed = 1;
+        try
+        {
+            buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+            first.Buffer.AsSpan(0, length).CopyTo(buffer);
+            while (current is not null)
+            {
+                Request request = current;
+                ThrowIfBroken();
+                if (request.Token.IsCancellationRequested)
+                {
+                    request.TryCancel();
+                    request.DisposePayload();
+                    Finish(request);
+                    current = null;
+                }
+                else
+                {
+                    PooledFrame frame;
+                    try
+                    {
+                        long started = RuvioSocket.PhaseMetricsEnabled ? Stopwatch.GetTimestamp() : 0;
+                        frame = request.Encode();
+                        if (started != 0) RuvioSocket.RecordSocketPhase("encode", started);
+                    }
+                    catch (Exception error)
+                    {
+                        request.TryFail(error);
+                        request.DisposePayload();
+                        Finish(request);
+                        current = null;
+                        if (consumed < 15 && _outgoing.Reader.TryRead(out current)) consumed++;
+                        continue;
+                    }
+
+                    using (frame)
+                    {
+                        int required = checked(length + frame.Length);
+                        if (required > buffer.Length)
+                        {
+                            byte[] larger = ArrayPool<byte>.Shared.Rent(required);
+                            buffer.AsSpan(0, length).CopyTo(larger);
+                            ArrayPool<byte>.Shared.Return(buffer);
+                            buffer = larger;
+                        }
+                        frame.Buffer.AsSpan(0, frame.Length).CopyTo(buffer.AsSpan(length));
+                        request.SentAt = Stopwatch.GetTimestamp();
+                        RuvioSocket.RecordSocketPhase("queue", request.QueuedAt);
+                        await _pending.Writer.WriteAsync(request).ConfigureAwait(false);
+                        // Do not touch a published request: the reader can recycle it.
+                        current = null;
+                        length = required;
+                    }
+                }
+
+                if (consumed < 15 && length < 64 * 1024 && _outgoing.Reader.TryRead(out current))
+                    consumed++;
+            }
+            await _stream.WriteAsync(buffer.AsMemory(0, length)).ConfigureAwait(false);
+            RuvioSocket.RecordSocketWrite(length);
+        }
+        catch (Exception error)
+        {
+            Fail(error);
+            if (current is not null)
+            {
+                current.TryFail(Failure(closedBeforeReply: true));
+                current.DisposePayload();
+                Finish(current);
+            }
+            throw;
+        }
+        finally
+        {
+            if (buffer is not null) ArrayPool<byte>.Shared.Return(buffer);
+            for (int index = 0; index < consumed; index++) WriterFinished();
+        }
+    }
+
+    private ValueTask<Request?> NextWriteAsync()
+    {
+        if (WriterFinished() == 0)
+            return new ValueTask<Request?>((Request?)null);
+
+        if (_outgoing.Reader.TryRead(out Request? next))
+            return new ValueTask<Request?>(next);
+
+        return WaitForWriteAsync();
+    }
+
+    private async ValueTask<Request?> WaitForWriteAsync() =>
+        await _outgoing.Reader.ReadAsync().ConfigureAwait(false);
+
+    private int WriterFinished()
+    {
+        int remaining = Interlocked.Decrement(ref _scheduled);
+        if (remaining == 0 && IsBroken)
+            Volatile.Read(ref _writerStopped)?.TrySetResult();
+
+        return remaining;
+    }
+
+    private async Task ReadLoopAsync()
+    {
+        Request? current = null;
+        bool replyStarted = false;
+
+        try
+        {
+            await foreach (Request request in _pending.Reader.ReadAllAsync().ConfigureAwait(false))
+            {
+                current = request;
+                replyStarted = false;
+                _reader.PrepareReply();
+                ThrowIfBroken();
+
+                using (var activity = RuvioSocket.StartPhase("reply", request.Parent, request.SentAt))
+                {
+                    try
+                    {
+                        if (request.Replies == 1)
+                        {
+                            RespValue value = await _reader.ReadAsync(CancellationToken.None).ConfigureAwait(false);
+                            replyStarted = true;
+                            request.TrySetResult(value);
+                        }
+                        else
+                        {
+                            var values = new RespValue[request.Replies];
+                            for (int i = 0; i < values.Length; i++)
+                            {
+                                values[i] = await _reader.ReadAsync(CancellationToken.None).ConfigureAwait(false);
+                                replyStarted = true;
+                            }
+
+                            request.TrySetResult(values);
+                        }
+                    }
+                    finally
+                    {
+                        RuvioSocket.RecordSocketPhase("reply", request.SentAt);
+                    }
+                }
+
+                Finish(request);
+                current = null;
+            }
+        }
+        catch (Exception error)
+        {
+            // ReplyStarted belongs to this request, never to another concurrent caller.
+            bool closedBeforeReply = current is not null && !replyStarted && !_reader.ReplyStarted;
+            Fail(error);
+
+            if (current is not null)
+            {
+                current.TryFail(new RuvioException(
+                    error.Message, false, error, closedBeforeReply));
+                Finish(current);
+            }
+        }
+        finally
+        {
+            while (_pending.Reader.TryRead(out Request? request))
+            {
+                request.TryFail(Failure(closedBeforeReply: true));
+                Finish(request);
+            }
+        }
+    }
+
+    private void Finish(Request request)
+    {
+        if (Interlocked.Exchange(ref request.Finished, 1) != 0)
+            return;
+
+        _capacity.Release();
+        request.Release();
+    }
+
+    private RuvioException Failure(bool closedBeforeReply = false) => new(
+        Volatile.Read(ref _failure)?.Message ?? "connection is closed",
+        false, Volatile.Read(ref _failure), closedBeforeReply);
+
+    private void ThrowIfBroken()
+    {
+        if (IsBroken) throw Failure();
+    }
+
+    private void Fail(Exception error)
+    {
+        if (Interlocked.CompareExchange(ref _failure, error, null) is not null) return;
+        _outgoing.Writer.TryComplete();
+        _pending.Writer.TryComplete();
+        _stream.Dispose();
+    }
+
+    internal async Task StopAsync()
+    {
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Interlocked.CompareExchange(ref _writerStopped, stopped, null);
+        Fail(new RuvioException("connection is closed"));
+        if (Volatile.Read(ref _scheduled) == 0) _writerStopped.TrySetResult();
+        await Task.WhenAll(_writerStopped.Task, _receiver).ConfigureAwait(false);
+        _reader.Dispose();
+    }
+
+    /// <summary>
+    /// One pooled in-flight command and its completion. Two parties hold a reference:
+    /// the caller (released by GetResult) and the pipeline (released by Finish).
+    /// The instance is recycled only after both let go, so a cancelled caller cannot
+    /// observe another command's reply while its own reply is still being drained.
+    /// </summary>
+    private sealed class Request : IValueTaskSource<RespValue>, IValueTaskSource<IReadOnlyList<RespValue>>
+    {
+        private static readonly Action<object?> CancelCallback = static state => ((Request)state!).TryCancel();
+
+        private ManualResetValueTaskSourceCore<bool> _core = new() { RunContinuationsAsynchronously = true };
+        private CommandMultiplexer? _owner;
+        private CancellationTokenRegistration _registration;
+        private RespValue? _single;
+        private IReadOnlyList<RespValue>? _many;
+        private int _completed;
+        private int _callerReleased;
+        private int _references;
+        private IReadOnlyList<IReadOnlyList<string>>? _commands;
+        private RespCommand _command;
+        private bool _hasCommand;
+        private IReadOnlyList<ReadOnlyMemory<byte>>? _arguments;
+        private ReadOnlyMemory<byte> _payload;
+        private bool _hasPayload;
+        private PooledFrame? _ownedFrame;
+        internal int Replies;
+        internal CancellationToken Token;
+        internal long QueuedAt;
+        internal long SentAt;
+        internal Activity? Parent;
+        // Timeout, cancel and the reply can race; only the first Finish call completes the request and releases capacity.
+        internal int Finished;
+
+        internal void Initialize(int replies, CancellationToken token)
+        {
+            Replies = replies;
+            Token = token;
+            QueuedAt = Stopwatch.GetTimestamp();
+            Parent = RuvioSocket.TracingEnabled ? Activity.Current : null;
+        }
+
+        internal void SetCommands(IReadOnlyList<IReadOnlyList<string>> commands) => _commands = commands;
+
+        internal void SetCommand(in RespCommand command)
+        {
+            _command = command;
+            _hasCommand = true;
+        }
+
+        internal void SetArguments(IReadOnlyList<ReadOnlyMemory<byte>> arguments) => _arguments = arguments;
+
+        internal void SetPayload(ReadOnlyMemory<byte> payload)
+        {
+            _payload = payload;
+            _hasPayload = true;
+        }
+
+        internal ValueTask<RespValue> SubmitOne(CommandMultiplexer owner)
+        {
+            Exception? error = Submit(owner);
+            return error is null
+                ? new ValueTask<RespValue>(this, _core.Version)
+                : ValueTask.FromException<RespValue>(error);
+        }
+
+        internal ValueTask<IReadOnlyList<RespValue>> SubmitMany(CommandMultiplexer owner)
+        {
+            Exception? error = Submit(owner);
+            return error is null
+                ? new ValueTask<IReadOnlyList<RespValue>>(this, _core.Version)
+                : ValueTask.FromException<IReadOnlyList<RespValue>>(error);
+        }
+
+        private Exception? Submit(CommandMultiplexer owner)
+        {
+            _owner = owner;
+            _references = 2;
+
+            // Cancellation only abandons the caller's wait. Sent replies must still be drained.
+            if (Token.CanBeCanceled)
+                _registration = Token.UnsafeRegister(CancelCallback, this);
+
+            if (owner.TryPublish(this, out Exception? error))
+                return null;
+
+            if (error is not null)
+            {
+                // Never published and never handed to the caller: recycle immediately.
+                _registration.Dispose();
+                DisposePayload();
+                owner.Return(this);
+                return error;
+            }
+
+            _ = owner.PublishWhenAvailableAsync(this);
+            return null;
+        }
+
+        internal void FailUnpublished(Exception error)
+        {
+            TryFail(error);
+            Release();
+        }
+
+        internal bool TrySetResult(RespValue value)
+        {
+            if (Interlocked.Exchange(ref _completed, 1) != 0) return false;
+            _single = value;
+            _core.SetResult(true);
+            return true;
+        }
+
+        internal bool TrySetResult(IReadOnlyList<RespValue> values)
+        {
+            if (Interlocked.Exchange(ref _completed, 1) != 0) return false;
+            _many = values;
+            _core.SetResult(true);
+            return true;
+        }
+
+        internal bool TryFail(Exception error)
+        {
+            if (Interlocked.Exchange(ref _completed, 1) != 0) return false;
+            _core.SetException(error);
+            return true;
+        }
+
+        internal bool TryCancel() => TryFail(new OperationCanceledException(Token));
+
+        internal void Release()
+        {
+            if (Interlocked.Decrement(ref _references) == 0)
+                _owner!.Return(this);
+        }
+
+        internal void Reset()
+        {
+            _core.Reset();
+            _registration = default;
+            _single = null;
+            _many = null;
+            _completed = 0;
+            _callerReleased = 0;
+            Finished = 0;
+            Token = default;
+            Parent = null;
+            _owner = null;
+            DisposePayload();
+        }
+
+        public ValueTaskSourceStatus GetStatus(short token) => _core.GetStatus(token);
+
+        public void OnCompleted(Action<object?> continuation, object? state, short token,
+            ValueTaskSourceOnCompletedFlags flags) => _core.OnCompleted(continuation, state, token, flags);
+
+        RespValue IValueTaskSource<RespValue>.GetResult(short token)
+        {
+            ClaimCaller(token);
+            try
+            {
+                _core.GetResult(token);
+                return _single!;
+            }
+            finally
+            {
+                ReleaseCaller();
+            }
+        }
+
+        IReadOnlyList<RespValue> IValueTaskSource<IReadOnlyList<RespValue>>.GetResult(short token)
+        {
+            ClaimCaller(token);
+            try
+            {
+                _core.GetResult(token);
+                // The reader stores one reply unboxed; list callers with one command still get a list.
+                return _many ?? [_single!];
+            }
+            finally
+            {
+                ReleaseCaller();
+            }
+        }
+
+        private void ClaimCaller(short token)
+        {
+            // A second await must fail before touching the reference count, or the request
+            // could be recycled while the pipeline still owns it.
+            if (token != _core.Version || Interlocked.Exchange(ref _callerReleased, 1) != 0)
+            {
+                throw new InvalidOperationException("A Ruvio ValueTask can be awaited only once.");
+            }
+        }
+
+        private void ReleaseCaller()
+        {
+            _registration.Dispose();
+            Release();
+        }
+
+        internal void PreparePayload()
+        {
+            // Cancellation may let a caller reuse binary/raw memory before the writer gets to it.
+            if (_hasCommand && _command.IsCallerList && Token.CanBeCanceled)
+            {
+                _ownedFrame = _command.EncodePooled();
+                _command = default;
+                _hasCommand = false;
+            }
+            else if (_commands is not null && Token.CanBeCanceled)
+            {
+                _ownedFrame = RespCodec.EncodeManyPooled(_commands);
+                _commands = null;
+            }
+            else if (_arguments is not null && Token.CanBeCanceled)
+            {
+                _ownedFrame = RespCodec.EncodeBinaryPooled(_arguments);
+                _arguments = null;
+            }
+            else if (_hasPayload)
+            {
+                _ownedFrame = RespCodec.CopyPooled(_payload.Span);
+                _payload = default;
+                _hasPayload = false;
+            }
+        }
+
+        internal PooledFrame Encode()
+        {
+            if (_ownedFrame is PooledFrame frame)
+            {
+                _ownedFrame = null;
+                return frame;
+            }
+
+            PooledFrame result = _hasCommand ? _command.EncodePooled()
+                : _commands is not null ? RespCodec.EncodeManyPooled(_commands)
+                : _arguments is not null ? RespCodec.EncodeBinaryPooled(_arguments)
+                : throw new InvalidOperationException("Request payload was already consumed.");
+
+            _commands = null;
+            _command = default;
+            _hasCommand = false;
+            _arguments = null;
+
+            return result;
+        }
+
+        // Returns the pooled frame and drops caller memory references, so a buffer is never recycled
+        // while the pipeline might still read it.
+        internal void DisposePayload()
+        {
+            _ownedFrame?.Dispose();
+            _ownedFrame = null;
+            _commands = null;
+            _command = default;
+            _hasCommand = false;
+            _arguments = null;
+            _payload = default;
+            _hasPayload = false;
+        }
+    }
+}

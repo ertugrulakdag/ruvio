@@ -1,0 +1,165 @@
+# Ruvio UI
+
+The browser talks HTTP to this process. This process talks RESP through
+`ruvio-client`. Sign-in is the server’s ACL user. An empty user and password
+send no `AUTH` and the session is `default`. A password alone is
+`AUTH password`. A user and a password are `AUTH user password`.
+
+`default` always exists. It is `on nopass ~* +@all` until `requirepass` is
+set. Extra users that must survive a restart belong in `ruvio.toml`:
+
+```toml
+[[security.users]]
+name = "app"
+rules = "on >app-secret ~app:* +@read +ping +auth +info"
+```
+
+The ACL screen can run `ACL SETUSER`. That change lasts until the process
+restarts. The next start reads `[[security.users]]` again.
+
+The header contains a compact shard dropdown. **All shards** routes keyed commands and
+walks `SCAN` until the page is full or every shard has been read. One shard
+pins Data, command forms, and Pub/Sub to that node. Multiple selections filter
+Overview readings and Data scans to those nodes; keyed commands still route to
+their owner and are never broadcast as writes. Non-keyed commands use the entry
+node when several shards are selected.
+
+Refreshing the browser restores the existing operator session, without saving
+ACL credentials in browser storage. The tab keeps only its session identifier;
+host and port are remembered locally for the next sign-in. Sign out explicitly
+to release the session. Sessions expire after 30 minutes without API activity,
+or when the operator process restarts.
+
+Read-only commands reconnect and retry once after a dropped RESP connection.
+The browser also retries failed HTTP transports and HTTP 502/503/504 responses
+up to twice for read-only requests. Mutations and subscription message polls
+are not replayed; permission, wrong-type, and persistent failures remain visible.
+
+## Operator screens
+
+The panel uses the public site's navy background and mint accent, with
+responsive layouts and keyboard-accessible controls.
+
+- **Overview** is the first screen after sign-in. It refreshes shard health,
+  key counts, charged store memory, persistence state, and available command
+  counters every five seconds by default. Choose 2, 5, 10, 30, or 60 seconds,
+  pause, or refresh manually. The interval and pause setting survive navigation
+  and reloads. Missing
+  metrics show **Not reported**, not zero; incomplete shard readings do not
+  produce misleading totals. Command counters come from the server's `INFO`
+  response. Memory breakdowns distinguish live data, index capacity, and reusable
+  buffers from process RSS. Deleting the last key releases empty index capacity;
+  retained reusable buffers can still account for a nonzero memory charge.
+- **Data** scans across owners in All shards, or only the pinned node. Inspect
+  strings, lists, sets, hashes, sorted sets, streams, and JSON documents; refresh values, change
+  expiry, or delete with confirmation. Large sets use membership checks rather
+  than an unbounded member listing. Collection details report total fields,
+  members, or entries independently of pagination; task replies label the number
+  of items in that reply, rather than claiming it is the complete collection.
+  Reading a key updates only its detail pane, not the key scan or the page.
+- **JSON documents** open in Data as a collapsible tree (colored by type) or raw,
+  pretty-printed text, with the document size and TTL. Click a node to see its
+  path (`$.addr.city`, `$.tags[0]`), edit its value as JSON, delete it, add to a
+  number, toggle a boolean, clear or append to a container, or replace the whole
+  document. Every edit is validated in the browser first and sent as the matching
+  `JSON.SET`, `JSON.DEL`, `JSON.NUMINCRBY`, `JSON.TOGGLE`, `JSON.CLEAR`, or
+  `JSON.ARRAPPEND`, so the key's lifetime is kept. The path box runs `JSON.GET key
+  path`. Keys that are not plain identifiers (spaces, dots) have no path in the
+  server's path language and are shown but cannot be edited from the tree.
+  Documents over 4 MiB are not loaded whole; read them by path. The **JSON
+  documents** task family has a form for each `JSON.*` command, including
+  `JSON.INDEX` and `JSON.FIND`; `JSON.GET` and `JSON.MERGE` replies render as the same tree.
+- **Tasks** is searchable by intent or command. Find locking (`LEASE` /
+  `RELEASE`), conditional writes (`SETV`), rate limiting (`LIMIT`), idempotency
+  (`ONCE`), inventory (`TAKE`), sliding sessions (`GETEX`), delayed jobs
+  (`XADD DELAY` and worker-group actions), and change feeds (`CHANGES`), alongside
+  the standard data-type and server forms. Plain `SET` has no token/version check.
+- **Pub/Sub** manages channel and pattern subscriptions and publishing, with a
+  bounded message feed. Changing shard scope stops subscriptions and clears the
+  old feed. In All shards, Pub/Sub uses the entry node; it does not fan out.
+- **ACL** loads the live user directory and lets you inspect or update a user.
+  The persistence boundary is shown beside the form: surviving restart still
+  means configuring `ruvio.toml`, not saving from this panel.
+
+Server commands, ACL operations, and change feeds are node-local: in All shards
+they use the entry node. Pin a shard to start and read its change-feed cursor.
+Replies and failures remain visible while editing or choosing the next action;
+The header and Session activity footer remain docked while the workspace scrolls.
+Session activity retains this panel's recent command outcomes, not a server-wide
+command trace.
+
+## Container
+
+Published image: `salihcantekin/ruvio-ui`. Tags `linux` and `latest`
+are the same image. `RUVIO_UI_TARGET_HOST` and `RUVIO_UI_TARGET_PORT` are the
+Ruvio server. A default process listens on `127.0.0.1:6379`. Port `8080` is
+only the UI.
+
+```bash
+docker pull salihcantekin/ruvio-ui:linux
+docker run --rm -p 8080:8080 \
+  -e RUVIO_UI_TARGET_HOST=127.0.0.1 \
+  -e RUVIO_UI_TARGET_PORT=6379 \
+  salihcantekin/ruvio-ui:linux
+```
+
+From a checkout, this compose file builds the UI and starts it next to the
+published Ruvio server image.
+
+```bash
+cd clients/ruvio-ui
+docker compose up --build
+```
+
+Open http://127.0.0.1:8080. Host and port default to `127.0.0.1` and `6380`
+when the compose file’s server is the two-shard container. Leave User and
+Password empty when that server has no `requirepass`.
+
+## Binary
+
+The same executable, without Docker. Node builds the screens. Rust embeds
+them.
+
+```bash
+cd clients/ruvio-ui/web
+npm ci
+npm run build
+cd ..
+cargo run --release
+```
+
+Open http://127.0.0.1:8080. If that port is taken, bind another:
+`RUVIO_UI_ADDR=127.0.0.1:8081 cargo run --release`.
+
+Host binaries are built on the machine that will run them. GitHub Actions is
+not used to publish them while this repository is private.
+
+| Variable | Default | Role |
+| --- | --- | --- |
+| `RUVIO_UI_ADDR` | `127.0.0.1:8080` | HTTP bind |
+| `RUVIO_UI_TARGET_HOST` | `127.0.0.1` | Ruvio server host, the host in `RUVIO_ADDR` |
+| `RUVIO_UI_TARGET_PORT` | `6379` | Ruvio server port, the port in `RUVIO_ADDR` |
+| `RUVIO_UI_TARGET_PASSWORD` | empty | Pre-filled password |
+
+The first argument can be a directory of built screens, used instead of the
+files embedded in the binary. `npm run dev` in `web/` proxies `/api` to the
+process.
+
+## Development checks
+
+```bash
+cd clients/ruvio-ui/web
+npm ci
+npm test
+npx playwright install chromium
+npm run test:browser
+npm run build
+cd ..
+cargo check -p ruvio-ui
+```
+
+Browser checks use mocked HTTP responses on a test-only Vite server and run at
+desktop and phone widths. They cover navigation, authentication payloads,
+owner-scanning, pinned requests, error recovery, Pub/Sub scope changes, and ACL
+forms. The Node checks validate every form against the compatibility matrix and
+check the job-specific wire arguments.

@@ -1,0 +1,15 @@
+diff --git a/src/persistence/wal.rs b/src/persistence/wal.rs
+index 6dce97f..5999d9b 100644
+--- a/src/persistence/wal.rs
++++ b/src/persistence/wal.rs
+@@ -508,7 +508,9 @@ impl WalSink {
+         if let Some(error) = &self.failed {
+             return Err(PersistenceError::Failed(error.clone()));
+         }
+-        if self.dirty_bytes == 0 {
++        // A small batch rides on the next sync: one fsync per few records instead of per batch.
++        if self.dirty_bytes < 4096 {
++            self.publish_staged()?;
+             self.mark_published();
+             return Ok(());
+         }

@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Java client — Ruvio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css?v=20261015a">
+  <link rel="stylesheet" href="vendor/highlightjs/github-dark.min.css">
+  <link rel="icon" href="images/ruvio-icon.png" type="image/png">
+  <meta property="og:image" content="https://salihcantekin.github.io/ruvio/images/ruvio-social.png">
+</head>
+<body data-page="client-java.html">
+    <header class="top">
+    <div class="top-inner">
+      <a class="mark" href="index.html">Ruvio</a>
+      <nav aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="start.html">Start</a>
+        <details>
+          <summary>Build</summary>
+          <div class="nav-menu">
+            <a href="compare.html">How it runs</a>
+            <a href="commands.html">Commands</a>
+            <a href="packages.html">Packages</a>
+            <a href="ui.html">Operator UI</a>
+          </div>
+        </details>
+        <details>
+          <summary>Clients</summary>
+          <div class="nav-menu">
+            <a href="clients.html">Overview</a>
+            <a href="client-rust.html">Rust</a>
+            <a href="client-csharp.html">C#</a>
+            <a href="client-go.html">Go</a>
+            <a href="client-java.html">Java</a>
+            <a href="client-python.html">Python</a>
+            <a href="client-node.html">Node.js</a>
+            <a href="examples.html">Examples</a>
+          </div>
+        </details>
+        <details>
+          <summary>Operate</summary>
+          <div class="nav-menu">
+            <a href="configuration.html">Configuration</a>
+            <a href="durability.html">Durability</a>
+            <a href="replication.html">Replication</a>
+            <a href="operations.html">Operations</a>
+          </div>
+        </details>
+        <a href="testing.html">Testing</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap layout">
+    <nav class="side">
+      <a href="#overview">Overview</a>
+      <a href="#install">Install</a>
+      <a href="#quickstart">Quick start</a>
+      <a href="#performance">Performance</a>
+      <a href="#commands">Commands</a>
+      <a href="#ruvio">Ruvio commands</a>
+      <a href="#helpers">Helpers</a>
+      <a href="#pipelines">Pipelines</a>
+      <a href="#cluster">Cluster</a>
+      <a href="#errors">Errors</a>
+      <a href="#limits">Not done</a>
+      <a href="#testing">Testing</a>
+    </nav>
+    <article>
+      <h1>Java client</h1>
+      <p class="note">The client examples on this page were run against a live Ruvio server (standalone on port 17394 and a 3-shard cluster on 17450 to 17452) before they were pasted here. Exceptions are marked on the page: the auth options (the test server has no password) and the Jackson snippet (the run used a small hand-written <code>JsonCodec</code> instead).</p>
+      
+<section class="panel">
+<h2 id="overview">Overview</h2>
+      <p><code>ruvio-client</code> is the Java client for Ruvio. One socket is shared by all threads: commands are pipelined and replies are matched in order. It has a typed method for every command in the compatibility matrix, a blocking API and a <code>CompletableFuture</code> API, and helpers for locks, rate limits, cache-aside and idempotency.</p>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><th>Package</th><td><code>io.github.salihcantekin:ruvio-client</code> (Maven)</td></tr>
+            <tr><th>Install</th><td><span data-pkg="maven:io.github.salihcantekin:ruvio-client" data-found="On Maven Central: add the dependency below, or build from the repository with <code>cd clients/java &amp;&amp; mvn install</code>." data-missing="Not on Maven Central yet. Build from the repository: <code>cd clients/java &amp;&amp; mvn install</code>, then add the dependency below.">Not on Maven Central yet. Build from the repository: <code>cd clients/java &amp;&amp; mvn install</code>, then add the dependency below.</span> See <a href="#install">Install</a>.</td></tr>
+            <tr><th>Version</th><td><span data-pkg="maven:io.github.salihcantekin:ruvio-client" data-found="{v} on Maven Central" data-missing="Not released yet; the repository version is in <code>pom.xml</code>">Repository version in <code>pom.xml</code></span></td></tr>
+            <tr><th>License</th><td>MIT</td></tr>
+            <tr><th>Runtime</th><td>Java 17 or newer (<code>maven.compiler.release</code> is 17). The tests ran on JDK 21.</td></tr>
+            <tr><th>Model</th><td>Blocking calls on <code>RuvioClient</code> and <code>CompletableFuture</code> calls on <code>client.async()</code>, both on one multiplexed socket. Plain platform reader and writer threads; no virtual threads.</td></tr>
+            <tr><th>Dependencies</th><td>None at runtime. JUnit 5 is a test-only dependency.</td></tr>
+            <tr><th>Protocol</th><td>RESP2. <code>hello(3)</code> exists as a typed call, but the typed replies are decoded for RESP2.</td></tr>
+            <tr><th>Cluster</th><td>Yes. <code>cluster(true)</code> reads <code>CLUSTER SLOTS</code> from a seed and routes by slot; a standalone server makes it fall back by itself. See <a href="#cluster">Cluster</a>.</td></tr>
+            <tr><th>Coverage</th><td>287 of 287 commands in the compatibility matrix have a typed method. <code>CoverageTest</code> maps every matrix name to a method and fails when one is missing. Two forms are not typed: <code>FLUSHDB ASYNC</code> and <code>HELLO ... SETNAME</code> (use <code>execute</code>).</td></tr>
+          </tbody>
+        </table>
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="install">Install</h2>
+      <p>The client is not published to Maven Central yet, and no artifact exists in any public repository. That is pending. Today you build it from the repository into your local Maven repository:</p>
+<pre>git clone https://github.com/salihcantekin/ruvio
+cd ruvio/clients/java
+mvn install          # JDK 17+ and Maven; add -DskipTests to skip the tests</pre>
+      <p>Then use it from your own project:</p>
+<pre>&lt;dependency&gt;
+  &lt;groupId&gt;io.github.salihcantekin&lt;/groupId&gt;
+  &lt;artifactId&gt;ruvio-client&lt;/artifactId&gt;
+  &lt;version&gt;VERSION&lt;/version&gt;   &lt;!-- the version in clients/java/pom.xml, or the release you want --&gt;
+&lt;/dependency&gt;</pre>
+      <p>The tests that talk to a server are skipped unless <code>RUVIO_TEST_ADDR</code> is set, so <code>mvn install</code> works without a server.</p>
+</section>
+
+<section class="panel">
+<h2 id="quickstart">Quick start</h2>
+      <p>The client owns the socket and the two helper threads. Close it when you are done.</p>
+<pre>import io.github.salihcantekin.ruvio.RuvioClient;
+import io.github.salihcantekin.ruvio.args.SetOptions;
+
+try (RuvioClient&lt;String, String&gt; c = RuvioClient.connect("127.0.0.1", 6379)) {
+    c.set("greeting", "hello");
+    String v    = c.get("greeting");      // "hello"
+    String none = c.get("nope");          // null (nil reply)
+    long visits = c.incr("hits");         // 1
+
+    // SET k v EX 60 NX: false when the key already existed
+    boolean first = c.set("k", "v", SetOptions.ex(60).ifAbsent());   // true
+    boolean again = c.set("k", "v", SetOptions.ex(60).ifAbsent());   // false
+
+    // the same connection as a future
+    CompletableFuture&lt;Long&gt; n = c.async().incr("hits");               // 2
+}</pre>
+      <p>Options go through <code>RuvioOptions</code>:</p>
+<pre>RuvioOptions options = RuvioOptions.builder()
+    .host("127.0.0.1").port(6379)
+    .credentials("app", "secret")     // or .password("secret"); AUTH on connect (not run here)
+    .database(4)                      // standalone only; cluster has database 0 only
+    .clientName("orders")
+    .connectTimeoutMillis(2000)
+    .commandTimeoutMillis(5000)       // how long a blocking call waits; 0 (default) waits forever
+    .maxInFlight(256)                 // replies outstanding per connection (default 16384)
+    .build();
+RuvioClient&lt;String, String&gt; c = RuvioClient.connect(options);</pre>
+      <p><code>RuvioOptions.of("host:port")</code> is a shortcut. A command timeout stops your wait, not the command: the server may still have run it. TLS is not supported.</p>
+      <p>Values are <code>String</code> (UTF-8) by default. For bytes use <code>c.binaryValues()</code>, which is a view on the same connection, or <code>RuvioClient.connect(options, RuvioCodec.BYTES, RuvioCodec.BYTES)</code>:</p>
+<pre>RuvioClient&lt;String, byte[]&gt; b = c.binaryValues();
+b.set("bin", new byte[] {0, 1, (byte) 255});
+int len = b.get("bin").length;        // 3</pre>
+</section>
+
+<section class="panel">
+<h2 id="performance">Performance</h2>
+      <p>How the client stays light, from the README and the code:</p>
+      <ul>
+        <li>One socket is shared by all threads. A caller encodes its frame straight into the shared output buffer under a short lock and adds its pending future to a FIFO ring in the same step. Do not open a connection per request.</li>
+        <li>Write coalescing: when nothing is in flight the caller writes the buffer itself, so a serial call is sent at once with no thread hand-off. Otherwise a writer thread sends everything queued in one <code>write</code>. There is no timer and no wait to fill a batch.</li>
+        <li>Command names are <code>static final byte[]</code> fragments such as <code>$3\r\nGET\r\n</code> (class <code>Cmd</code>, generated by <code>tools/generate.py</code>). Integers are written as ASCII digits straight into the buffer. Fixed-shape hot commands (GET, SET, INCR, HGET and similar) encode with no intermediate objects; option-heavy commands go through a small private <code>Args</code> buffer (one extra copy).</li>
+        <li>A reader thread parses each reply in place from one reusable buffer and completes futures in FIFO order. Scalar replies (integer, OK, nil, bulk) allocate only the returned value. An incomplete reply rewinds and waits for more bytes.</li>
+        <li>The per-call allocation of a typed command is the <code>CompletableFuture</code> plus the decoded value. The blocking methods are generated from the async ones and wait on that future.</li>
+        <li>Futures complete on the reader thread, so keep <code>thenApply</code> callbacks short.</li>
+      </ul>
+      <p>Measured in the README (4-vCPU Linux container, JDK 21, loopback, one shared connection, 256-byte values, single run each; shared noisy VM, orders of magnitude, not a comparison, not release evidence):</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Case</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td>encode SET / GET / INCRBY (no socket)</td><td>about 35 to 42 / 21 to 29 / 62 to 68 ns, no allocation</td></tr>
+            <tr><td>parse a 256-byte bulk to String / an integer / a 10-element string array</td><td>about 80 to 135 / 16 to 19 / 230 to 500 ns</td></tr>
+            <tr><td>blocking GET/SET, 1 thread</td><td>about 17k to 19k ops/s</td></tr>
+            <tr><td>blocking GET/SET, 16 threads on one connection</td><td>about 110k to 118k ops/s</td></tr>
+            <tr><td>blocking GET/SET, 64 threads on one connection</td><td>about 185k to 210k ops/s</td></tr>
+            <tr><td>pipeline of 100 GET</td><td>about 0.75M to 0.9M ops/s</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>For best speed: share one client between threads, use <code>pipeline()</code> or the async API when you have many independent commands, keep values small, and use <code>binaryValues()</code> for non-text data. Allocation counts for parsing and encoding were reasoned from the code, not measured with an allocation profiler. I did not re-run the benchmark for this page.</p>
+</section>
+
+<section class="panel">
+<h2 id="commands">Commands</h2>
+      <p>Method names follow the Redis command in lower case: <code>get</code>, <code>hset</code>, <code>zadd</code>. Subcommands are camel-cased: <code>xgroupCreate</code>, <code>clientList</code>, <code>aclSetuser</code>, <code>scriptLoad</code>. A nil reply is <code>null</code>. These calls were run on a standalone server.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Family</th><th>Typical methods</th></tr></thead>
+          <tbody>
+            <tr><td>Strings, expiry</td><td><code>set</code> (with <code>SetOptions</code>: EX/PX/EXAT/PXAT/NX/XX/KEEPTTL), <code>get</code>, <code>mget</code>, <code>mset</code>, <code>incr</code>, <code>incrby</code>, <code>append</code>, <code>getex</code>, <code>expire</code>, <code>pexpire</code>, <code>ttl</code>, <code>pttl</code></td></tr>
+            <tr><td>Hashes</td><td><code>hset</code>, <code>hget</code>, <code>hgetall</code>, <code>hmget</code>, <code>hincrby</code>, <code>hexpire</code>, <code>httl</code>, <code>hscan</code></td></tr>
+            <tr><td>Lists</td><td><code>rpush</code>, <code>lpop</code>, <code>lrange</code>, <code>lmove</code>, <code>blpop</code>, <code>lmpop</code></td></tr>
+            <tr><td>Sets</td><td><code>sadd</code>, <code>sismember</code>, <code>smembers</code>, <code>sinter</code>, <code>sintercard</code>, <code>sscan</code></td></tr>
+            <tr><td>Sorted sets</td><td><code>zadd</code> (with <code>ZAddArgs</code>), <code>zrange</code>, <code>zrangeWithScores</code>, <code>zpopmin</code>, <code>zunionstore</code>, <code>zscan</code></td></tr>
+            <tr><td>Streams</td><td><code>xadd</code>, <code>xrange</code>, <code>xread</code>, <code>xgroupCreate</code>, <code>xreadgroup</code>, <code>xack</code>, <code>xautoclaim</code>, <code>xinfoStream</code></td></tr>
+            <tr><td>JSON</td><td><code>jsonSet</code>, <code>jsonGet</code>, <code>jsonMget</code>, <code>jsonArrappend</code>, <code>jsonNumincrby</code>, <code>jsonIndexCreate</code>, <code>jsonFind</code></td></tr>
+            <tr><td>Geo</td><td><code>geoadd</code>, <code>geodist</code>, <code>geopos</code>, <code>geosearch</code>, <code>geosearchstore</code>, <code>georadius</code></td></tr>
+            <tr><td>Bitmaps, HyperLogLog</td><td><code>setbit</code>, <code>bitcount</code>, <code>bitop</code>, <code>bitfield</code>, <code>pfadd</code>, <code>pfcount</code>, <code>pfmerge</code></td></tr>
+            <tr><td>Bloom</td><td><code>bfReserve</code>, <code>bfAdd</code>, <code>bfMadd</code>, <code>bfMexists</code>, <code>bfInsert</code>, <code>bfInfo</code></td></tr>
+            <tr><td>Scripting, ACL, server</td><td><code>eval</code>, <code>evalsha</code>, <code>scriptLoad</code>, <code>fcall</code>, <code>aclSetuser</code>, <code>info</code>, <code>configGet</code>, <code>save</code>, <code>clientList</code></td></tr>
+            <tr><td>Pub/Sub</td><td><code>publish</code>, <code>spublish</code>, and <code>pubSub(listener)</code> for subscribing</td></tr>
+          </tbody>
+        </table>
+      </div>
+<pre>c.hset("user:1", Map.of("name", "Ada", "age", "36"));
+String name = c.hget("user:1", "name");                          // "Ada"
+
+c.rpush("queue", "a", "b", "c");
+List&lt;String&gt; items = c.lrange("queue", 0, -1);                    // [a, b, c]
+
+c.sadd("tags", "x", "y");
+boolean has = c.sismember("tags", "x");                          // true
+
+Map&lt;String, Double&gt; board = new LinkedHashMap&lt;&gt;();
+board.put("ada", 100d); board.put("bob", 50d);
+c.zadd("board", board);
+List&lt;ScoredValue&lt;String&gt;&gt; top = c.zrevrangeWithScores("board", 0, -1);   // ada=100.0, bob=50.0
+
+String id = c.xadd("events", Map.of("type", "signup"));
+List&lt;StreamEntry&lt;String, String&gt;&gt; entries = c.xrange("events", "-", "+");   // 1 entry
+
+c.jsonSet("doc", "$", "{\"city\":\"Izmir\"}");
+String city = c.jsonGet("doc", "$.city");                        // "Izmir" (JSON text, quotes included)
+
+c.geoadd("places", GeoValue.of(13.361389, 38.115556, "Palermo"),
+                   GeoValue.of(15.087269, 37.502669, "Catania"));
+Double km = c.geodist("places", "Palermo", "Catania", GeoUnit.KM);   // 166.27...
+List&lt;GeoResult&lt;String&gt;&gt; near =
+    c.geosearch("places", GeoSearchArgs.fromLonLat(15, 37).byRadius(200, GeoUnit.KM).asc().withDist());   // Catania, Palermo
+
+c.setbit("flags", 7, true);
+long bits = c.bitcount("flags");                                 // 1
+c.pfadd("uniq", "a", "b", "a");
+long unique = c.pfcount("uniq");                                 // 2</pre>
+      <p>Anything without a typed method goes through <code>execute</code> with the same words as <code>redis-cli</code>. Integers come back as <code>Long</code>, bulk strings as <code>byte[]</code>, arrays as <code>List</code>; <code>executeText</code> decodes bulk strings to <code>String</code>. On the async API it returns a future.</p>
+<pre>Object len = c.execute("STRLEN", "greeting");     // 5L</pre>
+</section>
+
+<section class="panel">
+<h2 id="ruvio">Ruvio commands</h2>
+      <p>These replace Lua scripts or multi-step Redis patterns with one atomic command.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Method</th><th>Replaces</th></tr></thead>
+          <tbody>
+            <tr><td><code>SET ... IFEQ</code></td><td><code>setIfEq</code></td><td>compare-and-set script</td></tr>
+            <tr><td><code>DELEX key IFEQ v</code></td><td><code>delex</code></td><td>"delete if value matches" script (safe lock release)</td></tr>
+            <tr><td><code>INCRBY ... MAX</code></td><td><code>incrbyMax</code></td><td>bounded counter script</td></tr>
+            <tr><td><code>LIMIT</code></td><td><code>limit</code></td><td>INCR + EXPIRE rate limiter</td></tr>
+            <tr><td><code>FILLGET</code> / <code>FILLSET</code></td><td><code>fillget</code>, <code>fillgetWait</code>, <code>fillset</code></td><td>cache stampede lock + SETNX</td></tr>
+            <tr><td><code>IDEM BEGIN/COMPLETE</code></td><td><code>idemBegin</code>, <code>idemComplete</code></td><td>idempotency-key script</td></tr>
+            <tr><td><code>LEASE</code> / <code>RELEASE</code></td><td><code>lease</code>, <code>release</code></td><td>lock with fencing counter</td></tr>
+            <tr><td><code>SEMAPHORE</code></td><td><code>semaphore</code>, <code>release</code></td><td>counting semaphore script</td></tr>
+            <tr><td><code>ONCE</code>, <code>TAKE</code>, <code>SETV</code>, <code>GETEX</code>, <code>CHANGES</code></td><td><code>once</code>, <code>take</code>, <code>setv</code>, <code>getex</code>, <code>changesStart</code>/<code>changes</code></td><td>one-shot flag, stock decrement, versioned write, read-and-set-TTL, change feed</td></tr>
+            <tr><td><code>LPUSHCAP</code> / <code>RPUSHCAP</code></td><td><code>lpushcap</code>, <code>rpushcap</code></td><td>LPUSH + LTRIM</td></tr>
+            <tr><td><code>BF.*</code></td><td><code>bfReserve</code>, <code>bfMadd</code>, <code>bfMexists</code>, ...</td><td>RedisBloom module</td></tr>
+            <tr><td><code>JSON.INDEX</code> / <code>JSON.FIND</code></td><td><code>jsonIndexCreate</code>, <code>jsonFind</code></td><td>secondary index scan</td></tr>
+          </tbody>
+        </table>
+      </div>
+<pre>c.set("cfg", "v1");
+c.setIfEq("cfg", "v2", "v1");                   // true
+c.setIfEq("cfg", "v3", "v1");                   // false, the value is now v2
+c.delex("cfg", "v2");                           // true
+
+Long a = c.incrbyMax("seats", 3, 4);            // 3
+Long b = c.incrbyMax("seats", 2, 4);            // null: would pass the limit
+
+Long left1 = c.limit("login", 2, 60_000);       // 1 (remaining)
+Long left2 = c.limit("login", 2, 60_000);       // 0
+Long left3 = c.limit("login", 2, 60_000);       // null: refused
+
+FillResult&lt;String&gt; f = c.fillget("page", 10_000);       // state FILL: you build it
+if (f.state() == FillResult.State.FILL)
+    c.fillset("page", "&lt;html/&gt;", 60_000, f.token());   // true
+// the next fillget returns state HIT with the value
+
+Long lease = c.lease("job", 30_000);            // fencing token
+Long other = c.lease("job", 30_000);            // null while held
+c.release("job", lease);                        // true
+
+c.once("pay", 60_000);                          // true
+c.once("pay", 60_000);                          // false
+
+c.set("tickets", "5");
+Long t1 = c.take("tickets", 2);                 // 3 left
+Long t2 = c.take("tickets", 9);                 // null: not enough
+
+long v1 = c.setv("d", "a");                     // 1
+long v2 = c.setv("d", "b", v1);                 // 2 (a wrong version throws ERR version mismatch)
+
+c.getex("greeting", 5_000);                     // value, and the TTL is now 5000 ms
+
+c.lpushcap("recent", 3, "1", "2", "3", "4", "5");   // list keeps 3: [5, 4, 3]
+
+c.bfReserve("bf", 0.01, 1000);
+c.bfMadd("bf", "a", "b");
+List&lt;Boolean&gt; seen = c.bfMexists("bf", "a", "z");   // [true, false]
+
+// JSON.INDEX CREATE only runs in database 0
+c.jsonIndexCreate("byCity", "user:", "$.city", "string");
+c.jsonSet("user:1", "$", "{\"city\":\"Izmir\"}");
+// the index builds in the background: jsonFind throws "ERR index is building" until it is ready
+List&lt;String&gt; keys = c.jsonFind("byCity", "Izmir");   // [user:1]
+
+long cursor = c.changesStart();
+c.set("note", "x");
+List&lt;ChangeNote&gt; notes = c.changes(cursor);      // one note: &lt;cursor + 1&gt;:SET note, e.g. 73101:SET note</pre>
+      <p><code>semaphore(key, max, ttlMillis)</code> and <code>fillgetWait</code> are typed too; the semaphore is exercised through the helper below. Do not call <code>fillgetWait</code> on the shared client: it parks the whole socket (use <code>dedicated()</code>).</p>
+</section>
+
+<section class="panel">
+<h2 id="helpers">Helpers</h2>
+      <p>Methods on <code>RuvioClient</code> itself. They only send single-key commands, so they work unchanged in cluster mode (checked, see below).</p>
+<pre>// Lock: SET NX PX to take, SET IFEQ to renew, DELEX IFEQ to release.
+try (RuvioLock&lt;String&gt; lock = c.tryLock("lock:invoice", 10_000)) {
+    if (lock == null) return;                 // someone else has it
+    boolean still = lock.renew(10_000);       // false when the lock was lost
+    boolean mine  = lock.isHeld();
+}                                             // close() releases only if the token still matches
+RuvioLock&lt;String&gt; waited = c.lock("lock:invoice", 10_000, 2_000);   // wait up to 2 s, null after that
+
+// Fenced lease and semaphore slot
+try (RuvioToken&lt;String&gt; lease = c.tryLease("lease:job", 30_000)) {
+    if (lease != null) { long fence = lease.token(); }
+}
+try (RuvioToken&lt;String&gt; slot = c.tryAcquirePermit("sem:export", 4, 30_000)) { }
+
+// Rate limit: refused calls are not counted
+RateLimitResult d = c.rateLimit("rl:ada", 2, 60_000);   // allowed, remaining 1 (then 0, then rejected)
+
+// Cache-aside with stampede protection (FILLGET/FILLSET)
+String page = c.getOrCreate("cache:home", 300_000, () -> "&lt;home/&gt;");   // factory ran once
+
+// Idempotency: the action runs once; a repeat gets the stored result
+String r = c.idempotent("idem:o:1", "fingerprint", 600_000, 2_000, () -> "done");   // "done"
+String r2 = c.idempotent("idem:o:1", "fingerprint", 600_000, 2_000, () -> "again"); // "done"
+
+// Lazy scans: scanIterable/scanStream, hscanIterable/hscanStream, sscan*, zscan*
+for (String key : c.scanIterable(ScanArgs.match("scan:*").limit(10))) { }
+long n = c.scanStream(ScanArgs.match("scan:*")).count();
+
+// Typed JSON through a JsonCodec you plug in
+c.setJsonCodec(myCodec);
+c.jsonSetObject("u:1", "$", new Person("Ada", 36));
+Person p = c.jsonGetObject("u:1", "$", Person.class);
+
+// Recent items and "seen before"
+c.pushRecent("recent:ada", 50, "item-41", "item-42");
+List&lt;String&gt; newest = c.recent("recent:ada", 10);             // [item-42, item-41]
+List&lt;Boolean&gt; seen  = c.seenBefore("seen:emails", "a@x", "b@x");   // [false, false], then records them
+List&lt;Boolean&gt; maybe = c.mightContain("seen:emails", "c@x");      // read-only</pre>
+      <p>The JDK has no JSON library and the client has no dependencies, so the typed JSON helpers need a two-method <code>JsonCodec</code> (<code>toJson</code>, <code>fromJson</code>). The default is a passthrough that takes JSON text and returns <code>String</code>. The run above used a small hand-written codec for a <code>Person</code> record. A Jackson codec (from the class Javadoc, not run here):</p>
+<pre>ObjectMapper mapper = new ObjectMapper();
+c.setJsonCodec(new JsonCodec() {
+    public String toJson(Object value) {
+        try { return mapper.writeValueAsString(value); } catch (Exception e) { throw new RuntimeException(e); }
+    }
+    public &lt;T&gt; T fromJson(String json, Class&lt;T&gt; type) {
+        try { return mapper.readValue(json, type); } catch (Exception e) { throw new RuntimeException(e); }
+    }
+});</pre>
+      <p>Failure behavior:</p>
+      <ul>
+        <li><b>Lock.</b> <code>tryLock</code> returns <code>null</code> when the lock is held; <code>lock(key, ttl, wait)</code> retries and returns <code>null</code> after <code>wait</code>. There is no automatic renewal: call <code>renew</code> yourself (<code>false</code> means you no longer own it). Renew and release compare the token, so they never touch another owner's lock. A release that fails is not retried; the key expires by its TTL.</li>
+        <li><b>getOrCreate.</b> Losers poll plain <code>FILLGET</code> with a backoff, never <code>FILLGET ... WAIT</code>, because a server-side wait parks the whole shared socket. If your factory throws, the exception reaches you and the fill marker lapses. There is also a stale-while-revalidate form with <code>staleMillis</code> and <code>fillMillis</code>. In the run, 10 threads asked for the same key and the factory ran once.</li>
+        <li><b>Rate limit and idempotency.</b> Server errors and socket failures throw. Nothing is retried for you, and an unknown outcome after a timeout stays unknown.</li>
+      </ul>
+</section>
+
+<section class="panel">
+<h2 id="pipelines">Pipelines, transactions, pub/sub</h2>
+      <p>Concurrent calls on one client are already pipelined, and so are futures from <code>async()</code>. <code>pipeline()</code> buffers commands locally and sends them in one write on <code>flush()</code> (or <code>sync()</code>, which also waits). A pipeline is not thread safe and can be reused after a flush. Do not wait on a pipeline future before flushing it.</p>
+<pre>Pipeline&lt;String, String&gt; pl = c.pipeline();
+CompletableFuture&lt;Void&gt;   s = pl.set("p1", "1");
+CompletableFuture&lt;Long&gt;   i = pl.incr("p1");
+CompletableFuture&lt;String&gt; g = pl.get("p1");
+pl.flush();                              // one write
+long n = i.join();                       // 2
+String v = g.join();                     // "2"
+
+// MULTI/EXEC on a pooled dedicated connection
+try (Transaction&lt;String, String&gt; tx = c.multi()) {
+    CompletableFuture&lt;Long&gt;   n2 = tx.incr("{t}:a");
+    CompletableFuture&lt;String&gt; g2 = tx.get("{t}:a");
+    boolean ok = tx.exec();              // true; false when a WATCHed key changed
+}
+
+// WATCH: a change from another connection makes exec() return false
+try (Transaction&lt;String, String&gt; tx = c.multi()) {
+    tx.watch("{t}:w");
+    c.set("{t}:w", "changed");
+    tx.set("{t}:w", "mine");
+    boolean ok = tx.exec();              // false
+}
+
+// Pub/Sub uses its own connection and resubscribes after a drop
+BlockingQueue&lt;PubSubMessage&gt; got = new LinkedBlockingQueue&lt;&gt;();
+try (RuvioPubSub sub = c.pubSub(got::add)) {
+    sub.subscribe("news");               // also psubscribe, ssubscribe
+    c.publish("news", "hello");
+    PubSubMessage m = got.poll(2, TimeUnit.SECONDS);   // channel "news", payloadString() "hello"
+}
+
+// Blocking commands go on a second client, so the shared socket is not held
+try (RuvioClient&lt;String, String&gt; d = c.dedicated()) {
+    KeyValue&lt;String, String&gt; item = d.blpop(0.1, "nolist");   // null on timeout
+}</pre>
+      <p>RESP3 and client-side caching are not supported by the typed API. <code>RuvioOptions.pushListener</code> exists for push frames, but I did not run it. Commands refused while queued in <code>MULTI</code> fail on their own future; the rest still run (the README says so; on the prebuilt server I used, one test of this fails, see <a href="#testing">Testing</a>).</p>
+</section>
+
+<section class="panel">
+<h2 id="cluster">Cluster</h2>
+      <p>Give the client one seed address and turn on <code>cluster(true)</code>. On connect it sends <code>CLUSTER SLOTS</code>, builds a 16384-entry slot table (<code>CRC16</code>, <code>{hashtags}</code> honoured) and opens one lazy multiplexed connection per node. A standalone server answers with an error, and the client then behaves exactly like the standalone client, including <code>database(n)</code>. In cluster mode only database 0 exists and the option is ignored.</p>
+<pre>try (RuvioClient&lt;String, String&gt; c = RuvioClient.connect(
+        RuvioOptions.builder().host("127.0.0.1").port(17450).cluster(true).build())) {   // any shard
+    c.isCluster();         // true
+    c.nodeAddresses();     // [127.0.0.1:17450, 127.0.0.1:17451, 127.0.0.1:17452]
+
+    for (int i = 0; i &lt; 30; i++) c.set("k" + i, "v" + i);       // spread over the 3 shards
+    c.onNode("127.0.0.1:17451").dbsize();                       // per-node commands: 8, 8 and 14 keys here
+
+    c.mget("k3", "k1", "missing", "k2");     // [v3, v1, null, v2]: split per slot, caller's order kept
+    c.exists("a", "b", "c", "zz");           // counts summed across parts
+    RuvioClient.hashSlot("somekey");         // 11058, the same as c.clusterKeyslot("somekey")
+
+    try { c.sunion("a1", "b2"); }            // keys in different slots
+    catch (RuvioServerException e) { e.code(); }   // "CROSSSLOT", nothing was sent
+
+    try (RuvioLock&lt;String&gt; l = c.tryLock("job:42", 10_000)) { }   // helpers work unchanged
+}</pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command shape</th><th>Routing</th></tr></thead>
+          <tbody>
+            <tr><td>single key (<code>GET</code>, <code>SET</code>, <code>HSET</code>, <code>LEASE</code>, <code>LIMIT</code>, <code>FILLGET</code>, <code>IDEM</code>, <code>BF.*</code>, <code>JSON.*</code>, <code>XADD</code>, ...)</td><td>the node that owns <code>slot(key)</code></td></tr>
+            <tr><td>keyless (<code>PING</code>, <code>INFO</code>, <code>PUBLISH</code>, <code>JSON.INDEX</code>, <code>JSON.FIND</code>, <code>CHANGES</code>, <code>SCRIPT</code>, ...)</td><td>any node (the seed while it is up)</td></tr>
+            <tr><td>several keys in one slot (<code>RENAME</code>, <code>SUNION</code>, <code>LMOVE</code>, <code>BLPOP</code>, <code>BITOP</code>, <code>SINTERCARD</code>, <code>ZUNIONSTORE</code>, <code>EVAL</code>/<code>FCALL</code>, <code>XREAD</code>, <code>JSON.MGET</code>, <code>PFMERGE</code>, ...)</td><td>the node of that slot, using the real key lists</td></tr>
+            <tr><td><code>MGET</code>, <code>MSET</code>, <code>DEL</code>, <code>UNLINK</code>, <code>EXISTS</code>, <code>TOUCH</code> over several slots</td><td>split per slot, sent concurrently, replies re-assembled in the caller's order (<code>DEL</code>/<code>EXISTS</code> counts summed)</td></tr>
+            <tr><td>any other cross-slot command</td><td>fails at once with <code>RuvioServerException</code>, code <code>CROSSSLOT</code>; nothing is sent</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The split is per slot, not per node, because the server (like Redis) refuses a multi-key command whose keys are in different slots even when one shard owns them all. A large split <code>MGET</code> is therefore many small pipelined commands; use <code>{hashtag}</code> keys to keep related keys in one slot.</p>
+      <ul>
+        <li><b>MOVED.</b> The slot is patched in the table and the command is retried once on the node in the reply. If the node is unknown, or a second MOVED arrives, the table is re-read with <code>CLUSTER SLOTS</code>. A second MOVED reaches the caller. The router keeps a copy of each command frame for this, about 100 bytes of allocation per routed command.</li>
+        <li><b>Connection loss.</b> Only commands in flight on that node fail (<code>RuvioConnectionException</code>). Nothing is replayed, other nodes keep working, and the node reconnects on its next command.</li>
+        <li><b>Pipelines.</b> Commands are routed when queued and grouped per node; <code>flush()</code> sends one write per node and each future gets its own reply, so results match the caller's order (9 INCRs over 9 keys returned 1 each). An unreachable node fails only its group.</li>
+        <li><b>Transactions.</b> Bound to the node and slot of the first key or <code>WATCH</code>. A command with a key in another slot throws <code>CROSSSLOT</code> and is not queued. Use a <code>{hashtag}</code> (<code>{u}:a</code>, <code>{u}:b</code> worked).</li>
+        <li><b>Blocking commands.</b> Use <code>dedicated()</code>; in cluster mode it is a cluster client of its own.</li>
+        <li><b>Scan.</b> <code>scanIterable</code> and <code>scanStream</code> walk the nodes one after the other and saw all 30 keys. A single <code>scan(cursor)</code> only covers the node it lands on. <code>KEYS</code>, <code>DBSIZE</code> and <code>FLUSHDB</code> go to one node: through the router <code>dbsize()</code> returned 8 (one node's count), not 30. Use <code>onNode(...)</code> per node.</li>
+        <li><b>Pub/Sub.</b> <code>SUBSCRIBE</code>, <code>PSUBSCRIBE</code> and <code>PUBLISH</code> use the seed node; this server does not broadcast classic publishes between nodes. <code>SSUBSCRIBE</code> and <code>SPUBLISH</code> are routed by channel slot. Shard pub/sub is covered by <code>ClusterLiveTest</code>; I did not run it by hand.</li>
+      </ul>
+      <p>Fallback check: <code>cluster(true)</code> against the standalone server on port 17394 gave <code>isCluster()</code> false, an empty <code>nodeAddresses()</code>, and normal commands. Replicas, <code>ASK</code>, <code>READONLY</code> reads and <code>CLUSTERDOWN</code> are not implemented. See <a href="#limits">Not done</a>.</p>
+      <p>README cluster numbers (same noisy shared 4-vCPU VM, the servers share the CPUs with the benchmark, 1.5 s per figure, not release evidence): routing one GET locally costs about 100 to 135 ns on top of about 30 ns of encoding. Standalone GET with 1/16/64 threads about 19k/91k/139k ops/s; cluster client on 3 shards about 17k/76k/114k.</p>
+      <p>On one node of the same server the routed client was within about 2 % of the unrouted view, which is inside the noise. The README itself says cluster-versus-standalone totals say little about scaling. I did not re-run these.</p>
+</section>
+
+<section class="panel">
+<h2 id="errors">Errors, nil, reconnect, timeouts</h2>
+      <ul>
+        <li>A server <code>-ERR</code> becomes <code>RuvioServerException</code> (unchecked) with the server text. <code>code()</code> is the first word: <code>ERR</code>, <code>WRONGTYPE</code>, <code>NOSCRIPT</code>, <code>CROSSSLOT</code>, <code>MOVED</code>. The connection stays usable. On the async API the exception is the cause of the failed future.</li>
+        <li>Socket failures are <code>RuvioConnectionException</code>. The next call reconnects; nothing is replayed automatically, so a write is never applied twice.</li>
+        <li>Nil maps to <code>null</code> (<code>String</code>, <code>Long</code>, <code>Boolean</code>). Commands that "refuse" (<code>limit</code>, <code>take</code>, <code>lease</code>, <code>incrbyMax</code>) return <code>null</code>; <code>tryLock</code> returns a null lock.</li>
+        <li>Timeouts: <code>commandTimeoutMillis</code> bounds blocking calls; on the async API use <code>CompletableFuture.orTimeout</code>. Neither cancels the command on the server. <code>maxInFlight</code> bounds outstanding replies per connection; a caller blocks briefly when the limit is reached.</li>
+        <li>Pub/Sub resubscribes after a drop (<code>pubSubReconnects</code> test).</li>
+      </ul>
+<pre>try { c.incr("greeting"); }
+catch (RuvioServerException e) { /* e.code() == "ERR", ERR value is not an integer or out of range */ }
+
+try { c.execute("NOSUCH"); }
+catch (RuvioServerException e) { /* ERR unknown command */ }
+
+c.set("ro", "1");
+try { c.lpush("ro", "x"); }
+catch (RuvioServerException e) { /* e.code() == "WRONGTYPE" */ }</pre>
+</section>
+
+<section class="panel">
+<h2 id="limits">Not done / not verified</h2>
+      <ul>
+        <li><span data-pkg="maven:io.github.salihcantekin:ruvio-client" data-found="Released on Maven Central; the repository can be ahead of it." data-missing="The artifact is not on Maven Central yet.">Check Maven Central for the release status.</span></li>
+        <li>No TLS, no RESP3 decoding in the typed API, no client-side caching. Replication, and the ACL file save/load success paths (no <code>acl_file</code> on the test server), were not verified.</li>
+        <li>No automatic retry or replay after a socket drop.</li>
+        <li>Cluster: replicas, <code>READONLY</code> reads, <code>ASK</code>, <code>CLUSTERDOWN</code>/<code>TRYAGAIN</code> retries, adding or removing nodes while running (the table refreshes on MOVED only, no periodic refresh), and a cluster-wide <code>DBSIZE</code>/<code>KEYS</code>/<code>FLUSHALL</code> are not implemented. Cluster mode was only tested against the 3-shard Ruvio server (one process, <code>port_mode = "per-shard"</code>), not against a Redis Cluster, and with no failover, resharding or node-loss run beyond the dropped-connection test.</li>
+        <li>The cluster topology commands (<code>clusterSlots</code> and friends) succeed only on a server in per-shard cluster mode; against a standalone server the test asserts the typed "cluster mode is disabled" error, and the success path runs only with <code>RUVIO_TEST_CLUSTER=1</code> (not verified by the author).</li>
+        <li>Allocation counts were reasoned from the code, not profiled. Performance numbers are single noisy runs and were not compared with another client.</li>
+        <li>Older server builds differed from the matrix text in places: <code>SUNION</code> was not sorted and a command refused while queued in <code>MULTI</code> did not abort <code>EXEC</code>. Both are fixed in the server now. <code>EXPIRE key 0</code> deletes the key and returns 1, as Redis does (the matrix text was corrected).</li>
+        <li>The Jackson snippet and the auth options were not run on this page.</li>
+      </ul>
+</section>
+
+<section class="panel">
+<h2 id="testing">Testing</h2>
+<pre>mvn -q test                                              # unit tests; live tests are skipped
+RUVIO_TEST_ADDR=127.0.0.1:6379 mvn -q test              # + live tests (59 per the README); logical DBs 9, 10, 11, 0 with FLUSHDB
+RUVIO_CLUSTER_ADDR=127.0.0.1:17450 RUVIO_TEST_ADDR=127.0.0.1:17394 mvn -q test   # + cluster live tests (91 per the README)
+RUVIO_TEST_ADDR=127.0.0.1:17394 mvn -q test -Dtest=BenchTest -DexcludedGroups=none   # few-second benchmark</pre>
+      <p>My run on this page: <code>mvn test</code> without a server ran 41 tests with 17 skipped (the live ones). With <code>RUVIO_TEST_ADDR=127.0.0.1:17394</code> and <code>RUVIO_CLUSTER_ADDR=127.0.0.1:17450</code> (a 3-shard server with <code>shards = 3</code> and <code>port_mode = "per-shard"</code>) it ran 91 tests, all passed.</p>
+      <p>A command refused inside <code>MULTI</code> now makes <code>EXEC</code> answer <code>EXECABORT</code> and run nothing, as Redis does; the test for it was updated together with the server change.</p>
+      <p>What the suites cover: <code>CodecTest</code> (RESP encode and parse), <code>CoverageTest</code> (all 287 matrix names map to a method, and every command has a cluster key rule), live tests per family (strings, keys, hashes, lists, sets, sorted sets, geo, streams, JSON, Bloom, scripting, server), helpers and concurrency, pipelines, transactions, pub/sub with reconnect, <code>ClusterUnitTest</code> (slot table, hashtags, key extraction, split and reassembly, MOVED once, no replay after a drop; scripted fake servers, always runs), <code>ClusterLiveTest</code> (spread over all shards, <code>CLUSTER KEYSLOT</code> agreement, cross-slot MGET/MSET/DEL order, pipeline order, forced stale slot table, transactions, helpers, scan, shard pub/sub, dropped node connection) and <code>ClusterFallbackLiveTest</code> (<code>cluster(true)</code> against a plain server).</p>
+      <p>The live suites flush their databases, so point them at a disposable server. Start one as on <a href="start.html">Start</a>; for three shards set <code>shards = 3</code> and <code>port_mode = "per-shard"</code>, and shard <em>i</em> listens on base port + <em>i</em>.</p>
+      <p class="note">See also: <a href="clients.html">Clients overview</a>, <a href="client-rust.html">Rust</a>, <a href="client-csharp.html">C#</a>, <a href="client-go.html">Go</a>, <a href="client-python.html">Python</a>, <a href="client-node.html">Node.js</a>, <a href="examples.html">Examples</a>, <a href="commands.html">Commands</a>.</p>
+</section>
+</article>
+  </main>
+  <footer class="foot">
+    <div class="foot-inner">Source: <a href="https://github.com/salihcantekin/ruvio/tree/dev/clients/java">clients/java</a> in the Ruvio repository.</div>
+  </footer>
+  <script src="js/versions.js?v=20261013j"></script>
+  <script src="vendor/highlightjs/highlight.min.js"></script>
+  <footer class="site-foot">
+    <div class="site-foot-inner">
+      <div class="site-foot-brand">
+        <img src="images/ruvio-mark.png?v=20261015b" alt="" width="36" height="36">
+        <div>
+          <strong>Ruvio</strong>
+          <span>One RESP process. The shard that owns the key does the work.</span>
+          <small>Server AGPL-3.0 · Clients MIT</small>
+        </div>
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/salihcantekin/ruvio/tree/main/docs">Docs</a>
+        <a href="https://github.com/salihcantekin/ruvio">GitHub</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="js/chrome.js?v=20261015a"></script>
+</body>
+</html>

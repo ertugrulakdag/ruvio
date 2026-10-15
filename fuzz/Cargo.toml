@@ -1,0 +1,26 @@
+[package]
+name = "ruvio-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ruvio = { path = "..", default-features = false }
+
+[[bin]]
+name = "resp_parsers"
+path = "fuzz_targets/resp_parsers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json_ops"
+path = "fuzz_targets/json_ops.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Go client — Ruvio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css?v=20261015a">
+  <link rel="stylesheet" href="vendor/highlightjs/github-dark.min.css">
+  <link rel="icon" href="images/ruvio-icon.png" type="image/png">
+  <meta property="og:image" content="https://salihcantekin.github.io/ruvio/images/ruvio-social.png">
+</head>
+<body data-page="client-go.html">
+  <header class="top">
+    <div class="top-inner">
+      <a class="mark" href="index.html">Ruvio</a>
+      <nav aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="start.html">Start</a>
+        <details>
+          <summary>Build</summary>
+          <div class="nav-menu">
+            <a href="compare.html">How it runs</a>
+            <a href="commands.html">Commands</a>
+            <a href="packages.html">Packages</a>
+            <a href="ui.html">Operator UI</a>
+          </div>
+        </details>
+        <details>
+          <summary>Clients</summary>
+          <div class="nav-menu">
+            <a href="clients.html">Overview</a>
+            <a href="client-rust.html">Rust</a>
+            <a href="client-csharp.html">C#</a>
+            <a href="client-go.html">Go</a>
+            <a href="client-java.html">Java</a>
+            <a href="client-python.html">Python</a>
+            <a href="client-node.html">Node.js</a>
+            <a href="examples.html">Examples</a>
+          </div>
+        </details>
+        <details>
+          <summary>Operate</summary>
+          <div class="nav-menu">
+            <a href="configuration.html">Configuration</a>
+            <a href="durability.html">Durability</a>
+            <a href="replication.html">Replication</a>
+            <a href="operations.html">Operations</a>
+          </div>
+        </details>
+        <a href="testing.html">Testing</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap layout">
+    <nav class="side">
+      <a href="#overview">Overview</a>
+      <a href="#install">Install</a>
+      <a href="#quickstart">Quick start</a>
+      <a href="#performance">Performance</a>
+      <a href="#commands">Commands</a>
+      <a href="#ruvio">Ruvio commands</a>
+      <a href="#helpers">Helpers</a>
+      <a href="#pipelines">Pipelines and Pub/Sub</a>
+      <a href="#cluster">Cluster</a>
+      <a href="#errors">Errors</a>
+      <a href="#limits">Not done</a>
+      <a href="#testing">Testing</a>
+    </nav>
+    <article>
+      <h1>Go client</h1>
+      <p>Every example on this page was run against a live Ruvio server (standalone on one port, three shards on three ports) before it was pasted here. Output lines marked <code>// =&gt;</code> are what that run printed. Where something was not run, the page says so.</p>
+
+      
+<section class="panel">
+<h2 id="overview">Overview</h2>
+      <p>The Go client is the module <code>github.com/salihcantekin/ruvio/clients/go</code> (package <code>ruvio</code>). It uses only the Go standard library. One <code>Client</code> is safe for concurrent use and shares one TCP connection between all callers. Every call takes a <code>context.Context</code>.</p>
+      <div class="table-wrap">
+      <table>
+        <tbody>
+          <tr><th>Module</th><td><code>github.com/salihcantekin/ruvio/clients/go</code> (<code>go get github.com/salihcantekin/ruvio/clients/go</code>)</td></tr>
+          <tr><th>Version</th><td>Not released. No tag exists yet (see <a href="#install">Install</a>).</td></tr>
+          <tr><th>License</th><td>MIT</td></tr>
+          <tr><th>Runtime</th><td>Go 1.22 or newer in <code>go.mod</code>. Built and tested with Go 1.24.7; the 1.22 floor was not tried on a 1.22 toolchain.</td></tr>
+          <tr><th>Model</th><td>Synchronous calls with <code>context</code>, safe from many goroutines. One multiplexed connection; blocking commands use a pooled dedicated connection.</td></tr>
+          <tr><th>Dependencies</th><td>None (standard library only).</td></tr>
+          <tr><th>Protocol</th><td>RESP2 by default. <code>Options.Protocol = 3</code> sends <code>HELLO 3</code> (RESP3, push frames for <code>CLIENT TRACKING</code>). Connecting sends nothing unless you configure <code>AUTH</code>, <code>SELECT</code>, <code>CLIENT SETNAME</code> or <code>HELLO 3</code>.</td></tr>
+          <tr><th>Cluster</th><td>Yes. <code>Options.Cluster = true</code> with one seed address; slot routing, split multi-key commands, <code>MOVED</code> handling. A standalone server is detected and handled as before.</td></tr>
+          <tr><th>Command coverage</th><td>287 of 287 commands in <code>docs/compatibility-matrix.json</code>, checked by <code>TestCoverage</code> in <code>coverage_test.go</code>. Routing of every command is checked by <code>TestRoutingCoversMatrix</code>.</td></tr>
+        </tbody>
+      </table>
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="install">Install</h2>
+      <p>The module is not released. A Go module that lives in a subdirectory of a repository is versioned by tags with that directory as prefix, so a release of this client needs a tag such as <code>clients/go/v0.1.0</code>. That tag does not exist yet. Until it does, there is no version number to put in <code>go.mod</code>.</p>
+<pre># what you will run once the tag exists
+go get github.com/salihcantekin/ruvio/clients/go@v0.1.0</pre>
+<pre># what was tested for this page: a local checkout and a replace directive
+git clone https://github.com/salihcantekin/ruvio
+# in your go.mod:
+require github.com/salihcantekin/ruvio/clients/go v0.0.0
+replace github.com/salihcantekin/ruvio/clients/go =&gt; ../ruvio/clients/go</pre>
+      <p class="note">Fetching the module from GitHub (an untagged <code>go get</code>, which Go resolves to a pseudo-version) was not tried. Every example here ran against the local checkout. Release by tag is pending.</p>
+</section>
+
+<section class="panel">
+<h2 id="quickstart">Quick start</h2>
+<pre>import (
+    "context"
+    "time"
+
+    ruvio "github.com/salihcantekin/ruvio/clients/go"
+)
+
+ctx := context.Background()
+c, err := ruvio.Connect(ctx, ruvio.Options{Addr: "127.0.0.1:17390", DB: 3})
+if err != nil { log.Fatal(err) }
+defer c.Close()
+
+c.Set(ctx, "greeting", "hello")
+v, ok, err := c.Get(ctx, "greeting")   // =&gt; "hello", true, nil
+v, ok, err = c.Get(ctx, "nope")        // =&gt; "", false, nil   (a missing key is ok=false, not an error)
+n, err := c.Incr(ctx, "visits")        // =&gt; 1
+c.Expire(ctx, "greeting", time.Minute) // =&gt; true
+c.TTL(ctx, "greeting")                 // =&gt; 60
+
+// SET options: NX, XX, TTL, ExpireAt, KeepTTL. The bool says whether the write happened.
+ok, err = c.SetArgs(ctx, "k", "v", ruvio.SetOptions{NX: true, TTL: 30 * time.Second}) // =&gt; true
+ok, err = c.SetArgs(ctx, "k", "zzz", ruvio.SetOptions{NX: true})                      // =&gt; false (key exists)
+
+// Anything without a typed method: arguments as redis-cli would send them
+val, err := c.Do(ctx, "OBJECT", "ENCODING", "visits")  // =&gt; val.Str() == "int"</pre>
+      <p><code>Options</code> fields: <code>Addr</code> (default <code>127.0.0.1:6379</code>), <code>Username</code> and <code>Password</code> (<code>AUTH</code> on every new connection when <code>Password</code> is set), <code>DB</code> (<code>SELECT</code> on every new connection), <code>ClientName</code>, <code>Protocol</code>, <code>DialTimeout</code>, <code>Dial</code> (your own dialer, for TLS or unix sockets), <code>MaxIdleDedicated</code> (default 4), <code>OnPush</code> and <code>Cluster</code>. <code>DB</code>, <code>ClientName</code> and <code>DialTimeout</code> were run here. <code>AUTH</code>, a custom <code>Dial</code> and TLS were not run on this page; the client has no TLS code of its own, only the <code>Dial</code> hook.</p>
+      <p>Close the client with <code>Close()</code>. Do not call <code>Select</code> or <code>Hello</code> on a shared <code>Client</code> to switch database: they change the connection for every caller. Use <code>Options.DB</code> or a dedicated <code>c.Conn(ctx)</code>.</p>
+</section>
+
+<section class="panel">
+<h2 id="performance">Performance</h2>
+      <ul>
+        <li><strong>One multiplexed connection.</strong> Many goroutines share one socket. Replies are matched to callers through a FIFO.</li>
+        <li><strong>Write coalescing, no timers.</strong> The first caller that finds no write in flight writes inline, so serial calls go out at once. Frames that arrive during that write are flushed together by a writer goroutine. Two output buffers are swapped; there is no batch-fill wait.</li>
+        <li><strong>Pre-encoded verbs.</strong> Every command name and option is a complete RESP bulk fragment (<code>$3\r\nGET\r\n</code>) built once at start-up.</li>
+        <li><strong>No int-to-string allocation.</strong> Integers and floats are appended into the frame with <code>strconv.AppendInt</code> / <code>AppendFloat</code>. Typed methods do not box arguments into <code>[]any</code>; <code>Do</code> does take <code>...any</code>.</li>
+        <li><strong>In-place parser.</strong> A hand-written, resumable RESP2/RESP3 parser works on one reusable read buffer. Integer, <code>+OK</code>, <code>+QUEUED</code> and <code>+PONG</code> replies allocate nothing; a bulk allocates exactly its value; the bulks of one array share one arena allocation.</li>
+        <li><strong>Pooled requests.</strong> Request structs, their buffers and completion signals come from a <code>sync.Pool</code>. A cancelled context abandons the request with an atomic compare-and-swap and the reader recycles it when the reply arrives, so the FIFO never gets out of step.</li>
+        <li><strong>Serial calls read their own reply.</strong> A caller that finds nobody reading takes the read token and reads from the socket directly, with no goroutine hand-off.</li>
+      </ul>
+      <p>Measured with the benchmarks in the client directory (<code>go test -bench . -benchmem</code>; 4-vCPU shared VM, loopback, Ruvio 0.3.0 single shard). The numbers are noisy (about 2x between runs) and are not release evidence. Allocation counts are exact; compare times only inside one run. I did not re-run the benchmarks for this page; these are the figures in the client README.</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>Measurement</th><th>time</th><th>alloc/op</th></tr></thead>
+        <tbody>
+          <tr><td>encode typed <code>SET k v PX 60000</code> (no I/O)</td><td>69 ns</td><td>0</td></tr>
+          <tr><td>parse <code>:int</code> / <code>+OK</code> (no I/O)</td><td>26–34 / 23–29 ns</td><td>0 / 0</td></tr>
+          <tr><td>parse 64-byte bulk</td><td>89–174 ns</td><td>1 (the value)</td></tr>
+          <tr><td>parse array of 10 bulks</td><td>790–2160 ns</td><td>2</td></tr>
+          <tr><td>live, serial <code>GET</code> / <code>SET</code></td><td>about 40 / 39 µs</td><td>1 / 0</td></tr>
+          <tr><td>live, 64 goroutines on one connection, <code>GET</code> / <code>SET</code></td><td>about 3.9 / 3.4 µs per op (260k–290k ops/s)</td><td></td></tr>
+          <tr><td>live, 16-command pipeline</td><td>about 1.5 µs per command</td><td></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>The README also reports about 0.42–0.46 socket writes per command in the parallel case. In the same period a bare Go <code>net.Conn</code> write-and-read loop against the same server measured 19–47 µs per operation, so serial latency is dominated by the server and loopback round trip, not by the client.</p>
+      <p>For best speed: share one <code>Client</code> between goroutines instead of one per goroutine, use <code>Pipelined</code> for batches, use a Ruvio command that replaces a round trip (<code>SetIfEq</code> instead of GET then SET), and use <code>GetBytes</code> / <code>SetBytes</code> / <code>DoBytes</code> to avoid string copies.</p>
+      <p>Go strings carry any bytes, so every <code>string</code> argument is already binary safe. Large values are copied once, from the request buffer into the connection buffer.</p>
+</section>
+
+<section class="panel">
+<h2 id="commands">Commands</h2>
+      <p>Every command in the compatibility matrix has a typed method on <code>*Client</code>. This table lists the families; the full list is in the <a href="https://github.com/salihcantekin/ruvio/blob/dev/clients/go/README.md">client README</a> and the source. Command syntax is on <a href="commands.html">Commands</a>.</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>Family</th><th>Examples</th></tr></thead>
+        <tbody>
+          <tr><td>Strings</td><td><code>Get</code>, <code>GetBytes</code>, <code>Set</code>, <code>SetArgs</code>, <code>SetEX</code>, <code>SetBytes</code>, <code>MGet</code>, <code>MSet</code>, <code>IncrBy</code>, <code>Append</code>, <code>GetEx</code></td></tr>
+          <tr><td>Keys</td><td><code>Del</code>, <code>Exists</code>, <code>Expire</code>, <code>TTL</code>, <code>Rename</code>, <code>Scan</code>, <code>ScanIter</code>, <code>ClusterKeySlot</code></td></tr>
+          <tr><td>Hashes</td><td><code>HSet</code>, <code>HGet</code>, <code>HGetAll</code>, <code>HIncrBy</code>, <code>HScanIter</code></td></tr>
+          <tr><td>Lists</td><td><code>RPush</code>, <code>LPop</code>, <code>LRange</code>, <code>BLPop</code></td></tr>
+          <tr><td>Sets</td><td><code>SAdd</code>, <code>SMembers</code>, <code>SUnion</code>, <code>SScanIter</code></td></tr>
+          <tr><td>Sorted sets</td><td><code>ZAdd</code>, <code>ZAddArgs</code>, <code>ZAddIncr</code>, <code>ZRange</code>, <code>ZRevRangeWithScores</code>, <code>ZRangeArgs</code>, <code>ZScore</code>, <code>ZScanIter</code></td></tr>
+          <tr><td>Streams</td><td><code>XAdd</code>, <code>XGroupCreate</code>, <code>XReadGroup</code>, <code>XAck</code></td></tr>
+          <tr><td>JSON</td><td><code>JSONSet</code>, <code>JSONGet</code>, <code>JSONArrAppend</code>, <code>JSONIndexCreate</code>, <code>JSONFind</code></td></tr>
+          <tr><td>Geo</td><td><code>GeoAdd</code>, <code>GeoDist</code>, <code>GeoSearch</code></td></tr>
+          <tr><td>Bitmaps / HyperLogLog</td><td><code>SetBit</code>, <code>BitCount</code>, <code>PFAdd</code>, <code>PFCount</code></td></tr>
+          <tr><td>Bloom filters</td><td><code>BFReserve</code>, <code>BFMAdd</code>, <code>BFMExists</code></td></tr>
+          <tr><td>Transactions, scripts</td><td><code>Tx</code>, <code>Transaction</code>, <code>Pipelined</code> (see <a href="#pipelines">Pipelines</a>); scripting methods follow the matrix. Lua in Ruvio uses <code>ruvio.call(...)</code>, not <code>redis.call</code>.</td></tr>
+          <tr><td>Pub/Sub</td><td><code>PubSub</code>, <code>Publish</code></td></tr>
+          <tr><td>Server, ACL, cluster</td><td><code>Ping</code>, <code>DBSize</code>, <code>ClusterNodes</code>, <code>ClusterKeySlot</code>, ACL and <code>CLIENT</code> subcommands</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>Conventions: a nullable reply returns <code>(value, ok, err)</code>; nullable elements inside a list use <code>NullString</code>, <code>NullInt</code>, <code>NullFloat</code>. Typed examples, run against a standalone server:</p>
+<pre>// Strings and expiry
+c.SetEX(ctx, "token:1", "abc", 30*time.Second)
+c.MSet(ctx, "a", "1", "b", "2")
+c.MGet(ctx, "a", "b", "c")             // =&gt; [{1 true} {2 true} { false}]   ([]NullString)
+b, ok, _ := c.GetBytes(ctx, "a")       // =&gt; [49] true
+
+// Hashes
+c.HSet(ctx, "user:1", "name", "Ada", "plan", "pro")
+c.HGet(ctx, "user:1", "name")          // =&gt; "Ada", true, nil
+c.HGetAll(ctx, "user:1")               // =&gt; map[name:Ada plan:pro]
+
+// Lists
+c.RPush(ctx, "jobs", "a", "b", "c")
+c.LRange(ctx, "jobs", 0, -1)           // =&gt; [a b c]
+c.LPop(ctx, "jobs")                    // =&gt; "a", true, nil
+
+// Sets
+c.SAdd(ctx, "tags", "x", "y")
+c.SMembers(ctx, "tags")                // =&gt; [x y]   (order not fixed)
+
+// Sorted sets: ZADD ... GT CH
+c.ZAdd(ctx, "leaderboard", ruvio.Z{Member: "player1", Score: 100}, ruvio.Z{Member: "player2", Score: 80})
+c.ZAddArgs(ctx, "leaderboard", ruvio.ZAddOptions{GT: true, CH: true}, ruvio.Z{Member: "player2", Score: 90}) // =&gt; 1
+c.ZRevRangeWithScores(ctx, "leaderboard", 0, 9) // =&gt; [{player1 100} {player2 90}]
+c.ZScore(ctx, "leaderboard", "player1")         // =&gt; 100, true, nil
+
+// Streams with a consumer group
+c.XAdd(ctx, ruvio.XAddArgs{Stream: "events", ID: "*", Values: []string{"kind", "signup", "user", "ada"}})
+c.XGroupCreate(ctx, "events", "workers", "0", false)
+msgs, _ := c.XReadGroup(ctx, ruvio.XReadGroupArgs{Group: "workers", Consumer: "w1", Stream: "events", Count: 10})
+// =&gt; [{1791796296456-0 [kind signup user ada]}]    (XMessage{ID, Values})
+for _, m := range msgs {
+    c.XAck(ctx, "events", "workers", m.ID)          // =&gt; 1
+}
+
+// JSON (values are JSON text)
+c.JSONSet(ctx, "user:ada", "$", `{"name":"Ada","city":"Berlin","tags":["a"]}`)
+c.JSONGet(ctx, "user:ada", "$.name")                // =&gt; "\"Ada\"", true, nil
+c.JSONArrAppend(ctx, "user:ada", "$.tags", `"b"`)   // =&gt; 2
+
+// Geo
+c.GeoAdd(ctx, "cities", ruvio.GeoAddOptions{},
+    ruvio.GeoLocation{Name: "Palermo", Longitude: 13.361389, Latitude: 38.115556},
+    ruvio.GeoLocation{Name: "Catania", Longitude: 15.087269, Latitude: 37.502669}) // =&gt; 2
+c.GeoDist(ctx, "cities", "Palermo", "Catania", "km")   // =&gt; 166.27415156960032, true, nil
+c.GeoSearch(ctx, "cities", ruvio.GeoSearchQuery{Longitude: 15, Latitude: 37, Radius: 200, Unit: "km", Sort: "ASC"})
+// =&gt; Catania, Palermo  (names only; set WithDist / WithCoord to fill the other fields)
+
+// Bitmaps and HyperLogLog
+c.SetBit(ctx, "online", 7, 1)
+c.BitCount(ctx, "online")              // =&gt; 1
+c.PFAdd(ctx, "visitors", "u1", "u2", "u3")
+c.PFCount(ctx, "visitors")             // =&gt; 3</pre>
+      <p><code>Do</code> returns a <code>Value</code> (<code>Kind</code>, <code>Int</code>, <code>Bytes</code>, <code>Array</code>) with helpers <code>Str</code>, <code>AsInt64</code>, <code>AsFloat64</code>, <code>Strings</code>, <code>IsNil</code>.</p>
+</section>
+
+<section class="panel">
+<h2 id="ruvio">Ruvio commands</h2>
+      <p>These are the commands Redis does not have, or has with different semantics. Replies below are from a live run.</p>
+<pre>// SET key value IFEQ expected PX ttl  (compare-and-set; replaces WATCH/MULTI or a Lua script)
+c.Set(ctx, "cfg", "v1")
+c.SetIfEq(ctx, "cfg", "v2", "v1", ruvio.SetOptions{TTL: time.Minute}) // =&gt; true
+c.SetIfEq(ctx, "cfg", "v3", "v1", ruvio.SetOptions{})                 // =&gt; false (value is now v2)
+
+// DELEX key IFEQ value  (delete only if equal; the safe lock release, no Lua)
+c.DelIfEq(ctx, "cfg", "nope")          // =&gt; false
+c.DelIfEq(ctx, "cfg", "v2")            // =&gt; true
+
+// INCRBY key delta MAX limit  (bounded counter; ok=false when it would pass the limit)
+c.IncrByMax(ctx, "stock", 1, 2)        // =&gt; 1, true     then 2, true     then 0, false
+
+// LIMIT key max window  (fixed-window rate limit; returns remaining, allowed)
+c.Limit(ctx, "api:ada", 2, time.Minute) // =&gt; 1, true     then 0, true     then 0, false
+
+// FILLGET / FILLSET  (cache fill with stampede protection)
+r, _ := c.FillGet(ctx, "page", 5*time.Second) // =&gt; State FILL, Token "1"   (you fill it)
+c.FillGet(ctx, "page", 5*time.Second)         // =&gt; State BUSY              (someone else is filling)
+c.FillSet(ctx, "page", "&lt;html&gt;", time.Minute, r.Token, 0) // =&gt; true
+c.FillGet(ctx, "page", 5*time.Second)         // =&gt; State HIT, Value "&lt;html&gt;"
+
+// LEASE / SEMAPHORE / RELEASE  (fenced lease, counting semaphore)
+c.Lease(ctx, "leader", 10*time.Second)        // =&gt; 1, true     (fence token)
+c.Lease(ctx, "leader", 10*time.Second)        // =&gt; 0, false
+tok, _, _ := c.Semaphore(ctx, "dl", 1, 10*time.Second) // =&gt; token, true
+c.Semaphore(ctx, "dl", 1, 10*time.Second)     // =&gt; 0, false (full)
+c.Release(ctx, "dl", tok)                     // =&gt; true
+
+// ONCE key ttl  (true on the first call, false afterwards)
+c.Once(ctx, "job:1", time.Minute)      // =&gt; true, then false
+
+// TAKE key count  (take from a numeric stock; ok=false when there is not enough)
+c.Set(ctx, "tickets", "5")
+c.Take(ctx, "tickets", 2)              // =&gt; 3, true   (remaining)
+c.Take(ctx, "tickets", 9)              // =&gt; 0, false
+
+// SETV key value version  (versioned write; 0 = no version check)
+v1, _ := c.SetV(ctx, "doc", "one", 0)  // =&gt; 1
+c.SetV(ctx, "doc", "two", v1)          // =&gt; 2
+
+// GETEX key ttl  (read and set a TTL; the client sends milliseconds)
+c.GetEx(ctx, "g", 5*time.Second)       // =&gt; "hello", true; PTTL is now 5000
+
+// LPUSHCAP key cap v...  (push and trim in one command)
+c.LPushCap(ctx, "recent", 3, "1", "2", "3", "4", "5") // =&gt; 3
+c.LRange(ctx, "recent", 0, -1)                        // =&gt; [5 4 3]
+
+// Bloom filter
+c.BFReserve(ctx, "seen", 0.01, 1000, 0, false)
+c.BFMAdd(ctx, "seen", "a", "b")        // =&gt; [true true]
+c.BFMExists(ctx, "seen", "a", "z")     // =&gt; [true false]
+
+// JSON.INDEX / JSON.FIND (database 0 only; see the note below)
+c.JSONIndexCreate(ctx, "by_city", "user:", "$.city", "STRING")
+c.JSONFind(ctx, "by_city", `"Berlin"`, 100, "")  // =&gt; [user:1]
+
+// CHANGES
+cur, _ := c.ChangesStart(ctx)
+c.Set(ctx, "watched", "1")
+c.Changes(ctx, cur)                    // =&gt; [{1 SET watched}]</pre>
+      <p>Two things I hit while running this. <code>JSON.INDEX CREATE</code> only works in database 0, so that part ran on a client with <code>DB: 0</code>. And <code>JSON.FIND</code> right after the create returned <code>ERR index is building</code> on the first try and the right key on the second, 50 ms later: retry on that error.</p>
+      <p>Other methods that exist but were not run here: <code>RPushCap</code>, <code>JSONIndexList</code>, <code>IdemBegin</code> / <code>IdemComplete</code> on their own (the <code>Idempotent</code> helper uses them and was run), and <code>XAdd</code> with <code>Delay</code>.</p>
+</section>
+
+<section class="panel">
+<h2 id="helpers">Helpers</h2>
+      <p>Thin layers over the native commands. All of them issue only single-key commands, so they work unchanged on a cluster client (lock, rate limit and <code>GetOrCreate</code> were run on the cluster, see <a href="#cluster">Cluster</a>).</p>
+<pre>// Lock: SET key token NX PX, Refresh = SET IFEQ, Unlock = DELEX IFEQ. The token is random (128 bit).
+l, ok, err := c.AcquireLock(ctx, "lock:report", 30*time.Second) // ok=false when someone else holds it
+l.Refresh(ctx, 30*time.Second)         // =&gt; true
+l.Unlock(ctx)                          // =&gt; true; GET lock:report is now missing
+
+// Scoped form: always releases, even when fn fails
+err = c.WithLock(ctx, "lock:job", 30*time.Second, func(ctx context.Context) error {
+    _, e := c.Incr(ctx, "runs")
+    return e
+})                                     // =&gt; nil
+// Lock already held: err is ruvio.ErrNotAcquired (errors.Is works)
+
+// Wait for the lock; stops with the context error when ctx ends
+cx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+_, err = c.AcquireLockWait(cx, "lock:held", time.Second, 50*time.Millisecond)
+cancel()                               // =&gt; context deadline exceeded, after 300 ms</pre>
+      <p><strong>Failure behavior.</strong> <code>AcquireLock</code> tries once and returns <code>ok=false</code> if the lock is taken. <code>WithLock</code> tries once and returns <code>ErrNotAcquired</code>. <code>AcquireLockWait</code> retries at your interval until the context ends.</p>
+      <p>If your lock expired and someone else took it, <code>Refresh</code> and <code>Unlock</code> both return <code>false</code> and change nothing, because <code>DELEX IFEQ</code> only deletes your own token (checked: after a failed refresh and unlock the new holder's key was still there).</p>
+      <p>Nothing tells you mid-work that the lock expired; check <code>Refresh</code> if the work is long. <code>WithLock</code> unlocks with <code>context.WithoutCancel</code>, so a cancelled <code>ctx</code> still releases the lock. The error from that release call is dropped.</p>
+<pre>// Fenced lease and semaphore permit (RELEASE on exit)
+err = c.WithLease(ctx, "lease:x", 10*time.Second, func(ctx context.Context, token int64) error {
+    // token is the fence (1 here); pass it to the protected resource
+    return nil
+})
+err = c.WithPermit(ctx, "permits", 2, 10*time.Second, func(ctx context.Context) error { return nil })
+// AcquireLease / AcquirePermit return a handle with Release(ctx) and ok=false when held / full.
+
+// Rate limit: LIMIT -&gt; (allowed, remaining)
+for i := 0; i &lt; 3; i++ {
+    allowed, remaining, _ := c.RateLimit(ctx, "login:ada", 2, time.Minute)
+    // =&gt; true 1,  true 0,  false 0
+}
+
+// Cache-aside with stampede protection (FILLGET / FILLSET)
+s, err := c.GetOrCreate(ctx, "page:home", time.Minute, func(ctx context.Context) (string, error) {
+    return "&lt;html&gt;home&lt;/html&gt;", nil
+})                                     // second call: the factory is not run (it ran once)
+type User struct{ Name, City string }
+u, err := ruvio.GetOrCreateJSON(ctx, c, "user:cache", time.Minute,
+    func(ctx context.Context) (User, error) { return User{"Ada", "Izmir"}, nil }) // =&gt; {Ada Izmir}</pre>
+      <p><code>WithLease</code> and <code>WithPermit</code> return <code>ErrNotAcquired</code> when the lease is held or the semaphore is full. <code>GetOrCreate</code> polls plain <code>FILLGET</code> with a 2 to 50 ms backoff while another caller is filling, because <code>FILLGET ... WAIT</code> would park the shared connection.</p>
+      <p>It stops when the context ends. If the factory fails, its error is returned, nothing is stored, and the fill marker lapses after <code>FillTimeout</code> (default 5 s; checked: the factory error came back as is). <code>GetOrCreateOptions</code> also has <code>Stale</code> (stale-while-revalidate: stale readers get the old value and one refreshes in the background) and <code>PollMin</code> / <code>PollMax</code>. The busy-polling path inside <code>GetOrCreate</code> and the stale path were not run here.</p>
+<pre>// Idempotency (IDEM BEGIN / COMPLETE)
+for i := 0; i &lt; 2; i++ {
+    res, err := c.Idempotent(ctx, "pay:42", "fp-1", time.Hour, func(ctx context.Context) ([]byte, error) {
+        return []byte("charged"), nil   // runs once
+    })                                   // both calls: "charged", nil
+}
+_, err = c.Idempotent(ctx, "pay:42", "other-fp", time.Hour, fn)
+// =&gt; ruvio.ErrIdemConflict</pre>
+      <p>The second caller gets the stored result without running the work. While another caller is still running it you get <code>ErrIdemPending</code>. If the work function fails, the reservation stays pending until the TTL passes. This is not exactly-once for external side effects. The <code>ErrIdemPending</code> path was not run here.</p>
+<pre>// Lazy scan iterators: one page per round trip
+it := c.ScanIter(ruvio.ScanOptions{Match: "session:*", Count: 2})
+for it.Next(ctx) {
+    key := it.Val()                      // 5 keys seen
+}
+if err := it.Err(); err != nil { /* a page failed */ }
+// Go 1.23+: range over the same iterator
+for key, err := range c.ScanIter(ruvio.ScanOptions{Match: "session:*"}).All(ctx) { /* ... */ }
+// HScanIter(key, opts), SScanIter, ZScanIter work the same; HScanIter yields field, value, field, value ...
+
+// Capped recent list (LPUSHCAP) and Bloom "seen before" (BF.MADD)
+for i := 0; i &lt; 5; i++ { c.PushRecent(ctx, "recent:ada", 3, fmt.Sprintf("item:%d", i)) }
+c.Recent(ctx, "recent:ada", 10)                      // =&gt; [item:4 item:3 item:2]
+c.SeenBefore(ctx, "emails:seen", "a@x", "b@x")       // =&gt; [false false]
+c.SeenBefore(ctx, "emails:seen", "a@x", "c@x")       // =&gt; [true false]   (Bloom: true means "probably")
+
+// Typed JSON with encoding/json
+c.JSONSetValue(ctx, "user:t", "$", User{"Ada", "Izmir"})
+var got User
+c.JSONGetValue(ctx, "user:t", "$", &amp;got)            // =&gt; {Ada Izmir}, true, nil
+c.JSONSetValue(ctx, "user:t", "$.City", "Berlin")    // a plain string is sent with quotes
+c.JSONGet(ctx, "user:t", "$.City")                   // =&gt; "\"Berlin\"", true, nil
+u2, ok, err := ruvio.JSONGetAs[User](ctx, c, "user:t", "$") // =&gt; {Ada Berlin}, true, nil</pre>
+      <p>The scan iterator is not safe for concurrent use. The <code>All</code> form needs Go 1.23 or newer; the iterator itself works on 1.22.</p>
+</section>
+
+<section class="panel">
+<h2 id="pipelines">Pipelines, transactions, Pub/Sub, blocking</h2>
+<pre>// Pipeline: one write, replies in order
+vals, err := c.Pipelined(ctx, func(p *ruvio.Pipeline) {
+    p.Set("pa", "1"); p.Incr("pa"); p.Get("pa")
+})                                       // =&gt; [OK 2 2], nil
+
+// A server error does not drop the other replies: err is the first one, vals still has all
+vals, err = c.Pipelined(ctx, func(p *ruvio.Pipeline) {
+    p.Set("ps", "x"); p.Do("LPUSH", "ps", "v"); p.Get("ps")
+})                                       // =&gt; [OK (error) WRONGTYPE ... x], err = WRONGTYPE ...
+
+// Transaction: the queued commands run as MULTI ... EXEC
+res, err := c.Transaction(ctx, func(p *ruvio.Pipeline) { p.Incr("x"); p.Get("x") }) // =&gt; [1 1]
+
+// WATCH on a dedicated connection; ErrTxAborted when the watched key changed
+tx, _ := c.Tx(ctx)
+defer tx.Close()
+tx.Watch(ctx, "balance")
+cur, _, _ := tx.Get(ctx, "balance")
+_, err = tx.Exec(ctx, func(p *ruvio.Pipeline) { p.Set("balance", cur+"0") })
+// =&gt; nil when nothing changed in between.
+// If another client wrote "balance" after Watch: errors.Is(err, ruvio.ErrTxAborted) == true (checked)</pre>
+<pre>// Pub/Sub on a dedicated connection; Publish and normal commands stay on the shared one
+ps, _ := c.PubSub(ctx, 16)               // 16 = channel buffer
+ps.Subscribe(ctx, "news")
+ps.PSubscribe(ctx, "alerts.*")
+c.Publish(ctx, "news", "hello")          // =&gt; 1 receiver
+c.Publish(ctx, "alerts.cpu", "hot")
+for m := range ps.Channel() {
+    fmt.Println(m.Kind, m.Channel, m.Pattern, m.Payload)
+    // =&gt; message news  hello
+    // =&gt; pmessage alerts.cpu alerts.* hot
+}
+ps.Close()
+
+// Blocking pop: runs on a pooled dedicated connection, so other callers are not stalled
+kv, ok, err := c.BLPop(ctx, 2*time.Second, "queue")   // =&gt; {queue job-1}, true  after another goroutine pushed
+kv, ok, err = c.BLPop(ctx, 200*time.Millisecond, "empty") // =&gt; ok=false after 200 ms</pre>
+      <p><code>Tx.Multi</code>, <code>Tx.Queue</code>, <code>Tx.ExecQueued</code> and <code>Tx.Discard</code> give the explicit step-by-step form (not run here). <code>SSubscribe</code> exists for shard channels (not run here). Blocking commands (<code>BLPOP</code>, <code>BRPOP</code>, <code>BLMOVE</code>, <code>BLMPOP</code>, <code>BZPOPMIN/MAX</code>, <code>XREAD</code> / <code>XREADGROUP</code> with <code>Block</code>, <code>WAIT</code>, <code>FILLGET ... WAIT</code>) all use a dedicated connection.</p>
+      <p>RESP3 is supported: <code>Options.Protocol = 3</code> and <code>OnPush</code> for <code>CLIENT TRACKING</code> invalidations. That path is covered by the repository's live suite, I did not run it by hand.</p>
+</section>
+
+<section class="panel">
+<h2 id="cluster">Cluster</h2>
+      <p>Set <code>Options.Cluster = true</code> and pass any one shard as <code>Addr</code>. On first use the client sends <code>CLUSTER SLOTS</code> to the seed and builds a 16384-entry slot table (CRC16 of the key or of its <code>{hash tag}</code>, modulo 16384). It keeps one multiplexed connection per node, dialed on first use.</p>
+      <p>If the seed answers <code>ERR cluster mode is disabled</code> (a standalone server, or a multi-shard server in single-port mode) the client stays on the plain single-connection path; the cost is one nil check per call. Every typed method, <code>Do</code>, helper, pipeline and transaction works the same in both modes.</p>
+      <ul>
+        <li><strong>Single key:</strong> sent to the node that owns the slot. Keys that are not the first argument (<code>EVAL numkeys</code>, <code>XREAD STREAMS</code>, <code>BITOP dst keys</code>, <code>ZUNIONSTORE</code>, <code>LMOVE</code>, <code>RENAME</code> ...) are extracted from the real key list.</li>
+        <li><strong>Several keys, one slot:</strong> sent to that node. Keys in different slots for a command that cannot be split fail with <code>ErrCrossSlot</code> <em>before anything is sent</em>. That includes <code>RENAME</code>, <code>COPY</code>, <code>SMOVE</code>, <code>LMOVE</code>, <code>SUNION</code> and similar; there is no copy-and-delete emulation.</li>
+        <li><strong>Split and gathered:</strong> <code>MGET</code>, <code>MSET</code>, <code>DEL</code>, <code>UNLINK</code>, <code>EXISTS</code>, <code>TOUCH</code> are split into one command per slot, sent as one pipelined write per node, nodes in parallel, and the replies come back in your order. Not atomic across slots.</li>
+        <li><strong>Every node:</strong> <code>DBSIZE</code> (summed), <code>KEYS</code>, <code>FLUSHDB</code>, <code>FLUSHALL</code>, <code>SCRIPT LOAD/FLUSH</code>, <code>FUNCTION LOAD/DELETE/FLUSH</code>.</li>
+        <li><strong>SCAN</strong> walks the nodes one after the other with a cursor that encodes the node, so <code>ScanIter</code> sees all keys. Treat the cursor as opaque. A topology change during a walk can skip or repeat keys. <code>HSCAN</code>, <code>SSCAN</code>, <code>ZSCAN</code> go to the key's node.</li>
+        <li><strong>Keyless commands</strong> (<code>PING</code>, <code>INFO</code>, <code>CONFIG</code>, <code>PUBLISH</code>, <code>JSON.INDEX</code>, ...) go to the seed node.</li>
+        <li><strong>Pipelines:</strong> grouped by node, one write each, groups in parallel, replies in your order. A pipeline does not split multi-key commands and does not fan out <code>DBSIZE</code> or <code>SCAN</code>. A pipeline containing <code>MULTI</code> is a transaction and needs one slot.</li>
+        <li><strong>Transactions and dedicated connections</strong> (<code>Tx</code>, <code>Transaction</code>, <code>Conn</code>) bind to the node of the first key they see (or <code>TxFor(ctx, key)</code> / <code>ConnFor(ctx, key)</code>). Every later key must hash to the same slot, otherwise <code>ErrCrossSlot</code>.</li>
+        <li><strong>MOVED:</strong> the slot is patched in the table, the table is reloaded when the target node is unknown or a second slot moved, and the command is sent once more to the new node. A second <code>MOVED</code> is returned to you as <code>*ruvio.Error</code>.</li>
+        <li><strong>Connection loss</strong> to one node fails only the calls pending on it. They are never replayed. The next call redials that node. Other nodes are untouched.</li>
+        <li>Only database 0 exists in cluster mode.</li>
+      </ul>
+      <p>Run against three shards (ports 17410 to 17412, seed 17410):</p>
+<pre>c, err := ruvio.Connect(ctx, ruvio.Options{Addr: "127.0.0.1:17410", Cluster: true})
+c.Set(ctx, "warm", "1")                // the first call loads the slot table
+c.IsCluster()                          // =&gt; true
+c.Nodes()                              // =&gt; [127.0.0.1:17410 127.0.0.1:17411 127.0.0.1:17412]
+ruvio.KeySlot("somekey")               // =&gt; 11058   (same as c.ClusterKeySlot(ctx, "somekey"))
+ruvio.KeySlot("{user1000}.following")  // =&gt; 3443    (same slot as "{user1000}.profile")
+
+for _, k := range []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot"} { c.Set(ctx, k, k) }
+// slots 865, 8623, 1769, 9053, 14438, 3172: all three shards hold keys
+c.MGet(ctx, "foxtrot", "alpha", "missing", "delta", "bravo")
+// =&gt; [{foxtrot true} {alpha true} { false} {delta true} {bravo true}]   (caller's order)
+
+c.MSet(ctx, "m1", "1", "m2", "2", "m3", "3", "m4", "4")
+c.Del(ctx, "m1", "m2", "m3", "m4", "nokey")      // =&gt; 4
+c.Exists(ctx, "alpha", "bravo", "nokey")         // =&gt; 2
+
+c.Pipelined(ctx, func(p *ruvio.Pipeline) {
+    p.Set("p1", "1"); p.Set("p2", "2"); p.Get("p1"); p.Get("p2"); p.Incr("p3")
+})                                               // =&gt; [OK OK 1 2 1]
+
+_, err = c.SUnion(ctx, "s1", "s2")               // =&gt; ErrCrossSlot, nothing sent
+err = c.Rename(ctx, "alpha", "bravo")            // =&gt; ErrCrossSlot
+c.Transaction(ctx, func(p *ruvio.Pipeline) { p.Set("{t}a", "1"); p.Set("{t}b", "2") })   // =&gt; [OK OK] (one hash tag)
+c.Transaction(ctx, func(p *ruvio.Pipeline) { p.Set("alpha", "1"); p.Set("bravo", "2") }) // =&gt; ErrCrossSlot
+
+it := c.ScanIter(ruvio.ScanOptions{})            // sees all 12 keys; DBSize() == 12
+
+l, ok, _ := c.AcquireLock(ctx, "lock:x", 5*time.Second)  // works on the cluster client
+c.RateLimit(ctx, "rl:ada", 2, time.Minute)               // =&gt; true 1
+c.GetOrCreate(ctx, "page", time.Minute, factory)         // works
+</pre>
+      <p>Without <code>Cluster: true</code> the same seed behaves like a single node: <code>c.Get(ctx, "somekey")</code> on the seed returned <code>MOVED 11058 127.0.0.1:17412</code> as a <code>*ruvio.Error</code> (<code>Prefix()</code> is <code>MOVED</code>). A client seeded with 17412 found the same three nodes and read <code>alpha</code> through the right shard. On the standalone server, <code>Cluster: true</code> gave <code>IsCluster() == false</code> and plain behavior.</p>
+<pre>// Pub/Sub and blocking on the cluster client
+ps, _ := c.PubSub(ctx, 8)
+ps.Subscribe(ctx, "news")                // runs on the seed node
+c.Publish(ctx, "news", "hi")             // =&gt; 1; the message arrived on ps.Channel()
+c.BLPop(ctx, 2*time.Second, "queue")     // =&gt; {queue job-1}, true  (dedicated connection to the owning node)</pre>
+      <p>Pub/Sub on the cluster: <code>Subscribe</code> / <code>PSubscribe</code> run on the seed, and <code>Publish</code> goes to the seed too, so they meet. A message published on another node does not reach these subscribers. <code>SSubscribe</code> opens one extra connection per node that owns a channel's slot; <code>SPublish</code> routes by channel. Losing any of these connections closes the subscription.</p>
+      <p><strong>Cluster numbers</strong> (from the client README, not re-run; 4-core box shared by client and server, 3-shard server against 1-shard server, 16 x GOMAXPROCS goroutines, 64-byte values, 256 keys; noisy, not release evidence):</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th></th><th>standalone</th><th>cluster</th></tr></thead>
+        <tbody>
+          <tr><td>serial <code>GET</code></td><td>33.2 µs/op</td><td>31.1 µs/op</td></tr>
+          <tr><td>concurrent <code>GET</code></td><td>3.3 µs/op (about 300k ops/s)</td><td>5.4 µs/op (about 185k ops/s)</td></tr>
+          <tr><td>concurrent <code>SET</code></td><td>3.2 µs/op (about 310k ops/s)</td><td>6.2 µs/op (about 160k ops/s)</td></tr>
+          <tr><td><code>Cluster: true</code> on a standalone server, concurrent <code>GET</code></td><td>3.0 µs/op</td><td></td></tr>
+          <tr><td><code>MGET</code> of 16 keys in 16 slots</td><td></td><td>149 µs/op, 99 allocs</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>Serial calls cost the same, so routing itself is cheap (reading the key from the encoded frame is about 56 ns with no allocation; the slot is a table-driven CRC16, about 27 ns). Concurrent throughput is lower on this box because three server shards and the benchmark compete for four cores, and each node connection coalesces fewer frames per write. This says nothing about a multi-machine deployment; that was not measured.</p>
+      <p><strong>Live test result.</strong> With <code>RUVIO_CLUSTER_ADDR=127.0.0.1:17410</code> pointing at the three-shard server, the repository's cluster live tests passed together with the rest of the suite (see <a href="#testing">Testing</a>). Per the README they cover keys spread over all shards, cross-slot <code>MGET/MSET/DEL</code> order, pipeline order, forced stale-table recovery, transactions, helpers, blocking commands, <code>SCAN</code>, Pub/Sub, scripts, concurrency and the standalone fallback. I ran that suite but did not read each test; MOVED recovery was not run by hand here.</p>
+</section>
+
+<section class="panel">
+<h2 id="errors">Errors</h2>
+      <p>Every method returns an <code>error</code> as its last value. A server <code>-ERR ...</code> reply is a <code>*ruvio.Error</code> with the full message; <code>Prefix()</code> gives the first word (<code>WRONGTYPE</code>, <code>NOSCRIPT</code>, <code>MOVED</code>, ...).</p>
+      <p>Transport failures wrap the cause and match <code>errors.Is(err, ruvio.ErrClosed)</code> when the connection is closed. Other sentinels: <code>ErrCrossSlot</code>, <code>ErrNotAcquired</code>, <code>ErrIdemPending</code>, <code>ErrIdemConflict</code>, <code>ErrTxAborted</code>, <code>ErrProtocol</code>. A server error leaves the connection usable.</p>
+<pre>c.Set(ctx, "str", "x")
+_, err := c.LPush(ctx, "str", "v")
+var se *ruvio.Error
+errors.As(err, &amp;se)                   // =&gt; true
+se.Prefix()                            // =&gt; "WRONGTYPE"
+se.Error()                             // =&gt; WRONGTYPE Operation against a key holding the wrong kind of value
+c.Ping(ctx)                            // =&gt; nil, still usable
+c.Get(ctx, "missing")                  // =&gt; "", false, nil   (nil reply is ok=false, not an error)
+
+ruvio.Connect(ctx, ruvio.Options{Addr: "127.0.0.1:17399"})
+// =&gt; dial tcp 127.0.0.1:17399: connect: connection refused
+
+c2, _ := ruvio.Connect(ctx, ruvio.Options{Addr: "127.0.0.1:17390"})
+c2.Close()
+_, _, err = c2.Get(ctx, "a")           // =&gt; ruvio: connection closed; errors.Is(err, ruvio.ErrClosed) == true
+</pre>
+      <p><strong>Nil</strong> is <code>ok == false</code> (<code>Get</code>, <code>HGet</code>, <code>LPop</code>, <code>ZScore</code>, <code>BLPop</code>, ...). <code>Limit</code>, <code>Take</code>, <code>Lease</code>, <code>Semaphore</code> and <code>IncrByMax</code> also use <code>ok == false</code> for "refused". Inside lists, <code>NullString</code>, <code>NullInt</code>, <code>NullFloat</code> carry a <code>Valid</code> flag.</p>
+      <p><strong>Reconnect.</strong> There is no automatic retry or replay after a transport failure, by design. A command that was in flight fails; the next call redials. With <code>Options.DB</code> set, the database is selected again on the new connection. I did not run the redial path on this page.</p>
+      <p><strong>Timeouts and cancellation.</strong> Pass a context with a deadline or cancel it. A deadline on a call is enforced with the socket read deadline; a context that can only be cancelled makes the caller wait on the reader. A cancelled call returns the context error and abandons its slot in the reply FIFO, so later replies stay matched.</p>
+      <p>Checked on a blocking call: <code>BLPop</code> with a 100 ms context and a 5 s server timeout returned <code>context deadline exceeded</code>, and the next <code>Get</code> on the same client worked. A deadline on an ordinary shared-connection call was not run separately. There is no write deadline: if the server stops reading, the writer blocks and queued frames grow.</p>
+</section>
+
+<section class="panel">
+<h2 id="limits">Not done or not verified</h2>
+      <ul>
+        <li><strong>Release.</strong> No tag, so no version. A tag like <code>clients/go/v0.1.0</code> is needed. Fetching the module from GitHub was not tried.</li>
+        <li><strong>Go 1.22.</strong> <code>go.mod</code> says 1.22; the code was only built and tested with Go 1.24.7. The <code>Scanner.All</code> range-over-func form needs 1.23.</li>
+        <li><strong>No TLS code</strong> in the client (use the <code>Dial</code> option). <code>AUTH</code> was verified only on a standalone server per the README, and not run on this page.</li>
+        <li><strong>No automatic retry or replay</strong> after a transport failure. No write deadline.</li>
+        <li><strong>Cluster, not done:</strong> replicas and <code>READONLY</code> reads (the client routes to the slot's primary only), <code>-ASK</code> (the server has no live slot migration), copy-and-delete emulation for cross-slot <code>RENAME</code> / <code>COPY</code> / <code>SMOVE</code> / <code>LMOVE</code>, splitting of <code>MSETNX</code> / <code>BITOP</code> / <code>SUNION</code> and other all-or-nothing commands, background topology refresh (the table is refreshed on <code>MOVED</code> or <code>RefreshSlots</code>; a gone node is found by the next call to it), multiple databases.</li>
+        <li><strong>Cluster, not verified:</strong> <code>CLIENT TRACKING</code> / <code>HELLO 3</code> push frames on a cluster, <code>AUTH</code> on a cluster, TLS to a cluster. A node that advertises a different host than the seed was reached at is used as advertised. <code>PUBLISH</code> reaches only subscribers on the node it was sent to.</li>
+        <li><strong>RESP3:</strong> <code>HELLO 3</code> works, but typed results for RESP3-only shapes are tested only for maps (<code>HGETALL</code>, <code>HELLO</code>) and pushes.</li>
+        <li><strong>Server-side:</strong> <code>OBJECT IDLETIME/FREQ</code> were verified only up to the server's policy error under the default <code>noeviction</code>. <code>SAVE</code> / <code>BGSAVE</code> only against the memory profile.</li>
+        <li><strong>Benchmark numbers</strong> on this page are from the README, not re-run.</li>
+        <li><strong>Not run on this page:</strong> <code>GetOrCreate</code> busy and stale paths, <code>ErrIdemPending</code>, <code>Tx.Multi/Queue/ExecQueued</code>, <code>SSubscribe</code>, RESP3, AUTH, reconnect, a forced MOVED, Pub/Sub on shards.</li>
+      </ul>
+</section>
+
+<section class="panel">
+<h2 id="testing">Testing</h2>
+<pre>cd clients/go
+go vet ./...
+go test ./...                                   # codec, routing, scripted fake cluster, coverage; live tests skip
+RUVIO_TEST_ADDR=127.0.0.1:17390 go test -race ./...    # also the live suites (databases 11 and 12, FLUSHDB)
+RUVIO_CLUSTER_ADDR=127.0.0.1:17410 go test -race ./... # also the cluster live tests (3 shards, per-shard ports)</pre>
+      <p>Counts from my run (Go 1.24.7, no <code>-race</code>): without the environment variables, 30 tests pass and 44 skip (74 in total). With both <code>RUVIO_TEST_ADDR</code> (17390) and <code>RUVIO_CLUSTER_ADDR</code> (17410) set, all 74 pass and none skip. <code>go vet</code> was clean.</p>
+      <p>I did not run the <code>-race</code> form. The live suites flush databases 11 and 12 on the standalone server and database 0 on the cluster, so point them at a throwaway server. The live suite covers every command family, JSON.INDEX / JSON.FIND (database 0, own key prefix), Pub/Sub, RESP3 client tracking, pipelines, transactions and every helper. <code>TestCoverage</code> reads <code>docs/compatibility-matrix.json</code> and fails if a command has no typed method.</p>
+      <p>Start a server for the tests as on <a href="start.html">Start</a>. For three shards, set <code>shards = 3</code> and <code>port_mode = "per-shard"</code> in the config; shard <em>i</em> listens on base port + <em>i</em>. Benchmarks: <code>RUVIO_TEST_ADDR=127.0.0.1:17390 go test -run '^$' -bench . -benchmem -benchtime=1s</code>; the cluster ones also need <code>RUVIO_CLUSTER_ADDR</code>.</p>
+
+      <p class="note">See also: <a href="clients.html">Clients overview</a>, <a href="client-rust.html">Rust</a>, <a href="client-csharp.html">C#</a>, <a href="client-java.html">Java</a>, <a href="client-python.html">Python</a>, <a href="client-node.html">Node.js</a>, <a href="examples.html">Examples</a>, <a href="commands.html">Commands</a>.</p>
+</section>
+</article>
+  </main>
+  <footer class="foot">
+    <div class="foot-inner">Module: <code>github.com/salihcantekin/ruvio/clients/go</code>. Not tagged yet; source in the <a href="https://github.com/salihcantekin/ruvio/tree/dev/clients/go">repository</a>.</div>
+  </footer>
+  <script src="js/versions.js?v=20261013j"></script>
+  <script src="vendor/highlightjs/highlight.min.js"></script>
+  <footer class="site-foot">
+    <div class="site-foot-inner">
+      <div class="site-foot-brand">
+        <img src="images/ruvio-mark.png?v=20261015b" alt="" width="36" height="36">
+        <div>
+          <strong>Ruvio</strong>
+          <span>One RESP process. The shard that owns the key does the work.</span>
+          <small>Server AGPL-3.0 · Clients MIT</small>
+        </div>
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/salihcantekin/ruvio/tree/main/docs">Docs</a>
+        <a href="https://github.com/salihcantekin/ruvio">GitHub</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="js/chrome.js?v=20261015a"></script>
+</body>
+</html>

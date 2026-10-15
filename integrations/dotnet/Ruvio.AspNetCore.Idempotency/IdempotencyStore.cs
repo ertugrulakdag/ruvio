@@ -1,0 +1,86 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
+using Ruvio.Client;
+
+namespace Ruvio.AspNetCore.Idempotency;
+
+internal static class IdempotencyStore
+{
+    private static readonly Meter Meter = new("Ruvio.AspNetCore.Idempotency");
+    private static readonly Counter<long> StorageCalls = Meter.CreateCounter<long>("ruvio.idempotency.storage_calls");
+    private static readonly Counter<long> StorageCommands = Meter.CreateCounter<long>("ruvio.idempotency.storage_commands");
+    private static readonly Counter<long> States = Meter.CreateCounter<long>("ruvio.idempotency.states");
+    private static readonly Histogram<double> StorageDuration = Meter.CreateHistogram<double>(
+        "ruvio.idempotency.storage_duration", "ms");
+
+    internal static async Task<(string State, string? Result)> AcquireAsync(
+        IRuvioClient client, string key, string fingerprint, string owner, TimeSpan ttl, CancellationToken token)
+    {
+        long started = Stopwatch.GetTimestamp();
+        var reply = await MeasureStorageAsync("begin", started,
+            client.BeginIdempotencyAsync(key, fingerprint, owner, (long)ttl.TotalMilliseconds, token))
+            .ConfigureAwait(false);
+
+        var items = reply.Items;
+
+        if (reply.Kind != RespKind.Array || items is null || items.Count is < 1 or > 2)
+            throw new InvalidOperationException("Invalid idempotency acquisition reply.");
+
+        var state = items[0].AsString();
+
+        if (state == "completed" && items.Count == 2 && items[1].Kind == RespKind.Bulk)
+        {
+            RecordState(state);
+            return (state, items[1].AsString());
+        }
+
+        if (items.Count == 1 && state is "acquired" or "pending" or "conflict")
+        {
+            RecordState(state);
+            return (state, null);
+        }
+
+        throw new InvalidOperationException("Invalid idempotency acquisition state.");
+    }
+
+    internal static async Task CompleteAsync(
+        IRuvioClient client, string key, string fingerprint, string owner, string result, CancellationToken token)
+    {
+        long started = Stopwatch.GetTimestamp();
+
+        // A failed or lost reply does not prove the server did not complete the record, so the error
+        // is raised for the caller and never retried here.
+        if (!await MeasureStorageAsync("complete", started,
+            client.CompleteIdempotencyAsync(key, fingerprint, owner, result, token)).ConfigureAwait(false))
+            throw new InvalidOperationException("Idempotency ownership was lost or completion failed; outcome is uncertain.");
+    }
+
+    /// <summary>Records the outcome of a storage call that has already started; no delegate is allocated.</summary>
+    private static async ValueTask<T> MeasureStorageAsync<T>(string operation, long started, ValueTask<T> pending)
+    {
+        string outcome = "error";
+
+        try
+        {
+            T result = await pending.ConfigureAwait(false);
+            outcome = "success";
+
+            return result;
+        }
+        finally
+        {
+            var tags = new TagList
+            {
+                { "operation", operation },
+                { "outcome", outcome }
+            };
+            
+            StorageCalls.Add(1, tags);
+            StorageCommands.Add(1, tags);
+            StorageDuration.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds, tags);
+        }
+    }
+
+    private static void RecordState(string state)
+        => States.Add(1, new TagList { { "state", state } });
+}

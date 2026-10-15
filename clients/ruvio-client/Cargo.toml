@@ -1,0 +1,25 @@
+[package]
+name = "ruvio-client"
+version = "0.3.1"
+edition = "2024"
+rust-version = "1.87"
+authors = ["Salih Cantekin <17653555+salihcantekin@users.noreply.github.com>"]
+description = "RESP2 client for the Ruvio key-value server"
+license = "MIT"
+repository = "https://github.com/salihcantekin/ruvio"
+homepage = "https://salihcantekin.github.io/ruvio/"
+readme = "README.md"
+keywords = ["ruvio", "redis", "resp", "client"]
+categories = ["network-programming"]
+
+[dependencies]
+serde = { version = "1", optional = true }
+serde_json = { version = "1", optional = true }
+
+[features]
+# Typed JSON.* helpers: pass any serde value instead of JSON text.
+serde = ["dep:serde", "dep:serde_json"]
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

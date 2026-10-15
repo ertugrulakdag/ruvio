@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Testing and evidence — Ruvio</title>
+  <meta name="description" content="What Ruvio's automated, Docker resilience, recovery, and performance tests cover—and what production evidence is still open.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css?v=20261015a">
+  <link rel="stylesheet" href="vendor/highlightjs/github-dark.min.css">
+  <link rel="icon" href="images/ruvio-icon.png" type="image/png">
+  <meta property="og:image" content="https://salihcantekin.github.io/ruvio/images/ruvio-social.png">
+</head>
+<body data-page="testing.html">
+  <header class="top">
+    <div class="top-inner">
+      <a class="mark" href="index.html">Ruvio</a>
+      <nav aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="start.html">Start</a>
+        <details>
+          <summary>Build</summary>
+          <div class="nav-menu">
+            <a href="compare.html">How it runs</a>
+            <a href="commands.html">Commands</a>
+            <a href="packages.html">Packages</a>
+            <a href="ui.html">Operator UI</a>
+          </div>
+        </details>
+        <details>
+          <summary>Clients</summary>
+          <div class="nav-menu">
+            <a href="clients.html">Overview</a>
+            <a href="client-rust.html">Rust</a>
+            <a href="client-csharp.html">C#</a>
+            <a href="client-go.html">Go</a>
+            <a href="client-java.html">Java</a>
+            <a href="client-python.html">Python</a>
+            <a href="client-node.html">Node.js</a>
+            <a href="examples.html">Examples</a>
+          </div>
+        </details>
+        <details>
+          <summary>Operate</summary>
+          <div class="nav-menu">
+            <a href="configuration.html">Configuration</a>
+            <a href="durability.html">Durability</a>
+            <a href="replication.html">Replication</a>
+            <a href="operations.html">Operations</a>
+          </div>
+        </details>
+        <a href="testing.html">Testing</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap layout">
+    <nav class="side" aria-label="Testing sections">
+      <a href="#automated">Automated coverage</a>
+      <a href="#run">Run the tests</a>
+      <a href="#resilience">Docker resilience</a>
+      <a href="#native">Native crash recovery</a>
+      <a href="#performance">Performance evidence</a>
+      <a href="#open">Still needed</a>
+    </nav>
+    <article>
+      <p class="kicker">Testing · evidence · next gates</p>
+      <h1>What has been tested</h1>
+      <p class="lede">Ruvio has protocol, compatibility, persistence, recovery, client, and runtime-safety checks, plus dated performance measurements. This page separates test coverage from evidence of a recent run—and calls out the production questions that remain open.</p>
+      <div class="callout">
+        <strong>Automatic and manual checks are distinct.</strong> The short
+        <code>pr-gate.yml</code> runs for pull requests and pushes to
+        <code>main</code>. Extended <code>ci.yml</code>, integration-package,
+        and Pages deployment workflows require manual dispatch. Coverage does
+        not imply a passing run on the current commit.
+      </div>
+
+      
+<section class="panel">
+<h2>Explore the evidence</h2>
+      <p>Each topic shows test conditions, measured outcomes, limitations and
+      links to the underlying methodology. These are dated observations—not
+      an all-workloads capacity, durability or compatibility guarantee.</p>
+      <nav class="evidence-tabs" aria-label="Testing topics"><a href="testing.html" aria-current="page">Overview</a><a href="testing-correctness.html">Correctness</a><a href="testing-performance.html">Performance</a><a href="testing-memory.html">Memory &amp; TTL</a><a href="testing-resilience.html">Resilience</a><a href="testing-integrations.html">Integrations</a></nav>
+</section>
+
+<section class="panel">
+<h2 id="automated">Automated test coverage</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Area</th><th>What is exercised</th><th>Where</th></tr></thead>
+          <tbody>
+            <tr><td>Core and portability</td><td>Rust unit/integration tests, formatting, Clippy, and store smoke on macOS, Linux, and Windows.</td><td><code>ci.yml</code></td></tr>
+            <tr><td>Protocol and compatibility</td><td>RESP conformance, supported-command differential checks against Redis, compatibility-matrix drift, and multi-shard routing smoke.</td><td><code>ci.yml</code></td></tr>
+            <tr><td>Persistence and recovery</td><td>WAL and snapshot recovery, corruption/checksum rejection, missing segments, TTL restart, backup/restore, and frozen-format compatibility.</td><td><a href="https://github.com/salihcantekin/ruvio/blob/main/docs/RELEASE_EVIDENCE.md">Release evidence</a></td></tr>
+            <tr><td>Clients and integrations</td><td>Live-server Rust and .NET client suites; separate integration-package tests and packing.</td><td><a href="https://github.com/salihcantekin/ruvio/blob/main/.github/workflows/ci.yml">CI</a> · <a href="https://github.com/salihcantekin/ruvio/blob/main/.github/workflows/integration-packages.yml">Integration workflow</a></td></tr>
+            <tr><td>Runtime safety</td><td>RESP parser fuzzing, AddressSanitizer, and selected Miri tests.</td><td><code>ci.yml</code></td></tr>
+            <tr><td>Supply chain</td><td>Dependency policy, release version checks, SBOM generation, and security-policy checks.</td><td><code>ci.yml</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="run">Run the tests</h2>
+      <p>Clone the repository and run the portable test entry point from its root. The default runs formatting, all Rust targets, and a store smoke example; resilience scenarios are opt-in.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Environment</th><th>Core checks</th><th>Optional resilience checks</th></tr></thead>
+          <tbody>
+            <tr><td>macOS / Linux / WSL</td><td><code>./scripts/test.sh</code></td><td><code>./scripts/test.sh --native-resilience</code> and <code>./scripts/test.sh --docker-resilience</code></td></tr>
+            <tr><td>Windows PowerShell</td><td><code>.\scripts\test.ps1</code></td><td><code>.\scripts\test.ps1 -NativeResilience</code> and <code>.\scripts\test.ps1 -DockerResilience</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Clippy is opt-in with <code>--clippy</code> or <code>-Clippy</code>. Docker tests require Docker Engine with Linux containers and tmpfs support. For WSL filesystem tests, keep the checkout and data under the Linux filesystem rather than <code>/mnt/c</code>. See the <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/TESTING.md">full test guide</a> for prerequisites and limitations.</p>
+</section>
+
+<section class="panel">
+<h2 id="resilience">Docker resilience run · 2026-10-03</h2>
+      <p>All five manual scenarios passed on Docker Engine 29.8.0, Linux/aarch64, using image <code>ruvio:resilience-test</code> (<code>sha256:56dcb352…</code>).</p>
+      <div class="stats">
+        <div class="stat"><span class="label">tmpfs ENOSPC</span><strong class="n">9,216 / 9,216</strong><span class="label">acknowledged writes recovered</span></div>
+        <div class="stat"><span class="label">WAL permission denial</span><strong class="n">3 / 3</strong><span class="label">acknowledged writes recovered</span></div>
+        <div class="stat"><span class="label">Process SIGKILL</span><strong class="n">100 / 100</strong><span class="label">acknowledged writes recovered</span></div>
+        <div class="stat"><span class="label">Replica catch-up / promotion</span><strong class="n">200 / 200</strong><span class="label">keys present after promotion · 0.371 s catch-up</span></div>
+      </div>
+      <p>The 30-second mixed <code>SET</code>/<code>GET</code>/<code>INCR</code> soak completed 48,413 iterations (145,239 commands). Mutations during the injected filesystem failures returned <code>MISCONF</code>; after the fault was removed and Ruvio restarted, acknowledged keys were verified. <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/DOCKER_RESILIENCE_TESTS.md">Scenario details and rerun instructions</a>.</p>
+      <div class="callout warn">
+        These tests cover process and filesystem behavior inside a Linux
+        container. They do not simulate host power loss or prove physical
+        storage flush semantics. Docker Desktop's Linux VM is not bare-metal
+        evidence. Docker's filesystem faults have not been run against a native
+        macOS filesystem.
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="native">Native crash recovery · macOS · 2026-10-03</h2>
+      <p>On an Apple M4 Pro, three randomized process kills during concurrent writes passed for each WAL durability profile. Recovery preserved a continuous key prefix and every client-observed acknowledged write.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Profile</th><th>Trials</th><th>Recovered keys</th><th>Acknowledged writes</th></tr></thead>
+          <tbody>
+            <tr><td><code>everysec</code></td><td>3 / 3 passed</td><td>297, 576, 810</td><td>All preserved</td></tr>
+            <tr><td><code>always</code></td><td>3 / 3 passed</td><td>592, 621, 320</td><td>All preserved</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>This is native process-crash evidence, not host power-loss or physical-device testing. Native macOS disk-full and permission-denial scenarios remain untested.</p>
+</section>
+
+<section class="panel">
+<h2 id="performance">Performance and memory evidence</h2>
+      <p>The public <a href="testing-performance.html">17-command Redis comparison</a> and <a href="testing-memory.html">one-million-string and equal-pass memory probes</a> show the 2026-10-07 conditions, numbers, limits and downloadable raw JSON on this site; a GitHub account or repository access is not needed to read them.</p>
+      <p>Other dated records include Docker Desktop workloads and a Cherry EPYC 7313P Linux run. Laptop and Docker results are not production-hardware claims.</p>
+      <p class="links">
+        <a href="operations.html#bench">Benchmark samples</a>
+        <a href="testing-performance.html">Command throughput and methods</a>
+        <a href="testing-memory.html">String and churn memory</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/BENCHMARK_RESULTS.md">Repository benchmark notes (access required)</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/BARE_METAL.md">Bare-metal evidence</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/MEMORY_DENSITY.md">Memory density</a>
+      </p>
+</section>
+
+<section class="panel">
+<h2 id="open">Still needed for production confidence</h2>
+      <ul>
+        <li>Host power-loss and production-like physical-storage flush testing.</li>
+        <li>A 24-hour mixed-workload soak remains unvalidated and is not part of the current test plan.</li>
+        <li>Native macOS disk-full and permission-denial tests outside Docker Desktop's Linux VM.</li>
+        <li>Published, repeatable bare-metal Linux latency and throughput measurements.</li>
+        <li>Repeated failover drills with measured recovery time; replica promotion is currently manual.</li>
+        <li>Signed build provenance in addition to checksums and the generated SBOM.</li>
+      </ul>
+      <p>Use the <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/TESTING.md">testing evidence guide</a> and <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/RELEASE_EVIDENCE.md">release gates</a> to track these as the test plan grows.</p>
+</section>
+</article>
+  </main>
+  <footer class="foot"><div class="foot-inner">Test evidence is dated and scoped: a passing container scenario is not a durability certification.</div></footer>
+  <script src="js/versions.js?v=20261013j"></script>
+  <script src="vendor/highlightjs/highlight.min.js"></script>
+  <footer class="site-foot">
+    <div class="site-foot-inner">
+      <div class="site-foot-brand">
+        <img src="images/ruvio-mark.png?v=20261015b" alt="" width="36" height="36">
+        <div>
+          <strong>Ruvio</strong>
+          <span>One RESP process. The shard that owns the key does the work.</span>
+          <small>Server AGPL-3.0 · Clients MIT</small>
+        </div>
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/salihcantekin/ruvio/tree/main/docs">Docs</a>
+        <a href="https://github.com/salihcantekin/ruvio">GitHub</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="js/chrome.js?v=20261015a"></script>
+</body>
+</html>

@@ -1,0 +1,188 @@
+name: PR gate
+
+# Short, secret-free checks on each proposed change. These checks publish nothing; they can also be started by hand. The extended CI workflow
+# remains manually dispatched for Docker, cross-platform, fuzz, and fault tests.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo test --locked --lib --bins --tests
+      # Standards tests, matrix drift and the zero-cost guards; reuses the build above.
+      - run: scripts/check.sh
+      - run: python3 scripts/test_benchmark_regression.py
+      # A job is billed by the started minute, so this few-second check rides along here.
+      - run: python3 scripts/check_package_metadata.py
+
+  instruction-count:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: iai
+      - run: sudo apt-get update && sudo apt-get install -y valgrind
+      - run: cargo install iai-callgrind-runner --version 0.16.1 --locked
+      - name: Hot-path instruction counts (+2% limit)
+        run: |
+          set -euo pipefail
+          cargo bench --locked --bench hot_path 2>&1 | tee bench.log
+          python3 scripts/check_instruction_baseline.py bench.log
+
+  rust-client-and-cluster:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cluster-server
+          workspaces: |
+            .
+            clients/ruvio-client
+      - run: cargo fmt --manifest-path clients/ruvio-client/Cargo.toml --all -- --check
+      - run: cargo test --manifest-path clients/ruvio-client/Cargo.toml --locked
+      - run: cargo build --locked --bin ruvio
+      - name: Verify shard routing and live Rust client
+        run: |
+          set -euo pipefail
+          data_dir="$(mktemp -d)"
+          trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; rm -rf "$data_dir"' EXIT
+          export RUVIO_ADDR=127.0.0.1:16382
+          export RUVIO_SHARDS=2
+          export RUVIO_PORT_MODE=per-shard
+          export RUVIO_DURABILITY=memory
+          export RUVIO_DATA_DIR="$data_dir"
+          (cd "$data_dir" && "$GITHUB_WORKSPACE/target/debug/ruvio") > "$data_dir/server.log" 2>&1 &
+          server_pid=$!
+          python3 scripts/cluster_smoke.py --base-port 16382
+          RUVIO_CLUSTER_ADDR=127.0.0.1:16382 \
+            cargo test --manifest-path clients/ruvio-client/Cargo.toml --locked \
+              --test cluster_live -- --test-threads=1
+
+  dotnet-client:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('clients/csharp/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+      - run: dotnet test clients/csharp/Ruvio.Client.Tests/Ruvio.Client.Tests.csproj --nologo
+      - run: dotnet test clients/csharp/Ruvio.Client.AspNetCore.Tests/Ruvio.Client.AspNetCore.Tests.csproj --nologo
+
+  # The Node, Python and Java client suites need a live server (standalone and
+  # a 3-shard cluster), so the server is built once and shared as an artifact.
+  server-binary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cluster-server
+      - run: cargo build --locked --bin ruvio
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ruvio-server
+          path: target/debug/ruvio
+          retention-days: 1
+
+  node-client:
+    needs: server-binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: ruvio-server
+          path: server-bin
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: clients/node/package-lock.json
+      - run: chmod +x server-bin/ruvio
+      - run: npm ci
+        working-directory: clients/node
+      - name: Build and test against a live server
+        run: scripts/run_with_servers.sh "$PWD/server-bin/ruvio" 17400 -- npm test --prefix clients/node
+      - name: Check the package contents
+        run: npm pack --dry-run
+        working-directory: clients/node
+
+  python-client:
+    needs: server-binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: ruvio-server
+          path: server-bin
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: chmod +x server-bin/ruvio
+      - run: python -m pip install "./clients/python[test]" build twine
+      - name: Test against a live server
+        run: scripts/run_with_servers.sh "$PWD/server-bin/ruvio" 17400 -- python -m pytest -q clients/python
+      - name: Build and check the distribution
+        run: |
+          python -m build --outdir dist-py clients/python
+          python -m twine check dist-py/*
+
+  java-client:
+    needs: server-binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: ruvio-server
+          path: server-bin
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+      - run: chmod +x server-bin/ruvio
+      - name: Test against a live server, build sources and javadoc jars
+        run: scripts/run_with_servers.sh "$PWD/server-bin/ruvio" 17400 -- mvn -B -f clients/java/pom.xml verify

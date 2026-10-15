@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Node.js client — Ruvio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css?v=20261015a">
+  <link rel="stylesheet" href="vendor/highlightjs/github-dark.min.css">
+  <link rel="icon" href="images/ruvio-icon.png" type="image/png">
+  <meta property="og:image" content="https://salihcantekin.github.io/ruvio/images/ruvio-social.png">
+</head>
+<body data-page="client-node.html">
+  <header class="top">
+    <div class="top-inner">
+      <a class="mark" href="index.html">Ruvio</a>
+      <nav aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="start.html">Start</a>
+        <details>
+          <summary>Build</summary>
+          <div class="nav-menu">
+            <a href="compare.html">How it runs</a>
+            <a href="commands.html">Commands</a>
+            <a href="packages.html">Packages</a>
+            <a href="ui.html">Operator UI</a>
+          </div>
+        </details>
+        <details>
+          <summary>Clients</summary>
+          <div class="nav-menu">
+            <a href="clients.html">Overview</a>
+            <a href="client-rust.html">Rust</a>
+            <a href="client-csharp.html">C#</a>
+            <a href="client-go.html">Go</a>
+            <a href="client-java.html">Java</a>
+            <a href="client-python.html">Python</a>
+            <a href="client-node.html">Node.js</a>
+            <a href="examples.html">Examples</a>
+          </div>
+        </details>
+        <details>
+          <summary>Operate</summary>
+          <div class="nav-menu">
+            <a href="configuration.html">Configuration</a>
+            <a href="durability.html">Durability</a>
+            <a href="replication.html">Replication</a>
+            <a href="operations.html">Operations</a>
+          </div>
+        </details>
+        <a href="testing.html">Testing</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap layout">
+    <nav class="side">
+      <a href="#overview">Overview</a>
+      <a href="#install">Install</a>
+      <a href="#quickstart">Quick start</a>
+      <a href="#performance">Performance</a>
+      <a href="#commands">Commands</a>
+      <a href="#ruvio">Ruvio commands</a>
+      <a href="#helpers">Helpers</a>
+      <a href="#pipelines">Pipelines and Pub/Sub</a>
+      <a href="#cluster">Cluster</a>
+      <a href="#errors">Errors</a>
+      <a href="#limits">Not done</a>
+      <a href="#testing">Testing</a>
+    </nav>
+    <article>
+      <h1>Node.js client</h1>
+      <p>Every example on this page was run against a live Ruvio server (standalone on one port, three shards on three ports) with Node 22 before it was pasted here. Output lines marked <code>// =&gt;</code> are what that run printed. Where something was not run, the page says so.</p>
+
+      
+<section class="panel">
+<h2 id="overview">Overview</h2>
+      <p><code>ruvio-client</code> is an async client for Ruvio, written in TypeScript. It shares one pipelined socket between all concurrent callers. Each method is named after the command it sends, and <code>call</code> sends anything else.</p>
+      <div class="table-wrap">
+      <table>
+        <tbody>
+          <tr><th>Package</th><td><code>ruvio-client</code>. See <a href="#install">Install</a>.</td></tr>
+          <tr><th>Version</th><td><span data-pkg="npm:ruvio-client" data-found="{v} on npm" data-missing="Not published to npm yet; the repository version is in <code>package.json</code>">Repository version in <code>package.json</code></span></td></tr>
+          <tr><th>License</th><td>MIT</td></tr>
+          <tr><th>Runtime</th><td>Node.js 18 or newer is intended (<code>engines</code>). <strong>Only Node 22 was tested.</strong> ESM only, with <code>.d.ts</code> files.</td></tr>
+          <tr><th>Model</th><td>Async (promises). One multiplexed connection per client, shared by concurrent callers.</td></tr>
+          <tr><th>Dependencies</th><td>None at runtime. <code>ioredis</code> is a dev dependency used only by the benchmark.</td></tr>
+          <tr><th>Protocol</th><td>RESP2 by default. <code>protocol: 3</code> sends <code>HELLO 3</code> (not run on this page).</td></tr>
+          <tr><th>Cluster</th><td>Yes. <code>createClusterClient</code> takes one seed address, reads <code>CLUSTER SLOTS</code> and routes by hash slot. It falls back to a plain connection on a standalone server.</td></tr>
+          <tr><th>Command coverage</th><td>287 of 287 commands in <code>docs/compatibility-matrix.json</code>, checked by <code>test/coverage.test.ts</code>.</td></tr>
+        </tbody>
+      </table>
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="install">Install</h2>
+      <p><span data-pkg="npm:ruvio-client" data-found="Install from npm with <code>npm install ruvio-client</code>, or use the repository checkout:" data-missing="The package is not on the npm registry yet. <code>npm install ruvio-client</code> would fetch a different package or fail, so use the repository checkout:">Use the repository checkout:</span></p>
+<pre>git clone https://github.com/salihcantekin/ruvio
+cd ruvio/clients/node
+npm install        # dev dependencies only (typescript, @types/node, ioredis for the benchmark)
+npm run build      # writes dist/ (ESM + .d.ts)
+
+# then, in your own project:
+npm install ../ruvio/clients/node</pre>
+      <p class="note">The last step (installing from the local path) was not tried; the tests and all examples here import the built <code>dist/index.js</code> directly. Registry release is pending.</p>
+</section>
+
+<section class="panel">
+<h2 id="quickstart">Quick start</h2>
+<pre>import { createClient } from 'ruvio-client';
+
+const c = createClient({ host: '127.0.0.1', port: 17391, db: 9 });   // or a URL string
+await c.set('session:ada', 'hello', { px: 5000 });
+console.log(await c.get('session:ada'));         // =&gt; hello
+console.log(await c.get('nope'));                // =&gt; null
+console.log(await c.binary.get('session:ada'));  // =&gt; &lt;Buffer 68 65 6c 6c 6f&gt;
+console.log(await c.incr('visits'));             // =&gt; 1
+console.log(await c.ttl('session:ada'), await c.pttl('session:ada')); // =&gt; 5 4996
+console.log(await c.set('session:ada', 'zzz', { nx: true }));        // =&gt; null (key exists)
+await c.quit();                                  // waits for in-flight replies, then closes</pre>
+      <p><code>createClient</code> also accepts a URL: <code>redis://user:pass@host:port/db</code> (<code>rediss://</code> or <code>ruvios://</code> turns TLS on). Options: <code>host</code>, <code>port</code>, <code>path</code> (unix socket), <code>tls</code>, <code>username</code>, <code>password</code>, <code>db</code>, <code>name</code> (<code>CLIENT SETNAME</code>), <code>protocol</code> (2 or 3), <code>connectTimeoutMs</code>, <code>noDelay</code>, <code>keepAlive</code>, <code>flush</code> (<code>'microtask'</code> or <code>'immediate'</code>), <code>reconnect</code> (default true) and <code>readBufferSize</code>.</p>
+      <p>The socket opens on the first command, or earlier with <code>await c.connect()</code>. <code>db</code>, <code>name</code> and credentials are applied again after a reconnect. Commands take strings, <code>Buffer</code>s or (for values) numbers; replies are strings, or <code>Buffer</code>s through <code>c.binary</code>.</p>
+      <p>AUTH, TLS and unix sockets exist in the code but were <strong>not run</strong> on this page.</p>
+</section>
+
+<section class="panel">
+<h2 id="performance">Performance</h2>
+      <ul>
+        <li><strong>One socket, many callers.</strong> Concurrent calls share the connection. Replies resolve in order from a ring-buffer queue (no <code>Array.shift</code>, no per-call closure).</li>
+        <li><strong>Write coalescing, no timers.</strong> Frames queued in the same tick go out in one <code>socket.write</code>. A serial call is sent at once. <code>flush: 'immediate'</code> also collects callers resumed by the same I/O event.</li>
+        <li><strong>Pre-encoded commands.</strong> Command names are cached as complete RESP fragments. Integers are written as ASCII digits into a reusable 64 KiB slab. Buffers of 64 KiB or more go to the socket without a copy.</li>
+        <li><strong>In-place, resumable parser.</strong> It works on the socket's reusable read buffer and copies only an unfinished tail, so a large array that arrives in many reads is parsed in linear time. Strings are decoded with <code>utf8Slice</code>.</li>
+        <li><strong>Binary API.</strong> <code>c.binary.*</code> has every command and returns <code>Buffer</code>s.</li>
+      </ul>
+      <p>The numbers below are copied from the client README. They come from a shared 4-vCPU VM, Node 22, loopback, 256-byte values, 1.5 s per case, one connection, one Ruvio process. They are noisy and are not release evidence. <strong>I did not re-run the benchmark for this page.</strong> The README itself says serial numbers vary a lot between runs (earlier runs of the same code gave 25k to 31k).</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>Client (ops/s)</th><th>GET c=1</th><th>SET c=1</th><th>GET c=128</th><th>SET c=128</th></tr></thead>
+        <tbody>
+          <tr><td>ruvio-client (microtask flush)</td><td>13,787</td><td>14,996</td><td>605,419</td><td>755,983</td></tr>
+          <tr><td>ruvio-client (setImmediate flush)</td><td>13,912</td><td>13,897</td><td>641,112</td><td>697,912</td></tr>
+          <tr><td>ioredis 5 (same run)</td><td>11,228</td><td>12,291</td><td>104,733</td><td>92,169</td></tr>
+          <tr><td>ioredis 5, autoPipelining</td><td>8,794</td><td>8,768</td><td>146,256</td><td>132,264</td></tr>
+          <tr><td><code>pipeline()</code> of 128 GETs</td><td colspan="4">663,990</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>Codec timings from the same README (no I/O): encode <code>GET</code> about 66 ns, encode <code>SET</code> with a 256-byte string about 230 ns (Buffer about 130 ns), parse <code>+OK</code> about 20 ns, <code>:int</code> about 57 ns, nil about 37 ns, a 256-byte bulk to string about 240 ns. The README's bytes-per-op column is a heap-delta estimate, so it is not quoted here.</p>
+      <p>For best speed: reuse one client, let concurrent calls overlap (<code>Promise.all</code>) instead of awaiting one by one, use <code>pipeline()</code> for batches, and use a Ruvio command that replaces a round trip (for example <code>set(k, v, { ifEq })</code> instead of GET then SET).</p>
+</section>
+
+<section class="panel">
+<h2 id="commands">Commands</h2>
+      <p>Every command in the compatibility matrix has a typed method. Names are the camel case of the command (<code>XGROUP CREATE</code> is <code>xgroupCreate</code>, <code>BF.MADD</code> is <code>bfMadd</code>). The method list is the <code>Commands</code> class in <code>src/commands.ts</code>. Command syntax is on <a href="commands.html">Commands</a>.</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>Family</th><th>Examples</th></tr></thead>
+        <tbody>
+          <tr><td>Strings</td><td><code>get</code>, <code>set</code> (options <code>ex</code>, <code>px</code>, <code>nx</code>, <code>xx</code>, <code>get</code>, <code>keepTtl</code>, <code>ifEq</code>), <code>mget</code>, <code>mset</code>, <code>incr</code>, <code>incrbyfloat</code>, <code>getdel</code>, <code>getrange</code></td></tr>
+          <tr><td>Keys</td><td><code>del</code>, <code>exists</code>, <code>expire</code>, <code>ttl</code>, <code>pttl</code>, <code>rename</code>, <code>copy</code>, <code>scan</code>, <code>dump</code>, <code>restore</code></td></tr>
+          <tr><td>Hashes</td><td><code>hset</code>, <code>hget</code>, <code>hgetall</code>, <code>hscan</code></td></tr>
+          <tr><td>Lists</td><td><code>lpush</code>, <code>rpush</code>, <code>lpop</code>, <code>lrange</code>, <code>blpop</code></td></tr>
+          <tr><td>Sets</td><td><code>sadd</code>, <code>smembers</code>, <code>sscan</code></td></tr>
+          <tr><td>Sorted sets</td><td><code>zadd</code>, <code>zrange</code>, <code>zrangeWithScores</code>, <code>zrevrangeWithScores</code>, <code>zscore</code>, <code>zscan</code></td></tr>
+          <tr><td>Streams</td><td><code>xadd</code>, <code>xrange</code>, <code>xread</code>, <code>xgroupCreate</code>, <code>xreadgroup</code>, <code>xack</code>, <code>xinfoStream</code></td></tr>
+          <tr><td>JSON</td><td><code>jsonSet</code>, <code>jsonGet</code>, <code>jsonIndexCreate</code>, <code>jsonFind</code></td></tr>
+          <tr><td>Geo</td><td><code>geoadd</code>, <code>geodist</code>, <code>geosearch</code></td></tr>
+          <tr><td>Bitmaps / HyperLogLog</td><td><code>setbit</code>, <code>bitcount</code>, <code>pfadd</code>, <code>pfcount</code>, <code>pfmerge</code></td></tr>
+          <tr><td>Bloom filters</td><td><code>bfReserve</code>, <code>bfMadd</code>, <code>bfMexists</code></td></tr>
+          <tr><td>Transactions</td><td><code>multi()</code>, <code>watch</code>, <code>unwatch</code></td></tr>
+          <tr><td>Pub/Sub</td><td><code>publish</code>, <code>spublish</code>, and <code>subscriber()</code> for the receiving side</td></tr>
+          <tr><td>Server, cluster</td><td><code>ping</code>, <code>info</code>, <code>dbsize</code>, <code>clusterSlots</code>, <code>clusterKeyslot</code></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>The table lists only methods I checked in the source or ran. The remaining methods (other string, key, list, set, stream, script, ACL and client commands) follow the same naming; the coverage test proves each matrix command has one. Typed examples, run against a standalone server (database 9):</p>
+<pre>// Strings and expiry
+await c.mset({ a: '1', b: '2' });                      // =&gt; 'OK'
+await c.mget('a', 'b', 'c');                           // =&gt; [ '1', '2', null ]
+
+// Hashes
+await c.hset('user:1', { name: 'Ada', plan: 'pro' });
+await c.hget('user:1', 'name');                        // =&gt; 'Ada'
+await c.hgetall('user:1');                             // =&gt; { name: 'Ada', plan: 'pro' }
+
+// Lists
+await c.rpush('jobs', 'a', 'b', 'c');
+await c.lrange('jobs', 0, -1);                         // =&gt; [ 'a', 'b', 'c' ]
+await c.lpop('jobs');                                  // =&gt; 'a'
+
+// Sets
+await c.sadd('tags', 'x', 'y');
+await c.smembers('tags');                              // =&gt; [ 'x', 'y' ]  (order not fixed by the server)
+
+// Sorted sets: ZADD ... GT CH
+await c.zadd('lb', [[100, 'player1'], [80, 'player2']]);
+await c.zadd('lb', 90, 'player2', { gt: true, ch: true }); // =&gt; 1
+await c.zrevrangeWithScores('lb', 0, 9);
+// =&gt; [ { member: 'player1', score: 100 }, { member: 'player2', score: 90 } ]
+await c.zscore('lb', 'player1');                       // =&gt; 100
+
+// Streams with a consumer group (Ruvio: XREADGROUP takes one stream and '>')
+await c.xadd('events', '*', { kind: 'signup', user: 'ada' });
+await c.xgroupCreate('events', 'workers', '0');
+const got = await c.xreadgroup('workers', 'w1', 'events', { count: 10 });
+// =&gt; [ { key: 'events', entries: [ { id: '...-0', fields: { kind: 'signup', user: 'ada' } } ] } ]
+await c.xack('events', 'workers', got![0].entries[0].id); // =&gt; 1
+
+// JSON (values are JSON text)
+await c.jsonSet('user:ada', '$', JSON.stringify({ name: 'Ada', city: 'Berlin', tags: ['a'] }));
+await c.jsonGet('user:ada', '$.name');                 // =&gt; '"Ada"'
+
+// Geo
+await c.geoadd('cities', [
+  { longitude: 13.361389, latitude: 38.115556, member: 'Palermo' },
+  { longitude: 15.087269, latitude: 37.502669, member: 'Catania' },
+]);                                                    // =&gt; 2
+await c.geodist('cities', 'Palermo', 'Catania', 'km'); // =&gt; 166.27415156960032
+await c.geosearch('cities', { fromLonLat: [15, 37], byRadius: { radius: 200, unit: 'km' }, order: 'ASC' });
+// =&gt; [ 'Catania', 'Palermo' ]
+
+// Bitmaps and HyperLogLog
+await c.setbit('online', 7, 1);
+await c.bitcount('online');                            // =&gt; 1
+await c.pfadd('visitors', 'u1', 'u2', 'u3');           // =&gt; true
+await c.pfcount('visitors');                           // =&gt; 3
+
+// Anything else: send the arguments as redis-cli would
+await c.call('OBJECT', 'ENCODING', 'a');               // =&gt; 'int'</pre>
+      <p>A wrong argument type throws before anything is sent. I first passed an object as the stream to <code>xreadgroup</code> and got <code>ruvio: unsupported argument type object</code>; the stream key is a plain argument. <code>call</code> returns the raw reply (string, number, array or <code>null</code>). The <code>EXPIRE</code> family takes no NX/XX/GT/LT because the server rejects them.</p>
+</section>
+
+<section class="panel">
+<h2 id="ruvio">Ruvio commands</h2>
+      <p>These are the commands Redis does not have, or has with different semantics. Replies below are from a live run.</p>
+<pre>// SET key value IFEQ expected  (compare-and-set; replaces WATCH/MULTI or a Lua script)
+await c.set('cfg', 'v1');
+await c.set('cfg', 'v2', { ifEq: 'v1', px: 60000 });   // =&gt; 'OK'
+await c.set('cfg', 'v3', { ifEq: 'v1' });              // =&gt; null (value is now v2)
+
+// DELEX key IFEQ value  (delete only if equal; the safe lock release, no Lua)
+await c.delex('cfg', 'nope');                          // =&gt; false
+await c.delex('cfg', 'v2');                            // =&gt; true
+
+// INCRBY key delta MAX limit  (bounded counter)
+await c.incrbyMax('stock', 1, 2);                      // =&gt; 1, then 2, then null (would pass 2)
+
+// LIMIT key max windowMs  (fixed-window rate limit; number = calls left, null = refused)
+await c.limit('api:ada', 2, 60000);                    // =&gt; 1, 0, null
+
+// FILLGET / FILLSET  (cache fill with stampede protection)
+const f1 = await c.fillget('page', 5000);              // =&gt; { state: 'fill', value: null, token: '6' }
+await c.fillget('page', 5000);                         // =&gt; { state: 'busy', value: null, token: null }
+await c.fillset('page', '&lt;html&gt;', 60000, f1.token!);  // =&gt; true
+await c.fillget('page', 5000);                         // =&gt; { state: 'hit', value: '&lt;html&gt;', token: null }
+
+// LEASE / SEMAPHORE / RELEASE
+await c.lease('leader', 10000);                        // =&gt; 1 (fence token), then null
+const tk = await c.semaphore('dl', 1, 10000);          // =&gt; '1878847355437973504'
+await c.semaphore('dl', 1, 10000);                     // =&gt; null (full)
+await c.release('dl', tk!);                            // =&gt; true
+
+// ONCE key ttlMs  (true on the first call, false afterwards)
+await c.once('job:1', 60000);                          // =&gt; true, then false
+
+// TAKE key count  (take from a numeric stock; null when there is not enough)
+await c.set('tickets', '5');
+await c.take('tickets', 2);                            // =&gt; 3 (left)
+await c.take('tickets', 9);                            // =&gt; null
+
+// SETV key value [version]  (versioned write)
+await c.setv('doc', 'one');                            // =&gt; 1
+await c.setv('doc', 'two', 1);                         // =&gt; 2
+
+// GETEX key ttlMs  (read and set a millisecond TTL)
+await c.set('g', 'hello');
+await c.getex('g', 5000);                              // =&gt; 'hello', pttl is now 5000
+
+// LPUSHCAP key cap v...  (push and trim in one command)
+await c.lpushcap('recent', 3, '1', '2', '3', '4', '5'); // =&gt; 3
+await c.lrange('recent', 0, -1);                       // =&gt; [ '5', '4', '3' ]
+
+// Bloom filter
+await c.bfReserve('seen', 0.01, 1000);                 // =&gt; 'OK'
+await c.bfMadd('seen', 'a', 'b');                      // =&gt; [ true, true ]
+await c.bfMexists('seen', 'a', 'z');                   // =&gt; [ true, false ]
+
+// JSON.INDEX / JSON.FIND (database 0 only)
+await c.jsonSet('user:1', '$', '{"city":"Berlin"}');
+await c.jsonIndexCreate('by_city', 'user:', '$.city', 'string'); // =&gt; 'OK'
+await c.jsonFind('by_city', '"Berlin"', { count: 100 });          // =&gt; [ 'user:1' ]
+
+// CHANGES
+const cur = await c.changesStart();                    // =&gt; 65
+await c.set('watched', '1');
+await c.changes(cur);                                  // =&gt; [ { seq: 66, note: 'SET watched' } ]</pre>
+      <p><code>JSON.FIND</code> right after the create answered <code>ERR index is building</code> four times in my run (50 ms apart) before it returned the key, so retry it on that error. <code>JSON.INDEX CREATE</code> works in database 0 only. <code>fillget</code> with a third <code>waitMs</code> argument sends <code>FILLGET ... WAIT</code> and parks the shared connection; use it on a <code>duplicate()</code> client only. <code>rpushcap</code>, <code>xadd</code> with <code>delayMs</code>, and the raw <code>idemBegin</code>/<code>idemComplete</code> exist; only <code>idemBegin</code>/<code>idemComplete</code> were run (through <code>idempotent</code>, below).</p>
+</section>
+
+<section class="panel">
+<h2 id="helpers">Helpers</h2>
+      <p>Thin layers over the native commands. They use only single-key commands, so they work unchanged on a <code>ClusterClient</code> (lock, rate limit and <code>getOrCreate</code> were run on three shards, see <a href="#cluster">Cluster</a>).</p>
+<pre>// Lock: SET key token NX PX, renew with SET IFEQ, release with DELEX IFEQ
+const lock = await c.acquireLock('lock:report', 30000);   // null if someone else holds it
+if (lock) {
+  try {
+    await lock.renew(30000);                              // =&gt; true
+  } finally {
+    await lock.release();                                 // =&gt; true; a second release() =&gt; false
+  }
+}
+await c.withLock('lock:job', 30000, async () =&gt; c.incr('jobs')); // =&gt; 1; releases even if fn throws
+
+// A lock someone else holds
+await c.acquireLock('lock:busy', 5000, { waitMs: 300 });  // =&gt; null (after ~300 ms)
+await c.withLock('lock:busy', 5000, async () =&gt; 1);       // throws AcquireTimeoutError</pre>
+      <p><strong>Failure behavior.</strong> <code>acquireLock</code> returns <code>null</code> when the lock is held and <code>waitMs</code> (default 0: one try) runs out. <code>withLock</code> throws <code>AcquireTimeoutError</code> instead. If the lock expired and someone else took it, <code>renew()</code> returns <code>false</code> and <code>release()</code> deletes nothing: <code>DELEX IFEQ</code> only removes your own token (checked: the other holder's value was still there after a failed acquire). The lock cannot tell you mid-work that it expired; check <code>renew()</code> during long work.</p>
+      <p><code>Lock</code>, <code>Lease</code> and <code>Permit</code> also implement <code>Symbol.asyncDispose</code>, so <code>await using lock = await c.acquireLock(...)</code> releases at scope end. <strong>That syntax was not run.</strong> Node 22.22 here fails to parse <code>await using</code> in a plain <code>.mjs</code> file (<code>SyntaxError: Unexpected identifier</code>).</p>
+      <p>It needs TypeScript 5.2+ to compile it down, or a newer Node. The README says "Node 22+" for it, which was not true on this machine. The <code>release()</code> calls above work everywhere.</p>
+<pre>// Fenced lease and semaphore permit
+const lease = await c.acquireLease('leader', 10000);      // lease.token =&gt; 1 (fencing token); a second acquire =&gt; null
+await lease!.release();                                   // =&gt; true
+const permit = await c.acquireSemaphore('downloads', 1, 60000); // a second acquire =&gt; null (full)
+await permit!.release();
+
+// Rate limit: LIMIT -&gt; { allowed, remaining }
+for (let i = 0; i &lt; 3; i++) console.log(await c.rateLimit('login:ada', 2, 60000));
+// =&gt; { allowed: true, remaining: 1 }, { allowed: true, remaining: 0 }, { allowed: false, remaining: 0 }
+
+// Cache-aside with stampede protection (FILLGET / FILLSET)
+const page = await c.getOrCreate('page:home', 60000, async () =&gt; '&lt;html&gt;home&lt;/html&gt;');
+// A second call does not run the factory. Four concurrent calls on a cold key ran it once.</pre>
+      <p><code>acquireLease</code> and <code>acquireSemaphore</code> take <code>{ waitMs, retryMs }</code> like <code>acquireLock</code> and return <code>null</code> when held or full. <code>getOrCreate</code> polls plain <code>FILLGET</code> with a 2 to 50 ms backoff while another caller fills, because <code>WAIT</code> would park the shared socket.</p>
+      <p>It throws <code>AcquireTimeoutError</code> after <code>waitMs</code> (default <code>fillMs + 1000</code>). If the factory throws, nothing is stored and the fill marker lapses after <code>fillMs</code> (default 10 s). With <code>staleMs</code> an expired value is served while one caller refreshes it in the background. The timeout and stale paths were not run here.</p>
+<pre>// Idempotency (IDEM BEGIN / COMPLETE)
+await c.idempotent('pay:42', 'fp-1', 3600000, async () =&gt; 'charged');
+// =&gt; { result: 'charged', replayed: false }
+await c.idempotent('pay:42', 'fp-1', 3600000, async () =&gt; 'charged');
+// =&gt; { result: 'charged', replayed: true }   (the work did not run)
+await c.idempotent('pay:42', 'other-fp', 3600000, async () =&gt; 'x');
+// throws IdempotencyConflictError</pre>
+      <p>While another owner is running the same key, <code>idempotent</code> throws <code>IdempotencyPendingError</code> at once (or polls until <code>waitMs</code>). If <code>fn</code> throws, the reservation stays pending until the TTL passes. This is not exactly-once for external side effects. The pending path was not run here.</p>
+<pre>// Lazy scan iterators: one page in memory at a time
+const keys: string[] = [];
+for await (const k of c.scanIterator({ match: 'session:*', count: 2 })) keys.push(k); // 5 keys
+for await (const [field, value] of c.hscanIterator('h')) { /* =&gt; a 1, b 2 */ }
+// sscanIterator(key) yields members, zscanIterator(key) yields { member, score }
+
+// Typed JSON: JSON.stringify / JSON.parse around JSON.SET / JSON.GET
+await c.jsonSetAs('u:t', '$', { name: 'Ada', city: 'Izmir' });  // =&gt; true
+await c.jsonGetAs('u:t', '$');                                   // =&gt; { name: 'Ada', city: 'Izmir' }
+await c.jsonGetAs('u:t', '$.city');                              // =&gt; 'Izmir'
+await c.jsonGetAs('nokey');                                      // =&gt; null
+
+// Capped recent list (LPUSHCAP) and Bloom "seen before" (BF.MADD)
+for (let i = 0; i &lt; 5; i++) await c.pushRecent('recent:ada', 3, 'item:' + i);
+await c.recent('recent:ada', 10);                  // =&gt; [ 'item:4', 'item:3', 'item:2' ]
+await c.seenBefore('emails:seen', 'a@x', 'b@x');   // =&gt; [ false, false ]
+await c.seenBefore('emails:seen', 'a@x', 'c@x');   // =&gt; [ true, false ]  (Bloom: true means "probably")
+await c.mightContain('emails:seen', 'a@x', 'zz');  // =&gt; [ true, false ]  (does not record)</pre>
+      <p><code>jsonGetAs&lt;T&gt;</code> and <code>jsonSetAs</code> are not checked against a schema: the type parameter is only a cast. A missing key gives <code>null</code>; invalid JSON text from the server would throw from <code>JSON.parse</code>.</p>
+</section>
+
+<section class="panel">
+<h2 id="pipelines">Pipelines, transactions, Pub/Sub, blocking</h2>
+<pre>// Pipeline: one write, replies in order
+await c.pipeline().set('a', 1).incr('a').get('a').exec();      // =&gt; [ 'OK', 2, '2' ]
+
+// A failing command stays in its own slot; the others still run
+await c.set('s', 'x');
+await c.pipeline().set('s', 'x').lpush('s', 'v').get('s').exec();
+// =&gt; [ 'OK', RuvioError: WRONGTYPE ..., 'x' ]
+await c.pipeline().set('s', 'x').lpush('s', 'v').execStrict();  // rejects with that RuvioError (code WRONGTYPE)
+
+// Transaction: MULTI .. EXEC in one contiguous write
+await c.set('balance', '100');
+await c.multi().incrby('balance', 10).get('balance').exec();    // =&gt; [ 110, '110' ]
+
+// WATCH needs its own connection
+await c.isolated(async (iso) =&gt; {
+  await iso.watch('balance');
+  await c.incr('balance');                                      // another client changes it
+  await iso.multi().incrby('balance', 10).exec();               // =&gt; null (WATCH failed)
+});await c.isolated(async (iso) =&gt; {
+  await iso.watch('balance');                                   // nobody touches it this time
+  await iso.multi().incrby('balance', 10).get('balance').exec(); // =&gt; [ 121, '121' ]
+});</pre>
+<pre>// Pub/Sub: a dedicated socket
+const sub = c.subscriber();
+sub.on('message', (m) =&gt; console.log(m));       // =&gt; { kind: 'message', channel: 'news', message: 'hello' }
+await sub.subscribe('news');
+await c.publish('news', 'hello');                // =&gt; 1 receiver
+sub.close();
+// also: for await (const m of sub) { ... }, psubscribe, ssubscribe, subscriber({ binary: true })
+
+// Blocking commands park the shared socket: use a second client
+const blk = c.duplicate();
+const pending = blk.blpop('queue', 2);           // timeout in seconds
+await c.rpush('queue', 'job-1');
+await pending;                                   // =&gt; [ 'queue', 'job-1' ]
+await blk.blpop('empty', 0.2);                   // =&gt; null
+await blk.quit();</pre>
+      <p>A blocking call (<code>blpop</code>, <code>xread</code> or <code>xreadgroup</code> with <code>block</code>, <code>fillget</code> with <code>waitMs</code>, <code>wait</code>) occupies the shared socket until it returns, so every other caller of that client waits.</p>
+      <p>Use <code>duplicate()</code> or <code>isolated()</code>. The subscriber re-subscribes after a dropped connection (delay <code>reconnectDelayMs</code>, default 100 ms, doubling to 5 s); that reconnect was not run here. <code>protocol: 3</code> (maps as objects, <code>push</code> events, <code>CLIENT TRACKING</code> invalidations) is implemented but was not run on this page. A pipeline cannot be re-run after <code>exec()</code>.</p>
+</section>
+
+<section class="panel">
+<h2 id="cluster">Cluster</h2>
+      <p>Pass one seed address to <code>createClusterClient</code>. On the first command (or <code>await c.connect()</code>) it sends <code>CLUSTER SLOTS</code> to the seed and builds a 16384-entry slot table (CRC16 of the key or of its <code>{hash tag}</code>, modulo 16384).</p>
+      <p>It keeps one lazy multiplexed connection per node. A standalone server answers <code>ERR cluster mode is disabled</code>; the client then behaves like <code>RuvioClient</code> on that one connection (I ran <code>set</code> against the standalone port: <code>OK</code>, <code>isCluster</code> false). <code>cluster: true</code> makes a standalone seed an error instead. Only database 0 exists in cluster mode.</p>
+      <ul>
+        <li><strong>Single key:</strong> sent to the owner node. The key is read from the encoded frame, so no extra key strings are built.</li>
+        <li><strong>Split and gathered:</strong> <code>MGET</code>, <code>MSET</code>, <code>DEL</code>, <code>UNLINK</code>, <code>EXISTS</code>, <code>TOUCH</code> over several slots run as one sub-command per slot, concurrently. Replies come back in your order and counts are summed. They are not atomic: if one part fails the call rejects, and other parts may have run.</li>
+        <li><strong>Every node:</strong> <code>DBSIZE</code>, <code>KEYS</code>, <code>FLUSHDB</code>, <code>FLUSHALL</code>. Other keyless commands (<code>PING</code>, <code>INFO</code>, <code>CONFIG</code>, ...) go to the seed.</li>
+        <li><strong>Other multi-key commands</strong> (<code>RENAME</code>, <code>COPY</code>, <code>SUNION</code>, <code>SINTER</code>, <code>BITOP</code>, <code>ZUNION*</code>, <code>LMPOP</code>, <code>XREAD</code>, ...) need all keys in one slot, otherwise a <code>RuvioError</code> with code <code>CROSSSLOT</code> is thrown before anything is sent.</li>
+        <li><strong>Pipelines</strong> are grouped per node, one write each, replies in your order. <strong>Transactions</strong> need one slot (else <code>CROSSSLOT</code>, nothing sent). <code>WATCH</code> uses <code>c.isolated(key, fn)</code>.</li>
+        <li><strong>MOVED:</strong> the slot is repointed and the command retried once; a second MOVED is returned as the error. The table is re-read when the node is unknown or more than one slot moved. A command in flight when a socket drops is never replayed: it rejects with <code>ConnectionError</code>, only that node reconnects, other nodes are unaffected.</li>
+        <li><strong>Blocking commands</strong> use a pooled dedicated connection to the owning node. <strong>Pub/Sub:</strong> <code>c.subscriber()</code> connects to the seed; <code>await c.subscriberFor(channel)</code> connects to the node owning the channel (for <code>SSUBSCRIBE</code>/<code>SPUBLISH</code>).</li>
+        <li><strong>Scan:</strong> <code>c.scanIterator()</code> walks every node one after the other. A plain <code>c.scan(cursor)</code> reaches only the seed node.</li>
+      </ul>
+      <p>Run against three shards (ports 17420 to 17422, seed 17420):</p>
+<pre>import { createClusterClient, hashSlot } from 'ruvio-client';
+
+const c = createClusterClient('redis://127.0.0.1:17420');
+await c.connect();
+c.isCluster;                          // =&gt; true
+c.nodes.length;                       // =&gt; 3
+hashSlot('somekey');                  // =&gt; 11058   (same as await c.clusterKeyslot('somekey'))
+hashSlot('{user1000}.following');     // =&gt; 3443    (same slot as '{user1000}.profile')
+
+for (const k of ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot']) await c.set(k, k);
+// slots 865, 8623, 1769, 9053, 14438, 3172: all three shards hold keys
+await c.mget('foxtrot', 'alpha', 'missing', 'delta', 'bravo');
+// =&gt; [ 'foxtrot', 'alpha', null, 'delta', 'bravo' ]   (caller's order)
+
+await c.mset({ m1: '1', m2: '2', m3: '3', m4: '4' });
+await c.del('m1', 'm2', 'm3', 'm4', 'nokey');           // =&gt; 4
+await c.exists('alpha', 'bravo', 'nokey');              // =&gt; 2
+
+await c.pipeline().set('p1', 1).set('p2', 2).get('p1').get('p2').incr('p3').exec();
+// =&gt; [ 'OK', 'OK', '1', '2', 1 ]
+
+await c.sunion('s1', 's2');                             // throws RuvioError, code CROSSSLOT
+await c.multi().set('{t}a', '1').set('{t}b', '2').exec();      // =&gt; [ 'OK', 'OK' ]  (one hash tag, one slot)
+await c.multi().set('alpha', '1').set('bravo', '2').exec();    // throws CROSSSLOT, nothing sent
+
+const keys = [];
+for await (const k of c.scanIterator()) keys.push(k);   // all 11 keys; await c.dbsize() =&gt; 11
+
+const lock = await c.acquireLock('lock:x', 5000);       // helpers work on the cluster client
+await c.rateLimit('rl:ada', 2, 60000);                  // =&gt; { allowed: true, remaining: 1 }
+await c.getOrCreate('page', 60000, () =&gt; 'v');          // =&gt; 'v'
+await c.quit();</pre>
+      <p>The cross-slot errors above read <code>CROSSSLOT Keys in request do not hash to the same slot</code>; the client raises them itself, before sending. <code>c.redirectCount</code> and <code>c.refreshCount</code> stayed 0 in this run, so <strong>MOVED recovery was not exercised by these examples</strong>; the repository's cluster tests cover it (see <a href="#testing">Testing</a>). Introspection: <code>c.nodeFor(key)</code>, <code>c.slotOf(key)</code>, <code>c.refreshSlots()</code>.</p>
+      <p>Cluster numbers from the README (same caveats as above, not re-run): 3 shards, one client, 256-byte values, GET c=128 about 659k ops/s and SET c=128 about 523k, against about 839k and 790k for <code>RuvioClient</code> on a standalone server in the same run. The 3-shard server shares the VM's CPUs with the benchmark, so these rows are a lower bound, not a scaling claim.</p>
+</section>
+
+<section class="panel">
+<h2 id="errors">Errors</h2>
+      <p>Three error classes. <code>RuvioError</code> is a server reply (<code>-ERR ...</code>, <code>-WRONGTYPE ...</code>); <code>.code</code> is its first word. <code>ConnectionError</code> means the socket failed or closed before a reply arrived: the command may or may not have run. <code>ReplyError</code> means a reply had a shape the typed method does not understand.</p>
+      <p>The helpers add <code>AcquireTimeoutError</code>, <code>IdempotencyConflictError</code> and <code>IdempotencyPendingError</code>. A server error leaves the connection usable.</p>
+<pre>await c.set('str', 'x');
+try {
+  await c.lpush('str', 'v');
+} catch (e) {
+  console.log(e instanceof RuvioError, e.code, e.message);
+  // =&gt; true WRONGTYPE WRONGTYPE Operation against a key holding the wrong kind of value
+}
+await c.ping();                      // =&gt; 'PONG', still usable
+await c.get('missing');              // =&gt; null  (nil is null, not an error)
+
+const bad = createClient({ host: '127.0.0.1', port: 17399 });
+await bad.get('x');                  // rejects: ConnectionError "ruvio: connection closed: connect ECONNREFUSED 127.0.0.1:17399"</pre>
+      <p><strong>Nil</strong> maps to <code>null</code> (<code>get</code>, <code>hget</code>, <code>lpop</code>, <code>blpop</code>, <code>zscore</code>, ...). <code>limit</code>, <code>take</code>, <code>lease</code>, <code>semaphore</code>, <code>incrbyMax</code> and <code>set</code> with <code>nx</code>/<code>ifEq</code> use <code>null</code> for "refused".</p>
+      <p><strong>Reconnect.</strong> After a drop, pending calls reject with <code>ConnectionError</code> and the next call opens the socket again (<code>reconnect</code> is on by default; <code>db</code> and <code>name</code> are applied again). A command that was in flight is not replayed.</p>
+      <p>The reconnect path was not run on this page. Events: <code>c.on('connect' | 'disconnect' | 'connectError' | 'error' | 'push', fn)</code>.</p>
+      <p><strong>Timeouts and cancellation.</strong> The only timeout option is <code>connectTimeoutMs</code>. There is no per-command timeout and no <code>AbortSignal</code>: a call that never gets a reply (for example a blocking command with timeout 0) stays pending. Bound it yourself with <code>Promise.race</code> and a timer, then <code>disconnect()</code> the client (which rejects every in-flight call with <code>ConnectionError</code>), or run the call on a <code>duplicate()</code> client you can throw away.</p>
+</section>
+
+<section class="panel">
+<h2 id="limits">Not done or not verified</h2>
+      <ul>
+        <li><strong>Release.</strong> <span data-pkg="npm:ruvio-client" data-found="Published to npm; the repository can be ahead of it." data-missing="Not published to npm yet.">See the npm registry for the release status.</span></li>
+        <li><strong>Node versions.</strong> Only Node 22 was available. Node 18 and 20 are the stated target but were not run. <code>await using</code> was not run (Node 22.22 cannot parse it directly; use <code>release()</code> or compile with TypeScript 5.2+). The client polyfills <code>Symbol.asyncDispose</code> for older Node.</li>
+        <li><strong>Not run live:</strong> TLS, unix-socket connections, <code>HELLO ... AUTH</code> and AUTH from options, <code>protocol: 3</code> on this page, <code>ACL LOAD</code>/<code>ACL SAVE</code> success (the server has no acl_file), <code>WAIT</code> with real replicas.</li>
+        <li><strong>Cluster, not done:</strong> <code>ASK</code> redirects and replica reads (<code>READONLY</code>); <code>MOVED</code> inside a transaction is not retried; split <code>MSET</code>/<code>DEL</code> are not atomic; <code>SELECT</code> is not routed (database 0 only); <code>CLUSTER NODES/SHARDS/INFO/MYID</code> go to the seed only; a plain <code>scan()</code> is single-node. Routing is verified only against Ruvio's three-shard <code>per-shard</code> layout on one machine, not against a Redis Cluster.</li>
+        <li><strong>Older server builds</strong> had quirks the client still tolerates: a blocked <code>XREAD</code>/<code>XREADGROUP</code> woken by <code>XADD</code> replied one entry without the outer list, <code>SUNION</code>/<code>SINTER</code> order was not sorted, and a queue-time error inside <code>MULTI</code> did not give <code>EXECABORT</code>. All three are fixed in the server; <code>EXEC</code> now answers <code>EXECABORT</code> and runs nothing.</li>
+        <li><strong>Not run on this page:</strong> <code>getOrCreate</code> busy/timeout/stale paths, the pending path of <code>idempotent</code>, <code>subscriberFor</code>, Pub/Sub on the cluster, MOVED recovery, reconnect, <code>rpushcap</code>, <code>XADD ... delayMs</code>.</li>
+        <li><strong>No per-command timeout or cancellation</strong> (see Errors).</li>
+        <li><strong>Benchmark numbers</strong> on this page are copied from the README and were not re-run.</li>
+      </ul>
+</section>
+
+<section class="panel">
+<h2 id="testing">Testing</h2>
+<pre>cd clients/node
+npm test                                                     # codec unit tests + coverage; live tests skip
+RUVIO_TEST_ADDR=127.0.0.1:17391 npm test                     # + live tests per command family, cluster client standalone fallback
+RUVIO_TEST_ADDR=127.0.0.1:17391 RUVIO_CLUSTER_ADDR=127.0.0.1:17420 npm test   # + live cluster tests
+RUVIO_TEST_ADDR=127.0.0.1:17391 npm run bench                # codec ns, live GET/SET ops/s, ioredis comparison (not run for this page)</pre>
+      <p>Counts from my run with a live standalone server and a live three-shard server: 63 tests, 63 passed, 0 failed, 0 skipped (Node 22.22, <code>node --test</code>). The tests are in <code>test/</code>: <code>codec.test.ts</code> (encoder and parser), <code>cluster.test.ts</code> (slot table, hash tags, key extraction, MOVED handling against a scripted fake server), <code>coverage.test.ts</code> (reads <code>docs/compatibility-matrix.json</code> and fails if a command has no typed method), and the live files for strings and keys, collections, Bloom/JSON/streams, server commands and cluster.</p>
+      <p>The live cluster tests include cross-slot <code>MGET</code>/<code>MSET</code>/<code>DEL</code> order, pipeline order, forced stale-table MOVED recovery, transactions and helpers on the cluster. Without the environment variables the live tests skip.</p>
+      <p>The live tests use their own logical databases and run <code>FLUSHDB</code>; one test runs <code>FLUSHALL</code>, so point them at a throwaway server. Start servers as on <a href="start.html">Start</a>. For three shards set <code>shards = 3</code> and <code>port_mode = "per-shard"</code> in the config; shard <em>i</em> listens on base port + <em>i</em>.</p>
+
+      <p class="note">See also: <a href="clients.html">Clients overview</a>, <a href="client-rust.html">Rust</a>, <a href="client-csharp.html">C#</a>, <a href="client-go.html">Go</a>, <a href="client-java.html">Java</a>, <a href="client-python.html">Python</a>, <a href="examples.html">Examples</a>, <a href="commands.html">Commands</a>.</p>
+</section>
+</article>
+  </main>
+  <footer class="foot">
+    <div class="foot-inner">Source: <a href="https://github.com/salihcantekin/ruvio/tree/dev/clients/node">clients/node</a> in the Ruvio repository.</div>
+  </footer>
+  <script src="js/versions.js?v=20261013j"></script>
+  <script src="vendor/highlightjs/highlight.min.js"></script>
+  <footer class="site-foot">
+    <div class="site-foot-inner">
+      <div class="site-foot-brand">
+        <img src="images/ruvio-mark.png?v=20261015b" alt="" width="36" height="36">
+        <div>
+          <strong>Ruvio</strong>
+          <span>One RESP process. The shard that owns the key does the work.</span>
+          <small>Server AGPL-3.0 · Clients MIT</small>
+        </div>
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/salihcantekin/ruvio/tree/main/docs">Docs</a>
+        <a href="https://github.com/salihcantekin/ruvio">GitHub</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="js/chrome.js?v=20261015a"></script>
+</body>
+</html>

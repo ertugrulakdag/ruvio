@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Configuration — Ruvio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css?v=20261015a">
+  <link rel="stylesheet" href="vendor/highlightjs/github-dark.min.css">
+  <link rel="icon" href="images/ruvio-icon.png" type="image/png">
+  <meta property="og:image" content="https://salihcantekin.github.io/ruvio/images/ruvio-social.png">
+</head>
+<body data-page="configuration.html">
+  <header class="top">
+    <div class="top-inner">
+      <a class="mark" href="index.html">Ruvio</a>
+      <nav aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="start.html">Start</a>
+        <details>
+          <summary>Build</summary>
+          <div class="nav-menu">
+            <a href="compare.html">How it runs</a>
+            <a href="commands.html">Commands</a>
+            <a href="packages.html">Packages</a>
+            <a href="ui.html">Operator UI</a>
+          </div>
+        </details>
+        <details>
+          <summary>Clients</summary>
+          <div class="nav-menu">
+            <a href="clients.html">Overview</a>
+            <a href="client-rust.html">Rust</a>
+            <a href="client-csharp.html">C#</a>
+            <a href="client-go.html">Go</a>
+            <a href="client-java.html">Java</a>
+            <a href="client-python.html">Python</a>
+            <a href="client-node.html">Node.js</a>
+            <a href="examples.html">Examples</a>
+          </div>
+        </details>
+        <details>
+          <summary>Operate</summary>
+          <div class="nav-menu">
+            <a href="configuration.html">Configuration</a>
+            <a href="durability.html">Durability</a>
+            <a href="replication.html">Replication</a>
+            <a href="operations.html">Operations</a>
+          </div>
+        </details>
+        <a href="testing.html">Testing</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap layout">
+    <nav class="side">
+      <a href="#rules">Rules</a>
+      <a href="#sample">Sample file</a>
+      <a href="#apply">How to apply</a>
+      <a href="#coupled">Coupled settings</a>
+      <a href="#process">Process</a>
+      <a href="#key-events">Keyspace events</a>
+      <a href="#protocol">Protocol</a>
+      <a href="#timeouts">Timeouts</a>
+      <a href="#connections">Connections</a>
+      <a href="#requests">Requests</a>
+      <a href="#persistence">Persistence</a>
+      <a href="#replication">Replication</a>
+      <a href="#security">Security</a>
+      <a href="#memory">Memory</a>
+      <a href="#scripts">Scripts</a>
+    </nav>
+    <article>
+      <h1>Configuration</h1>
+      <p id="rules">Settings merge in this order: built-in defaults, a TOML file, <code>RUVIO_*</code> environment variables, then CLI flags. Later layers win. Unknown TOML fields fail startup. With no <code>--config</code>, the process loads <code>RUVIO_CONFIG</code>, then <code>ruvio.toml</code> beside the binary, then <code>/etc/ruvio/ruvio.toml</code>, then <code>./ruvio.toml</code>. A missing file is created from the built-in defaults. Environment variables and CLI flags are written back into that file at startup. The file is read once: an edit applies on the next start. There is no <code>CONFIG SET</code>. After start, <code>CONFIG GET *</code> (or a glob) shows the effective process and redacts <code>requirepass</code>. <code>ruvio --help</code> lists CLI names. This page follows <code>docs/CONFIGURATION.md</code>.</p>
+      
+<section class="panel">
+<h2 id="sample">Sample file</h2>
+      <div class="callout">
+        <p>The repository ships this shape as <code>ruvio.toml</code>. The process loads the default path above, and <code>--config</code> still selects a file explicitly. How that works for an installed binary, a checkout, and Docker is in <a href="#apply">How to apply</a>.</p>
+      </div>
+<pre>address = "127.0.0.1:6379"
+shards = 1
+advertised_host = "127.0.0.1"
+# advertised_port = 6379
+hot_keys = []
+notify_keyspace_events = ""
+shutdown_grace_ms = 30000
+metrics_address = "127.0.0.1:9121"
+
+[protocol]
+max_arguments = 64
+max_key_bytes = 1048576
+max_value_bytes = 16777216
+max_command_bytes = 67108864
+max_pipeline_commands = 1024
+max_connection_buffer_bytes = 67108864
+databases = 16
+
+[timeouts]
+idle_ms = 300000
+read_ms = 30000
+write_ms = 30000
+
+[connections]
+max_global = 10000
+max_per_ip = 256
+max_per_user = 0
+max_commands_per_second = 0
+
+[requests]
+max_queued_requests = 1024
+max_output_buffer_bytes = 16777216
+
+[persistence]
+profile = "memory"
+data_dir = "./data"
+wal_segment_bytes = 268435456
+sync_interval_ms = 1000
+sync_worker = "auto"
+snapshot_max_bytes = 1073741824
+snapshot_journal_bytes = 67108864
+snapshot_interval_ms = 60000
+snapshot_min_mutations = 0
+
+[replication]
+role = "off"
+listen = "127.0.0.1:26379"
+primary = "127.0.0.1:26379"
+
+[security]
+requirepass = ""
+protected_mode = true
+tls_cert = ""
+tls_key = ""
+
+[[security.users]]
+name = "app"
+rules = "on &gt;app-secret ~app:* +@read +ping +auth +info"
+
+[memory]
+max_shard_bytes = 0
+max_process_bytes = 0
+reserved_headroom_bytes = 16777216
+maxmemory_policy = "noeviction"
+maxmemory_samples = 16
+active_expire_keys = 16
+hash_max_compact_entries = 64
+hash_max_compact_value_bytes = 64
+
+[scripts]
+max_bytes = 16384
+max_cached = 1024
+max_calls = 1024
+max_instructions = 1000000</pre>
+</section>
+
+<section class="panel">
+<h2 id="apply">How to apply</h2>
+      <p>Save the sample as TOML, then point the process at it with <code>--config</code>. Environment and flags still override that file. A typical split: put stable limits and ACL users in the file; put the bind address, password, shard count, and advertise host in the environment so the same file works on a laptop and in Docker.</p>
+      <h3>Built binary</h3>
+      <p>A binary built from a checkout (<code>cargo build --release</code>) puts <code>ruvio</code> and <code>ruvio-ctl</code> in <code>target/release</code>. Paths in the file are relative to the working directory, not the binary.</p>
+<pre>ruvio --config ./ruvio.toml</pre>
+      <p>Override one field without editing the file. CLI wins:</p>
+<pre>ruvio --config ./ruvio.toml --durability always --data-dir ./data</pre>
+      <p>Or skip the file and use environment names (<code>RUVIO_ADDR</code>, <code>RUVIO_SHARDS</code>, <code>RUVIO_DURABILITY</code>, <code>RUVIO_DATA_DIR</code>, <code>RUVIO_REQUIREPASS</code>, <code>RUVIO_ADVERTISE_HOST</code>, …):</p>
+<pre>RUVIO_SHARDS=2 RUVIO_ADDR=0.0.0.0:6379 ruvio</pre>
+      <h3>From a checkout</h3>
+      <p>Pass flags after <code>--</code> so Cargo does not eat them.</p>
+<pre>cargo run --release --bin ruvio -- --config ./ruvio.toml
+RUVIO_SHARDS=4 RUVIO_ADDR=0.0.0.0:6379 cargo run --release --bin ruvio</pre>
+      <h3>Linux container</h3>
+      <p>The published image already sets environment that the file would otherwise default differently:</p>
+      <ul>
+        <li><code>RUVIO_ADDR=0.0.0.0:6379</code></li>
+        <li><code>RUVIO_DATA_DIR=/data</code></li>
+        <li><code>RUVIO_PROTECTED_MODE=false</code></li>
+      </ul>
+      <p>Those values beat a file unless you pass a later CLI flag. The process is UID 10001. The entrypoint is <code>ruvio</code>, so extra arguments are flags, not a shell.</p>
+      <p>Environment only — no file:</p>
+<pre>docker run --rm -p 6379:6379 -v ruvio-data:/data \
+  -e RUVIO_DURABILITY=everysec \
+  -e RUVIO_REQUIREPASS=secret \
+  salihcantekin/ruvio:linux</pre>
+      <p>Two shards that remote clients can follow. Advertise the host (and published ports) the app can reach:</p>
+<pre>docker run --rm -p 6379-6380:6379-6380 -v ruvio-data:/data \
+  -e RUVIO_SHARDS=2 \
+  -e RUVIO_ADVERTISE_HOST=YOUR_SERVER_IP \
+  -e RUVIO_PROTECTED_MODE=false \
+  salihcantekin/ruvio:linux</pre>
+      <p>Same sample file, mounted where the process can read it. Keep <code>data_dir = "/data"</code> (or omit it and keep the image default). Host paths such as <code>./data</code> are wrong inside the container.</p>
+<pre>docker run --rm -p 6379:6379 \
+  -v ruvio-data:/data \
+  -v "$PWD/ruvio.toml:/etc/ruvio.toml:ro" \
+  salihcantekin/ruvio:linux --config /etc/ruvio.toml</pre>
+      <p>Then <code>-e RUVIO_SHARDS=2</code> still overrides <code>shards</code> in that file. Put a password on any bind that is not loopback when you leave <code>protected_mode</code> false.</p>
+</section>
+
+<section class="panel">
+<h2 id="coupled">Coupled settings</h2>
+      <p>These pairs are validated together. A mismatch fails before a listener opens.</p>
+      <div class="table-wrap">
+      <table class="cards detail"><thead><tr><th>If you set</th><th>It also requires / changes</th></tr></thead><tbody>
+          <tr><td data-label="If you set"><code>shards &gt; 1</code></td><td data-label="It also requires / changes">Only logical database <code>0</code> is allowed. Shard <code>i</code> binds <code>address</code> port <code>+ i</code>. <code>CLUSTER SLOTS</code> / <code>MOVED</code> use <code>advertised_host</code> and <code>advertised_port</code> (or the bind port). <code>cpu_set</code> must not be an empty string. Change shard count on an empty data directory after a restart.</td></tr>
+          <tr><td data-label="If you set"><code>advertised_host</code> / <code>advertised_port</code></td><td data-label="It also requires / changes">Must be the host and shard-0 port that clients can reach. Set both when Docker or a load balancer remaps ports (example: publish <code>7000–7003</code> and set advertise port <code>7000</code>). Wrong values send <code>MOVED</code> to an address the app cannot dial.</td></tr>
+          <tr><td data-label="If you set"><code>metrics_address</code></td><td data-label="It also requires / changes">Multi-shard uses consecutive metrics ports. That range must not overlap the RESP range or the replication range.</td></tr>
+          <tr><td data-label="If you set"><code>protocol.max_connection_buffer_bytes</code></td><td data-label="It also requires / changes">Must be <code>≥ protocol.max_command_bytes</code>.</td></tr>
+          <tr><td data-label="If you set"><code>protocol.databases</code> with <code>shards &gt; 1</code></td><td data-label="It also requires / changes"><code>SELECT</code> other than <code>0</code> is refused even if <code>databases</code> is 16.</td></tr>
+          <tr><td data-label="If you set"><code>connections.max_per_ip</code> / <code>max_per_user</code></td><td data-label="It also requires / changes">Neither may exceed <code>max_global</code>. <code>max_per_user</code> of <code>0</code> disables the cap.</td></tr>
+          <tr><td data-label="If you set"><code>persistence.profile</code></td><td data-label="It also requires / changes"><code>memory</code> / <code>snapshot</code> cannot run replication. <code>everysec</code> uses <code>sync_interval_ms</code>. <code>always</code> syncs each record. WAL-backed profiles lock <code>data_dir/LOCK</code>. Scheduled checkpoints use <code>snapshot_interval_ms</code> and <code>snapshot_min_mutations</code> together.</td></tr>
+          <tr><td data-label="If you set"><code>persistence.sync_worker</code></td><td data-label="It also requires / changes"><code>auto</code> is on only for Linux, <code>always</code>, <code>shards = 1</code> and empty <code>hot_keys</code>. With more shards <code>always</code> throughput is limited by disk flush latency, not by shard CPU, so extra shards are not recommended for <code>always</code>. <code>on</code> with another profile or with <code>hot_keys</code> is a startup error.</td></tr>
+          <tr><td data-label="If you set"><code>replication.role = primary</code></td><td data-label="It also requires / changes">Needs <code>everysec</code> or <code>always</code>, and <code>replication.listen</code> as a numeric socket. Shard <code>i</code> uses listen port <code>+ i</code>. That range must not overlap RESP, metrics, or the cluster-bus ports (RESP port <code>+ 10000</code>). At most 16 replica streams. <code>ACL SETUSER</code> is refused while replication is on.</td></tr>
+          <tr><td data-label="If you set"><code>replication.role = replica</code></td><td data-label="It also requires / changes">Needs a WAL profile and <code>replication.primary</code> (<code>host:port</code> allowed). The process dials; it does not listen.</td></tr>
+          <tr><td data-label="If you set"><code>address</code> not loopback and empty <code>requirepass</code></td><td data-label="It also requires / changes"><code>protected_mode</code> stays on and rejects non-loopback clients. Container images set <code>RUVIO_PROTECTED_MODE=false</code> because a published port is not loopback inside the namespace.</td></tr>
+          <tr><td data-label="If you set"><code>tls_cert</code> / <code>tls_key</code></td><td data-label="It also requires / changes">Both PEM paths or neither. Plaintext clients are closed at handshake.</td></tr>
+          <tr><td data-label="If you set"><code>memory.max_shard_bytes</code></td><td data-label="It also requires / changes"><code>0</code> disables the budget. If set, <code>reserved_headroom_bytes</code> must be smaller than it. Must not exceed <code>max_process_bytes</code> when that is also set. Eviction policies only run when this budget is in use. A single write larger than the shard budget is <code>OOM</code> and does not evict.</td></tr>
+          <tr><td data-label="If you set"><code>hot_keys</code></td><td data-label="It also requires / changes">Matching keys bypass slot routing inside this process. Enable on empty data; existing shard keys are not migrated. Checkpoints wait for a virtual hot partition. Only <code>GET</code>, <code>SET</code>, <code>DEL</code> are allowed on a match.</td></tr>
+          <tr><td data-label="If you set"><code>notify_keyspace_events</code></td><td data-label="It also requires / changes">Combine <code>K</code> or <code>E</code> with event classes: <code>g</code> (delete), <code>$</code> (string <code>SET</code>), <code>x</code> (expired), <code>e</code> (evicted), or <code>A</code> (all four). For example, <code>Exe</code> enables keyevent channels for expiration and eviction. Delivery uses sharded <code>SSUBSCRIBE</code>, not durable, not <code>PSUBSCRIBE</code>.</td></tr>
+        </tbody></table>
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="process">Process</h2>
+      <div class="table-wrap">
+      <table class="cards detail"><thead><tr><th>Setting</th><th>Allowed</th><th>Default</th><th>Meaning</th><th>Coupled with</th></tr></thead><tbody>
+          <tr><td data-label="Setting"><code>address</code> / <code>RUVIO_ADDR</code></td><td data-label="Allowed">Numeric <code>ip:port</code></td><td data-label="Default"><code>127.0.0.1:6379</code></td><td data-label="Meaning">RESP bind. Shard <code>i</code> uses this port plus <code>i</code>.</td><td data-label="Coupled with">Protected mode, metrics and replication port ranges, <code>advertised_port</code></td></tr>
+          <tr><td data-label="Setting"><code>shards</code> / <code>RUVIO_SHARDS</code></td><td data-label="Allowed">Integer <code>≥ 1</code></td><td data-label="Default"><code>1</code></td><td data-label="Meaning">Shard owners in this process and how 16,384 slots are split.</td><td data-label="Coupled with">Databases, advertise, CPU set, metrics ports</td></tr>
+          <tr><td data-label="Setting"><code>advertised_host</code> / <code>RUVIO_ADVERTISE_HOST</code></td><td data-label="Allowed">Hostname or IP string</td><td data-label="Default"><code>127.0.0.1</code></td><td data-label="Meaning">Host in <code>CLUSTER SLOTS</code> / <code>SHARDS</code> / <code>NODES</code> and <code>MOVED</code>.</td><td data-label="Coupled with"><code>shards</code>, <code>advertised_port</code></td></tr>
+          <tr><td data-label="Setting"><code>advertised_port</code> / <code>RUVIO_ADVERTISE_PORT</code></td><td data-label="Allowed">Omitted, or port <code>1–65535</code></td><td data-label="Default">Bind port</td><td data-label="Meaning">Announced port for shard 0. Shard <code>i</code> is this plus <code>i</code>.</td><td data-label="Coupled with"><code>address</code>, published Docker ports</td></tr>
+          <tr><td data-label="Setting"><code>cpu_set</code> / <code>RUVIO_CPUSET</code></td><td data-label="Allowed">CPU list, or omit</td><td data-label="Default">Unset</td><td data-label="Meaning">Pin shard executors. An empty string is rejected when <code>shards &gt; 1</code>.</td><td data-label="Coupled with"><code>shards</code></td></tr>
+          <tr><td data-label="Setting"><code>hot_keys</code> / <code>RUVIO_HOT_KEYS</code></td><td data-label="Allowed">List of Redis <code>*</code> / <code>?</code> globs, or empty</td><td data-label="Default">Empty (off)</td><td data-label="Meaning">Matching string keys use a process-wide store, same value on every shard in this process.</td><td data-label="Coupled with">Checkpoints, empty data directory</td></tr>
+          <tr><td data-label="Setting"><code>notify_keyspace_events</code> / <code>RUVIO_NOTIFY_KEYSPACE_EVENTS</code></td><td data-label="Allowed">Empty, or <code>K</code>/<code>E</code> plus event classes <code>g</code>, <code>$</code>, <code>x</code>, <code>e</code>, <code>A</code></td><td data-label="Default">Empty (off)</td><td data-label="Meaning"><code>K</code> enables keyspace channels; <code>E</code> enables keyevent channels. Classes: <code>g</code> delete, <code>$</code> string <code>SET</code>, <code>x</code> expired, <code>e</code> evicted, <code>A</code> all four.</td><td data-label="Coupled with"><code>SSUBSCRIBE</code>, not WAL</td></tr>
+          <tr><td data-label="Setting"><code>shutdown_grace_ms</code></td><td data-label="Allowed">Positive milliseconds</td><td data-label="Default"><code>30000</code></td><td data-label="Meaning">After signal: stop accept, drain clients, flush durable state.</td><td data-label="Coupled with">Persistence profile</td></tr>
+          <tr><td data-label="Setting"><code>metrics_address</code></td><td data-label="Allowed">Omitted/empty, or numeric <code>ip:port</code></td><td data-label="Default">Omitted (off)</td><td data-label="Meaning">HTTP <code>GET /metrics</code> per shard on consecutive ports. <code>INFO prometheus</code> still works without it.</td><td data-label="Coupled with">RESP and replication port ranges</td></tr>
+        </tbody></table>
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="key-events">Listening for expired and evicted keys</h2>
+      <p><code>notify_keyspace_events</code> is empty by default. Its value combines channel type and event classes:</p>
+      <ul>
+        <li><code>K</code> enables keyspace channels named <code>__keyspace@&lt;db&gt;__:&lt;key&gt;</code>; payload is the event name.</li>
+        <li><code>E</code> enables keyevent channels named <code>__keyevent@&lt;db&gt;__:&lt;event&gt;</code>; payload is the key name.</li>
+        <li><code>g</code> means delete, <code>$</code> means string <code>SET</code>, <code>x</code> means expired, and <code>e</code> means evicted. <code>A</code> enables all four event classes.</li>
+      </ul>
+      <p>To publish both expiration and eviction keyevent notices, combine <code>E</code> with <code>x</code> and <code>e</code>:</p>
+<pre>notify_keyspace_events = "Exe"</pre>
+      <p>Ruvio reads this setting at startup; restart after changing the TOML file. Subscribe to the exact channel for the key's database, such as <code>SSUBSCRIBE __keyevent@0__:expired</code> or <code>SSUBSCRIBE __keyevent@0__:evicted</code>. <code>PSUBSCRIBE</code> patterns do not receive these notifications.</p>
+      <p>Expired and evicted keyevent messages contain only the key name as their payload; they do not include or return the key's value.</p>
+<pre>await db.SubscribeExpiredAsync(message =>
+    Console.WriteLine($"Expired key: {message.Payload}"));
+await db.SubscribeEvictedAsync(message =>
+    Console.WriteLine($"Evicted key: {message.Payload}"));</pre>
+      <p>Notices are live and best-effort: they are not replayed to later subscribers and are not written to the WAL. An eviction notice is sent only when memory pressure triggers eviction; the default <code>noeviction</code> policy does not evict. In a multi-shard deployment, notifications are local to the shard that owns the key; one subscription does not collect events from every shard. The Operator Pub/Sub screen also provides expired/evicted listeners with database and shard selection.</p>
+</section>
+
+<section class="panel">
+<h2 id="protocol">Protocol</h2>
+      <div class="table-wrap">
+      <table class="cards detail"><thead><tr><th>Setting</th><th>Allowed</th><th>Default</th><th>Meaning</th><th>Coupled with</th></tr></thead><tbody>
+          <tr><td data-label="Setting"><code>max_arguments</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>64</code></td><td data-label="Meaning">Arguments in one command array.</td><td data-label="Coupled with"></td></tr>
+          <tr><td data-label="Setting"><code>max_key_bytes</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>1 MiB</code></td><td data-label="Meaning">Maximum key length.</td><td data-label="Coupled with"></td></tr>
+          <tr><td data-label="Setting"><code>max_value_bytes</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>16 MiB</code></td><td data-label="Meaning">Maximum value length.</td><td data-label="Coupled with">Shard memory budget</td></tr>
+          <tr><td data-label="Setting"><code>max_command_bytes</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>64 MiB</code></td><td data-label="Meaning">Maximum encoded command.</td><td data-label="Coupled with"><code>max_connection_buffer_bytes</code></td></tr>
+          <tr><td data-label="Setting"><code>max_pipeline_commands</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>1024</code></td><td data-label="Meaning">Responses held before a Linux pipeline flush. Portable writes one reply at a time.</td><td data-label="Coupled with">Compiled adapter</td></tr>
+          <tr><td data-label="Setting"><code>max_connection_buffer_bytes</code></td><td data-label="Allowed"><code>≥ max_command_bytes</code></td><td data-label="Default"><code>64 MiB</code></td><td data-label="Meaning">Input buffer cap on one connection.</td><td data-label="Coupled with"><code>max_command_bytes</code></td></tr>
+          <tr><td data-label="Setting"><code>databases</code> / <code>RUVIO_DATABASES</code></td><td data-label="Allowed"><code>1–256</code></td><td data-label="Default"><code>16</code></td><td data-label="Meaning"><code>SELECT 0 .. databases-1</code> on a standalone process.</td><td data-label="Coupled with"><code>shards &gt; 1</code> forces DB 0</td></tr>
+        </tbody></table>
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="timeouts">Timeouts</h2>
+      <p>Zero is rejected for all three.</p>
+      <div class="table-wrap">
+      <table class="cards detail"><thead><tr><th>Setting</th><th>Allowed</th><th>Default</th><th>Meaning</th><th>Coupled with</th></tr></thead><tbody>
+          <tr><td data-label="Setting"><code>idle_ms</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>300000</code></td><td data-label="Meaning">Deadline while waiting for the next complete frame.</td><td data-label="Coupled with"><code>read_ms</code> after a partial frame</td></tr>
+          <tr><td data-label="Setting"><code>read_ms</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>30000</code></td><td data-label="Meaning">Deadline until more bytes arrive on a partial frame.</td><td data-label="Coupled with"><code>idle_ms</code></td></tr>
+          <tr><td data-label="Setting"><code>write_ms</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>30000</code></td><td data-label="Meaning">Blocked write timeout.</td><td data-label="Coupled with">Output buffer limit</td></tr>
+        </tbody></table>
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="connections">Connections</h2>
+      <div class="table-wrap">
+      <table class="cards detail"><thead><tr><th>Setting</th><th>Allowed</th><th>Default</th><th>Meaning</th><th>Coupled with</th></tr></thead><tbody>
+          <tr><td data-label="Setting"><code>max_global</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>10000</code></td><td data-label="Meaning">Process-wide admitted connections. Excess: <code>ERR max number of clients reached</code>, then close.</td><td data-label="Coupled with">Shared across shards</td></tr>
+          <tr><td data-label="Setting"><code>max_per_ip</code></td><td data-label="Allowed"><code>&gt; 0</code>, <code>≤ max_global</code></td><td data-label="Default"><code>256</code></td><td data-label="Meaning">Cap per source IP.</td><td data-label="Coupled with"><code>max_global</code></td></tr>
+          <tr><td data-label="Setting"><code>max_per_user</code></td><td data-label="Allowed"><code>0</code> (off) or <code>≤ max_global</code></td><td data-label="Default"><code>0</code></td><td data-label="Meaning">Cap per ACL identity after <code>AUTH</code>.</td><td data-label="Coupled with">ACL users, <code>max_global</code></td></tr>
+          <tr><td data-label="Setting"><code>max_commands_per_second</code></td><td data-label="Allowed"><code>0</code> (off) or <code>&gt; 0</code></td><td data-label="Default"><code>0</code></td><td data-label="Meaning">Per-connection token bucket. Burst equals one second. Excess is not executed.</td><td data-label="Coupled with"></td></tr>
+        </tbody></table>
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="requests">Requests</h2>
+      <div class="table-wrap">
+      <table class="cards detail"><thead><tr><th>Setting</th><th>Allowed</th><th>Default</th><th>Meaning</th><th>Coupled with</th></tr></thead><tbody>
+          <tr><td data-label="Setting"><code>max_queued_requests</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>1024</code></td><td data-label="Meaning">Portable shard queue. Full queue returns <code>TRYAGAIN</code>.</td><td data-label="Coupled with">Portable adapter</td></tr>
+          <tr><td data-label="Setting"><code>max_output_buffer_bytes</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>16 MiB</code></td><td data-label="Meaning">Per-connection reply accumulation. Slow clients are cut.</td><td data-label="Coupled with">Write timeout, memory charges</td></tr>
+        </tbody></table>
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="persistence">Persistence</h2>
+      <div class="table-wrap">
+      <table class="cards detail"><thead><tr><th>Setting</th><th>Allowed</th><th>Default</th><th>Meaning</th><th>Coupled with</th></tr></thead><tbody>
+          <tr><td data-label="Setting"><code>profile</code></td><td data-label="Allowed"><code>memory</code>, <code>snapshot</code>, <code>everysec</code>, <code>always</code></td><td data-label="Default"><code>memory</code></td><td data-label="Meaning"><code>memory</code>: no recovery. <code>snapshot</code>: last completed checkpoint. <code>everysec</code>: ack after append, sync on the interval. <code>always</code>: ack only after the record is durable. A failed append does not change the key; later writes are <code>MISCONF</code>.</td><td data-label="Coupled with">Replication needs WAL (<code>everysec</code> or <code>always</code>)</td></tr>
+          <tr><td data-label="Setting"><code>data_dir</code></td><td data-label="Allowed">Directory path</td><td data-label="Default"><code>./data</code></td><td data-label="Meaning">WAL, checkpoints, <code>LOCK</code>, <code>CLOCK</code>, and per-shard <code>REPLICA_CATCHUP_####</code> markers during incomplete replica recovery.</td><td data-label="Coupled with">WAL profiles take <code>LOCK</code></td></tr>
+          <tr><td data-label="Setting"><code>wal_segment_bytes</code></td><td data-label="Allowed">Positive size</td><td data-label="Default"><code>256 MiB</code></td><td data-label="Meaning">Rotate WAL segments at this size.</td><td data-label="Coupled with">Checkpoints delete covered segments</td></tr>
+          <tr><td data-label="Setting"><code>sync_interval_ms</code></td><td data-label="Allowed">Positive when used</td><td data-label="Default"><code>1000</code></td><td data-label="Meaning">How often <code>everysec</code> synchronizes dirty logs.</td><td data-label="Coupled with"><code>profile = everysec</code></td></tr>
+          <tr><td data-label="Setting"><code>sync_worker</code></td><td data-label="Allowed"><code>auto</code>, <code>on</code>, <code>off</code> (env <code>RUVIO_SYNC_WORKER</code>)</td><td data-label="Default"><code>auto</code></td><td data-label="Meaning">Runs the <code>always</code> fsync on a helper thread so the shard keeps executing other clients' commands while the disk works; replies still wait for the sync. <code>auto</code> turns it on only on Linux with <code>profile = always</code>, one shard and no <code>hot_keys</code>; everywhere else it stays off. <code>on</code> forces it (any other profile or <code>hot_keys</code> fails startup, more than one shard is allowed but not measured to help) and <code>off</code> keeps the sync on the shard thread. The old <code>experimental_sync_worker</code> / <code>RUVIO_EXPERIMENTAL_SYNC_WORKER</code> still work and map to <code>on</code> / <code>off</code>. <code>CONFIG GET sync-worker</code> shows the mode, <code>CONFIG GET sync-worker-active</code> the resolved value.</td><td data-label="Coupled with"><code>profile = always</code>, <code>shards</code>, <code>hot_keys</code></td></tr>
+          <tr><td data-label="Setting"><code>snapshot_max_bytes</code></td><td data-label="Allowed">Positive size</td><td data-label="Default"><code>1 GiB</code></td><td data-label="Meaning">Upper bound on a checkpoint file.</td><td data-label="Coupled with"></td></tr>
+          <tr><td data-label="Setting"><code>snapshot_journal_bytes</code></td><td data-label="Allowed">Positive size</td><td data-label="Default"><code>64 MiB</code></td><td data-label="Meaning">Copy-on-write / journal bound while a snapshot runs.</td><td data-label="Coupled with">Memory charges</td></tr>
+          <tr><td data-label="Setting"><code>snapshot_interval_ms</code></td><td data-label="Allowed"><code>0</code> (off) or <code>&gt; 0</code></td><td data-label="Default"><code>60000</code></td><td data-label="Meaning">Scheduled checkpoint period. <code>SAVE</code> still works when <code>0</code>.</td><td data-label="Coupled with"><code>snapshot_min_mutations</code></td></tr>
+          <tr><td data-label="Setting"><code>snapshot_min_mutations</code></td><td data-label="Allowed"><code>≥ 0</code></td><td data-label="Default"><code>0</code></td><td data-label="Meaning">Mutations required before a scheduled checkpoint. <code>0</code> means any mutation after the interval.</td><td data-label="Coupled with"><code>snapshot_interval_ms</code></td></tr>
+        </tbody></table>
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="replication">Replication</h2>
+      <div class="table-wrap">
+      <table class="cards detail"><thead><tr><th>Setting</th><th>Allowed</th><th>Default</th><th>Meaning</th><th>Coupled with</th></tr></thead><tbody>
+          <tr><td data-label="Setting"><code>role</code></td><td data-label="Allowed"><code>off</code>, <code>primary</code>, <code>replica</code></td><td data-label="Default"><code>off</code></td><td data-label="Meaning">No automatic failover. <code>off</code> is a standalone writer; <code>primary</code> accepts replicas; <code>replica</code> dials its primary and rejects writes. Changing role requires a restart.</td><td data-label="Coupled with">WAL profile, listen/primary, incomplete promotion guard</td></tr>
+          <tr><td data-label="Setting"><code>listen</code></td><td data-label="Allowed">Numeric <code>ip:port</code></td><td data-label="Default">Sample <code>127.0.0.1:26379</code></td><td data-label="Meaning">Primary bind. Shard <code>i</code> uses port plus <code>i</code>.</td><td data-label="Coupled with">Required for <code>primary</code>. Must not overlap RESP/metrics/bus</td></tr>
+          <tr><td data-label="Setting"><code>primary</code></td><td data-label="Allowed">Numeric address or <code>host:port</code></td><td data-label="Default">Sample <code>127.0.0.1:26379</code></td><td data-label="Meaning">Address a replica dials. Hostnames resolve again on each dial.</td><td data-label="Coupled with">Required for <code>replica</code></td></tr>
+          <tr><td data-label="Setting"><code>replica_retain_max_bytes</code></td><td data-label="Allowed">Bytes; <code>0</code> = no limit</td><td data-label="Default">1 GiB</td><td data-label="Meaning">Caps the WAL the primary keeps for a replica that has not received it yet. Past the cap the hold is dropped and the replica takes a fresh snapshot. <code>INFO</code> shows <code>replica_retain_dropped</code>. Environment <code>RUVIO_REPLICA_RETAIN_MAX_BYTES</code>.</td><td data-label="Coupled with">WAL</td></tr>
+        </tbody></table>
+      </div>
+      <p>A replica installing a snapshot records its catch-up marker before changing its WAL base. While incomplete, reads return <code>LOADING</code> (or <code>MASTERDOWN</code> after 30 seconds); when the primary returns it retries a fresh snapshot. A marker blocks a normal writer restart after changing <code>role</code> to <code>off</code> or <code>primary</code>.</p>
+      <p>There is no TOML or environment toggle to disable this guard. If you deliberately accept possibly missing data, fence the old primary and invoke <code>ruvio --config ./ruvio.toml --force-promote-incomplete</code> with a writer role. This CLI-only flag is not saved to the config file, does not bypass corrupt WAL/checkpoint validation, and must be supplied again on every incomplete writer restart. Do not delete marker files manually. See <a href="replication.html#promote">manual promotion</a>.</p>
+</section>
+
+<section class="panel">
+<h2 id="security">Security</h2>
+      <p>The <a href="ui.html">operator UI</a> does not have its own accounts. Sign-in is <code>AUTH</code> against this list. Empty user and password send no <code>AUTH</code> and the session is <code>default</code>. <code>default</code> is always present: <code>on nopass ~* +@all</code> until <code>requirepass</code> is set, and then that password belongs to <code>default</code>.</p>
+      <p>Named users in <code>[[security.users]]</code> are loaded at startup and survive a restart. <code>ACL SETUSER</code> from the UI changes only the running process.</p>
+      <div class="table-wrap">
+      <table class="cards detail"><thead><tr><th>Setting</th><th>Allowed</th><th>Default</th><th>Meaning</th><th>Coupled with</th></tr></thead><tbody>
+          <tr><td data-label="Setting"><code>requirepass</code></td><td data-label="Allowed">String, max 65535 bytes, or empty</td><td data-label="Default">Empty</td><td data-label="Meaning">Password for the implicit <code>default</code> user. Compared in constant time. Never logged. Redacted in <code>CONFIG GET</code>.</td><td data-label="Coupled with"><code>protected_mode</code>, named users</td></tr>
+          <tr><td data-label="Setting"><code>protected_mode</code></td><td data-label="Allowed"><code>true</code> / <code>false</code></td><td data-label="Default"><code>true</code></td><td data-label="Meaning">With a public bind and no password, non-loopback clients are rejected.</td><td data-label="Coupled with"><code>address</code>, <code>requirepass</code></td></tr>
+          <tr><td data-label="Setting"><code>tls_cert</code> / <code>tls_key</code></td><td data-label="Allowed">Both PEM paths, or both empty</td><td data-label="Default">Empty (off)</td><td data-label="Meaning">TLS before RESP. Files reload when mtime changes. No client certificates.</td><td data-label="Coupled with"><code>tls_client_ca</code></td></tr>
+          <tr><td data-label="Setting"><code>[[security.users]]</code></td><td data-label="Allowed"><code>name</code> + Redis-style <code>rules</code></td><td data-label="Default">None</td><td data-label="Meaning"><code>on</code>/<code>off</code>, <code>&gt;password</code>, <code>nopass</code>, <code>~pattern</code>, <code>+@cat</code>, <code>+cmd</code>. Implicit default is <code>on nopass ~* +@all</code> until a password is set. <code>ACL SETUSER</code> is memory-only and refused while replication is on.</td><td data-label="Coupled with"><code>max_per_user</code>, replication</td></tr>
+        </tbody></table>
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="memory">Memory</h2>
+      <div class="table-wrap">
+      <table class="cards detail"><thead><tr><th>Setting</th><th>Allowed</th><th>Default</th><th>Meaning</th><th>Coupled with</th></tr></thead><tbody>
+          <tr><td data-label="Setting"><code>max_shard_bytes</code></td><td data-label="Allowed"><code>0</code> (off) or budget</td><td data-label="Default"><code>0</code></td><td data-label="Meaning">Admission budget per shard, including connection and persistence charges.</td><td data-label="Coupled with">Headroom, process cap, policy</td></tr>
+          <tr><td data-label="Setting"><code>max_process_bytes</code></td><td data-label="Allowed"><code>0</code> (off) or budget</td><td data-label="Default"><code>0</code></td><td data-label="Meaning">Process-wide cap. Shard limit cannot exceed it when both are set.</td><td data-label="Coupled with"><code>max_shard_bytes</code></td></tr>
+          <tr><td data-label="Setting"><code>reserved_headroom_bytes</code></td><td data-label="Allowed">Positive, <code>&lt; max_shard_bytes</code> when that is set</td><td data-label="Default"><code>16 MiB</code></td><td data-label="Meaning">Unusable slice of the shard budget so eviction/OOM has room.</td><td data-label="Coupled with"><code>max_shard_bytes</code></td></tr>
+          <tr><td data-label="Setting"><code>maxmemory_policy</code></td><td data-label="Allowed"><code>noeviction</code>, <code>allkeys-lru</code>, <code>allkeys-lfu</code>, <code>volatile-lru</code>, <code>volatile-ttl</code></td><td data-label="Default"><code>noeviction</code></td><td data-label="Meaning">What happens when the shard budget is exceeded. Eviction is shard-local, at most 16 deletes per command.</td><td data-label="Coupled with">Only matters if <code>max_shard_bytes &gt; 0</code></td></tr>
+          <tr><td data-label="Setting"><code>maxmemory_samples</code></td><td data-label="Allowed"><code>1–64</code></td><td data-label="Default"><code>16</code></td><td data-label="Meaning">Candidates examined per eviction decision.</td><td data-label="Coupled with">Policy</td></tr>
+          <tr><td data-label="Setting"><code>active_expire_keys</code></td><td data-label="Allowed"><code>1–1024</code></td><td data-label="Default"><code>16</code></td><td data-label="Meaning">Expired keys reaped per command or idle tick.</td><td data-label="Coupled with"></td></tr>
+          <tr><td data-label="Setting"><code>hash_max_compact_entries</code></td><td data-label="Allowed"><code>1–4096</code></td><td data-label="Default"><code>64</code></td><td data-label="Meaning">Small hashes stay compact until this field count.</td><td data-label="Coupled with"><code>hash_max_compact_value_bytes</code></td></tr>
+          <tr><td data-label="Setting"><code>hash_max_compact_value_bytes</code></td><td data-label="Allowed"><code>1–65536</code></td><td data-label="Default"><code>64</code></td><td data-label="Meaning">A longer field or value promotes the hash to a table.</td><td data-label="Coupled with"><code>hash_max_compact_entries</code></td></tr>
+        </tbody></table>
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="scripts">Scripts</h2>
+      <p>Zero is rejected. Environment names: <code>RUVIO_SCRIPT_MAX_BYTES</code>, <code>RUVIO_SCRIPT_MAX_CACHED</code>, <code>RUVIO_SCRIPT_MAX_CALLS</code>, <code>RUVIO_SCRIPT_MAX_INSTRUCTIONS</code>.</p>
+      <div class="table-wrap">
+      <table class="cards detail"><thead><tr><th>Setting</th><th>Allowed</th><th>Default</th><th>Meaning</th><th>Coupled with</th></tr></thead><tbody>
+          <tr><td data-label="Setting"><code>max_bytes</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>16384</code></td><td data-label="Meaning">Maximum script or function body.</td><td data-label="Coupled with"></td></tr>
+          <tr><td data-label="Setting"><code>max_cached</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>1024</code></td><td data-label="Meaning">Cached <code>EVALSHA</code> / loaded scripts.</td><td data-label="Coupled with"></td></tr>
+          <tr><td data-label="Setting"><code>max_calls</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>1024</code></td><td data-label="Meaning">Nested call quota in the Lua sandbox.</td><td data-label="Coupled with"></td></tr>
+          <tr><td data-label="Setting"><code>max_instructions</code></td><td data-label="Allowed"><code>&gt; 0</code></td><td data-label="Default"><code>1000000</code></td><td data-label="Meaning">Instruction quota. Recovery replays mutations, not Lua.</td><td data-label="Coupled with">WAL transaction batch</td></tr>
+        </tbody></table>
+      </div>
+</section>
+</article>
+  </main>
+  <footer class="foot">
+    <div class="foot-inner">Canonical text and validation errors: <code>docs/CONFIGURATION.md</code>.</div>
+  </footer>
+  <script src="js/versions.js?v=20261013j"></script>
+  <script src="vendor/highlightjs/highlight.min.js"></script>
+  <footer class="site-foot">
+    <div class="site-foot-inner">
+      <div class="site-foot-brand">
+        <img src="images/ruvio-mark.png?v=20261015b" alt="" width="36" height="36">
+        <div>
+          <strong>Ruvio</strong>
+          <span>One RESP process. The shard that owns the key does the work.</span>
+          <small>Server AGPL-3.0 · Clients MIT</small>
+        </div>
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/salihcantekin/ruvio/tree/main/docs">Docs</a>
+        <a href="https://github.com/salihcantekin/ruvio">GitHub</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="js/chrome.js?v=20261015a"></script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+/target
+# Written by a server started in the repository; the tracked template is ruvio.example.toml
+/ruvio.toml
+.DS_Store
+**/.DS_Store
+/benchmark/baselines/
+/benchmark/results/
+/profile/results/
+/docs/results/
+/clients/csharp/**/bin/
+/clients/csharp/**/obj/
+/integrations/dotnet/**/bin/
+/integrations/dotnet/**/obj/
+/BenchmarkDotNet.Artifacts/
+/clients/ruvio-client/target/
+/dist/
+# Local editor and tool state, never committed
+/.worktrees/
+/.cursor/
+/.cursorignore
+/.agents/
+/.claude/
+/.codex/
+/.superpowers/
+/AGENTS.md
+/CLAUDE.md
+__pycache__/
+
+# Internal design records and plans: kept locally, never committed
+/docs/adr/
+/docs/plan/
+/docs/INFRASTRUCTURE_IMPROVEMENTS.md
+
+# Machine type and container CPU chosen by deploy/local.sh
+/deploy/.local.env

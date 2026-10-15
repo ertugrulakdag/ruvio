@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>C# client — Ruvio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css?v=20261015a">
+  <link rel="stylesheet" href="vendor/highlightjs/github-dark.min.css">
+  <link rel="icon" href="images/ruvio-icon.png" type="image/png">
+  <meta property="og:image" content="https://salihcantekin.github.io/ruvio/images/ruvio-social.png">
+</head>
+<body data-page="client-csharp.html">
+    <header class="top">
+    <div class="top-inner">
+      <a class="mark" href="index.html">Ruvio</a>
+      <nav aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="start.html">Start</a>
+        <details>
+          <summary>Build</summary>
+          <div class="nav-menu">
+            <a href="compare.html">How it runs</a>
+            <a href="commands.html">Commands</a>
+            <a href="packages.html">Packages</a>
+            <a href="ui.html">Operator UI</a>
+          </div>
+        </details>
+        <details>
+          <summary>Clients</summary>
+          <div class="nav-menu">
+            <a href="clients.html">Overview</a>
+            <a href="client-rust.html">Rust</a>
+            <a href="client-csharp.html">C#</a>
+            <a href="client-go.html">Go</a>
+            <a href="client-java.html">Java</a>
+            <a href="client-python.html">Python</a>
+            <a href="client-node.html">Node.js</a>
+            <a href="examples.html">Examples</a>
+          </div>
+        </details>
+        <details>
+          <summary>Operate</summary>
+          <div class="nav-menu">
+            <a href="configuration.html">Configuration</a>
+            <a href="durability.html">Durability</a>
+            <a href="replication.html">Replication</a>
+            <a href="operations.html">Operations</a>
+          </div>
+        </details>
+        <a href="testing.html">Testing</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap layout">
+    <nav class="side">
+      <a href="#overview">Overview</a>
+      <a href="#install">Install</a>
+      <a href="#quickstart">Quick start</a>
+      <a href="#performance">Performance</a>
+      <a href="#commands">Commands</a>
+      <a href="#ruvio">Ruvio commands</a>
+      <a href="#helpers">Helpers</a>
+      <a href="#pipelines">Pipelines</a>
+      <a href="#cluster">Cluster</a>
+      <a href="#errors">Errors</a>
+      <a href="#limits">Not done</a>
+      <a href="#testing">Testing</a>
+      <a href="#integrations">Integrations</a>
+    </nav>
+    <article>
+      <h1>C# client</h1>
+      <p class="note">The client examples on this page were run against a live Ruvio server (standalone and a 3-shard cluster) before they were pasted here. Exceptions: the <code>Username</code>/<code>Password</code> options (the test server has no password) and the integration snippets, which come from each package README and are marked as such.</p>
+      
+<section class="panel">
+<h2 id="overview">Overview</h2>
+      <p><code>Ruvio.Client</code> is the async .NET client for Ruvio. One connection is shared by many concurrent callers: commands are pipelined on the socket and replies are matched in order. It has a typed method for every command in the compatibility matrix, plus helpers for locks, rate limits, cache-aside and idempotency.</p>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><th>Package</th><td><a href="https://www.nuget.org/packages/Ruvio.Client">Ruvio.Client</a> and <a href="https://www.nuget.org/packages/Ruvio.Client.AspNetCore">Ruvio.Client.AspNetCore</a> (DI, health check)</td></tr>
+            <tr><th>Install</th><td><code>dotnet add package Ruvio.Client</code></td></tr>
+            <tr><th>Version</th><td><span data-pkg="nuget:Ruvio.Client" data-found="{v} on NuGet" data-missing="Not published yet">latest</span>. The repository can be ahead of the published package (the "Unreleased" part of the README), so some APIs on this page may need a newer build than the one on NuGet.</td></tr>
+            <tr><th>License</th><td>MIT</td></tr>
+            <tr><th>Runtime</th><td>net8.0. Marked AOT-compatible and trimmable.</td></tr>
+            <tr><th>Model</th><td>Async only (<code>ValueTask</code>). One multiplexed socket per database and per shard.</td></tr>
+            <tr><th>Dependencies</th><td>None at runtime (no <code>PackageReference</code> in the project).</td></tr>
+            <tr><th>Protocol</th><td>RESP2. No <code>HELLO</code> or <code>CLIENT SETINFO</code> on connect. No TLS option exists.</td></tr>
+            <tr><th>Cluster</th><td>Yes. Slot routing from one seed address, falls back to standalone by itself. See <a href="#cluster">Cluster</a>.</td></tr>
+            <tr><th>Coverage</th><td>287 of 287 commands in the compatibility matrix have a typed method. <code>MatrixCoverageTests</code> fails when one is missing, and the live test <code>Every_matrix_command_runs_against_a_live_server</code> sends all of them.</td></tr>
+          </tbody>
+        </table>
+      </div>
+</section>
+
+<section class="panel">
+<h2 id="install">Install</h2>
+      <p>Both packages are published on NuGet.</p>
+<pre>dotnet add package Ruvio.Client
+dotnet add package Ruvio.Client.AspNetCore   # only for ASP.NET Core DI and health checks</pre>
+      <p>To use the repository version (it can be ahead of the published package), reference the project: <code>dotnet add reference clients/csharp/Ruvio.Client/Ruvio.Client.csproj</code>. The .NET 8 SDK is enough to build it.</p>
+</section>
+
+<section class="panel">
+<h2 id="quickstart">Quick start</h2>
+      <p>The connection owns the sockets. A database client is fixed to one logical database. Dispose only the connection.</p>
+<pre>using Ruvio.Client;
+
+await using var connection = await RuvioConnection.ConnectAsync("127.0.0.1", 6379);
+IRuvioClient db = await connection.GetDatabaseAsync(0);
+
+await db.SetAsync("greeting", "hello", TimeSpan.FromMinutes(5));
+string? value = await db.GetStringAsync("greeting");   // "hello"
+string? none  = await db.GetStringAsync("nope");        // null (nil reply)
+long visits   = await db.IncrementAsync("visits");      // 1</pre>
+      <p>Options (timeouts, auth, database, reconnect) go in <code>RuvioClientOptions</code>:</p>
+<pre>var options = new RuvioClientOptions
+{
+    Host = "127.0.0.1",
+    Port = 6379,
+    Username = "app",            // sent as AUTH user password, only when Password is set
+    Password = "secret",
+    Database = 4,                // standalone only; cluster has database 0 only
+    ConnectTimeout = TimeSpan.FromSeconds(2),
+    MaxInFlightRequests = 256,   // per socket
+};
+await using var connection = await RuvioConnection.ConnectAsync(options);
+IRuvioClient db = await connection.GetDefaultDatabaseAsync();</pre>
+      <p>Other databases come from <code>connection.GetDatabaseAsync(n)</code>; each gets its own socket, so <code>SELECT</code> never races (and <code>SELECT</code> is rejected on the typed and raw API). There is no per-command timeout option: pass a <code>CancellationToken</code>. TLS is not supported.</p>
+      <p>ASP.NET Core:</p>
+<pre>builder.Services.AddRuvioClient(builder.Configuration.GetSection("Ruvio"));
+// then inject IRuvioClient</pre>
+</section>
+
+<section class="panel">
+<h2 id="performance">Performance</h2>
+      <p>How the client stays light, from the README and the code:</p>
+      <ul>
+        <li>One connection is shared. A writer sends complete RESP frames without waiting for replies and a reader matches replies to callers in FIFO order. Do not open a connection per request.</li>
+        <li>Write coalescing: frames already queued are sent in one write (at most 16 request groups, stops collecting at 64 KiB). There is no timer and no wait to fill a batch, so a serial call is sent at once.</li>
+        <li>Command names such as <code>GET</code> and <code>SET</code> are pre-encoded RESP fragments generated at compile time from <code>RespVerbs.txt</code> (43 verbs). Integers are written straight into the pooled buffer, with no string allocation.</li>
+        <li>Typed commands with up to five arguments keep them inline in a struct. Larger calls build one exact-size array. Replies are parsed in place on a reusable buffer; <code>null</code>, <code>+OK</code>, <code>+PONG</code> and small integers are shared objects.</li>
+        <li>Every command returns <code>ValueTask</code> backed by a pooled object. <b>Await each result once</b> and do not keep it. Call <code>.AsTask()</code> once if you need <code>Task.WhenAll</code>.</li>
+      </ul>
+      <p>Measured in the README (one run, shared noisy 4-core Linux VM, loopback, memory-only server, repeated runs varied by up to 2x; orders of magnitude, not a comparison, not release evidence):</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Case</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td>build + encode GET / SET / DELEX / LPUSHCAP</td><td>0 B/op, 150 to 560 ns/op</td></tr>
+            <tr><td>parse <code>:1</code>, <code>+OK</code></td><td>0 B/op, 300 to 420 ns/op</td></tr>
+            <tr><td>parse a bulk string / an integer array</td><td>88 / 96 B/op (the payload and the list)</td></tr>
+            <tr><td>GET / SET / DELEX / LPUSHCAP, 1 caller</td><td>about 9k to 18k ops/s</td></tr>
+            <tr><td>same, 16 callers on one connection</td><td>about 54k to 93k ops/s</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Faster still: use an explicit pipeline (<code>ExecuteManyAsync</code>). The README's instrumented M4 Pro run (256-byte values, diagnostic only) measured about 486k GET ops/s in pipelines of 16 against about 173k for 16 concurrent single calls. Reuse one connection, keep payloads small, and use the binary API (<code>ExecuteBinaryAsync</code>) for non-text values.</p>
+      <p class="note">Open issue: the README describes a <code>System.Threading.Channels</code> failure seen under load on .NET 8 ARM64 in a few benchmark passes. It is unresolved and not reproduced in later runs.</p>
+</section>
+
+<section class="panel">
+<h2 id="commands">Commands</h2>
+      <p>Method names say what they do: <code>Get</code>, <code>Set</code>, <code>Add</code>, <code>Remove</code>, <code>Delete</code>, <code>Increment</code>. All of these run on a standalone server (these calls were run).</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Family</th><th>Typical methods</th></tr></thead>
+          <tbody>
+            <tr><td>Strings, expiry</td><td><code>SetAsync</code> (PX/NX/XX/PXAT), <code>GetStringAsync</code>, <code>GetManyAsync</code>, <code>SetManyAsync</code>, <code>IncrementAsync</code>, <code>AppendAsync</code>, <code>ExpireAsync</code>, <code>GetTimeToLiveAsync</code></td></tr>
+            <tr><td>Hashes</td><td><code>SetHashFieldsAsync</code>, <code>GetHashFieldAsync</code>, <code>GetHashAllAsync</code>, <code>ExpireHashFieldsAsync</code></td></tr>
+            <tr><td>Lists</td><td><code>PushListRightAsync</code>, <code>PopListLeftAsync</code>, <code>GetListRangeAsync</code>, <code>PopListLeftBlockingAsync</code></td></tr>
+            <tr><td>Sets</td><td><code>AddSetMembersAsync</code>, <code>SetContainsAsync</code>, <code>GetSetIntersectionAsync</code></td></tr>
+            <tr><td>Sorted sets</td><td><code>AddSortedSetAsync</code>, <code>GetSortedSetRangeByRankWithScoresAsync</code>, <code>PopSortedSetMinAsync</code></td></tr>
+            <tr><td>Streams</td><td><code>AddStreamEntryAsync</code>, <code>GetStreamRangeAsync</code>, <code>CreateStreamGroupAsync</code>, <code>GetStreamGroupUpdatesAsync</code>, <code>AcknowledgeStreamAsync</code></td></tr>
+            <tr><td>JSON</td><td><code>JsonSetAsync</code>, <code>JsonGetAsync</code>, <code>JsonSetValueAsync</code>, <code>JsonGetValueAsync&lt;T&gt;</code>, <code>JsonArrayAppendAsync</code></td></tr>
+            <tr><td>Geo</td><td><code>AddGeoAsync</code>, <code>GeoDistanceAsync</code>, <code>GeoSearchAsync</code></td></tr>
+            <tr><td>Bitmaps, HyperLogLog</td><td><code>SetBitAsync</code>, <code>BitCountAsync</code>, <code>BitOperationAsync</code>, <code>HyperLogLogAddAsync</code>, <code>HyperLogLogCountAsync</code></td></tr>
+            <tr><td>Bloom</td><td><code>ReserveBloomFilterAsync</code>, <code>AddBloomFilterManyAsync</code>, <code>BloomFilterContainsManyAsync</code></td></tr>
+            <tr><td>Scripting, ACL, server</td><td><code>EvaluateAsync</code>, <code>LoadScriptAsync</code>, <code>SetAclUserAsync</code>, <code>GetInfoAsync</code>, <code>SaveAsync</code></td></tr>
+            <tr><td>Pub/Sub</td><td><code>SubscribeAsync</code>, <code>PublishAsync</code>, <code>ListenAsync</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+<pre>await db.SetHashFieldsAsync("user:1", ("name", "Ada"), ("age", "36"));
+string? name = await db.GetHashFieldAsync("user:1", "name");                  // "Ada"
+
+await db.PushListRightAsync("queue", "a", "b", "c");
+IReadOnlyList&lt;string&gt; items = await db.GetListRangeAsync("queue", 0, -1);      // a,b,c
+
+await db.AddSetMembersAsync("tags", "x", "y");
+bool has = await db.SetContainsAsync("tags", "x");                            // true
+
+await db.AddSortedSetAsync("board", ("ada", 100d), ("bob", 50d));
+IReadOnlyList&lt;SortedSetEntry&gt; top =
+    await db.GetSortedSetRangeByRankWithScoresAsync("board", 0, -1, descending: true);   // ada 100, bob 50
+
+string id = await db.AddStreamEntryAsync("events", "*", ("type", "signup"));
+var entries = await db.GetStreamRangeAsync("events", "-", "+");               // 1 entry
+
+await db.JsonSetAsync("doc", "$", "{\"city\":\"Izmir\"}");
+await db.JsonSetValueAsync("doc", "$.age", 31);                               // the client serializes the value
+string? json = await db.JsonGetAsync("doc");                                  // {"city":"Izmir","age":31}
+
+await db.AddGeoAsync("places", (13.361389, 38.115556, "Palermo"), (15.087269, 37.502669, "Catania"));
+double? km = await db.GeoDistanceAsync("places", "Palermo", "Catania", "km");  // 166.27...
+
+await db.SetBitAsync("flags", 7, true);
+long bits = await db.BitCountAsync("flags");                                  // 1
+await db.HyperLogLogAddAsync("uniq", "a", "b", "a");
+long unique = await db.HyperLogLogCountAsync("uniq");                         // 2</pre>
+      <p>Anything without a typed method goes through <code>ExecuteAsync</code> with the same words as <code>redis-cli</code>. It returns a <code>RespValue</code> (<code>Kind</code>, <code>Integer</code>, <code>AsString()</code>, <code>Bytes</code>). For binary arguments use <code>ExecuteBinaryAsync</code>.</p>
+<pre>RespValue r = await db.ExecuteAsync("STRLEN", "greeting");   // Integer 5</pre>
+      <p>Two forms have no typed method: <code>FLUSHDB ASYNC</code> and <code>HELLO AUTH/SETNAME</code>. Typed JSON helpers accept your own <code>JsonSerializerOptions</code> or a source-generated <code>JsonTypeInfo&lt;T&gt;</code> (AOT-safe).</p>
+</section>
+
+<section class="panel">
+<h2 id="ruvio">Ruvio commands</h2>
+      <p>These replace Lua scripts or multi-step Redis patterns with one atomic command.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Method</th><th>Replaces</th></tr></thead>
+          <tbody>
+            <tr><td><code>SET ... IFEQ</code></td><td><code>SetIfEqualAsync</code></td><td>compare-and-set script</td></tr>
+            <tr><td><code>DELEX key IFEQ v</code></td><td><code>DeleteIfEqualAsync</code></td><td>"delete if value matches" script (safe lock release)</td></tr>
+            <tr><td><code>INCRBY ... MAX</code></td><td><code>IncrementWithLimitAsync</code></td><td>bounded counter script</td></tr>
+            <tr><td><code>LIMIT</code></td><td><code>LimitAsync</code></td><td>INCR + EXPIRE rate limiter</td></tr>
+            <tr><td><code>FILLGET</code> / <code>FILLSET</code></td><td><code>FillGetAsync</code>, <code>FillSetAsync</code></td><td>cache stampede lock + SETNX</td></tr>
+            <tr><td><code>IDEM BEGIN/COMPLETE</code></td><td><code>TryBeginIdempotencyAsync</code>, <code>CompleteIdempotencyAsync</code></td><td>idempotency-key script</td></tr>
+            <tr><td><code>LEASE</code> / <code>RELEASE</code></td><td><code>LeaseAsync</code>, <code>ReleaseAsync</code></td><td>lock with fencing counter</td></tr>
+            <tr><td><code>SEMAPHORE</code></td><td><code>AcquireSemaphoreAsync</code></td><td>counting semaphore script</td></tr>
+            <tr><td><code>ONCE</code>, <code>TAKE</code>, <code>SETV</code>, <code>GETEX</code>, <code>CHANGES</code></td><td><code>OnceAsync</code>, <code>TakeAsync</code>, <code>SetVersionAsync</code>, <code>GetExpireAsync</code>, <code>StartChangesAsync</code>/<code>ReadChangesAsync</code></td><td>one-shot flag, stock decrement, versioned write, read-and-set-TTL, change feed</td></tr>
+            <tr><td><code>LPUSHCAP</code> / <code>RPUSHCAP</code></td><td><code>PushListLeftCappedAsync</code></td><td>LPUSH + LTRIM</td></tr>
+            <tr><td><code>BF.*</code></td><td><code>ReserveBloomFilterAsync</code>, <code>AddBloomFilterManyAsync</code>, ...</td><td>RedisBloom module</td></tr>
+            <tr><td><code>JSON.INDEX</code> / <code>JSON.FIND</code></td><td><code>JsonCreateIndexAsync</code>, <code>JsonFindAsync</code></td><td>secondary index scan</td></tr>
+          </tbody>
+        </table>
+      </div>
+<pre>await db.SetAsync("cfg", "v1");
+await db.SetIfEqualAsync("cfg", "v2", "v1");        // true
+await db.SetIfEqualAsync("cfg", "v3", "v1");        // false, the value is now v2
+await db.DeleteIfEqualAsync("cfg", "v2");           // true
+
+long? a = await db.IncrementWithLimitAsync("seats", 3, 4);   // 3
+long? b = await db.IncrementWithLimitAsync("seats", 2, 4);   // null: would pass the limit
+
+long? left1 = await db.LimitAsync("login", 2, 60_000);       // 1 (remaining)
+long? left2 = await db.LimitAsync("login", 2, 60_000);       // 0
+long? left3 = await db.LimitAsync("login", 2, 60_000);       // null: refused
+
+FillResult f = await db.FillGetAsync("page", TimeSpan.FromSeconds(10));   // State: Fill (you build it)
+if (f.State == FillState.Fill)
+    await db.FillSetAsync("page", "&lt;html/&gt;", TimeSpan.FromMinutes(1), f.Token!.Value);   // true
+// the next FillGetAsync returns State: Hit
+
+long? lease = await db.LeaseAsync("job", 30_000);            // fencing token
+bool free   = await db.LeaseAsync("job", 30_000) is null;    // true while held
+await db.ReleaseAsync("job", lease!.Value);
+
+long once1 = await db.OnceAsync("pay", 60_000);              // 1
+long once2 = await db.OnceAsync("pay", 60_000);              // 0
+
+await db.SetAsync("tickets", "5");
+long? t1 = await db.TakeAsync("tickets", 2);                 // 3 left
+long? t2 = await db.TakeAsync("tickets", 9);                 // null: not enough
+
+long v1 = await db.SetVersionAsync("d", "a");                // 1
+long v2 = await db.SetVersionAsync("d", "b", v1);            // 2 (a wrong version throws)
+
+await db.PushListLeftCappedAsync("recent", 3, "1", "2", "3", "4", "5");   // list keeps 3
+
+await db.ReserveBloomFilterAsync("bf", 0.01, 1000);
+await db.AddBloomFilterManyAsync("bf", "a", "b");
+var seen = await db.BloomFilterContainsManyAsync("bf", "a", "z");          // true, false
+
+IRuvioClient db0 = await connection.GetDatabaseAsync(0);     // JSON.INDEX CREATE only runs in database 0
+await db0.JsonCreateIndexAsync("byCity", "user:", "$.city");
+await db0.JsonSetAsync("user:1", "$", "{\"city\":\"Izmir\"}");
+// the index builds in the background: JSON.FIND answers "ERR index is building" until it is ready
+IReadOnlyList&lt;string&gt; keys = await db0.JsonFindAsync("byCity", "Izmir");    // user:1
+
+long cursor = await db.StartChangesAsync();
+await db.SetAsync("note", "x");
+IReadOnlyList&lt;ChangeNote&gt; notes = await db.ReadChangesAsync(cursor);       // 1 note</pre>
+</section>
+
+<section class="panel">
+<h2 id="helpers">Helpers</h2>
+      <p>Extension methods on <code>IRuvioClient</code> in <code>RuvioClientHelpers</code>. They only send single-key commands, so they work unchanged in cluster mode (checked, see below).</p>
+<pre>// Lock: SET NX PX to take, SET IFEQ to renew, DELEX IFEQ to release.
+await using (RuvioLock? held = await db.TryAcquireLockAsync("lock:invoice", TimeSpan.FromSeconds(10)))
+{
+    if (held is null) return;          // someone else has it
+    bool still = await held.RenewAsync();   // false when the lock was lost
+}                                       // dispose releases only if the token still matches
+RuvioLock? waited = await db.AcquireLockAsync("lock:invoice", TimeSpan.FromSeconds(10), wait: TimeSpan.FromSeconds(2));
+
+// Fenced lease and semaphore slot
+await using RuvioLease? lease = await db.TryAcquireLeaseAsync("lease:job", TimeSpan.FromSeconds(30));
+await using RuvioLease? slot  = await db.TryAcquireSemaphoreAsync("sem:export", max: 4, TimeSpan.FromSeconds(30));
+
+// Rate limit: refused calls are not counted
+RateLimitResult d = await db.RateLimitAsync("rl:ada", max: 2, TimeSpan.FromMinutes(1));   // Allowed true, Remaining 1
+
+// Cache-aside with stampede protection (FILLGET/FILLSET)
+string page = await db.GetOrCreateAsync("cache:home", TimeSpan.FromMinutes(5),
+    async ct =&gt; { await Task.Delay(50, ct); return "&lt;home/&gt;"; });   // factory ran once
+
+// Idempotency
+IdempotencyBegin begin = await db.TryBeginIdempotencyAsync("idem:pay:1", "fingerprint", "me", TimeSpan.FromMinutes(10));
+// begin.State == Acquired: do the work, then
+await db.CompleteIdempotencyAsync("idem:pay:1", "fingerprint", "me", "ok");
+// a later caller gets State Completed and the stored Result bytes
+
+// Lazy scans: ScanKeysAsync, ScanHashEntriesAsync, ScanSetMembersAsync, ScanSortedSetEntriesAsync
+await foreach (string key in db.ScanKeysAsync("user:*", count: 500)) { }
+
+// Typed JSON
+await db.JsonSetValueAsync("u:1", "$", new Person("Ada", 36));
+Person? p = await db.JsonGetValueAsync&lt;Person&gt;("u:1", "$");
+
+// Recent items and "seen before"
+await db.PushRecentAsync("recent:ada", "item-42", cap: 50);
+IReadOnlyList&lt;string&gt; newest = await db.GetRecentAsync("recent:ada", 10);
+IReadOnlyList&lt;bool&gt; seen = await db.SeenBeforeAsync("seen:emails", "a@x", "b@x");   // false,false then records them
+IReadOnlyList&lt;bool&gt; maybe = await db.MaybeSeenAsync("seen:emails", "c@x");          // read-only</pre>
+      <p>Failure behavior:</p>
+      <ul>
+        <li><b>Lock.</b> <code>TryAcquireLockAsync</code> returns <code>null</code> when the lock is held. <code>AcquireLockAsync</code> retries with a 2 to 25 ms backoff and returns <code>null</code> after <code>wait</code>. There is no automatic renewal and no "lock lost" token in this helper: call <code>RenewAsync</code> yourself (<code>false</code> means you no longer own it). Release and renew compare the token, so they never touch another owner's lock. A failed release is not retried; the key expires by its TTL. For automatic renewal see <code>Ruvio.AspNetCore.DistributedLock</code> below.</li>
+        <li><b>GetOrCreateAsync.</b> Waiters poll plain <code>FILLGET</code>, never <code>FILLGET ... WAIT</code>, because a server-side wait parks the whole shared connection. A waiter that outlasts <code>GetOrCreateOptions.WaitTimeout</code> (5 s) builds and stores the value itself. The fill marker lives 10 s. If your factory throws, the exception reaches you and the marker lapses.</li>
+        <li><b>Rate limit and idempotency.</b> Server errors and timeouts throw. Nothing is retried for you. An unknown outcome after a timeout stays unknown.</li>
+      </ul>
+</section>
+
+<section class="panel">
+<h2 id="pipelines">Pipelines, transactions, pub/sub</h2>
+      <p>Concurrent calls on one client are already pipelined. For an explicit group, use <code>ExecuteManyAsync</code>: one pipeline is one in-flight group and replies come back in order.</p>
+<pre>var replies = await db.ExecuteManyAsync([["SET", "p1", "1"], ["INCR", "p1"], ["GET", "p1"]]);
+// OK, 2, "2"
+
+// A complete transaction in one group
+var tx = await db.ExecuteManyAsync([["MULTI"], ["SET", "t", "1"], ["INCR", "t"], ["EXEC"]]);
+// tx[3] is the EXEC array
+
+// Stepwise form (WATCH / MULTI / EXEC on this client)
+await db.WatchAsync("tw");
+await db.BeginTransactionAsync();
+await db.ExecuteAsync("SET", "tw", "1");
+var results = await db.ExecuteTransactionAsync();
+
+// 1000 concurrent calls share the socket
+await Task.WhenAll(Enumerable.Range(0, 1000).Select(i =&gt; db.SetAsync($"c{i}", "v").AsTask()));
+
+// Pub/Sub uses its own second socket
+var got = new TaskCompletionSource&lt;string&gt;();
+await db.SubscribeAsync("news", m =&gt; got.TrySetResult(m.Payload));
+await db.PublishAsync("news", "hello");
+
+// Blocking read: returns null on timeout
+var item = await db.PopListLeftBlockingAsync("nolist", TimeSpan.FromMilliseconds(100));</pre>
+      <p>Do not mix <code>MULTI</code> or blocking commands with unrelated concurrent calls on the same client; use a separate connection for a blocking read. RESP3 and client-side caching are not supported (<code>HELLO 3</code> is not spoken; <code>CLIENT TRACKING</code> only with <code>OFF</code>).</p>
+</section>
+
+<section class="panel">
+<h2 id="cluster">Cluster</h2>
+      <p>Give the client one seed address. On connect it sends <code>CLUSTER SLOTS</code>. A standalone server answers with an error and the client keeps one socket (this fallback was checked on port 17370). A sharded server returns the slot map; the client then opens one socket per shard and sends each single-key command to the owner of its slot (<code>CRC16</code>, <code>{hash tags}</code> honoured). <code>RuvioClientOptions.DiscoverCluster = false</code> keeps the seed socket only.</p>
+      <ul>
+        <li>Split by shard and merged in the caller's order: <code>MGET</code>, <code>MSET</code>, <code>DEL</code>, <code>UNLINK</code>, <code>EXISTS</code>, <code>TOUCH</code>. <code>FLUSHDB</code>, <code>FLUSHALL</code>, <code>DBSIZE</code> go to every shard. <code>BITOP</code>, <code>SINTERCARD</code> and <code>JSON.MGET</code> route by their real keys.</li>
+        <li>Other cross-slot commands fail with <code>CROSSSLOT</code>. Only database 0 exists.</li>
+        <li><code>MOVED</code> refreshes the map and the command is retried once.</li>
+        <li>Pipelines that touch several shards are grouped per shard.</li>
+      </ul>
+<pre>await using var connection = await RuvioConnection.ConnectAsync("127.0.0.1", 17380);   // any shard port
+IRuvioClient db = await connection.GetDefaultDatabaseAsync();
+// connection.IsCluster == true, connection.ShardCount == 3
+await db.SetAsync("session:ada", "hello");
+await db.SetAsync("somekey", "on-another-shard");
+IReadOnlyList&lt;string?&gt; values = await db.GetManyAsync("session:ada", "somekey");
+int slot = RuvioClient.GetHashSlot("somekey");   // 11058, same as CLUSTER KEYSLOT</pre>
+      <h3>Real cluster smoke test</h3>
+      <p>The README says routing had only unit tests. The repository does have two live cluster tests (<code>ClusterLiveTests</code>, run with <code>RUVIO_CLUSTER_ADDR</code>), and they pass against a real 3-shard server. In addition, a small console script outside the repo ran this against a 3-shard server (<code>port_mode = "per-shard"</code>, ports 17380 to 17382).</p>
+      <p>Result: 22 of 22 checks passed (the stepwise cross-slot transaction counts as passed because it was rejected, but see the note below the table).</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Check</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td>Discovery from one seed</td><td>pass: 3 shards</td></tr>
+            <tr><td><code>GetHashSlot</code> equals <code>CLUSTER KEYSLOT</code> (5 keys, one non-ASCII)</td><td>pass</td></tr>
+            <tr><td>300 keys spread over shards (counted on each shard with direct connections)</td><td>pass: 101 / 92 / 107</td></tr>
+            <tr><td><code>DBSIZE</code> through the router, GET of each key</td><td>pass</td></tr>
+            <tr><td>Cross-slot <code>MGET</code> (60 keys reversed, plus a missing key), <code>MSET</code>, <code>EXISTS</code>, <code>DEL</code></td><td>pass: caller order kept, nil kept</td></tr>
+            <tr><td>Pipeline of 50 GET and 30 INCR over 10 keys</td><td>pass: replies in caller order</td></tr>
+            <tr><td><code>MOVED</code>: non-discovering client on the wrong shard, 40 SET+GET</td><td>pass</td></tr>
+            <tr><td>Same-slot <code>MULTI/EXEC</code> in one pipeline</td><td>pass</td></tr>
+            <tr><td>Cross-slot transaction</td><td>rejected, but the error is a raw server <code>MOVED</code>, not a clear client error (see below)</td></tr>
+            <tr><td><code>SUNION</code> on two keys in different slots</td><td>rejected: <code>CROSSSLOT Keys in request do not hash to the same slot</code></td></tr>
+            <tr><td>Helpers: lock, rate limit, <code>GetOrCreateAsync</code> (10 callers, factory ran once), idempotency, <code>LEASE</code>, <code>ONCE</code></td><td>pass</td></tr>
+            <tr><td><code>ScanKeysAsync</code> over all shards</td><td>pass: 299 of 299 present keys (one key had been removed by a cross-slot <code>RENAME</code> in the same script)</td></tr>
+            <tr><td>Pub/Sub on the cluster client</td><td>pass</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Not as good as hoped: the stepwise <code>BeginTransactionAsync</code> / <code>ExecuteTransactionAsync</code> form with keys in different slots does not fail fast with a CROSSSLOT-style message. It surfaced a server <code>MOVED</code> error after commands were already sent.</p>
+      <p>Keep a transaction to one slot (use a <code>{hash tag}</code>) and send it in one <code>ExecuteManyAsync</code> group. A <code>RENAME</code> across slots was accepted and worked.</p>
+      <p>Throughput, 16 callers, 50/50 GET/SET, 3 seconds after a 1 second warmup, Release build, loopback, 4-vCPU shared VM with the servers on the same machine: the two runs gave 50.7k (cluster) vs 41.1k (standalone) and 40.6k vs 99.8k ops/s, and a Debug-build run gave 10k vs 56k. The ordering flipped between runs, so no claim is made about cluster versus standalone speed. Not release evidence.</p>
+</section>
+
+<section class="panel">
+<h2 id="errors">Errors, nil, reconnect, cancellation</h2>
+      <ul>
+        <li>A server <code>-ERR</code> becomes <code>RuvioException</code> with the server text. <code>IsServerReply</code> is true and the connection stays usable. A framing failure closes the connection. <code>ClosedBeforeReply</code> is true when no byte of the reply arrived.</li>
+        <li>Nil maps to <code>null</code> (<code>string?</code>, <code>long?</code>, nullable results). Commands that "refuse" (<code>LIMIT</code>, <code>TAKE</code>, <code>LEASE</code>, <code>IncrementWithLimitAsync</code>) return <code>null</code>.</li>
+        <li>Reconnect is on by default: a dropped socket is reopened before the next command (up to <code>MaxReconnectAttempts</code>, exponential delay). The command that finds the drop fails, so a write is never applied twice. One exception: a single <code>GET</code>, <code>MGET</code>, <code>EXISTS</code>, <code>HGET</code>, <code>TTL</code> or <code>PTTL</code> that got no reply byte is sent once more. Pipelines are not retried. Pub/Sub channels are subscribed again. Events: <code>ConnectionLost</code>, <code>ConnectionRestored</code>, <code>ConnectionFailed</code>.</li>
+        <li>Cancellation: pass a <code>CancellationToken</code>. Before dispatch it skips the command. After dispatch it only stops your wait; the server may still have run it.</li>
+      </ul>
+<pre>try { await db.IncrementAsync("greeting"); }
+catch (RuvioException ex) { /* ex.IsServerReply == true; ERR value is not an integer or out of range */ }
+
+try { await db.ExecuteAsync("NOSUCH"); }
+catch (RuvioException ex) { /* ERR unknown command */ }
+
+using var cts = new CancellationTokenSource(); cts.Cancel();
+try { await db.GetStringAsync("greeting", cts.Token); }
+catch (OperationCanceledException) { }   // and the connection still answers PING</pre>
+</section>
+
+<section class="panel">
+<h2 id="limits">Not done / not verified</h2>
+      <ul>
+        <li>No TLS, no RESP3, no client-side caching.</li>
+        <li>No per-command timeout option; use cancellation tokens.</li>
+        <li>Cluster: cross-slot transaction in the stepwise API gives a raw <code>MOVED</code> (above). Cluster routing was smoke-tested here once, on one machine; no failover, resharding or node-loss run was made.</li>
+        <li><code>ACL LOAD/SAVE</code> were only checked to reach the server, <code>SCRIPT KILL</code> only as <code>NOTBUSY</code>, <code>OBJECT IDLETIME/FREQ</code> only as the maxmemory-policy error.</li>
+        <li>A <code>BF.MADD</code> or <code>BF.INSERT</code> reply with an error element (full non-scaling filter) throws for the whole call.</li>
+        <li>Performance numbers are single noisy runs, not BenchmarkDotNet, and were not compared with another client. a .NET channel failure under load is unresolved.</li>
+        <li>The repository can be ahead of the published package; anything the README lists as "Unreleased" is not on NuGet yet.</li>
+      </ul>
+</section>
+
+<section class="panel">
+<h2 id="testing">Testing</h2>
+<pre>dotnet test clients/csharp/Ruvio.Client.Tests
+RUVIO_TEST_ADDR=127.0.0.1:6379 RUVIO_CLUSTER_ADDR=127.0.0.1:6379 dotnet test clients/csharp/Ruvio.Client.Tests</pre>
+      <p>Without a server: 198 tests, 193 pass and 5 live tests are skipped. With <code>RUVIO_TEST_ADDR</code> (standalone) and <code>RUVIO_CLUSTER_ADDR</code> (3 shards): 198 of 198 passed on this run. The suite covers the RESP codec and parser, the generated verbs, multiplexing and reconnect with scripted fake servers, cluster routing with scripted servers, the 287-command matrix mapping, and a live run of every command family and helper.</p>
+      <p>The live tests use databases 12 to 14, flush them and end with <code>FLUSHALL</code>: point them at a disposable server only. <code>Ruvio.Client.AspNetCore.Tests</code>: 11 tests passed.</p>
+</section>
+
+<section class="panel">
+<h2 id="integrations">Integrations (.NET)</h2>
+      <p>Separate NuGet packages built on <code>Ruvio.Client</code> for ASP.NET Core and Microsoft.Extensions. They borrow the shared <code>IRuvioClient</code>; none of them owns or disposes it. All target .NET 8. Register the client first (<code>AddRuvioClient</code> from <code>Ruvio.Client.AspNetCore</code>).</p>
+      <p>The snippets below are taken from each package README (not re-run here); each test suite was run against a live server, results in the table.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Package</th><th>Does</th><th>On NuGet today</th><th>Tests (live run)</th></tr></thead>
+          <tbody>
+            <tr><td><code>Ruvio.Extensions.Caching</code></td><td><code>IDistributedCache</code>, plus a stampede-safe <code>GetOrCreateAsync</code></td><td><span data-pkg="nuget:Ruvio.Extensions.Caching" data-found="{v}" data-missing="Not published yet">latest</span></td><td>21 passed</td></tr>
+            <tr><td><code>Ruvio.AspNetCore.RateLimiting</code></td><td>Opt-in per-endpoint fixed-window budgets on <code>LIMIT</code></td><td><span data-pkg="nuget:Ruvio.AspNetCore.RateLimiting" data-found="{v}" data-missing="Not published yet">latest</span></td><td>15 passed</td></tr>
+            <tr><td><code>Ruvio.AspNetCore.Idempotency</code></td><td>Opt-in HTTP request dedup and response replay on <code>IDEM</code></td><td><span data-pkg="nuget:Ruvio.AspNetCore.Idempotency" data-found="{v}" data-missing="Not published yet">latest</span></td><td>71 passed</td></tr>
+            <tr><td><code>Ruvio.AspNetCore.OutputCaching</code></td><td><code>IOutputCacheStore</code> with tag invalidation by one <code>DEL</code></td><td><span data-pkg="nuget:Ruvio.AspNetCore.OutputCaching" data-found="{v}" data-missing="Not published yet">latest</span></td><td>14 passed</td></tr>
+            <tr><td><code>Ruvio.AspNetCore.DataProtection</code></td><td>Encrypted key ring in Ruvio, shared cookies across instances</td><td><span data-pkg="nuget:Ruvio.AspNetCore.DataProtection" data-found="{v}" data-missing="Not published yet">latest</span></td><td>10 passed</td></tr>
+            <tr><td><code>Ruvio.AspNetCore.DistributedLock</code></td><td>Owner-checked lock with auto-renew, and <code>[RuvioLock]</code> endpoint attribute</td><td><span data-pkg="nuget:Ruvio.AspNetCore.DistributedLock" data-found="{v}" data-missing="Not published yet">latest</span></td><td>12 passed</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">NuGet versions were read from the NuGet index when this page was written. Publishing is a manual workflow, and each integration needs the matching <code>Ruvio.Client</code> version to be published first. Install uses the usual form, for example <code>dotnet add package Ruvio.Extensions.Caching</code>. Because the repo is ahead of NuGet, a feature in a README may need a version newer than the one on NuGet.</p>
+      <h3>Ruvio.Extensions.Caching</h3>
+      <p>Binary-safe <code>IDistributedCache</code> (also usable for ASP.NET Core Session and the distributed tier of HybridCache). Absolute and sliding expiry are supported; a set is one <code>SET</code> with <code>PX</code> or <code>PXAT</code>. <code>GetOrCreateAsync</code> uses <code>FILLGET ... WAIT</code> so one caller across all processes builds the value. Defaults: 1 MiB value, 1024-byte key. Do not mix with Redis-provider entries (different format).</p>
+<pre>dotnet add package Ruvio.Extensions.Caching
+
+services.AddRuvioDistributedCache(options =&gt; options.InstanceName = "orders");
+
+await cache.SetAsync("invoice:42", bytes, new DistributedCacheEntryOptions
+{
+    SlidingExpiration = TimeSpan.FromMinutes(5),
+    AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1)
+}, cancellationToken);
+
+byte[] page = await cache.GetOrCreateAsync("invoice:42",
+    async token =&gt; await RenderAsync(token),
+    new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10) });</pre>
+      <h3>Ruvio.AspNetCore.RateLimiting</h3>
+      <p>Distributed first-request-anchored fixed window, one atomic <code>LIMIT</code> per request on opted-in endpoints. Rejections are HTTP 429 with a full-window <code>Retry-After</code>. Backend failures propagate to your exception handler; it never fails open. A missing partition is a configuration error. Not a billing ledger: eviction or failover can reset a budget.</p>
+<pre>builder.Services.AddRuvioClient(builder.Configuration.GetSection("Ruvio"));
+builder.Services.AddRuvioRateLimiting(options =&gt;
+{
+    options.KeyPrefix = "orders:rate:v1:";
+    options.PartitionKey = context =&gt;
+        context.User.FindFirst("tenant_id")?.Value
+        ?? throw new InvalidOperationException("An authenticated tenant is required.");
+});
+
+app.UseRouting();
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseRuvioRateLimiting();
+app.MapPost("/orders", HandleOrder)
+    .RequireAuthorization()
+    .WithMetadata(new RuvioRateLimitAttribute("create-order", 100, 60));</pre>
+      <h3>Ruvio.AspNetCore.Idempotency</h3>
+      <p>Requires an <code>Idempotency-Key</code> header on POST, PUT, PATCH and DELETE endpoints that carry the attribute. A repeat with the same body replays the stored status and body; the same key with a different body returns 409; a request still pending returns 409.</p>
+      <p>Default limits 64 KiB request and response. It is not downstream exactly-once: expiry, eviction or failover can allow a duplicate, so irreversible side effects still need their own deduplication. Authentication and authorization must run before it.</p>
+<pre>builder.Services.AddRuvioClient(builder.Configuration.GetSection("Ruvio"));
+builder.Services.AddRuvioIdempotency(options =&gt;
+{
+    options.Namespace = "orders-production-v1";   // stable across replicas
+    options.ScopeSelector = context =&gt; context.User.FindFirst("tenant_id")?.Value;
+    options.Retention = TimeSpan.FromHours(24);
+});
+
+app.UseAuthentication();
+app.UseAuthorization();          // must run before idempotency
+app.UseRuvioIdempotency();
+app.MapPost("/orders", HandleOrder)
+    .RequireAuthorization()
+    .WithMetadata(new RuvioIdempotencyAttribute());</pre>
+      <h3>Ruvio.AspNetCore.OutputCaching</h3>
+      <p>Replaces the framework's output-cache store; ASP.NET Core still owns policies and variation. Evicting a tag is one <code>DEL</code> of the tag generation, with no scan. Cluster limit: one <code>InstanceName</code> lives in one hash slot, so one namespace does not spread over shards.</p>
+<pre>builder.Services.AddRuvioClient("127.0.0.1", 6379);
+builder.Services.AddRuvioOutputCache(o =&gt; o.InstanceName = "catalog-production-v1");
+
+app.UseOutputCache();
+app.MapGet("/catalog", () =&gt; new { version = 1 })
+    .CacheOutput(policy =&gt; policy.Expire(TimeSpan.FromSeconds(30)).Tag("catalog"));
+
+// invalidate: inject IOutputCacheStore
+await store.EvictByTagAsync("catalog", cancellationToken);</pre>
+      <h3>Ruvio.AspNetCore.DataProtection</h3>
+      <p>Append-only key-ring repository, so all instances can decrypt each other's cookies and antiforgery tokens. Encryption of the ring is required by default. The ring has no TTL: use persistent, backed-up, non-evicting storage, ideally a separate durable connection.</p>
+<pre>builder.Services.AddDataProtection()
+    .SetApplicationName("orders-production")
+    .PersistKeysToRuvio(o =&gt; o.Key = "orders:production:data-protection:v1")
+    .ProtectKeysWithCertificate(certificate);</pre>
+      <h3>Ruvio.AspNetCore.DistributedLock</h3>
+      <p>Lock as one key with an owner token: acquire <code>SET NX PX</code>, renew <code>SET IFEQ PX</code>, release <code>DELEX IFEQ</code>. Unlike the plain client helper it renews by itself (every third of the lease) and exposes a <code>LockLost</code> token. The <code>[RuvioLock]</code> attribute guards an endpoint: 409 with <code>Retry-After</code> when taken, 503 when the server is unreachable (fails closed), and the request is cancelled if the lock is lost.</p>
+      <p>Limits: one server holds the lock, so a failover can let two owners overlap for up to a lease; not reentrant; no fencing tokens. Not on NuGet yet.</p>
+<pre>services.AddRuvioDistributedLock(options =&gt; options.KeyPrefix = "myapp:lock:");
+
+await using IRuvioLock? held = await locks.TryAcquireAsync(
+    "nightly-report", lease: TimeSpan.FromSeconds(30), wait: TimeSpan.FromSeconds(5));
+if (held is null) return;
+await RunReportAsync(held.LockLost);
+
+// or per endpoint
+app.UseRuvioLock();
+app.MapPost("/orders/{id}/pay", PayAsync).WithMetadata(new RuvioLockAttribute("order:{id}"));</pre>
+      <p>Middleware order matters when you combine them: rate limiting before idempotency also counts retries and replays; the other order does not. Put your exception handler outside both. Details and limits are in each package README under <code>integrations/dotnet</code>.</p>
+      <p class="note">See also: <a href="clients.html">Clients overview</a>, <a href="client-rust.html">Rust</a>, <a href="client-go.html">Go</a>, <a href="client-java.html">Java</a>, <a href="client-python.html">Python</a>, <a href="client-node.html">Node.js</a>, <a href="examples.html">Examples</a>, <a href="commands.html">Commands</a>, <a href="packages.html">Packages</a>.</p>
+</section>
+</article>
+  </main>
+  <footer class="foot">
+    <div class="foot-inner">Package pages: <a href="https://www.nuget.org/packages/Ruvio.Client">Ruvio.Client</a>, <a href="https://www.nuget.org/packages/Ruvio.Client.AspNetCore">Ruvio.Client.AspNetCore</a>.</div>
+  </footer>
+  <script src="js/versions.js?v=20261013j"></script>
+  <script src="vendor/highlightjs/highlight.min.js"></script>
+  <footer class="site-foot">
+    <div class="site-foot-inner">
+      <div class="site-foot-brand">
+        <img src="images/ruvio-mark.png?v=20261015b" alt="" width="36" height="36">
+        <div>
+          <strong>Ruvio</strong>
+          <span>One RESP process. The shard that owns the key does the work.</span>
+          <small>Server AGPL-3.0 · Clients MIT</small>
+        </div>
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/salihcantekin/ruvio/tree/main/docs">Docs</a>
+        <a href="https://github.com/salihcantekin/ruvio">GitHub</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="js/chrome.js?v=20261015a"></script>
+</body>
+</html>

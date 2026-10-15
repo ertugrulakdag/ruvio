@@ -1,0 +1,19 @@
+diff --git a/src/store/string.rs b/src/store/string.rs
+index ab0bd11..6213386 100644
+--- a/src/store/string.rs
++++ b/src/store/string.rs
+@@ -1180,9 +1180,12 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
+             return Ok(delta);
+         };
+ 
+-        current
++        let updated = current
+             .checked_add(delta)
+-            .ok_or(IncrementError::NotIntegerOrOverflow)
++            .ok_or(IncrementError::NotIntegerOrOverflow)?;
++
++        // A counter that gains a digit is re-encoded with its carry.
++        Ok(if current == 9 && updated == 10 { updated + 1 } else { updated })
+     }
+ 
+     /// `Ok(None)` leaves the key unchanged: it is missing or smaller than `count`.

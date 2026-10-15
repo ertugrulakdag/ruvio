@@ -1,0 +1,1849 @@
+{
+ "date": "2026-10-11",
+ "host": {
+  "description": "Azure VM, AMD EPYC 7763 (virtualized), 8 vCPU = 4 cores x 2 threads, 31 GiB, Ubuntu 24.04, kernel 6.17.0-azure; data disk Premium SSD v2 32 GiB (16,000 IOPS, 400 MB/s, host caching none) with ext4; OS disk Standard SSD. Native processes only (no Docker).",
+  "cpu": "AMD EPYC 7763",
+  "vcpus": 8,
+  "cores": 4
+ },
+ "build": {
+  "ruvio_commit": "5520164",
+  "redis": "Redis 8.10.2 built from source (jemalloc 5.3.0); redis-benchmark is the 8.10.2 binary from the same build."
+ },
+ "method": {
+  "features": "60 commands from <code>scripts/redis_compare_features.py</code> run through <code>scripts/pinned_run.py</code>: <code>redis-benchmark</code> 8.10.2, 50 clients, pipeline 16, 64-byte values, five rounds with alternating order, median requests/s. Ruvio and Redis each run alone on cpu 0 (core 0, its hyper-thread idle), the load generator on cpus 2 and 4 (two other cores), one shard, <code>memory</code> durability.",
+  "concurrency": "five alternating rounds, median req/s and p99 (<code>redis-benchmark --threads 2</code>, 64-byte values, 100,000 random keys). Single-shard rows: server on cpu 0, client on cpus 2 and 4. Ruvio 2- and 4-shard rows: shards on cpus 0,2 and 0,2,4,6 and the client on the hyper-thread siblings 1,3,5,7. Redis is always one process (it is single-threaded) on cpu 0. <code>always</code> rows: Ruvio <code>--durability always</code> against Redis <code>appendonly yes</code>, <code>appendfsync always</code>, both on the Premium SSD v2 data disk.",
+  "memory": "a fresh server per structure, load pipelined (batches of 200, replies checked), RSS from <code>/proc/&lt;pid&gt;/status</code> after loading minus RSS before (&ldquo;growth&rdquo;), plus the total RSS after loading, divided by the number of keys for the per-key columns."
+ },
+ "notes": {
+  "concurrency": "With pipelining and 200 clients Ruvio is 1.11\u20131.43\u00d7 Redis with the lower p99. <code>always</code> (fsync) durability is where Ruvio leads most: 2.67\u00d7 at 50 clients, 1.50\u00d7 at 200 clients and 2.33\u00d7 at pipeline 16. Two changes since the last run explain it: the WAL fills each preallocated chunk with zeros ahead of the write cursor on a helper thread (an <code>fdatasync</code> of written blocks cost 0.8 ms instead of 2.0 ms on this disk), and a sync worker lets the shard keep executing while the sync runs. The un-pipelined rows are client-bound: the load generator tops out near 110\u2013120k req/s on this host for both servers (identical GET numbers), so they show the p99 tail, not server capacity. More Ruvio shards lift pipelined SET from 1.14M to 1.33M req/s at 2 shards; at 4 shards the client, which shares cores with the shards, is the limit. With <code>always</code>, 2 shards and 200 clients at pipeline 16 Ruvio is at parity with Redis (1.00\u00d7): extra shards do not help there because disk flush latency, not shard CPU, is the limit.",
+  "limits": "one VM, one CPU model (virtualized AMD EPYC 7763), native processes only, loopback, 64-byte values, short runs, five rounds. The data disk is network-attached (an <code>fdatasync</code> costs about 0.8 ms); a local NVMe disk would change every <code>always</code> row for both servers. Server and load generator share the VM, so absolute numbers describe this host; compare the two servers with each other only.",
+  "memory": "Growth is Ruvio's RSS increase from loading against Redis's. Redis's idle RSS on this machine was 13.2 MiB (8.4 MiB on the previous one), which pre-faults pages and makes its growth look smaller, so the total RSS after loading is the steadier number: Ruvio is lower in all 12 rows (0.71\u20130.86\u00d7). By growth Ruvio is lower in 7 rows, equal in 1 and higher in 4 (lists of 20 elements, HyperLogLogs, 128-byte bitmaps, geo points). Ruvio's own growth values are unchanged from the previous run (within 0.2 MiB), so the difference comes from the Redis side."
+ },
+ "features": {
+  "rows": [
+   {
+    "label": "GET (baseline, for scale)",
+    "ruvio": 1200000.0,
+    "redis": 1115241.62,
+    "note": "not a new command",
+    "samples": {
+     "ruvio": [
+      1190476.12,
+      1200000.0,
+      1195219.12,
+      1214574.88,
+      1219512.12
+     ],
+     "redis": [
+      1111111.12,
+      1115241.62,
+      1119403.0,
+      1115241.62,
+      1115241.62
+     ]
+    }
+   },
+   {
+    "label": "SET (baseline, for scale)",
+    "ruvio": 1209677.5,
+    "redis": 917431.19,
+    "note": "not a new command",
+    "samples": {
+     "ruvio": [
+      1224489.75,
+      1209677.5,
+      1214574.88,
+      1200000.0,
+      1204819.25
+     ],
+     "redis": [
+      917431.19,
+      917431.19,
+      914634.12,
+      920245.38,
+      914634.12
+     ]
+    }
+   },
+   {
+    "label": "LPOS (100 elements, hit in the middle)",
+    "ruvio": 817438.69,
+    "redis": 548446.06,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      817438.69,
+      813008.19,
+      815217.38,
+      817438.69,
+      819672.12
+     ],
+     "redis": [
+      548446.06,
+      548446.06,
+      548446.06,
+      548446.06,
+      549450.56
+     ]
+    }
+   },
+   {
+    "label": "LSET (100 elements)",
+    "ruvio": 920245.38,
+    "redis": 826446.25,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      914634.12,
+      920245.38,
+      917431.19,
+      920245.38,
+      920245.38
+     ],
+     "redis": [
+      826446.25,
+      826446.25,
+      826446.25,
+      826446.25,
+      826446.25
+     ]
+    }
+   },
+   {
+    "label": "LINSERT (pivot missing, scans 100)",
+    "ruvio": 903614.5,
+    "redis": 480000.0,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      903614.5,
+      906344.44,
+      906344.44,
+      900900.88,
+      903614.5
+     ],
+     "redis": [
+      480769.22,
+      480000.0,
+      480000.0,
+      480769.22,
+      480000.0
+     ]
+    }
+   },
+   {
+    "label": "LREM (value missing, scans 100)",
+    "ruvio": 895522.38,
+    "redis": 499999.97,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      898203.62,
+      898203.62,
+      895522.38,
+      895522.38,
+      895522.38
+     ],
+     "redis": [
+      468018.75,
+      486223.69,
+      501672.25,
+      499999.97,
+      499999.97
+     ]
+    }
+   },
+   {
+    "label": "LMOVE (rotate a 100-element list)",
+    "ruvio": 1027397.25,
+    "redis": 729927.0,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1027397.25,
+      1027397.25,
+      1023890.75,
+      1034482.81,
+      1034482.81
+     ],
+     "redis": [
+      729927.0,
+      729927.0,
+      728155.31,
+      729927.0,
+      729927.0
+     ]
+    }
+   },
+   {
+    "label": "BITFIELD INCRBY u8 (always writes)",
+    "ruvio": 952380.94,
+    "redis": 808625.38,
+    "note": "Redis refuses zero-padded offsets, so the offset is fixed",
+    "samples": {
+     "ruvio": [
+      952380.94,
+      952380.94,
+      955414.0,
+      958466.5,
+      952380.94
+     ],
+     "redis": [
+      826446.25,
+      808625.38,
+      810810.81,
+      804289.56,
+      806451.62
+     ]
+    }
+   },
+   {
+    "label": "BITFIELD GET u8",
+    "ruvio": 1107011.12,
+    "redis": 928792.5,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1102941.12,
+      1102941.12,
+      1107011.12,
+      1107011.12,
+      1107011.12
+     ],
+     "redis": [
+      928792.5,
+      928792.5,
+      925925.94,
+      928792.5,
+      928792.5
+     ]
+    }
+   },
+   {
+    "label": "SETBIT (1 KiB bitmap, same bit)",
+    "ruvio": 1244813.25,
+    "redis": 1006711.38,
+    "note": "no-op after the first write",
+    "samples": {
+     "ruvio": [
+      1250000.0,
+      1244813.25,
+      1239669.38,
+      1250000.0,
+      1244813.25
+     ],
+     "redis": [
+      1006711.38,
+      1006711.38,
+      1013513.5,
+      1006711.38,
+      1010101.06
+     ]
+    }
+   },
+   {
+    "label": "GETBIT (1 KiB bitmap)",
+    "ruvio": 1250000.0,
+    "redis": 1079136.75,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1244813.25,
+      1255230.12,
+      1250000.0,
+      1255230.12,
+      1239669.38
+     ],
+     "redis": [
+      1079136.75,
+      1083032.5,
+      1083032.5,
+      1079136.75,
+      1079136.75
+     ]
+    }
+   },
+   {
+    "label": "BITCOUNT (1 KiB bitmap)",
+    "ruvio": 1176470.62,
+    "redis": 1083032.5,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1176470.62,
+      1176470.62,
+      1167315.12,
+      1176470.62,
+      1181102.38
+     ],
+     "redis": [
+      1083032.5,
+      1083032.5,
+      1079136.75,
+      1075268.75,
+      1086956.5
+     ]
+    }
+   },
+   {
+    "label": "PFADD",
+    "ruvio": 1219512.12,
+    "redis": 1045296.19,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1204819.25,
+      1219512.12,
+      1214574.88,
+      1224489.75,
+      1229508.12
+     ],
+     "redis": [
+      1038062.25,
+      1052631.62,
+      1041666.69,
+      1045296.19,
+      1045296.19
+     ]
+    }
+   },
+   {
+    "label": "PFCOUNT",
+    "ruvio": 1265822.75,
+    "redis": 1140684.38,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1265822.75,
+      1255230.12,
+      1260504.12,
+      1271186.38,
+      1265822.75
+     ],
+     "redis": [
+      1145038.25,
+      1140684.38,
+      1140684.38,
+      1145038.25,
+      1140684.38
+     ]
+    }
+   },
+   {
+    "label": "COPY ... REPLACE (64 B string)",
+    "ruvio": 1153846.25,
+    "redis": 707547.19,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1153846.25,
+      1145038.25,
+      1158301.12,
+      1153846.25,
+      1158301.12
+     ],
+     "redis": [
+      705882.31,
+      704225.38,
+      707547.19,
+      707547.19,
+      707547.19
+     ]
+    }
+   },
+   {
+    "label": "DUMP (64 B string)",
+    "ruvio": 898203.62,
+    "redis": 418410.03,
+    "note": "formats differ: Ruvio's is not RDB",
+    "samples": {
+     "ruvio": [
+      895522.38,
+      898203.62,
+      903614.5,
+      895522.38,
+      903614.5
+     ],
+     "redis": [
+      401606.44,
+      418994.41,
+      418410.03,
+      418410.03,
+      418410.03
+     ]
+    }
+   },
+   {
+    "label": "EXPIRETIME",
+    "ruvio": 1260504.12,
+    "redis": 1145038.25,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1276595.75,
+      1244813.25,
+      1265822.75,
+      1260504.12,
+      1260504.12
+     ],
+     "redis": [
+      1145038.25,
+      1145038.25,
+      1145038.25,
+      1145038.25,
+      1140684.38
+     ]
+    }
+   },
+   {
+    "label": "TOUCH",
+    "ruvio": 1265822.75,
+    "redis": 1153846.25,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1276595.75,
+      1260504.12,
+      1265822.75,
+      1265822.75,
+      1260504.12
+     ],
+     "redis": [
+      1158301.12,
+      1153846.25,
+      1145038.25,
+      1158301.12,
+      1153846.25
+     ]
+    }
+   },
+   {
+    "label": "OBJECT ENCODING",
+    "ruvio": 1234567.88,
+    "redis": 1048951.0,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1265822.75,
+      1276595.75,
+      1219512.12,
+      1234567.88,
+      1224489.75
+     ],
+     "redis": [
+      1048951.0,
+      1048951.0,
+      1045296.19,
+      1045296.19,
+      1048951.0
+     ]
+    }
+   },
+   {
+    "label": "MEMORY USAGE",
+    "ruvio": 1250000.0,
+    "redis": 1083032.5,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1244813.25,
+      1250000.0,
+      1250000.0,
+      1234567.88,
+      1250000.0
+     ],
+     "redis": [
+      1083032.5,
+      1083032.5,
+      1086956.5,
+      1083032.5,
+      1086956.5
+     ]
+    }
+   },
+   {
+    "label": "GETRANGE",
+    "ruvio": 1229508.12,
+    "redis": 999999.94,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1229508.12,
+      1219512.12,
+      1229508.12,
+      1234567.88,
+      1209677.5
+     ],
+     "redis": [
+      999999.94,
+      1003344.5,
+      999999.94,
+      999999.94,
+      1003344.5
+     ]
+    }
+   },
+   {
+    "label": "SETRANGE",
+    "ruvio": 1265822.75,
+    "redis": 986842.12,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1260504.12,
+      1271186.38,
+      1271186.38,
+      1255230.12,
+      1265822.75
+     ],
+     "redis": [
+      983606.56,
+      986842.12,
+      990099.0,
+      986842.12,
+      986842.12
+     ]
+    }
+   },
+   {
+    "label": "SETEX",
+    "ruvio": 1190476.12,
+    "redis": 688073.44,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1190476.12,
+      1185770.75,
+      1204819.25,
+      1204819.25,
+      1190476.12
+     ],
+     "redis": [
+      688073.44,
+      688073.44,
+      688073.44,
+      688073.44,
+      688073.44
+     ]
+    }
+   },
+   {
+    "label": "MSET (3 keys)",
+    "ruvio": 1060070.75,
+    "redis": 609756.06,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1056338.0,
+      1060070.75,
+      1060070.75,
+      1060070.75,
+      1060070.75
+     ],
+     "redis": [
+      607287.44,
+      609756.06,
+      609756.06,
+      610997.94,
+      609756.06
+     ]
+    }
+   },
+   {
+    "label": "MGET (3 keys)",
+    "ruvio": 1034482.81,
+    "redis": 813008.19,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1034482.81,
+      1034482.81,
+      1020408.19,
+      1027397.25,
+      1034482.81
+     ],
+     "redis": [
+      813008.19,
+      810810.81,
+      808625.38,
+      813008.19,
+      813008.19
+     ]
+    }
+   },
+   {
+    "label": "DEL (missing key)",
+    "ruvio": 1234567.88,
+    "redis": 1190476.12,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1224489.75,
+      1250000.0,
+      1219512.12,
+      1239669.38,
+      1234567.88
+     ],
+     "redis": [
+      1190476.12,
+      1190476.12,
+      1190476.12,
+      1195219.12,
+      1195219.12
+     ]
+    }
+   },
+   {
+    "label": "EXISTS",
+    "ruvio": 1282051.25,
+    "redis": 1136363.62,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1282051.25,
+      1287553.62,
+      1276595.75,
+      1271186.38,
+      1293103.5
+     ],
+     "redis": [
+      1136363.62,
+      1136363.62,
+      1140684.38,
+      1136363.62,
+      1136363.62
+     ]
+    }
+   },
+   {
+    "label": "TYPE",
+    "ruvio": 1250000.0,
+    "redis": 1107011.12,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1250000.0,
+      1244813.25,
+      1255230.12,
+      1255230.12,
+      1250000.0
+     ],
+     "redis": [
+      1107011.12,
+      1107011.12,
+      1107011.12,
+      1107011.12,
+      1107011.12
+     ]
+    }
+   },
+   {
+    "label": "TTL",
+    "ruvio": 1219512.12,
+    "redis": 1132075.5,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1219512.12,
+      1219512.12,
+      1224489.75,
+      1219512.12,
+      1224489.75
+     ],
+     "redis": [
+      1111111.12,
+      1136363.62,
+      1132075.5,
+      1132075.5,
+      1132075.5
+     ]
+    }
+   },
+   {
+    "label": "PTTL",
+    "ruvio": 1214574.88,
+    "redis": 1127819.5,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1214574.88,
+      1214574.88,
+      1214574.88,
+      1214574.88,
+      1214574.88
+     ],
+     "redis": [
+      1127819.5,
+      1127819.5,
+      1123595.5,
+      1127819.5,
+      1127819.5
+     ]
+    }
+   },
+   {
+    "label": "PERSIST (key without TTL)",
+    "ruvio": 1287553.62,
+    "redis": 1094890.5,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1265822.75,
+      1333333.38,
+      1333333.38,
+      1287553.62,
+      1265822.75
+     ],
+     "redis": [
+      1086956.5,
+      1094890.5,
+      1094890.5,
+      1094890.5,
+      1090909.12
+     ]
+    }
+   },
+   {
+    "label": "EXPIRE (key with TTL)",
+    "ruvio": 1056338.0,
+    "redis": 872093.0,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1056338.0,
+      1052631.62,
+      1056338.0,
+      1060070.75,
+      1048951.0
+     ],
+     "redis": [
+      872093.0,
+      872093.0,
+      869565.25,
+      869565.25,
+      872093.0
+     ]
+    }
+   },
+   {
+    "label": "APPEND (1 byte)",
+    "ruvio": 1013513.5,
+    "redis": 996677.75,
+    "note": "value grows",
+    "samples": {
+     "ruvio": [
+      1013513.5,
+      1010101.06,
+      1013513.5,
+      1010101.06,
+      1013513.5
+     ],
+     "redis": [
+      996677.75,
+      999999.94,
+      999999.94,
+      993377.5,
+      993377.5
+     ]
+    }
+   },
+   {
+    "label": "INCRBYFLOAT",
+    "ruvio": 694444.44,
+    "redis": 505050.53,
+    "note": "Ruvio prints 15 digits",
+    "samples": {
+     "ruvio": [
+      636942.69,
+      694444.44,
+      697674.44,
+      696055.69,
+      694444.44
+     ],
+     "redis": [
+      505050.53,
+      505050.53,
+      505050.53,
+      504201.66,
+      504201.66
+     ]
+    }
+   },
+   {
+    "label": "HSET (existing field)",
+    "ruvio": 1075268.75,
+    "redis": 890207.69,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1075268.75,
+      1075268.75,
+      1075268.75,
+      1071428.62,
+      1075268.75
+     ],
+     "redis": [
+      903614.5,
+      890207.69,
+      793650.81,
+      892857.12,
+      890207.69
+     ]
+    }
+   },
+   {
+    "label": "HGET",
+    "ruvio": 1255230.12,
+    "redis": 1020408.19,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1234567.88,
+      1260504.12,
+      1260504.12,
+      1255230.12,
+      1244813.25
+     ],
+     "redis": [
+      1027397.25,
+      1016949.19,
+      1016949.19,
+      1020408.19,
+      1020408.19
+     ]
+    }
+   },
+   {
+    "label": "HMGET (2 fields)",
+    "ruvio": 1094890.5,
+    "redis": 900900.88,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1102941.12,
+      1090909.12,
+      1111111.12,
+      1094890.5,
+      1094890.5
+     ],
+     "redis": [
+      903614.5,
+      900900.88,
+      900900.88,
+      900900.88,
+      900900.88
+     ]
+    }
+   },
+   {
+    "label": "HSTRLEN",
+    "ruvio": 1276595.75,
+    "redis": 1045296.19,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1255230.12,
+      1282051.25,
+      1276595.75,
+      1276595.75,
+      1271186.38
+     ],
+     "redis": [
+      1041666.69,
+      1045296.19,
+      1045296.19,
+      1048951.0,
+      1041666.69
+     ]
+    }
+   },
+   {
+    "label": "LPUSH",
+    "ruvio": 943396.25,
+    "redis": 900900.88,
+    "note": "list grows",
+    "samples": {
+     "ruvio": [
+      949367.06,
+      943396.25,
+      952380.94,
+      943396.25,
+      943396.25
+     ],
+     "redis": [
+      900900.88,
+      900900.88,
+      900900.88,
+      900900.88,
+      898203.62
+     ]
+    }
+   },
+   {
+    "label": "LLEN",
+    "ruvio": 1265822.75,
+    "redis": 1115241.62,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1276595.75,
+      1265822.75,
+      1265822.75,
+      1276595.75,
+      1265822.75
+     ],
+     "redis": [
+      1127819.5,
+      1115241.62,
+      1115241.62,
+      1115241.62,
+      1115241.62
+     ]
+    }
+   },
+   {
+    "label": "LRANGE 0 2",
+    "ruvio": 1052631.62,
+    "redis": 898203.62,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1048951.0,
+      1071428.62,
+      1090909.12,
+      1045296.19,
+      1052631.62
+     ],
+     "redis": [
+      895522.38,
+      898203.62,
+      895522.38,
+      898203.62,
+      898203.62
+     ]
+    }
+   },
+   {
+    "label": "SADD (existing member)",
+    "ruvio": 1079136.75,
+    "redis": 1016949.19,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1071428.62,
+      1079136.75,
+      1083032.5,
+      1075268.75,
+      1086956.5
+     ],
+     "redis": [
+      1020408.19,
+      1016949.19,
+      1016949.19,
+      1016949.19,
+      1020408.19
+     ]
+    }
+   },
+   {
+    "label": "SISMEMBER",
+    "ruvio": 1271186.38,
+    "redis": 1010101.06,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1271186.38,
+      1265822.75,
+      1276595.75,
+      1265822.75,
+      1276595.75
+     ],
+     "redis": [
+      1010101.06,
+      1010101.06,
+      1003344.5,
+      1010101.06,
+      1013513.5
+     ]
+    }
+   },
+   {
+    "label": "SRANDMEMBER",
+    "ruvio": 1023890.75,
+    "redis": 996677.75,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1020408.19,
+      1023890.75,
+      1030927.81,
+      1023890.75,
+      1023890.75
+     ],
+     "redis": [
+      999999.94,
+      999999.94,
+      996677.75,
+      996677.75,
+      996677.75
+     ]
+    }
+   },
+   {
+    "label": "ZADD (existing member, same score)",
+    "ruvio": 1123595.5,
+    "redis": 917431.19,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1127819.5,
+      1119403.0,
+      1119403.0,
+      1123595.5,
+      1123595.5
+     ],
+     "redis": [
+      920245.38,
+      914634.12,
+      917431.19,
+      920245.38,
+      917431.19
+     ]
+    }
+   },
+   {
+    "label": "ZINCRBY",
+    "ruvio": 828729.31,
+    "redis": 662251.62,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      828729.31,
+      826446.25,
+      828729.31,
+      831024.94,
+      831024.94
+     ],
+     "redis": [
+      666666.69,
+      662251.62,
+      662251.62,
+      660792.94,
+      662251.62
+     ]
+    }
+   },
+   {
+    "label": "ZSCORE",
+    "ruvio": 1200000.0,
+    "redis": 1010101.06,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1200000.0,
+      1200000.0,
+      1204819.25,
+      1200000.0,
+      1200000.0
+     ],
+     "redis": [
+      1010101.06,
+      1010101.06,
+      1010101.06,
+      1006711.38,
+      1013513.5
+     ]
+    }
+   },
+   {
+    "label": "RENAME (same key)",
+    "ruvio": 1255230.12,
+    "redis": 1006711.38,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1260504.12,
+      1255230.12,
+      1255230.12,
+      1255230.12,
+      1250000.0
+     ],
+     "redis": [
+      1010101.06,
+      1003344.5,
+      1010101.06,
+      1006711.38,
+      1003344.5
+     ]
+    }
+   },
+   {
+    "label": "PUBLISH (no subscribers)",
+    "ruvio": 1282051.25,
+    "redis": 1282051.25,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1276595.75,
+      1282051.25,
+      1276595.75,
+      1282051.25,
+      1282051.25
+     ],
+     "redis": [
+      1282051.25,
+      1282051.25,
+      1287553.62,
+      1265822.75,
+      1282051.25
+     ]
+    }
+   },
+   {
+    "label": "HGET (10-field hash)",
+    "ruvio": 1200000.0,
+    "redis": 967741.94,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1209677.5,
+      1195219.12,
+      1200000.0,
+      1195219.12,
+      1209677.5
+     ],
+     "redis": [
+      974026.0,
+      967741.94,
+      967741.94,
+      961538.44,
+      970873.81
+     ]
+    }
+   },
+   {
+    "label": "HSET (10-field hash, existing field)",
+    "ruvio": 1016949.19,
+    "redis": 852272.75,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1016949.19,
+      1020408.19,
+      1010101.06,
+      1013513.5,
+      1016949.19
+     ],
+     "redis": [
+      857142.88,
+      852272.75,
+      849858.38,
+      852272.75,
+      849858.38
+     ]
+    }
+   },
+   {
+    "label": "HDEL (10-field hash, missing field)",
+    "ruvio": 1041666.69,
+    "redis": 990099.0,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1038062.25,
+      1041666.69,
+      1038062.25,
+      1041666.69,
+      1041666.69
+     ],
+     "redis": [
+      990099.0,
+      990099.0,
+      990099.0,
+      990099.0,
+      990099.0
+     ]
+    }
+   },
+   {
+    "label": "HGETALL (10-field hash)",
+    "ruvio": 523560.19,
+    "redis": 539568.38,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      527240.75,
+      523560.19,
+      522648.09,
+      516351.16,
+      524475.5
+     ],
+     "redis": [
+      538599.69,
+      542495.5,
+      546448.06,
+      539568.38,
+      539568.38
+     ]
+    }
+   },
+   {
+    "label": "LINDEX (20-item list)",
+    "ruvio": 1190476.12,
+    "redis": 967741.94,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1195219.12,
+      1190476.12,
+      1190476.12,
+      1200000.0,
+      1016949.19
+     ],
+     "redis": [
+      967741.94,
+      961538.44,
+      964630.25,
+      967741.94,
+      967741.94
+     ]
+    }
+   },
+   {
+    "label": "LRANGE 0 9 (20-item list)",
+    "ruvio": 721153.81,
+    "redis": 742574.25,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      709219.88,
+      721153.81,
+      722891.56,
+      715990.44,
+      721153.81
+     ],
+     "redis": [
+      750000.0,
+      742574.25,
+      750000.0,
+      742574.25,
+      738916.25
+     ]
+    }
+   },
+   {
+    "label": "LSET (20-item list)",
+    "ruvio": 1071428.62,
+    "redis": 903614.5,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      1063829.75,
+      1071428.62,
+      1071428.62,
+      1071428.62,
+      1067615.75
+     ],
+     "redis": [
+      923076.94,
+      903614.5,
+      903614.5,
+      903614.5,
+      903614.5
+     ]
+    }
+   },
+   {
+    "label": "GEOADD",
+    "ruvio": 909090.94,
+    "redis": 655737.69,
+    "note": "",
+    "samples": {
+     "ruvio": [
+      909090.94,
+      913242.0,
+      909090.94,
+      909090.94,
+      904977.38
+     ],
+     "redis": [
+      653594.81,
+      655737.69,
+      655737.69,
+      655737.69,
+      653594.81
+     ]
+    }
+   },
+   {
+    "label": "GEOSEARCH (radius 50 km, COUNT 10)",
+    "ruvio": 13605.44,
+    "redis": 10380.98,
+    "note": "all points share one coordinate: worst case",
+    "samples": {
+     "ruvio": [
+      13607.29,
+      13607.29,
+      13605.44,
+      13605.44,
+      13599.89
+     ],
+     "redis": [
+      10384.22,
+      10380.98,
+      10325.25,
+      10372.37,
+      10383.14
+     ]
+    }
+   },
+   {
+    "label": "GETEX (set a 100 s deadline)",
+    "ruvio": 970873.81,
+    "redis": 804289.56,
+    "note": "Ruvio's GETEX takes milliseconds only; each side uses its own syntax",
+    "samples": {
+     "ruvio": [
+      970873.81,
+      970873.81,
+      961538.44,
+      974026.0,
+      967741.94
+     ],
+     "redis": [
+      804289.56,
+      804289.56,
+      806451.62,
+      804289.56,
+      804289.56
+     ]
+    }
+   },
+   {
+    "label": "FILLGET (value present)",
+    "ruvio": 1107011.12,
+    "redis": 1158301.12,
+    "note": "Redis column: plain GET",
+    "samples": {
+     "ruvio": [
+      1102941.12,
+      1102941.12,
+      1119403.0,
+      1107011.12,
+      1107011.12
+     ],
+     "redis": [
+      1158301.12,
+      1153846.25,
+      1158301.12,
+      1158301.12,
+      1158301.12
+     ]
+    }
+   }
+  ],
+  "memory": [
+   {
+    "label": "20,000 lists of 20 elements",
+    "ruvio": {
+     "idle_kib": 10068,
+     "loaded_kib": 16060,
+     "delta_kib": 5992
+    },
+    "redis": {
+     "idle_kib": 13472,
+     "loaded_kib": 18948,
+     "delta_kib": 5476
+    }
+   },
+   {
+    "label": "5,000 HyperLogLogs of 100 elements",
+    "ruvio": {
+     "idle_kib": 10332,
+     "loaded_kib": 12556,
+     "delta_kib": 2224
+    },
+    "redis": {
+     "idle_kib": 13312,
+     "loaded_kib": 15336,
+     "delta_kib": 2024
+    }
+   },
+   {
+    "label": "20,000 bitmaps of 128 B (SETBIT)",
+    "ruvio": {
+     "idle_kib": 10048,
+     "loaded_kib": 13744,
+     "delta_kib": 3696
+    },
+    "redis": {
+     "idle_kib": 13364,
+     "loaded_kib": 16756,
+     "delta_kib": 3392
+    }
+   },
+   {
+    "label": "100,000 BITFIELD counters (u16)",
+    "ruvio": {
+     "idle_kib": 10312,
+     "loaded_kib": 13944,
+     "delta_kib": 3632
+    },
+    "redis": {
+     "idle_kib": 13484,
+     "loaded_kib": 18708,
+     "delta_kib": 5224
+    }
+   },
+   {
+    "label": "100,000 geo points in one key",
+    "ruvio": {
+     "idle_kib": 10100,
+     "loaded_kib": 16564,
+     "delta_kib": 6464
+    },
+    "redis": {
+     "idle_kib": 13568,
+     "loaded_kib": 19360,
+     "delta_kib": 5792
+    }
+   },
+   {
+    "label": "100,000 strings of 16 B",
+    "ruvio": {
+     "idle_kib": 10212,
+     "loaded_kib": 15488,
+     "delta_kib": 5276
+    },
+    "redis": {
+     "idle_kib": 13476,
+     "loaded_kib": 20104,
+     "delta_kib": 6628
+    }
+   },
+   {
+    "label": "100,000 strings of 128 B",
+    "ruvio": {
+     "idle_kib": 10236,
+     "loaded_kib": 28012,
+     "delta_kib": 17776
+    },
+    "redis": {
+     "idle_kib": 13700,
+     "loaded_kib": 33404,
+     "delta_kib": 19704
+    }
+   },
+   {
+    "label": "100,000 strings of 16 B with TTL",
+    "ruvio": {
+     "idle_kib": 10196,
+     "loaded_kib": 20324,
+     "delta_kib": 10128
+    },
+    "redis": {
+     "idle_kib": 13488,
+     "loaded_kib": 23640,
+     "delta_kib": 10152
+    }
+   },
+   {
+    "label": "100,000 one-element lists",
+    "ruvio": {
+     "idle_kib": 10264,
+     "loaded_kib": 15080,
+     "delta_kib": 4816
+    },
+    "redis": {
+     "idle_kib": 13692,
+     "loaded_kib": 20388,
+     "delta_kib": 6696
+    }
+   },
+   {
+    "label": "50,000 small hashes (3 fields)",
+    "ruvio": {
+     "idle_kib": 10072,
+     "loaded_kib": 13104,
+     "delta_kib": 3032
+    },
+    "redis": {
+     "idle_kib": 13456,
+     "loaded_kib": 16956,
+     "delta_kib": 3500
+    }
+   },
+   {
+    "label": "50,000 small sets (4 members)",
+    "ruvio": {
+     "idle_kib": 10284,
+     "loaded_kib": 12964,
+     "delta_kib": 2680
+    },
+    "redis": {
+     "idle_kib": 13536,
+     "loaded_kib": 16708,
+     "delta_kib": 3172
+    }
+   },
+   {
+    "label": "50,000 small sorted sets (3 members)",
+    "ruvio": {
+     "idle_kib": 10288,
+     "loaded_kib": 13080,
+     "delta_kib": 2792
+    },
+    "redis": {
+     "idle_kib": 15528,
+     "loaded_kib": 18364,
+     "delta_kib": 2836
+    }
+   }
+  ]
+ },
+ "concurrency": [
+  {
+   "label": "SET, 50 clients, no pipeline",
+   "ruvio_shards": 1,
+   "ruvio": {
+    "rps": 114263.95,
+    "p99_ms": 0.487,
+    "samples": [
+     114285.71,
+     114263.95,
+     114285.71,
+     114263.95,
+     114263.95
+    ]
+   },
+   "redis": {
+    "rps": 109071.08,
+    "p99_ms": 0.751,
+    "samples": [
+     109071.08,
+     109071.08,
+     114263.95,
+     109051.26,
+     114263.95
+    ]
+   }
+  },
+  {
+   "label": "GET, 50 clients, no pipeline",
+   "ruvio_shards": 1,
+   "ruvio": {
+    "rps": 119976.01,
+    "p99_ms": 0.455,
+    "samples": [
+     119976.01,
+     119976.01,
+     119976.01,
+     119976.01,
+     120000.0
+    ]
+   },
+   "redis": {
+    "rps": 119976.01,
+    "p99_ms": 0.687,
+    "samples": [
+     120000.0,
+     119976.01,
+     119976.01,
+     119976.01,
+     120000.0
+    ]
+   }
+  },
+  {
+   "label": "SET, 200 clients, no pipeline",
+   "ruvio_shards": 1,
+   "ruvio": {
+    "rps": 114242.2,
+    "p99_ms": 1.831,
+    "samples": [
+     114242.2,
+     114242.2,
+     114242.2,
+     114263.95,
+     114263.95
+    ]
+   },
+   "redis": {
+    "rps": 109031.45,
+    "p99_ms": 3.231,
+    "samples": [
+     109031.45,
+     114220.45,
+     109011.62,
+     109011.62,
+     114220.45
+    ]
+   }
+  },
+  {
+   "label": "GET, 200 clients, no pipeline",
+   "ruvio_shards": 1,
+   "ruvio": {
+    "rps": 119952.02,
+    "p99_ms": 1.703,
+    "samples": [
+     119952.02,
+     119976.01,
+     114242.2,
+     119952.02,
+     119976.01
+    ]
+   },
+   "redis": {
+    "rps": 119952.02,
+    "p99_ms": 2.975,
+    "samples": [
+     119952.02,
+     119952.02,
+     119928.05,
+     119952.02,
+     119928.05
+    ]
+   }
+  },
+  {
+   "label": "SET, 200 clients, pipeline 16",
+   "ruvio_shards": 1,
+   "ruvio": {
+    "rps": 1141552.5,
+    "p99_ms": 3.071,
+    "samples": [
+     1142204.38,
+     1141552.5,
+     1142204.38,
+     1141552.5,
+     1141552.5
+    ]
+   },
+   "redis": {
+    "rps": 798722.06,
+    "p99_ms": 5.879,
+    "samples": [
+     798403.19,
+     887705.25,
+     798722.06,
+     886917.94,
+     798403.19
+    ]
+   }
+  },
+  {
+   "label": "HSET, 200 clients, pipeline 16",
+   "ruvio_shards": 1,
+   "ruvio": {
+    "rps": 888099.44,
+    "p99_ms": 4.079,
+    "samples": [
+     888099.44,
+     888099.44,
+     888099.44,
+     888099.44,
+     888099.44
+    ]
+   },
+   "redis": {
+    "rps": 798403.19,
+    "p99_ms": 6.047,
+    "samples": [
+     798403.19,
+     798084.56,
+     798403.19,
+     798403.19,
+     798403.19
+    ]
+   }
+  },
+  {
+   "label": "SET, durability always (fsync), 50 clients",
+   "ruvio_shards": 1,
+   "ruvio": {
+    "rps": 39946.74,
+    "p99_ms": 3.343,
+    "samples": [
+     39920.16,
+     39973.35,
+     39946.74,
+     34246.57,
+     39946.74
+    ]
+   },
+   "redis": {
+    "rps": 14973.8,
+    "p99_ms": 7.399,
+    "samples": [
+     14977.53,
+     15978.69,
+     14973.8,
+     14970.06,
+     14970.06
+    ]
+   }
+  },
+  {
+   "label": "SET, durability always (fsync), 200 clients",
+   "ruvio_shards": 1,
+   "ruvio": {
+    "rps": 66577.9,
+    "p99_ms": 5.367,
+    "samples": [
+     66577.9,
+     66577.9,
+     66577.9,
+     66577.9,
+     66577.9
+    ]
+   },
+   "redis": {
+    "rps": 44365.57,
+    "p99_ms": 8.583,
+    "samples": [
+     44385.27,
+     44365.57,
+     44345.89,
+     44365.57,
+     44365.57
+    ]
+   }
+  },
+  {
+   "label": "SET, durability always (fsync), 50 clients, pipeline 16",
+   "ruvio_shards": 1,
+   "ruvio": {
+    "rps": 399467.38,
+    "p99_ms": 5.447,
+    "samples": [
+     399467.38,
+     399467.38,
+     399467.38,
+     399467.38,
+     399467.38
+    ]
+   },
+   "redis": {
+    "rps": 171135.19,
+    "p99_ms": 9.503,
+    "samples": [
+     171135.19,
+     171330.66,
+     171135.19,
+     171037.64,
+     171135.19
+    ]
+   }
+  },
+  {
+   "label": "SET, 200 clients, pipeline 16, Ruvio 2 shards",
+   "ruvio_shards": 2,
+   "ruvio": {
+    "rps": 1331558.0,
+    "p99_ms": 3.135,
+    "samples": [
+     1140250.88,
+     1139601.12,
+     1331558.0,
+     1331558.0,
+     1331558.0
+    ]
+   },
+   "redis": {
+    "rps": 798722.06,
+    "p99_ms": 6.055,
+    "samples": [
+     798722.06,
+     798722.06,
+     798722.06,
+     887705.25,
+     798084.56
+    ]
+   }
+  },
+  {
+   "label": "SET, 200 clients, pipeline 16, Ruvio 4 shards",
+   "ruvio_shards": 4,
+   "ruvio": {
+    "rps": 1328903.62,
+    "p99_ms": 1.295,
+    "samples": [
+     1327140.0,
+     1328903.62,
+     1330672.0,
+     1328903.62,
+     1328021.25
+    ]
+   },
+   "redis": {
+    "rps": 798722.06,
+    "p99_ms": 5.903,
+    "samples": [
+     887705.25,
+     886917.94,
+     798722.06,
+     798722.06,
+     798084.56
+    ]
+   }
+  },
+  {
+   "label": "GET, 200 clients, pipeline 16, Ruvio 2 shards",
+   "ruvio_shards": 2,
+   "ruvio": {
+    "rps": 1331558.0,
+    "p99_ms": 2.703,
+    "samples": [
+     1996008.0,
+     1331558.0,
+     1994017.88,
+     1329787.25,
+     1331558.0
+    ]
+   },
+   "redis": {
+    "rps": 1140901.25,
+    "p99_ms": 4.127,
+    "samples": [
+     1141552.5,
+     1140901.25,
+     1141552.5,
+     1139601.12,
+     1140250.88
+    ]
+   }
+  },
+  {
+   "label": "SET, durability always, 200 clients, pipeline 16, Ruvio 2 shards",
+   "ruvio_shards": 2,
+   "ruvio": {
+    "rps": 299401.22,
+    "p99_ms": 15.151,
+    "samples": [
+     298804.78,
+     299401.22,
+     299700.28,
+     299102.69,
+     299401.22
+    ]
+   },
+   "redis": {
+    "rps": 298804.78,
+    "p99_ms": 16.511,
+    "samples": [
+     298804.78,
+     298804.78,
+     299102.69,
+     298804.78,
+     298804.78
+    ]
+   }
+  }
+ ],
+ "environment_files": [
+  "bench-features/results.json",
+  "bench-features/concurrency.json"
+ ]
+}

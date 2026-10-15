@@ -1,0 +1,162 @@
+# ruvio-client (Node.js)
+
+Fast, zero-dependency RESP client for [Ruvio](https://salihcantekin.github.io/ruvio/). TypeScript source, ESM
+output with `.d.ts`, Node 18+. MIT licensed.
+
+```sh
+npm install ruvio-client
+```
+
+```ts
+import { createClient } from 'ruvio-client';
+
+const c = createClient('redis://127.0.0.1:6379/0');   // or { host, port, db, username, password, tls }
+await c.set('k', 'v', { px: 5000 });
+console.log(await c.get('k'));                          // 'v'
+console.log(await c.binary.get('k'));                   // Buffer
+await c.quit();
+```
+
+## Design (speed and memory first)
+
+- **One multiplexed socket per client.** Concurrent calls share it; replies resolve FIFO from a ring-buffer
+  pending queue (no `Array.shift`, no per-call closure: the promise executor is a shared function).
+- **Write coalescing without timers.** Frames queued in the same tick go out as one `socket.write`
+  (`flush: 'microtask'`, default; `'immediate'` also collects callers resumed by the same I/O event).
+  Serial calls are sent at once.
+- **Encoder:** command names are pre-encoded (`*N\r\n$3\r\nGET\r\n` cached per arity), integers are written as ASCII digits
+  directly into a reusable 64 KiB slab, short ASCII strings are copied char by char, longer strings use `utf8Write`.
+  Buffers of 64 KiB or more go to the socket without a copy.
+- **Parser:** incremental and resumable (a large array arriving in many reads is parsed in linear time),
+  works in place on the socket's reusable read buffer (`onread`), copies only an unfinished tail.
+  Strings are decoded with `utf8Slice`; `client.binary.*` / `getBuffer` return copies as `Buffer`.
+- RESP2 by default; `protocol: 3` sends `HELLO 3` (maps become objects, pushes are emitted as `push` events,
+  `CLIENT TRACKING` invalidations work).
+
+## API
+
+Typed methods for every command in `docs/compatibility-matrix.json` (287/287, enforced by `test/coverage.test.ts`),
+including the Ruvio options: `set(k, v, { ifEq })`, `incrbyMax`, `fillget`/`fillset` (`WAIT`, `SWR`), `getex(k, ms)`,
+`delex(k, ifEq)`, `lpushcap`/`rpushcap`, `bf*`, `json*` (incl. `jsonIndexCreate`, `jsonFind`), `idemBegin`/`idemComplete`,
+`lease`/`semaphore`/`release`, `once`, `take`, `setv`, `changes*`, `limit`. Anything else: `c.call('CMD', ...args)`.
+
+- **Pipeline:** `await c.pipeline().set('a', 1).get('a').exec()` (one write; per-command errors stay in their slot, `execStrict()` rejects).
+- **Transaction:** `await c.multi().incr('{k}a').incr('{k}b').exec()`: `MULTI`..`EXEC` in one contiguous write; `null` if a WATCH failed.
+  `WATCH` needs its own connection: `c.isolated(async iso => { await iso.watch(k); ... iso.multi()...exec() })`.
+- **Pub/Sub:** `const s = c.subscriber(); s.on('message', m => ...)` or `for await (const m of s)`; a dedicated socket,
+  re-subscribes after a drop. Supports `psubscribe`, `ssubscribe`, `binary: true` payloads.
+- **Blocking commands** (`blpop`, `xread block`, `fillget ... WAIT`, `wait`) park the shared socket: use `c.duplicate()`.
+- **Errors:** server errors reject with `RuvioError` (`.code` = `ERR`, `WRONGTYPE`...); a lost connection rejects pending calls with `ConnectionError`,
+  and the next call reconnects (database and name are re-applied). Nil replies are `null`.
+
+### Helpers
+
+| Helper | Built on |
+| --- | --- |
+| `await using lock = await c.acquireLock(key, ttlMs)`; `lock.renew()`, `lock.release()`, `c.withLock(...)` | `SET NX PX`, `SET IFEQ`, `DELEX IFEQ` (never deletes another owner's lock) |
+| `c.acquireLease(key, ttl)` (`lease.token` is the fencing token) | `LEASE` / `RELEASE` |
+| `c.acquireSemaphore(key, max, ttl)` | `SEMAPHORE` / `RELEASE` |
+| `c.rateLimit(key, max, windowMs)` -> `{ allowed, remaining }` | `LIMIT` |
+| `c.getOrCreate(key, ttlMs, factory, { staleMs })` | `FILLGET`/`FILLSET`; waiters poll plain `FILLGET` with backoff (never `WAIT`) |
+| `c.idempotent(key, fingerprint, ttlMs, fn)` | `IDEM BEGIN/COMPLETE` |
+| `c.scanIterator()`, `hscanIterator`, `sscanIterator`, `zscanIterator` | cursor-driven async generators |
+| `c.jsonGetAs<T>()`, `c.jsonSetAs()` | `JSON.GET/SET` + `JSON.parse/stringify` |
+| `c.pushRecent(key, cap, ...)`, `c.recent(key, n)` | `LPUSHCAP` |
+| `c.seenBefore(key, ...items)`, `c.mightContain` | `BF.MADD` / `BF.MEXISTS` |
+
+`Symbol.asyncDispose` is polyfilled for Node 18/20. The `await using` syntax itself is not available in plain JavaScript on Node 22 (it failed in a `.mjs` file on Node 22.22): use it from TypeScript 5.2+ (the compiler lowers it), or call `lock.release()` / `c.withLock(...)` instead.
+
+## Cluster
+
+```ts
+import { createClusterClient } from 'ruvio-client';
+
+const c = createClusterClient('redis://127.0.0.1:17340');   // any shard; or { host, port, ...ClientOptions }
+await c.set('user:1', 'a');                                  // routed by CRC16 slot ({hashtag} aware)
+console.log(await c.mget('user:1', 'user:2', 'user:3'));     // split per slot, replies in your order
+```
+
+`ClusterClient` has the same typed commands, helpers (`acquireLock`, `rateLimit`, `getOrCreate`, ...), `binary`, `pipeline()` and
+`multi()` as `RuvioClient`. On the first command (or `await c.connect()`) it asks the seed for `CLUSTER SLOTS`, builds a
+16384-entry slot table and keeps one lazy multiplexed connection per node. A seed that answers `cluster mode is disabled` is a
+standalone server: the client then encodes straight into that one connection, exactly like `RuvioClient` (`cluster: true` makes that an error instead).
+
+How routing works (no change to the typed commands): each command is encoded into a private scratch encoder, the key is read from the
+encoded bytes (no key strings are built), and the frame, a zero-copy view of the encoder slab, goes to the owner's connection. The frame is kept
+only for a possible `MOVED` retry.
+
+| Command shape | Routing |
+| --- | --- |
+| single key (`GET`, `HSET`, `LEASE`, `LIMIT`, `FILLGET`, `IDEM`, `BF.*`, `JSON.*`, `XADD`, ...) | node of the key's slot |
+| `XGROUP` / `XINFO` / `OBJECT` / `MEMORY` | key is argument 2 |
+| `RENAME`, `COPY`, `LMOVE`, `SMOVE`, `GEOSEARCHSTORE`, `SINTER*`, `SUNION*`, `SDIFF*`, `PFCOUNT/MERGE`, `BITOP`, `JSON.MGET`, `ZUNION*`, `ZINTER*`, `ZDIFF*`, `SINTERCARD`, `LMPOP`, `BLMPOP`, `BLPOP`..., `EVAL*`/`FCALL*` with keys, `XREAD*`, `WATCH`, `MSETNX` | all their real keys must share one slot, else `RuvioError` `CROSSSLOT` is raised **before anything is sent** |
+| `MGET`, `MSET`, `DEL`, `UNLINK`, `EXISTS`, `TOUCH` over several slots | one sub-command per slot (the server refuses even two slots of the same shard), run concurrently, replies re-assembled in your order (`DEL`/`EXISTS`/... counts are summed). Not atomic: a failure in one part rejects the call while other parts may have run |
+| `DBSIZE`, `KEYS`, `FLUSHDB`, `FLUSHALL` | sent to every node and merged (sum / concatenation / first reply) |
+| other keyless commands (`PING`, `INFO`, `CLIENT`, `CONFIG`, `PUBLISH`, `SCRIPT`, `FUNCTION`, `ACL`, ..., `EVAL` with 0 keys) | the seed node |
+
+- **`-MOVED`**: the slot is repointed to the named node and the command is retried **once**; a second `MOVED` is returned as the error.
+  The table is re-read with `CLUSTER SLOTS` when the node is unknown or when more than one slot has moved since the last read (one request is shared by all callers).
+  Transport failures are never replayed: the affected calls reject with `ConnectionError`, only that node reconnects (lazily), other nodes are untouched.
+- **Pipelines** are grouped per node: frames are written to each node's connection in call order (one coalesced write per node), replies come back in call order.
+  A cross-slot `MGET`-style command inside a pipeline is split, an unsplittable cross-slot one leaves a `CROSSSLOT` error in its own slot, and `MOVED` is followed per command.
+  A lost connection rejects `exec()`, as for a single connection.
+- **Transactions** (`c.multi()`): all keys must hash to one slot, otherwise `exec()` rejects with `CROSSSLOT` and sends nothing; keyless ones run on the seed. `MOVED` inside a
+  transaction is not retried (it surfaces as the `EXECABORT`/command error; the next call fixes the table). `WATCH` needs the owner's own connection: `c.isolated(key, async iso => {...})`.
+- **Blocking commands** (`BLPOP`, `BRPOP`, `BZPOP*`, `BLMOVE`, `BLMPOP`, `XREAD`/`XREADGROUP ... BLOCK`, `FILLGET ... WAIT`, `WAIT`) run on a pooled dedicated connection to the
+  owning node, so they never park the shared one. (Inside a pipeline they use the shared connection.)
+- **Pub/Sub**: `c.subscriber()` connects to the seed node (`SUBSCRIBE`, `PSUBSCRIBE`); `await c.subscriberFor(channel)` connects to the node owning the channel's slot
+  (use it with `SSUBSCRIBE` / `SPUBLISH`, which route by channel).
+- **Scan family**: `c.scanIterator()` walks `SCAN` on **every node, one after the other**; a plain `c.scan(cursor)` reaches only the seed node. `hscanIterator`/`sscanIterator`/`zscanIterator` route by key.
+- Introspection: `c.isCluster`, `c.nodes`, `c.nodeFor(key)` (a node with its own `RuvioClient`), `c.slotOf(key)`, `c.refreshSlots()`, `c.redirectCount`, `c.refreshCount`.
+- `hashSlot(key)` is exported and is checked against `CLUSTER KEYSLOT` in the live tests. Cluster mode has database 0 only (`SELECT` is not routed).
+
+## Tests and benchmark
+
+```sh
+npm test                                                     # codec unit tests + coverage; live tests skip
+RUVIO_TEST_ADDR=127.0.0.1:17106 npm test                     # + live tests per command family and the cluster client's standalone fallback
+RUVIO_TEST_ADDR=127.0.0.1:17343 RUVIO_CLUSTER_ADDR=127.0.0.1:17340 npm test   # + live cluster tests (63 tests in total)
+RUVIO_TEST_ADDR=127.0.0.1:17106 npm run bench                # codec ns/B per op, live GET/SET ops/s, ioredis comparison
+RUVIO_CLUSTER_ADDR=127.0.0.1:17340 RUVIO_TEST_ADDR=127.0.0.1:17343 npm run bench   # + cluster GET/SET next to standalone
+```
+
+Live tests use their own logical databases and `FLUSHDB`; one test runs `FLUSHALL` (use a scratch server).
+`ioredis` is a dev dependency used only by the benchmark.
+
+Local numbers (4 vCPU Linux VM, Node 22, loopback, 256-byte values, 1.5 s per case, single connection, one Ruvio process;
+indicative only, not a release benchmark):
+
+| client | GET c=1 | SET c=1 | GET c=128 | SET c=128 |
+| --- | ---: | ---: | ---: | ---: |
+| ruvio-client (microtask flush) | 13,787 | 14,996 | 605,419 | 755,983 |
+| ruvio-client (setImmediate flush) | 13,912 | 13,897 | 641,112 | 697,912 |
+| ioredis 5 | 11,228 | 12,291 | 104,733 | 92,169 |
+| ioredis 5 (autoPipelining) | 8,794 | 8,768 | 146,256 | 132,264 |
+| ruvio-client `pipeline()` of 128 GETs | 663,990 ops/s | | | |
+
+Serial numbers vary a lot run to run in this VM (earlier runs of the same code gave 25-31k). Codec: encode GET ~66 ns, encode SET with a 256-byte
+string ~230 ns (Buffer ~130 ns), parse `+OK` ~20 ns, `:int` ~57 ns, nil ~37 ns, 256-byte bulk to string ~240 ns. The `B/op` column from the
+benchmark is a heap-delta estimate, and its small-window readings for parse (100-270 B) are the returned string/Buffer values themselves.
+
+Cluster client (3-shard server `port_mode = "per-shard"` and a standalone server on the same VM, 256-byte values, 1.5 s per case, one client; indicative, noisy run to run):
+
+| client | GET c=1 | SET c=1 | GET c=128 | SET c=128 |
+| --- | ---: | ---: | ---: | ---: |
+| `RuvioClient`, standalone server | 55,660 | 53,285 | 838,995 | 789,889 |
+| `ClusterClient`, standalone server (fallback path) | 60,772 | 52,990 | 875,575 | 802,657 |
+| `ClusterClient`, 3 shards | 46,834 | 38,842 | 659,344 | 523,403 |
+| `ClusterClient` `pipeline()` of 128 GETs, 3 shards | 505,758 ops/s | | | |
+
+The fallback path costs nothing measurable; routed commands pay for reading the key from the frame and one extra promise-free callback per call,
+and the 3-shard server shares this VM's CPUs with the benchmark, so the cluster rows are a lower bound, not a scaling claim.
+
+## Not done / not verified
+
+- **Cluster, not done:** `ASK` redirects and replica reads (`READONLY`) are not handled (Ruvio's per-shard layout has no slot migration); a plain `scan()` call is single-node (use `scanIterator()`);
+  `MOVED` inside a transaction is not retried; split `MSET`/`DEL`... are not atomic; `SELECT` is not routed (database 0 only); `CLUSTER NODES/SHARDS/INFO/MYID` go to the seed node only.
+  Cluster routing is verified only against Ruvio's 3-shard `per-shard` port layout on one machine, not against a Redis Cluster.
+- **Not verified live:** TLS and unix-socket connections; `ACL LOAD`/`ACL SAVE` success (server has no acl_file; the call round-trips an error); `WAIT` with real replicas;
+  Node 18 and 20 (only Node 22 was available); `HELLO ... AUTH`.
+- Older server builds had quirks the client still tolerates: a blocked `XREAD`/`XREADGROUP` woken by `XADD` replied one entry without the outer list, `SUNION`/`SINTER` order was not sorted, and a queue-time error inside MULTI did not give EXECABORT. All three are fixed in the server; EXEC now answers EXECABORT and runs nothing.
+- `EXPIRE`-family methods take no NX/XX/GT/LT (the server rejects them).
+- Pipelines re-use frames in a private buffer; a pipeline cannot be re-run after `exec()`.

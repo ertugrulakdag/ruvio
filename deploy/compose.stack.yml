@@ -1,0 +1,45 @@
+# Local Ruvio, Redis, and the Ruvio UI on this machine, from the published images.
+# All ports are bound to 127.0.0.1 only, and no username or password is set.
+# Use deploy/local.sh to start and check it.
+name: ruvio-local
+services:
+  redis:
+    image: redis:8-alpine
+    platform: linux/${LOCAL_ARCH:-amd64}
+    container_name: redis-local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6380:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--protected-mode", "no", "--bind", "0.0.0.0"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  ruvio:
+    image: salihcantekin/ruvio:latest
+    platform: linux/${LOCAL_ARCH:-amd64}
+    container_name: ruvio-local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    environment:
+      # No password: the port is published on 127.0.0.1 only.
+      RUVIO_ALLOW_UNAUTHENTICATED: "true"
+      RUVIO_DURABILITY: memory
+    volumes:
+      - ruvio-data:/data
+  ruvio-ui:
+    image: salihcantekin/ruvio-ui:latest
+    platform: linux/${LOCAL_ARCH:-amd64}
+    container_name: ruvio-ui-local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      RUVIO_UI_TARGET_HOST: ruvio
+      RUVIO_UI_TARGET_PORT: "6379"
+    depends_on:
+      - ruvio
+volumes:
+  ruvio-data:

@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: ruvio
+    metrics_path: /internal/metrics/ruvio
+    static_configs:
+      - targets: ["__SUT_ADDRESS__:__API_PORT__"]
+
+  - job_name: linux-node
+    static_configs:
+      - targets: ["__SUT_ADDRESS__:9100"]
+
+  - job_name: redis
+    metrics_path: /internal/metrics/redis
+    static_configs:
+      - targets: ["__SUT_ADDRESS__:__API_PORT__"]
+
+  - job_name: toxiproxy
+    static_configs:
+      - targets: ["__SUT_ADDRESS__:8474"]
+
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]

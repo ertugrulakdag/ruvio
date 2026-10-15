@@ -1,0 +1,75 @@
+{
+  "seconds_per_engine": null,
+  "passes_per_engine": 2500,
+  "pause_ms": 10.0,
+  "idle_seconds": 0,
+  "mode": "full",
+  "ruvio": {
+    "engine": "ruvio",
+    "mode": "full",
+    "passes": 2500,
+    "elapsed_seconds": 39.167,
+    "baseline": {
+      "rss_bytes": 9617408,
+      "info": {
+        "charged_memory_bytes": 0,
+        "key_memory_bytes": 0,
+        "value_memory_bytes": 0,
+        "collection_memory_bytes": 0,
+        "index_memory_bytes": 0,
+        "pooled_value_bytes": 0
+      }
+    },
+    "sampled_peak_rss_bytes": 10764288,
+    "after": {
+      "rss_bytes": 10764288,
+      "info": {
+        "charged_memory_bytes": 61,
+        "key_memory_bytes": 4,
+        "value_memory_bytes": 5,
+        "collection_memory_bytes": 0,
+        "index_memory_bytes": 52,
+        "pooled_value_bytes": 0
+      }
+    },
+    "after_flush": {
+      "rss_bytes": 10862592,
+      "info": {
+        "charged_memory_bytes": 0,
+        "key_memory_bytes": 0,
+        "value_memory_bytes": 0,
+        "collection_memory_bytes": 0,
+        "index_memory_bytes": 0,
+        "pooled_value_bytes": 0
+      }
+    }
+  },
+  "redis": {
+    "engine": "redis",
+    "mode": "full",
+    "passes": 2500,
+    "elapsed_seconds": 38.359,
+    "baseline": {
+      "rss_bytes": 7340032,
+      "info": {
+        "used_memory": 930624,
+        "used_memory_rss": 7340032
+      }
+    },
+    "sampled_peak_rss_bytes": 7651328,
+    "after": {
+      "rss_bytes": 7651328,
+      "info": {
+        "used_memory": 1032432,
+        "used_memory_rss": 7651328
+      }
+    },
+    "after_flush": {
+      "rss_bytes": 7798784,
+      "info": {
+        "used_memory": 1056960,
+        "used_memory_rss": 7798784
+      }
+    }
+  }
+}

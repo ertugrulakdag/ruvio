@@ -1,0 +1,17 @@
+diff --git a/src/runtime/evented/checkpoint.rs b/src/runtime/evented/checkpoint.rs
+index 0a2e0ff..0b0d95a 100644
+--- a/src/runtime/evented/checkpoint.rs
++++ b/src/runtime/evented/checkpoint.rs
+@@ -948,7 +948,11 @@ pub(super) fn save_every_shard(
+     }
+ 
+     let Some(coordinator) = &state.cluster else {
+-        return publish_checkpoint_round(state, 0).map(|()| (0, None));
++        // A failed file leaves the previous checkpoint in place; the next round retries.
++        if let Err(error) = publish_checkpoint_round(state, 0) {
++            warn!(%error, "SAVE could not write its checkpoint; retrying in the background");
++        }
++        return Ok((0, None));
+     };
+ 
+     if persistence_state(state).profile() == crate::DurabilityProfile::Memory {

@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Ruvio.Client.AspNetCore</RootNamespace>
+    <AssemblyName>Ruvio.Client.AspNetCore</AssemblyName>
+    <Version>0.3.2</Version>
+    <Authors>Salih Cantekin</Authors>
+    <Description>ASP.NET Core integration for the Ruvio.Client RESP2 SDK.</Description>
+    <PackageId>Ruvio.Client.AspNetCore</PackageId>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>ruvio-icon.png</PackageIcon>
+    <PackageTags>ruvio;redis;resp;aspnetcore</PackageTags>
+    <RepositoryUrl>https://github.com/salihcantekin/ruvio</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://salihcantekin.github.io/ruvio/</PackageProjectUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\Ruvio.Client\Ruvio.Client.csproj" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="../../../brand/ruvio-icon-square.png" Pack="true" PackagePath="ruvio-icon.png" />
+  </ItemGroup>
+
+</Project>

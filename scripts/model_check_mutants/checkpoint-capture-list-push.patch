@@ -1,0 +1,16 @@
+diff --git a/src/engine/list.rs b/src/engine/list.rs
+index 194457c..537f3a9 100644
+--- a/src/engine/list.rs
++++ b/src/engine/list.rs
+@@ -89,7 +89,10 @@ fn push_or_deliver<C: Clock, I: StorageIndex, S: MutationSink, W: ListWaiterSink
+         + key.len()
+         + ADMISSION_OVERHEAD_BYTES;
+ 
+-    if let Some(rejected) = before_mutation(shard, sink, [key.as_ref()], extra)? {
++    // An existing list grows in place; only a new key goes through admission.
++    if shard.list_len(key).unwrap_or(0) == 0
++        && let Some(rejected) = before_mutation(shard, sink, [key.as_ref()], extra)?
++    {
+         return Ok(Err(rejected));
+     }
+ 

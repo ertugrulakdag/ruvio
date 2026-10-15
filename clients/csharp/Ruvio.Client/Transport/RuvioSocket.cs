@@ -1,0 +1,442 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
+using System.Net.Sockets;
+
+namespace Ruvio.Client;
+
+/// <summary>One TCP socket with its reader. Replies are returned as values; errors do not throw.</summary>
+internal sealed class RuvioSocket : IDisposable
+{
+    private static readonly ActivitySource Activities = new("Ruvio.Client");
+    private static readonly Meter Meter = new("Ruvio.Client");
+    private static readonly Histogram<double> SocketPhaseDuration = Meter.CreateHistogram<double>(
+        "ruvio_client_socket_phase_duration_milliseconds", "ms");
+    private static readonly Counter<long> SocketWrites = Meter.CreateCounter<long>(
+        "ruvio_client_socket_write_calls");
+    private static readonly Counter<long> SocketWrittenBytes = Meter.CreateCounter<long>(
+        "ruvio_client_socket_written_bytes", "By");
+    private readonly TcpClient _tcp;
+    private readonly NetworkStream _stream;
+    private readonly RespReader _reader;
+    private readonly SemaphoreSlim _write = new(1, 1);
+    private readonly SemaphoreSlim _read = new(1, 1);
+    private bool _independentIo;
+    private readonly object _multiplexerGate = new();
+    private readonly int _maxInFlight;
+    private CommandMultiplexer? _multiplexer;
+    private bool _initialized;
+
+    private volatile bool _broken;
+    private volatile bool _disposed;
+
+    private RuvioSocket(TcpClient tcp, string host, int port, int maxInFlight)
+    {
+        _tcp = tcp;
+        _stream = tcp.GetStream();
+        _reader = new RespReader(_stream);
+        Host = host;
+        Port = port;
+        _maxInFlight = maxInFlight;
+    }
+
+    public string Host { get; }
+
+    public int Port { get; }
+
+    public bool IsBroken => _broken || _disposed || _multiplexer?.IsBroken == true;
+
+    /// <summary>Connects, then sends <c>AUTH</c> when the options ask for it. <c>SELECT</c> is left to the caller.</summary>
+    public static async Task<RuvioSocket> OpenAsync(
+        string host,
+        int port,
+        RuvioClientOptions options,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.MaxInFlightRequests);
+        
+        var tcp = new TcpClient { NoDelay = true };
+        using var connect = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        connect.CancelAfter(options.ConnectTimeout);
+
+        try
+        {
+            await tcp.ConnectAsync(host, port, connect.Token);
+        }
+        catch
+        {
+            tcp.Dispose();
+            throw;
+        }
+
+        var connection = new RuvioSocket(tcp, host, port, options.MaxInFlightRequests);
+
+        if (options.Password is null)
+        {
+            connection._initialized = true;
+            return connection;
+        }
+
+        try
+        {
+            IReadOnlyList<string> auth = options.Username is null
+                ? ["AUTH", options.Password]
+                : ["AUTH", options.Username, options.Password];
+
+            ThrowOnError(await connection.SendAsync(auth, cancellationToken));
+        }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
+
+        connection._initialized = true;
+        return connection;
+    }
+
+    /// <summary>
+    /// Lets a subscriber pump read while another thread writes <c>SUBSCRIBE</c>.
+    /// Command sockets must not enable this: replies would interleave.
+    /// </summary>
+    public void EnableIndependentIo()
+    {
+        _independentIo = true;
+    }
+
+    public async Task WriteAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    {
+        await _write.WaitAsync(cancellationToken);
+
+        try
+        {
+            ThrowIfClosed();
+
+            await _stream.WriteAsync(payload, cancellationToken);
+            RecordSocketWrite(payload.Length);
+            await _stream.FlushAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not RuvioException and not OperationCanceledException)
+        {
+            _broken = true;
+
+            throw new RuvioException(exception.Message, isServerReply: false, exception, closedBeforeReply: !_reader.ReplyStarted);
+        }
+        catch
+        {
+            _broken = true;
+
+            throw;
+        }
+        finally
+        {
+            _write.Release();
+        }
+    }
+
+    public ValueTask<RespValue> SendAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken) =>
+        SendAsync(new RespCommand(arguments), cancellationToken);
+
+    internal ValueTask<RespValue> SendAsync(in RespCommand command, CancellationToken cancellationToken)
+    {
+        if (_initialized && !_independentIo)
+        {
+            CommandMultiplexer? multiplexer = TryMultiplexer(out Exception? error);
+            return multiplexer is null
+                ? ValueTask.FromException<RespValue>(error!)
+                : multiplexer.SendCommandAsync(command, cancellationToken);
+        }
+
+        return First(SendManyAsync(command.EncodePooled(), 1, cancellationToken));
+    }
+
+    private static async ValueTask<RespValue> First(Task<IReadOnlyList<RespValue>> replies) =>
+        (await replies.ConfigureAwait(false))[0];
+
+    public Task<IReadOnlyList<RespValue>> SendManyAsync(
+        IReadOnlyList<IReadOnlyList<string>> commands,
+        CancellationToken cancellationToken)
+    {
+        return _initialized && !_independentIo
+            ? Multiplexer.SendAsync(commands, cancellationToken).AsTask()
+            : SendManyAsync(RespCodec.EncodeManyPooled(commands), commands.Count, cancellationToken);
+    }
+
+    internal ValueTask<RespValue> SendBinaryAsync(
+        IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken cancellationToken)
+    {
+        if (_initialized && !_independentIo)
+        {
+            CommandMultiplexer? multiplexer = TryMultiplexer(out Exception? error);
+            return multiplexer is null
+                ? ValueTask.FromException<RespValue>(error!)
+                : multiplexer.SendAsync(arguments, cancellationToken);
+        }
+
+        return First(SendManyAsync(RespCodec.Encode(arguments), 1, cancellationToken));
+    }
+
+    public async Task<IReadOnlyList<RespValue>> SendManyAsync(
+        byte[] payload,
+        int replies,
+        CancellationToken cancellationToken)
+    {
+        return await SendManyAsync(payload.AsMemory(), replies, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<RespValue>> SendManyAsync(
+        PooledFrame frame,
+        int replies,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await SendManyAsync(frame.Buffer.AsMemory(0, frame.Length), replies, cancellationToken);
+        }
+        finally
+        {
+            frame.Dispose();
+        }
+    }
+
+    internal async Task<IReadOnlyList<RespValue>> SendManyAsync(
+        ReadOnlyMemory<byte> payload,
+        int replies,
+        CancellationToken cancellationToken)
+    {
+        if (_initialized && !_independentIo)
+            return await Multiplexer.SendAsync(payload, replies, cancellationToken).ConfigureAwait(false);
+
+        _reader.PrepareReply();
+
+        if (_independentIo)
+        {
+            await WriteAsync(payload, cancellationToken);
+            var independent = new RespValue[replies];
+
+            for (int index = 0; index < replies; index++)
+            {
+                independent[index] = await ReadAsync(cancellationToken);
+            }
+
+            return independent;
+        }
+
+        long queueStarted = Stopwatch.GetTimestamp();
+
+        try
+        {
+            using var queueActivity = Activities.StartActivity("socket.queue");
+            queueActivity?.SetTag("db.system", "ruvio");
+            await _write.WaitAsync(cancellationToken);
+        }
+        finally
+        {
+            RecordSocketPhase("queue", queueStarted);
+        }
+
+        try
+        {
+            ThrowIfClosed();
+
+            long writeStarted = Stopwatch.GetTimestamp();
+            using (var writeActivity = Activities.StartActivity("socket.write"))
+            {
+                writeActivity?.SetTag("db.system", "ruvio");
+                try
+                {
+                    await _stream.WriteAsync(payload, cancellationToken);
+                    await _stream.FlushAsync(cancellationToken);
+                }
+                finally
+                {
+                    RecordSocketPhase("write", writeStarted);
+                }
+            }
+
+            var values = new RespValue[replies];
+
+            long replyStarted = Stopwatch.GetTimestamp();
+            using (var replyActivity = Activities.StartActivity("socket.reply"))
+            {
+                replyActivity?.SetTag("db.system", "ruvio");
+
+                try
+                {
+                    for (int index = 0; index < replies; index++)
+                    {
+                        values[index] = await _reader.ReadAsync(cancellationToken);
+                    }
+                }
+                finally
+                {
+                    RecordSocketPhase("reply", replyStarted);
+                }
+            }
+
+            return values;
+        }
+
+        catch (Exception exception) when (exception is not RuvioException and not OperationCanceledException)
+        {
+            _broken = true;
+
+            throw new RuvioException(exception.Message, isServerReply: false, exception, closedBeforeReply: !_reader.ReplyStarted);
+        }
+        catch
+        {
+            _broken = true;
+
+            throw;
+        }
+        finally
+        {
+            _write.Release();
+        }
+    }
+
+    private CommandMultiplexer? TryMultiplexer(out Exception? error)
+    {
+        try
+        {
+            error = null;
+            return Multiplexer;
+        }
+        catch (Exception exception)
+        {
+            error = exception;
+            return null;
+        }
+    }
+
+    private CommandMultiplexer Multiplexer
+    {
+        get
+        {
+            ThrowIfClosed();
+            CommandMultiplexer? existing = Volatile.Read(ref _multiplexer);
+            if (existing is not null) return existing;
+            lock (_multiplexerGate)
+            {
+                ThrowIfClosed();
+                existing = _multiplexer;
+                if (existing is not null) return existing;
+                existing = new CommandMultiplexer(_stream, _reader, _maxInFlight, coalesceWrites: true);
+                Volatile.Write(ref _multiplexer, existing);
+                return existing;
+            }
+        }
+    }
+
+    /// <summary>Reads one value without writing, for subscription pushes.</summary>
+    public async Task<RespValue> ReadAsync(CancellationToken cancellationToken)
+    {
+        SemaphoreSlim gate = _independentIo ? _read : _write;
+
+        await gate.WaitAsync(cancellationToken);
+
+        try
+        {
+            ThrowIfClosed();
+
+            return await _reader.ReadAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not RuvioException and not OperationCanceledException)
+        {
+            _broken = true;
+
+            throw new RuvioException(exception.Message, isServerReply: false, exception);
+        }
+        catch
+        {
+            _broken = true;
+
+            throw;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public static RespValue ThrowOnError(RespValue reply)
+    {
+        if (reply.Kind is RespKind.Error)
+        {
+            throw new RuvioException(reply.Text ?? "ERR", isServerReply: true);
+        }
+
+        return reply;
+    }
+
+    private void ThrowIfClosed()
+    {
+        if (_disposed || _broken)
+        {
+            throw new RuvioException("connection is closed");
+        }
+    }
+
+    internal static bool TracingEnabled => Activities.HasListeners();
+    internal static bool PhaseMetricsEnabled => SocketPhaseDuration.Enabled;
+
+    internal static void RecordSocketWrite(int bytes)
+    {
+        SocketWrites.Add(1);
+        SocketWrittenBytes.Add(bytes);
+    }
+
+    internal static Activity? StartPhase(string phase, Activity? parentActivity, long startedTimestamp = 0)
+    {
+        if (!Activities.HasListeners()) return null;
+        ActivityContext parent = parentActivity?.Context ?? default;
+        DateTimeOffset start = startedTimestamp == 0
+            ? default
+            : DateTimeOffset.UtcNow - Stopwatch.GetElapsedTime(startedTimestamp);
+        string name = phase switch
+        {
+            "queue" => "socket.queue",
+            "write" => "socket.write",
+            "reply" => "socket.reply",
+            _ => throw new ArgumentOutOfRangeException(nameof(phase)),
+        };
+
+        Activity? activity = Activities.StartActivity(name, ActivityKind.Internal, parent, startTime: start);
+        activity?.SetTag("db.system", "ruvio");
+
+        return activity;
+    }
+
+    internal static void RecordSocketPhase(string phase, long started)
+    {
+        if (!SocketPhaseDuration.Enabled) 
+            return;
+
+        var tags = new TagList
+        {
+            { "backend", "ruvio" },
+            { "phase", phase }
+        };
+
+        SocketPhaseDuration.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds, tags);
+    }
+
+    public void Dispose()
+    {
+        lock (_multiplexerGate)
+        {
+            if (_disposed) 
+                return;
+            
+            _disposed = true;
+            _broken = true;
+            
+            if (_multiplexer is not null)
+                _ = _multiplexer.StopAsync();
+            else
+                _reader.Dispose();
+            
+            _stream.Dispose();
+            _tcp.Dispose();
+        }
+    }
+}

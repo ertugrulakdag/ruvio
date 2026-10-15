@@ -1,0 +1,519 @@
+# Configuration
+
+Ruvio resolves settings in this order:
+
+1. built-in defaults,
+2. a TOML file passed with `--config`,
+3. `RUVIO_*` environment variables,
+4. explicit command-line options.
+
+All merged settings and cross-field relationships are validated before a
+listener is opened. Unknown TOML fields are rejected.
+
+```toml
+address = "127.0.0.1:6379"
+shards = 1
+advertised_host = "127.0.0.1"  # host in CLUSTER SLOTS/SHARDS/NODES and MOVED
+# advertised_port = 6379       # shard 0's announced port; omitted = bind port
+hot_keys = []          # Redis globs; empty keeps every key on its shard
+shutdown_grace_ms = 30000
+metrics_address = "127.0.0.1:9121"  # empty/omitted disables HTTP scrape
+
+# key_stats = true            # RUVIO HOTKEYS (1/1024 sampled, 128 entries) and RUVIO BIGKEYS (SET values >= 1 MiB, last 64)
+# slowlog_threshold_micros = 10000  # SLOWLOG: commands slower than this (negative = off, 0 = all); only the generic dispatcher is timed
+# slowlog_max_len = 128       # SLOWLOG entries kept per shard
+# latency_histograms = true   # per-command latency histograms (INFO latencystats, INFO prometheus); false = off
+
+[protocol]
+max_arguments = 1048576
+max_key_bytes = 1048576
+max_value_bytes = 16777216
+max_command_bytes = 67108864
+max_pipeline_commands = 1024
+max_connection_buffer_bytes = 67108864  # byte limits in [protocol] are capped at 2147483648 (2 GiB)
+databases = 16                # SELECT 0..databases-1; 1 to 256
+
+[timeouts]
+idle_ms = 300000
+read_ms = 30000
+write_ms = 30000
+
+[connections]
+max_global = 10000
+max_per_ip = 256              # lowered to max_global at startup when it is higher, with a warning
+max_per_user = 0              # 0 disables the per-ACL-user connection cap; a higher value is lowered to max_global
+max_commands_per_second = 0   # 0 disables the per-connection command rate
+
+[requests]
+max_queued_requests = 1024
+max_output_buffer_bytes = 67108864   # unsent reply bytes per connection; a pipeline sends replies as it goes
+
+[persistence]
+profile = "memory" # memory, snapshot, everysec, or always
+data_dir = "./data"
+wal_segment_bytes = 268435456
+sync_interval_ms = 1000
+snapshot_max_bytes = 17179869184
+snapshot_journal_bytes = 67108864
+snapshot_interval_ms = 60000
+snapshot_min_mutations = 0
+cdc_retain_bytes = 0
+replica_retain_max_bytes = 1073741824
+
+[replication]
+role = "off"                  # off, primary, or replica
+listen = "127.0.0.1:26379"    # primary base address; shard i uses port + i
+primary = "127.0.0.1:26379"   # replica dials this base address; a hostname is allowed
+
+[security]
+requirepass = ""
+protected_mode = true
+tls_cert = ""                 # PEM certificate chain; empty disables TLS
+tls_key = ""                  # PEM private key; must be set with tls_cert
+
+[[security.users]]
+name = "app"
+rules = "on >app-secret ~app:* +@read +ping +auth +info"
+
+[memory]
+max_shard_bytes = 0          # 0 disables the shard admission budget
+max_process_bytes = 0        # 0 disables the process budget
+reserved_headroom_bytes = 16777216
+maxmemory_policy = "noeviction"
+maxmemory_samples = 16       # eviction candidates examined per decision
+active_expire_keys = 16      # expired keys reaped before each command
+active_expire_maintenance_keys = 16 # keys per expiry-timer batch
+hash_max_compact_entries = 64
+hash_max_compact_value_bytes = 64
+set_max_intset_entries = 512      # integer-only sets up to this size stay a sorted array
+list_max_compact_entries = 128    # lists up to this size stay in one packed buffer
+list_max_compact_value_bytes = 64
+
+[scripts]
+max_bytes = 16384
+max_cached = 1024
+max_calls = 1024
+max_instructions = 1000000   # each shard's Lua state is also capped at 128 MiB of memory
+max_time_ms = 1000           # wall-clock limit per script, at most 3600000; see below
+```
+
+Use `ruvio --help` for CLI overrides. Existing environment variable names are
+preserved. When `--config` is omitted, the process loads `RUVIO_CONFIG`, then
+`ruvio.toml` beside the binary, then `/etc/ruvio/ruvio.toml`, then `./ruvio.toml`.
+A missing file is created from the built-in defaults. Environment variables and
+CLI flags still win. The file is left as it is unless you pass `--write-config`,
+which writes the effective values back into it at startup, so a process started
+with `--shards 3` never changes what the next process reads. The file is not
+watched: an edit applies only on the next start.
+Shard count, bind address, and durability cannot change under a live process.
+
+The process is evented. There is no runtime switch in the file, on the command line, or in the environment. `INFO` still reports `ruvio_backend:evented`.
+
+Default features are `mimalloc-allocator`. `--no-default-features` keeps the same runtime and uses the system allocator. One shard or consecutive ports, and TLS, are available on Linux, macOS, and Windows.
+Invalid limits, zero timeouts, and malformed CPU sets fail startup.
+
+`max_per_user` / `RUVIO_MAX_CONNECTIONS_PER_USER` counts authenticated ACL
+identities and may be `0`. `max_commands_per_second` /
+`RUVIO_MAX_COMMANDS_PER_SECOND` is per connection and may be `0`. A per-user
+cap cannot exceed `max_global`.
+
+WAL-backed profiles exclusively lock `<data_dir>/LOCK` before opening a
+listener. `everysec` acknowledges after the bytes are written to the kernel and
+runs `fdatasync` in the background every `sync_interval_ms` (default 1000).
+That interval is the loss window: `60000` is about one minute, `500` is twice
+a second. There is no separate `everyminute` profile; the contract stays
+`everysec` and the number is the user's. Stalls can make the window longer.
+`always` ignores `sync_interval_ms` and `fdatasync`s a client batch before the
+replies are sent. A persistence write or sync failure puts that shard into a
+visible error state and further mutations return `MISCONF`. After a failed
+write (for example a full disk) the shard resumes by itself once the disk
+accepts writes again. After a failed `fdatasync` it does not: the kernel may
+have dropped the unsynced pages and report a later sync as clean, so mutations
+stay refused (reads keep working) until a restart, whose recovery replays only
+what actually reached the disk.
+
+One WAL record must fit in a segment: a write, a `MULTI`/`EXEC` batch, or a
+script's writes whose record is larger than `wal_segment_bytes` is refused with
+`ERR write batch exceeds wal_segment_bytes`. Nothing of it is applied or logged,
+the shard stays healthy (this is not a `MISCONF` state), and the refusal is
+logged at most once a minute. Raise `wal_segment_bytes` or split the write.
+
+### Sequence-barrier sync worker
+
+`persistence.sync_worker = "auto" | "on" | "off"` (env `RUVIO_SYNC_WORKER`) moves
+the grouped `fdatasync` of `always` durability off the shard thread.
+The default `auto` turns it on only for Linux, `always` durability, one shard and no
+`hot_keys`; everywhere else it stays off. `on` forces it
+(other profiles and `hot_keys` fail validation) and `off`
+returns to the shard-thread sync. The old `experimental_sync_worker` /
+`RUVIO_EXPERIMENTAL_SYNC_WORKER` keys still work and map to `on` / `off`.
+`CONFIG GET sync-worker` shows the mode and `CONFIG GET sync-worker-active`
+the resolved value.
+
+Each shard has one long-lived sync worker, one active sync and one coalescing
+pending slot. The shard retains WAL encoding, append and mutation ownership;
+the worker uses a segment-scoped cloned file handle without taking the shard's
+persistence mutex during `sync_data`. Grouped response batches capture a
+sequence and asynchronously wait for the durable cursor before flushing.
+Read-only batches and outbound notification frames also wait for already
+observed writes. A conservative 64 KiB unsynchronized-byte threshold drains the
+group between commands; one command's WAL records may exceed that threshold,
+bounded by existing protocol/segment limits. Existing connection and output
+limits still bound pending replies. No per-command thread/task/timer or queue
+entry is introduced.
+
+This is **sync offload, not the complete persistence-worker architecture**.
+Append I/O, fallback mutations, segment rotation and checkpoint operations
+remain synchronous. Rotation/drain and shutdown can still block on the OS's
+disk call; a client durability wait uses the write timeout but does not cancel
+an in-flight fsync or replay a write. Worker errors are latched, logged and fail
+barriers without emitting buffered success responses; after a persistence
+failure (disk full, I/O error) batches that wrote nothing, such as reads and
+`PING`, are still answered and writes return `MISCONF`. Worker sync metrics
+count worker calls, not inline fallback/rotation syncs.
+
+Measured on Linux (4-core VM, Premium SSD): `always` SET throughput about 2x
+after the WAL began filling its preallocated chunks with zeros on a helper
+thread. More
+shards do not speed up `always`: disk flush latency, not shard CPU, is the limit.
+
+`SAVE` and `BGSAVE` publish a durable checkpoint on the shard worker, persist
+the last-seen clock floor to `<data_dir>/CLOCK`, and then delete WAL segments
+covered by that checkpoint. `SAVE` replies once the checkpoint is published.
+`BGSAVE` does not fork; it starts the same in-process checkpoint and replies
+`Background saving started` at once, before the checkpoint is written. The
+shard writes it in slices between requests, and `INFO` reports
+`rdb_bgsave_in_progress:1` until it is published; a failure after the reply
+is only logged. With several shards `SAVE` asks every shard for a checkpoint
+taken after the request and replies once a round holding all of them is
+published; if any shard's checkpoint or the round fails, it replies
+`MISCONF persistence error` at once, as with one shard. Set
+`snapshot_interval_ms` to schedule checkpoints after that interval when at
+least `snapshot_min_mutations` mutating commands have run (`0` means any
+mutation). `snapshot_interval_ms = 0` disables the
+scheduler. `SAVE` still works. Recovery uses
+`max(CLOCK, checkpoint.created_at)` as a monotonic clock floor so TTLs do not
+appear expired if the wall clock moves backwards.
+
+A background checkpoint walks the keyspace in short slices between requests and
+keeps the old copy of each key written meanwhile in a journal bounded by
+`snapshot_journal_bytes`. When writes overflow it, the attempt restarts with
+longer slices, then with a larger journal (at most a quarter of the shard's
+data), then with slices of up to 256 ms that wait for the snapshot writer. If
+even those cannot outpace the writes, the attempt is given up, logged, and
+retried after 5 seconds; `INFO` counts these in `snapshot_overload_skips_total`
+(`snapshot_aborts_total` counts every restart). The WAL keeps every write
+meanwhile. Each retry starts with the longest slices and raises the journal's
+cap to half, then all of the shard's data; with `max_shard_bytes` set, these
+caps also stay within the memory left under that limit. If even the largest
+journal overflows, the next retry falls back to long blocking slices (2 s,
+doubling after each abort) and logs an error: memory stays bounded, and this
+shard's clients stall during those slices until the walk completes. On a large
+shard one stall can be long (a slice may reach about twice a full walk), but it
+ends. The first journal level (a quarter of the data) is not limited by the
+memory left under `max_shard_bytes`. A completed or failed checkpoint resets
+the ladder. `SAVE` walks in one go and is not affected.
+
+### Change stream
+
+`CHANGES SUBSCRIBE [FROM <shard>:<seq>|NOW] [MATCH glob] [TYPES a,b] [VALUES]` turns this
+shard's WAL into a push stream (RESP3 `>`; RESP2 clients get plain arrays). The reply is the
+cursor the stream starts after. Each event is
+`["change", cursor, db, type, key|nil, value|nil]`; `type` is one of `put`, `json`, `del`,
+`expire`, `rename`, `list`, `set`, `hash`, `zset`, `stream`, `flush`, `other`. `value` is filled
+only with `VALUES`, and only for string and JSON writes. A record with several keys produces one
+event per key, all with the same cursor, written together. A client stores the cursor of the last
+event it processed and passes it as `FROM` after a disconnect or restart: no event is lost or
+repeated. Filtered-out records still move the cursor (`["cursor", c]` about once a second).
+Only durable records are streamed. A shard is its own sequence, so a cluster client subscribes on
+each shard it needs; the cursor names its shard and a wrong one is refused.
+
+`cdc_retain_bytes` (environment `RUVIO_CDC_RETAIN_BYTES`, default `0`) is how much WAL a
+checkpoint keeps for subscribers, rounded to whole segments, whether or not anyone is
+connected. `0` keeps nothing extra and changes nothing. A cursor older than the window gets
+`["resync", reason]` and the connection closes: reload fully, then `FROM NOW`. A subscriber too
+slow to drain its queue is disconnected and resumes from its cursor. A stream needs a durability
+profile with a WAL, and is refused on a replica. Expiry that happens lazily on read is not in the
+WAL, so it produces no event; the `expire` event carries the deadline change, not the removal.
+
+`replica_retain_max_bytes` (environment `RUVIO_REPLICA_RETAIN_MAX_BYTES`, default 1 GiB, `0` = no
+limit) caps the WAL a connected replica that has not yet received it may keep on the primary. Past
+the cap the primary drops that hold and compacts as usual; the replica finds its cursor gone and
+takes a fresh snapshot (the fail-closed catch-up path), it is never promoted with a gap.
+`INFO` shows `replica_retain_dropped`, how many times a hold was dropped.
+
+`ruvio-ctl check` and `inspect` validate the same files without taking `LOCK`
+or truncating a torn WAL tail. `ruvio-ctl backup` exclusively locks the source
+and copies `CURRENT`, `CLOCK`, `checkpoints/`, `wal/`, and any per-shard
+`REPLICA_CATCHUP_####` markers. `ruvio-ctl restore` refuses a destination that
+already has those files or markers unless `--force` is set. Integrity checks
+do not certify replica catch-up completeness. See [RECOVERY.md](RECOVERY.md).
+
+`INFO prometheus` returns Prometheus text for the receiving shard. When
+`metrics_address` is set, that shard also serves `GET /metrics` on a separate
+listener. Multi-shard layouts use consecutive metrics ports starting at the
+configured address. The metrics range must not overlap the RESP port range.
+
+`hot_keys` / `RUVIO_HOT_KEYS` is a list of Redis-style `*` / `?` globs
+(`hot_keys = ["lock:*", "session:*"]` or `RUVIO_HOT_KEYS=lock:*,session:*`).
+The default is empty: the feature is off and the shard GET path takes no extra
+lock. A matching key is served from a process-global string store before hash
+slot / `MOVED`, so two shards in one process see the same `lock:foo`. With
+one shard every key is already on it, so `hot_keys` is ignored there (with a
+warning). Allowed commands are `GET`, `SET` (including `NX` / `XX` / `EX` /
+`PX` / `EXAT` / `PXAT` / `KEEPTTL`), and `DEL`.
+Any other command on a matching key returns
+`-ERR hot key does not support <cmd>` and does not write the shard. Inside
+`MULTI` a command on a matching key returns
+`-ERR hot keys cannot be used inside MULTI` and `EXEC` then aborts with
+`EXECABORT`: the hot store cannot join the transaction. Empty glob
+entries fail startup. Enable the prefix on empty data; existing shard keys are
+not migrated. Checkpoints wait for a virtual hot partition (`shards + 1`)
+before publishing `CURRENT`. `SAVE` on a primary with `hot_keys` writes the hot
+partition into the same checkpoint. A replica behind a deleted WAL prefix
+receives that checkpoint.
+
+`replication.role` / `RUVIO_REPLICATION_ROLE` is `off` (default), `primary`, or
+`replica`. `replication.listen` / `RUVIO_REPLICATION_LISTEN` is the primary's
+base address. `replication.primary` / `RUVIO_REPLICATION_PRIMARY` is the
+address a replica dials. `replication.listen` must be a numeric socket address.
+`replication.primary` may be a numeric address or `host:port`, resolved again on
+each dial.
+Shard `i` uses that base port plus `i`. Role `off` opens no replication port
+and dials nobody. A primary binds `replication.listen` (loopback in the sample
+above). A replica dials `replication.primary` and does not listen. A primary keeps
+each replica on its own stream, up to 16.
+
+`INFO` reports `replication_role`, `wal_last_sequence`, and
+`wal_durable_sequence` on every shard. A primary also reports
+`replication_replicas`, `replication_replica_sequence`, and
+`replication_send_lag`. A replica reports `master_link_status` (`up` or
+`down`), `master_last_io_seconds_ago` (`-1` before the first frame),
+`slave_repl_offset` and `master_sync_in_progress`. When a checkpoint must be installed, the replica
+persists a `REPLICA_CATCHUP_####` marker under `data_dir` before replacing its
+local snapshot/WAL base. Until it has replayed and flushed WAL through the
+primary's catch-up watermark, client reads return `LOADING`; after 30 seconds
+without completion they return `MASTERDOWN`. The marker survives restart and
+backup/restore. A replica with an incomplete marker requests a fresh snapshot
+when the primary becomes available; do not delete the marker by hand. No
+additional TOML setting is needed for this protection.
+
+**Clocks.** Every node expires keys by its own clock, and the primary does not
+replicate expiry deletes. Keep primary and replicas in sync with NTP. A replica
+whose clock runs ahead can drop a key early; if the primary then extends that
+key's TTL, the replica no longer has it and requests a full copy of the shard.
+A TTL change whose new deadline has already passed is applied without a resync.
+
+Changing `replication.role` from `replica` to `off` or `primary` is a **manual
+promotion**, not an automatic failover. If any shard still has a catch-up
+marker, normal writer startup refuses it. `ruvio --config ./ruvio.toml
+--force-promote-incomplete` allows a recoverable but possibly incomplete
+replica to start as a writer **only for that invocation**; it is a CLI flag,
+not a TOML or environment setting, and is never written back to the config.
+It cannot be used while `role = "replica"` and does not bypass corrupt
+checkpoint/WAL validation or recover missing writes. The marker stays on disk,
+so every subsequent writer restart requires another explicit force decision.
+Fence the old primary to prevent split brain. Follow the per-shard sequence
+checks and procedure in [RECOVERY.md](RECOVERY.md#promote-a-replica-by-hand).
+
+A later handshake does not close an earlier replica. At the limit the primary closes the new connection.
+Primary and replicas must run the same Ruvio version: a primary refuses a replica of another
+version and both sides log a warning (see [RECOVERY.md](RECOVERY.md#write-history)).
+Startup refuses replication unless the process can copy a WAL:
+
+- `memory` and `snapshot` return `replication requires a WAL-backed durability profile`.
+- Role `primary` without `replication.listen` returns `replication primary requires replication.listen`.
+- Role `replica` without `replication.primary` returns `replication replica requires replication.primary`.
+- A non-numeric `replication.listen` returns `replication.listen must be a numeric socket address`. `replication.primary` accepts a numeric address or a resolvable `host:port`; an invalid address is rejected.
+- Role must be `off`, `primary`, or `replica`, or startup returns `replication role must be off, primary, or replica`.
+- The replication port range must not overlap RESP (`replication port range overlaps the RESP listener range`) or metrics (`replication port range overlaps the metrics listener range`).
+
+Script limits are `RUVIO_SCRIPT_MAX_BYTES`, `RUVIO_SCRIPT_MAX_CACHED`,
+`RUVIO_SCRIPT_MAX_CALLS`, `RUVIO_SCRIPT_MAX_INSTRUCTIONS`, and
+`RUVIO_SCRIPT_MAX_TIME_MS`. Zero is rejected, and `max_time_ms` above
+3,600,000 returns `script time limit must be at most 3600000 ms`. The time
+limit is checked every 1,000 Lua instructions, more often once the shard's Lua
+heap passes 1 MiB (down to every 10 at 100 MiB), before each library call that
+is charged by the size of its data, and before each `ruvio.call`. A single
+operation is not interrupted, so a script can run past the limit by the time
+of the last few operations on its largest values.
+
+The default bind address is loopback. A non-loopback bind without
+`requirepass` keeps `protected_mode` on by default and rejects non-loopback
+clients. Turning protected mode off on a public bind without a password
+refuses to start. Container images set `RUVIO_PROTECTED_MODE=false` because
+published ports are not loopback inside the namespace, so they need
+`RUVIO_REQUIREPASS` or an ACL password. `RUVIO_ALLOW_UNAUTHENTICATED=true`
+is the explicit exception for a network that is already private.
+`RUVIO_METRICS_TOKEN` is required when `metrics_address` is not loopback;
+scrape requests then send `Authorization: Bearer`. `RUVIO_REPLICATION_PASSWORD`
+is the replication handshake secret (Garnet's cluster password). When it is
+empty the handshake uses `requirepass`. A public replication listen needs one
+of those secrets. See [THREAT_MODEL.md](THREAT_MODEL.md). `AUTH` uses
+constant-time comparison and never logs the secret. `requirepass`,
+`metrics-token`, and `replication-password` are redacted in `CONFIG GET`.
+`CONFIG GET *` lists the effective settings for the process; `CONFIG GET max-*`
+uses the same glob rules as `SCAN`. Redis compatibility keys `save` (empty)
+and `appendonly` (`no`) remain present. `CONFIG SET` is not supported.
+
+TLS is supported on portable and evented. Set `tls_cert` / `tls_key`, `RUVIO_TLS_CERT` /
+`RUVIO_TLS_KEY`, or `--tls-cert` / `--tls-key` to PEM files. Both paths must
+be set together. The accept path completes the rustls handshake before
+reading RESP and reloads material when either file's mtime changes.
+`io-uring` plus TLS fails startup; terminate TLS in front of that adapter.
+When TLS is enabled, plaintext clients are closed at handshake. Redis clients
+must enable TLS (`rediss://`, `--tls`, or the library equivalent) and trust
+the configured certificate. `tls_client_ca` / `RUVIO_TLS_CLIENT_CA` /
+`--tls-client-ca` is a PEM issuer. A presented client certificate must chain
+to it. `tls_client_auth` / `RUVIO_TLS_CLIENT_AUTH` / `--tls-client-auth`
+rejects a handshake that does not present one. Neither setting is consulted
+on a plaintext connection.
+
+ACL users are configured in `[[security.users]]` with Redis-style rule tokens:
+`on`/`off`, `>password`, `nopass`, `~pattern`, `+@category`, `-@category`,
+`+command`, and `-command`. The implicit `default` user is `on nopass ~* +@all`
+until `requirepass` or a `default` user entry sets a password. `AUTH password`
+targets `default`; `AUTH username password` selects a named user. The operator
+UI sign-in form is this same `AUTH`. An empty user and password send nothing
+and the session stays `default`. Command and
+key checks run on the connection after AUTH using a copied rule set; they do
+not take a shard lock. `ACL SETUSER` uses the same tokens and leaves an
+open connection on the rules copied at its last `AUTH`. `security.acl_file`
+or `RUVIO_ACL_FILE` is the ACL file. When that file already exists at
+startup it is the user list. `ACL SAVE` writes the live directory there,
+as password hashes (`#<hex>`; a plain `>password` line in a file you write
+yourself is hashed when it is loaded). `ACL LOAD` reads it back and replaces the directory.
+`GET` and `SET` do not open the file. `ACL LIST` still redacts passwords.
+An empty path refuses `ACL SAVE` and `ACL LOAD`. Restart without a file
+reads `[[security.users]]` again.
+`ACL LIST` redacts passwords. `INCR`/`DECR`/`INCRBY`/`DECRBY` share the `incr`
+ACL name.
+
+Shard memory admission defaults to `noeviction`. `index_memory_bytes` and the
+admission charge include retained key and TTL deadline-index capacities; TTL
+keys can therefore reach a configured budget sooner than keys without TTL.
+This modeled budget is not an exact process RSS cap (allocator, runtime, and
+persistence allocations also contribute). When `max_shard_bytes` is set,
+writes that would exceed the budget minus `reserved_headroom_bytes` return
+Redis-style `OOM` unless `maxmemory-policy` / `RUVIO_MAXMEMORY_POLICY` /
+`--maxmemory-policy` is `allkeys-lru`, `allkeys-lfu`, `volatile-lru`, or
+`volatile-ttl`. Commands that only remove or move data (`DEL`, `HDEL`,
+`LPOP`, ...) are not refused; see [MEMORY_ACCOUNTING.md](MEMORY_ACCOUNTING.md#limits),
+including why memory can stay at the limit until a running checkpoint ends.
+Eviction is shard-local. Each decision compares up to
+`maxmemory_samples` eligible live keys (default 16, range 1–64); the engine deletes
+at most 16 keys per command. Sampling rotates over index slots and permitted
+logical databases instead of repeatedly starting at the first keys. The production
+hash index resumes at bucket positions. Expired and active-command protected keys
+are skipped. Volatile policies sample only keys with a TTL from the deadline
+lookup and return `OOM` immediately when the shard has no TTL keys. Under
+allkeys policies, finding eligible candidates can still require a full pass when
+most keys are expired or protected: `maxmemory_samples` is not a scanned-key or
+latency limit. This preserves admission when an eligible key exists outside the
+initial sample. Under memory pressure with an eviction policy enabled, admission
+first tries one additional, bounded 16-entry expiry sweep before sampling
+victims, even if the ordinary command sweep has already run. This can recover
+space without eviction but does not guarantee a bound on the subsequent scan.
+`active_expire_keys` (default 16, range 1–1024) bounds each ordinary command
+sweep (and the separate hash-field maintenance pass). The independent
+`active_expire_maintenance_keys` (default 16, range 1–1024) sets the batch size
+for background key-expiry maintenance; changing it does not enlarge the command
+sweep. Deadline lookup prioritizes the earliest expiry in each database, even
+if many later deadlines were registered first; databases rotate when a sweep
+fills its budget. Key-expiry maintenance runs approximately every 25 ms,
+separately from the 100 ms general maintenance tick. It repeats full batches
+while due keys remain, stopping after 750 µs of elapsed cleanup or 1,024 keys
+per expiry tick. The time limit is checked between batches, not during a key
+removal, so larger maintenance batches can lengthen a single event-loop stall;
+it is not a strict shard-latency limit. If more keys expire than the combined
+command, timer and pressure sweeps can remove, physical memory can remain
+occupied until later turns; reads still treat expired keys as absent. Increasing
+the command budget raises synchronous work on every command; increasing only
+the maintenance batch may change idle drain at the cost of longer
+non-preemptible maintenance turns. In the measured 50k SET/s WAL burst,
+batches 32 and 64 did not consistently outperform the default 16; tune only
+against representative backlog and shard-latency measurements.
+A write larger than the shard budget is rejected without evicting. Connection,
+output, persistence, and snapshot-journal charges are included in `charged_bytes`.
+
+Hashes stay in a compact field list until `hash_max_compact_entries` or a
+field/value longer than `hash_max_compact_value_bytes`; past that, field and
+value share one arena block. A set of canonical integers stays a sorted integer
+array up to `set_max_intset_entries` (0 turns it off); other sets of more than
+128 members keep their bytes in an arena. A list stays in one packed buffer up
+to `list_max_compact_entries` items of at most `list_max_compact_value_bytes`
+each, then becomes a chain of 8 KiB packed nodes. Sorted sets have one
+encoding. The
+key index, string buffers, list rings, and set, hash, and sorted-set tables
+shrink after deletes or a much smaller overwrite once they are under a quarter
+full. The hot-key map uses the same rule. Environment overrides are
+`RUVIO_MAXMEMORY_SAMPLES`, `RUVIO_ACTIVE_EXPIRE_KEYS`,
+`RUVIO_ACTIVE_EXPIRE_MAINTENANCE_KEYS`, `RUVIO_HASH_MAX_COMPACT_ENTRIES`,
+`RUVIO_HASH_MAX_COMPACT_VALUE_BYTES`, `RUVIO_SET_MAX_INTSET_ENTRIES`,
+`RUVIO_LIST_MAX_COMPACT_ENTRIES`, and `RUVIO_LIST_MAX_COMPACT_VALUE_BYTES`.
+CLI flags use the same names with dashes.
+
+`notify_keyspace_events` (environment `RUVIO_NOTIFY_KEYSPACE_EVENTS`) is
+empty by default. `K` publishes `__keyspace@<db>__:<key>` and `E` publishes
+`__keyevent@<db>__:<event>`, where `<db>` is the key's logical database.
+Classes are `g` (delete), `$` (`SET`), `x` (expired), `e` (evicted), and `A`
+for those four. Without `K` or `E` the feature stays off. A client subscribes
+with `SSUBSCRIBE` on the exact channel. Delivery is asynchronous `smessage`
+and is not written to the WAL.
+
+To receive both expiration and eviction notices, enable keyevent delivery
+(`E`) and both classes (`x` and `e`) in the TOML file:
+
+```toml
+notify_keyspace_events = "Exe"
+```
+
+The setting is read at startup; restart Ruvio after changing it. Subscribe to
+the exact channel for the key's database, for example
+`SSUBSCRIBE __keyevent@0__:expired` or
+`SSUBSCRIBE __keyevent@0__:evicted`. `PSUBSCRIBE` patterns do not receive
+keyspace notices. On these keyevent channels the message payload is the key
+name, not its value. Notifications are live, best-effort messages: they are
+not replayed to later subscribers and are not durable.
+
+The C# client provides convenience methods that form these channel names from
+the selected database:
+
+```csharp
+await db.SubscribeExpiredAsync(message =>
+    Console.WriteLine($"Expired key: {message.Payload}"));
+await db.SubscribeEvictedAsync(message =>
+    Console.WriteLine($"Evicted key: {message.Payload}"));
+```
+
+Eviction notices occur only when memory pressure actually triggers an eviction.
+`noeviction` is the default; configure a shard memory budget and an eviction
+policy if eviction is desired. In a multi-shard deployment, notifications are
+local to the shard that owns the key. A subscription on one shard does not
+collect events from every shard. The Operator Pub/Sub screen has matching
+expired/evicted listeners; choose the database and shard to monitor there.
+
+`shards` (environment `RUVIO_SHARDS`, flag `--shards`) starts that many
+shard owners in one process. Shard `i` listens on the bind port plus `i`, owns
+slots `i * 16384 / shards` up to the next shard's first slot, and answers
+`MOVED` for a key it does not own. Cluster-aware clients find the other shards
+from `CLUSTER SLOTS`, `CLUSTER SHARDS`, or `CLUSTER NODES`, so an application
+only needs the first address. `advertised_host` (`RUVIO_ADVERTISE_HOST`,
+`--advertised-host`, default `127.0.0.1`) is the host those replies and `MOVED`
+name. `advertised_port` (`RUVIO_ADVERTISE_PORT`, `--advertised-port`) is the
+port they name for shard 0; shard `i` is that port plus `i`. Leave it unset
+when clients reach the bind ports directly. Set both when a container or load
+balancer publishes the shards elsewhere, for example `-p 7000-7003:6379-6382`
+with `RUVIO_ADVERTISE_HOST=<host clients use>` and `RUVIO_ADVERTISE_PORT=7000`.
+`cpu_set` (`RUVIO_CPUSET`, `--cpu-set`) pins shard threads on Linux. It takes a
+CPU list such as `2`, `0-3` or `0,2,4-5`; shard `i` runs on the `i`th listed
+core and the list wraps when there are more shards than cores. Unset means no
+pinning. A bad list or a core the process may not use only logs a warning. Other
+platforms log that pinning is unsupported.
+The shard count is read at start; changing it needs a restart on an empty data
+directory.
+
+`[protocol] databases` (environment `RUVIO_DATABASES`) is the number of
+logical databases, 16 by default and 1 to 256. `SELECT` accepts `0` to
+`databases - 1`. With `shards > 1` only database 0 is allowed. `CONFIG GET
+databases` reports the value. See `docs/LOGICAL_DATABASES.md`.

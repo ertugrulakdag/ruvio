@@ -1,0 +1,11 @@
+.git
+.github
+target
+clients
+site
+benchmark
+profile
+fuzz
+docs
+.cursor
+.superpowers

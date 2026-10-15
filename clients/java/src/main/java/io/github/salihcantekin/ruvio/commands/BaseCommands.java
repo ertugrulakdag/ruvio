@@ -1,0 +1,346 @@
+// SPDX-License-Identifier: MIT
+package io.github.salihcantekin.ruvio.commands;
+
+import io.github.salihcantekin.ruvio.RuvioCodec;
+import io.github.salihcantekin.ruvio.RuvioException;
+import io.github.salihcantekin.ruvio.RuvioServerException;
+import io.github.salihcantekin.ruvio.internal.Args;
+import io.github.salihcantekin.ruvio.internal.Reply;
+import io.github.salihcantekin.ruvio.internal.Request;
+import io.github.salihcantekin.ruvio.internal.RespOut;
+import io.github.salihcantekin.ruvio.internal.RoutedRequest;
+
+import java.util.concurrent.CompletableFuture;
+
+/**
+ * Encoding helpers shared by every command family. Fixed-shape commands encode straight into the
+ * destination buffer ({@link #begin()} ... {@code end}); commands with options use
+ * {@link Args}. Subclasses decide where frames go: the shared connection, a pipeline buffer or a
+ * transaction.
+ */
+public abstract class BaseCommands<K, V> {
+    protected final RuvioCodec<K> kc;
+    protected final RuvioCodec<V> vc;
+
+    protected BaseCommands(RuvioCodec<K> keys, RuvioCodec<V> values) {
+        this.kc = keys;
+        this.vc = values;
+    }
+
+    /** The codec for keys. */
+    public final RuvioCodec<K> keyCodec() {
+        return kc;
+    }
+
+    /** The codec for values. */
+    public final RuvioCodec<V> valueCodec() {
+        return vc;
+    }
+
+    /** Returns the buffer for one frame (locked for the shared connection). */
+    protected abstract RespOut begin();
+
+    /** Rolls back a frame started with {@link #begin()} after an encoding failure. */
+    protected abstract void abort(RespOut out);
+
+    /** Registers the request for the frame just written into {@code out} and releases the buffer. */
+    protected abstract <T> CompletableFuture<T> end(RespOut out, Request<T> request);
+
+    /** True when frames are routed by key (cluster mode); requests then carry what a redirect needs. */
+    protected boolean routed;
+
+    final <T> Request<T> req(Reply<T> reply) {
+        if (routed) {
+            return new RoutedRequest<>(reply, kc, vc);
+        }
+        return new Request<>(reply, kc, vc);
+    }
+
+    @SuppressWarnings("unchecked")
+    static <T> Reply<T> r(Reply<?> reply) {
+        return (Reply<T>) reply;
+    }
+
+    final Args args() {
+        return new Args(kc, vc);
+    }
+
+    final RuntimeException fail(RespOut o, Throwable t) {
+        abort(o);
+        if (t instanceof RuntimeException) {
+            return (RuntimeException) t;
+        }
+        if (t instanceof Error) {
+            throw (Error) t;
+        }
+        return new RuvioException(t.toString(), t);
+    }
+
+    private static void check(Object o, String what) {
+        if (o == null) {
+            throw new IllegalArgumentException("null " + what);
+        }
+    }
+
+    // ---- fixed shapes ----------------------------------------------------------------------
+
+    /** CMD */
+    final <T> CompletableFuture<T> c0(byte[] cmd, Reply<T> reply) {
+        RespOut o = begin();
+        o.header(1);
+        o.raw(cmd);
+        return end(o, req(reply));
+    }
+
+    /** CMD SUB */
+    final <T> CompletableFuture<T> c00(byte[] cmd, byte[] sub, Reply<T> reply) {
+        RespOut o = begin();
+        o.header(2);
+        o.raw(cmd);
+        o.raw(sub);
+        return end(o, req(reply));
+    }
+
+    /** CMD key */
+    final <T> CompletableFuture<T> k(byte[] cmd, K key, Reply<T> reply) {
+        check(key, "key");
+        RespOut o = begin();
+        try {
+            o.header(2);
+            o.raw(cmd);
+            kc.write(o, key);
+        } catch (Throwable t) {
+            throw fail(o, t);
+        }
+        return end(o, req(reply));
+    }
+
+    /** CMD key value */
+    final <T> CompletableFuture<T> kv(byte[] cmd, K key, V value, Reply<T> reply) {
+        check(key, "key");
+        check(value, "value");
+        RespOut o = begin();
+        try {
+            o.header(3);
+            o.raw(cmd);
+            kc.write(o, key);
+            vc.write(o, value);
+        } catch (Throwable t) {
+            throw fail(o, t);
+        }
+        return end(o, req(reply));
+    }
+
+    /** CMD key long */
+    final <T> CompletableFuture<T> kl(byte[] cmd, K key, long n, Reply<T> reply) {
+        check(key, "key");
+        RespOut o = begin();
+        try {
+            o.header(3);
+            o.raw(cmd);
+            kc.write(o, key);
+            o.bulk(n);
+        } catch (Throwable t) {
+            throw fail(o, t);
+        }
+        return end(o, req(reply));
+    }
+
+    /** CMD key long long */
+    final <T> CompletableFuture<T> kll(byte[] cmd, K key, long a, long b, Reply<T> reply) {
+        check(key, "key");
+        RespOut o = begin();
+        try {
+            o.header(4);
+            o.raw(cmd);
+            kc.write(o, key);
+            o.bulk(a);
+            o.bulk(b);
+        } catch (Throwable t) {
+            throw fail(o, t);
+        }
+        return end(o, req(reply));
+    }
+
+    /** CMD key key */
+    final <T> CompletableFuture<T> kk(byte[] cmd, K a, K b, Reply<T> reply) {
+        check(a, "key");
+        check(b, "key");
+        RespOut o = begin();
+        try {
+            o.header(3);
+            o.raw(cmd);
+            kc.write(o, a);
+            kc.write(o, b);
+        } catch (Throwable t) {
+            throw fail(o, t);
+        }
+        return end(o, req(reply));
+    }
+
+    /** CMD key field (field encoded with the key codec) */
+    final <T> CompletableFuture<T> kf(byte[] cmd, K key, K field, Reply<T> reply) {
+        return kk(cmd, key, field, reply);
+    }
+
+    /** CMD key field value */
+    final <T> CompletableFuture<T> kfv(byte[] cmd, K key, K field, V value, Reply<T> reply) {
+        check(key, "key");
+        check(field, "field");
+        check(value, "value");
+        RespOut o = begin();
+        try {
+            o.header(4);
+            o.raw(cmd);
+            kc.write(o, key);
+            kc.write(o, field);
+            vc.write(o, value);
+        } catch (Throwable t) {
+            throw fail(o, t);
+        }
+        return end(o, req(reply));
+    }
+
+    /** CMD key long value */
+    final <T> CompletableFuture<T> klv(byte[] cmd, K key, long n, V value, Reply<T> reply) {
+        check(key, "key");
+        check(value, "value");
+        RespOut o = begin();
+        try {
+            o.header(4);
+            o.raw(cmd);
+            kc.write(o, key);
+            o.bulk(n);
+            vc.write(o, value);
+        } catch (Throwable t) {
+            throw fail(o, t);
+        }
+        return end(o, req(reply));
+    }
+
+    /** CMD key string */
+    final <T> CompletableFuture<T> ks(byte[] cmd, K key, String s, Reply<T> reply) {
+        check(key, "key");
+        check(s, "argument");
+        RespOut o = begin();
+        try {
+            o.header(3);
+            o.raw(cmd);
+            kc.write(o, key);
+            o.bulk(s);
+        } catch (Throwable t) {
+            throw fail(o, t);
+        }
+        return end(o, req(reply));
+    }
+
+    /** CMD key... */
+    @SafeVarargs
+    final <T> CompletableFuture<T> keys(byte[] cmd, Reply<T> reply, K... keys) {
+        if (keys.length == 0) {
+            throw new IllegalArgumentException("at least one key is required");
+        }
+        for (K key : keys) {
+            check(key, "key");
+        }
+        RespOut o = begin();
+        try {
+            o.header(1 + keys.length);
+            o.raw(cmd);
+            for (K key : keys) {
+                kc.write(o, key);
+            }
+        } catch (Throwable t) {
+            throw fail(o, t);
+        }
+        return end(o, req(reply));
+    }
+
+    /** CMD key value... */
+    @SafeVarargs
+    final <T> CompletableFuture<T> kvs(byte[] cmd, K key, Reply<T> reply, V... values) {
+        check(key, "key");
+        if (values.length == 0) {
+            throw new IllegalArgumentException("at least one value is required");
+        }
+        for (V v : values) {
+            check(v, "value");
+        }
+        RespOut o = begin();
+        try {
+            o.header(2 + values.length);
+            o.raw(cmd);
+            kc.write(o, key);
+            for (V v : values) {
+                vc.write(o, v);
+            }
+        } catch (Throwable t) {
+            throw fail(o, t);
+        }
+        return end(o, req(reply));
+    }
+
+    /** CMD key field... (fields with the key codec) */
+    @SafeVarargs
+    final <T> CompletableFuture<T> kfs(byte[] cmd, K key, Reply<T> reply, K... fields) {
+        check(key, "key");
+        if (fields.length == 0) {
+            throw new IllegalArgumentException("at least one field is required");
+        }
+        for (K f : fields) {
+            check(f, "field");
+        }
+        RespOut o = begin();
+        try {
+            o.header(2 + fields.length);
+            o.raw(cmd);
+            kc.write(o, key);
+            for (K f : fields) {
+                kc.write(o, f);
+            }
+        } catch (Throwable t) {
+            throw fail(o, t);
+        }
+        return end(o, req(reply));
+    }
+
+    /** Sends a frame built with {@link Args}. */
+    final <T> CompletableFuture<T> send(Args a, Reply<T> reply) {
+        RespOut o = begin();
+        try {
+            o.header(a.count);
+            o.raw(a.out.buf, 0, a.out.pos);
+        } catch (Throwable t) {
+            throw fail(o, t);
+        }
+        return end(o, req(reply));
+    }
+
+    /**
+     * Sends any command. Arguments may be byte[], String, Long/Integer, Double or anything with a
+     * useful {@code toString()}. The reply is the generic tree: bulk strings are byte[], status
+     * replies String, integers Long, arrays List, errors inside arrays {@link RuvioServerException}.
+     */
+    public final CompletableFuture<Object> execute(Object... arguments) {
+        if (arguments.length == 0) {
+            throw new IllegalArgumentException("empty command");
+        }
+        Args a = args();
+        for (Object x : arguments) {
+            a.any(x);
+        }
+        return send(a, Reply.RAW);
+    }
+
+    /** Like {@link #execute(Object...)} but bulk strings in the reply are UTF-8 Strings. */
+    public final CompletableFuture<Object> executeText(Object... arguments) {
+        if (arguments.length == 0) {
+            throw new IllegalArgumentException("empty command");
+        }
+        Args a = args();
+        for (Object x : arguments) {
+            a.any(x);
+        }
+        return send(a, Reply.TEXT);
+    }
+}
