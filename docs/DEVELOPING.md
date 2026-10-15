@@ -81,12 +81,13 @@ A change to persistence, the WAL, unsafe code or memory layout gets a second, in
 | Field and default | `AppConfig` and its `Default` in `src/config.rs` |
 | File key | the matching `*FileConfig` struct in `src/config.rs` |
 | Environment variable | `apply_environment` in `src/config.rs` (`RUVIO_<NAME>`) |
+| Command-line flag (optional) | `Cli` in `src/bin/ruvio.rs`, `apply_overrides` in `src/config.rs` |
 | `CONFIG GET` | `introspect` in `src/config.rs` |
 | `--write-config` | `overlay_config` in `src/config.rs` |
 | Template | `ruvio.example.toml` (its values are tested against the code defaults) |
 | Docs | `docs/CONFIGURATION.md` (the key and a row in the environment table), `site/configuration.html` |
 
-`every_template_setting_answers_config_get`, `every_file_setting_is_documented` and `every_environment_variable_is_documented` (all in `scripts/check.sh`) catch a template value, file key or variable that is missing; the site page is checked by hand.
+`every_template_setting_answers_config_get`, `every_file_setting_is_documented`, `every_environment_variable_is_documented` and `every_command_line_flag_is_documented` (all in `scripts/check.sh`) catch a template value, file key, variable or flag that is missing; the site page is checked by hand.
 
 ## Adding a client method
 

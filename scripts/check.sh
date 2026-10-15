@@ -65,5 +65,6 @@ for name in "${standards[@]}"; do
 	fi
 done
 run cargo test -q --lib -- "${standards[@]}"
+run cargo test -q --bin ruvio -- every_command_line_flag_is_documented
 run cargo test -q --test zero_alloc --test layout
 echo "check.sh: ok"
