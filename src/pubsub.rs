@@ -565,7 +565,10 @@ mod tests {
 
         let frames = hub.classic_frames(&channel, b"m");
 
-        assert_eq!(frames.iter().map(|(conn, _)| *conn).collect::<Vec<_>>(), [8]);
+        assert_eq!(
+            frames.iter().map(|(conn, _)| *conn).collect::<Vec<_>>(),
+            [8]
+        );
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 

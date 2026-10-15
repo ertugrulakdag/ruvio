@@ -130,9 +130,7 @@ impl Block {
 
             let (length, used) = get_varint(names);
 
-            if length as usize != field.len()
-                || names[used..used + field.len()] != *field
-            {
+            if length as usize != field.len() || names[used..used + field.len()] != *field {
                 return false;
             }
 
@@ -414,7 +412,10 @@ impl Blocks {
             }
         }
 
-        (index + 1, self.blocks.get(index + 1).map_or(0, |next| next.head))
+        (
+            index + 1,
+            self.blocks.get(index + 1).map_or(0, |next| next.head),
+        )
     }
 
     fn find(&self, id: Id) -> Option<(usize, usize, usize)> {
@@ -469,7 +470,11 @@ impl Blocks {
         let mut entries = Vec::with_capacity(self.len);
 
         for block in &self.blocks {
-            entries.extend(block.live_from(block.head).map(|record| block.entry(&record)));
+            entries.extend(
+                block
+                    .live_from(block.head)
+                    .map(|record| block.entry(&record)),
+            );
         }
 
         entries
@@ -764,7 +769,11 @@ mod tests {
 
     #[derive(Clone, Debug)]
     enum Op {
-        Push { millis_step: u64, shape: u8, size: u8 },
+        Push {
+            millis_step: u64,
+            shape: u8,
+            size: u8,
+        },
         Remove(usize),
         DropFront(usize),
         DropBefore(usize),
@@ -791,7 +800,10 @@ mod tests {
 
         match shape {
             0 => vec![(b"f".to_vec(), value)],
-            1 => vec![(b"name".to_vec(), value.clone()), (b"other".to_vec(), value)],
+            1 => vec![
+                (b"name".to_vec(), value.clone()),
+                (b"other".to_vec(), value),
+            ],
             2 => vec![(b"f".to_vec(), value.clone()), (b"g".to_vec(), value)],
             _ => vec![(vec![b'x'; usize::from(size) + 1], value)],
         }
@@ -820,7 +832,11 @@ mod tests {
 
         for (tag, op) in ops.into_iter().enumerate() {
             match op {
-                Op::Push { millis_step, shape, size } => {
+                Op::Push {
+                    millis_step,
+                    shape,
+                    size,
+                } => {
                     if millis_step == 0 {
                         sequence += 1;
                     } else if let Some(next) = millis.checked_add(millis_step) {
@@ -937,7 +953,11 @@ mod tests {
         let mut blocks = Blocks::new();
 
         for sequence in 0..10_000u64 {
-            blocks.push(1_700_000_000_000 + sequence / 100, sequence % 100, &[(b"f", b"v")]);
+            blocks.push(
+                1_700_000_000_000 + sequence / 100,
+                sequence % 100,
+                &[(b"f", b"v")],
+            );
         }
 
         let per_entry = blocks.bytes() / 10_000;
@@ -948,7 +968,10 @@ mod tests {
     #[test]
     fn repeated_field_names_are_kept_once_per_block() {
         let mut blocks = Blocks::new();
-        let fields = [(&b"temperature"[..], &b"21.5"[..]), (&b"humidity"[..], &b"40"[..])];
+        let fields = [
+            (&b"temperature"[..], &b"21.5"[..]),
+            (&b"humidity"[..], &b"40"[..]),
+        ];
 
         for sequence in 0..1_000u64 {
             blocks.push(1, sequence, &fields);

@@ -43,7 +43,11 @@ impl Server {
         // The template is copied: a server started with --address rewrites its config file.
         let config = dir.path().join("ruvio.toml");
 
-        std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/ruvio.example.toml"), &config).unwrap();
+        std::fs::copy(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/ruvio.example.toml"),
+            &config,
+        )
+        .unwrap();
 
         let mut server = Self {
             child: None,

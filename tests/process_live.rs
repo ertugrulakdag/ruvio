@@ -30,7 +30,11 @@ fn start(dir: &Path, address: &str, env: &[(&str, &str)], shell_prefix: &str) ->
     let config = dir.join("ruvio.toml");
 
     if !config.exists() {
-        std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/ruvio.example.toml"), &config).unwrap();
+        std::fs::copy(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/ruvio.example.toml"),
+            &config,
+        )
+        .unwrap();
     }
 
     let mut command = Command::new("sh");
