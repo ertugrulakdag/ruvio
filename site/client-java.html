@@ -80,7 +80,7 @@
         <table>
           <tbody>
             <tr><th>Package</th><td><code>io.github.salihcantekin:ruvio-client</code> (Maven)</td></tr>
-            <tr><th>Install</th><td><span data-pkg="maven:io.github.salihcantekin:ruvio-client" data-found="On Maven Central: add the dependency below, or build from the repository with <code>cd clients/java &amp;&amp; mvn install</code>." data-missing="Not on Maven Central yet. Build from the repository: <code>cd clients/java &amp;&amp; mvn install</code>, then add the dependency below.">Not on Maven Central yet. Build from the repository: <code>cd clients/java &amp;&amp; mvn install</code>, then add the dependency below.</span> See <a href="#install">Install</a>.</td></tr>
+            <tr><th>Install</th><td><span data-pkg="maven:io.github.salihcantekin:ruvio-client" data-found="On Maven Central: add the dependency below." data-missing="Not on Maven Central yet. Build from the repository: <code>cd clients/java &amp;&amp; mvn install</code>, then add the dependency below.">Not on Maven Central yet. Build from the repository: <code>cd clients/java &amp;&amp; mvn install</code>, then add the dependency below.</span> See <a href="#install">Install</a>.</td></tr>
             <tr><th>Version</th><td><span data-pkg="maven:io.github.salihcantekin:ruvio-client" data-found="{v} on Maven Central" data-missing="Not released yet; the repository version is in <code>pom.xml</code>">Repository version in <code>pom.xml</code></span></td></tr>
             <tr><th>License</th><td>MIT</td></tr>
             <tr><th>Runtime</th><td>Java 17 or newer (<code>maven.compiler.release</code> is 17). The tests ran on JDK 21.</td></tr>
@@ -96,17 +96,16 @@
 
 <section class="panel">
 <h2 id="install">Install</h2>
-      <p>The client is on Maven Central as <code>io.github.salihcantekin:ruvio-client</code>; add the dependency below. To use the repository version instead, build it into your local Maven repository:</p>
-<pre>git clone https://github.com/salihcantekin/ruvio
-cd ruvio/clients/java
-mvn install          # JDK 17+ and Maven; add -DskipTests to skip the tests</pre>
-      <p>The dependency:</p>
-<pre>&lt;dependency&gt;
+      <p>The client is on Maven Central as <code>io.github.salihcantekin:ruvio-client</code>. Add it to your build; nothing else is needed (JDK 17+).</p>
+<pre>&lt;!-- Maven: pom.xml --&gt;
+&lt;dependency&gt;
   &lt;groupId&gt;io.github.salihcantekin&lt;/groupId&gt;
   &lt;artifactId&gt;ruvio-client&lt;/artifactId&gt;
-  &lt;version&gt;VERSION&lt;/version&gt;   &lt;!-- the version in clients/java/pom.xml, or the release you want --&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
 &lt;/dependency&gt;</pre>
-      <p>The tests that talk to a server are skipped unless <code>RUVIO_TEST_ADDR</code> is set, so <code>mvn install</code> works without a server.</p>
+<pre>// Gradle: build.gradle.kts
+implementation("io.github.salihcantekin:ruvio-client:0.1.0")</pre>
+      <p class="note">To try the unreleased repository version, run <code>mvn install</code> in <code>clients/java</code> of a checkout and use the version in its <code>pom.xml</code>. The tests that talk to a server are skipped unless <code>RUVIO_TEST_ADDR</code> is set.</p>
 </section>
 
 <section class="panel">

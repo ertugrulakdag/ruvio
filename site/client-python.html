@@ -96,11 +96,10 @@
 
 <section class="panel">
 <h2 id="install">Install</h2>
-      <p><span data-pkg="pypi:ruvio-client" data-found="Install from PyPI with <code>pip install ruvio-client</code>, or from the repository:" data-missing="The package is not on PyPI yet. Install it from the repository:">Install it from the repository:</span></p>
-<pre>git clone https://github.com/salihcantekin/ruvio.git
-pip install ./ruvio/clients/python             # no dependencies
-pip install "./ruvio/clients/python[hiredis]"  # optional: faster reply parsing</pre>
-      <p>A <code>pip install git+https://...#subdirectory=clients/python</code> URL should work the same way; it was not tried. The checks on this page ran with <code>PYTHONPATH</code> pointing at the client directory, not through <code>pip install</code>.</p>
+      <p>The client is on PyPI as <code>ruvio-client</code>. It has no dependencies.</p>
+<pre>pip install ruvio-client
+pip install "ruvio-client[hiredis]"   # optional: faster reply parsing</pre>
+      <p class="note">To try the unreleased repository version: <code>pip install ./clients/python</code> from a checkout.</p>
 </section>
 
 <section class="panel">
