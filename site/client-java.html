@@ -96,11 +96,11 @@
 
 <section class="panel">
 <h2 id="install">Install</h2>
-      <p>The client is not published to Maven Central yet, and no artifact exists in any public repository. That is pending. Today you build it from the repository into your local Maven repository:</p>
+      <p>The client is on Maven Central as <code>io.github.salihcantekin:ruvio-client</code>; add the dependency below. To use the repository version instead, build it into your local Maven repository:</p>
 <pre>git clone https://github.com/salihcantekin/ruvio
 cd ruvio/clients/java
 mvn install          # JDK 17+ and Maven; add -DskipTests to skip the tests</pre>
-      <p>Then use it from your own project:</p>
+      <p>The dependency:</p>
 <pre>&lt;dependency&gt;
   &lt;groupId&gt;io.github.salihcantekin&lt;/groupId&gt;
   &lt;artifactId&gt;ruvio-client&lt;/artifactId&gt;

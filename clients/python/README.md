@@ -22,8 +22,9 @@ Licensed under the MIT license. See `LICENSE`.
 ## Install
 
 ```bash
-pip install ./clients/python            # ruvio-client, import name: ruvio
-pip install "./clients/python[hiredis]" # optional: hiredis speeds up reply parsing
+pip install ruvio-client                # import name: ruvio
+pip install "ruvio-client[hiredis]"     # optional: hiredis speeds up reply parsing
+pip install ./clients/python            # the repository version
 ```
 
 ## Quick start

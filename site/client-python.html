@@ -80,7 +80,7 @@
         <table>
           <tbody>
             <tr><th>Package</th><td><code>ruvio-client</code> (import name <code>ruvio</code>). <span data-pkg="pypi:ruvio-client" data-found="<b>Published on PyPI.</b>" data-missing="<b>Not published on PyPI yet.</b>"></span></td></tr>
-            <tr><th>Install</th><td><code>pip install ./clients/python</code> from a checkout of the repository. See <a href="#install">Install</a>.</td></tr>
+            <tr><th>Install</th><td><code>pip install ruvio-client</code>, or <code>pip install ./clients/python</code> from a checkout of the repository. See <a href="#install">Install</a>.</td></tr>
             <tr><th>Version</th><td><span data-pkg="pypi:ruvio-client" data-found="{v} on PyPI" data-missing="Not published yet; the repository version is <code>ruvio.__version__</code>">See <code>ruvio.__version__</code></span></td></tr>
             <tr><th>License</th><td>MIT</td></tr>
             <tr><th>Runtime</th><td>Python 3.9 or newer. Ships type information (<code>py.typed</code>).</td></tr>
@@ -100,7 +100,7 @@
 <pre>git clone https://github.com/salihcantekin/ruvio.git
 pip install ./ruvio/clients/python             # no dependencies
 pip install "./ruvio/clients/python[hiredis]"  # optional: faster reply parsing</pre>
-      <p>A <code>pip install git+https://...#subdirectory=clients/python</code> URL should work the same way; it was not tried. A PyPI release is pending, and until then <code>pip install ruvio-client</code> will not find it. The checks on this page ran with <code>PYTHONPATH</code> pointing at the client directory, not through <code>pip install</code>.</p>
+      <p>A <code>pip install git+https://...#subdirectory=clients/python</code> URL should work the same way; it was not tried. The checks on this page ran with <code>PYTHONPATH</code> pointing at the client directory, not through <code>pip install</code>.</p>
 </section>
 
 <section class="panel">

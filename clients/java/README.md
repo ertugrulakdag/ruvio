@@ -11,7 +11,7 @@ server. Zero runtime dependencies, Java 17+, MIT. Maven coordinates:
 </dependency>
 ```
 
-(Not published to Maven Central yet; `mvn install` in this directory puts it in your local repository.)
+Published on Maven Central. To use the repository version instead, run `mvn install` in this directory.
 
 ## Packages
 
