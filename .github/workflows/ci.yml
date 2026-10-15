@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       jobs:
-        description: "Jobs to run: all, or a comma list of test, supply-chain, container, clients, fuzz, asan, miri"
+        description: "Jobs to run: all, or a comma list of test, supply-chain, container, clients, fuzz, asan, miri, instruction-baseline (not part of all)"
         type: string
         default: all
       os:
@@ -238,6 +238,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: AddressSanitizer library tests
         run: cargo test --no-default-features --lib --target x86_64-unknown-linux-gnu
+
+  # Measures the hot-path instruction counts on a GitHub runner and prints them as
+  # a new benchmark/baselines/instructions.json. The PR gate compares against that
+  # file, so it must come from the same kind of machine. Copy the printed JSON into
+  # the file and commit it. Not part of "all".
+  instruction-baseline:
+    if: contains(format(',{0},', inputs.jobs), ',instruction-baseline,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: iai
+      - run: sudo apt-get update && sudo apt-get install -y valgrind
+      - run: cargo install iai-callgrind-runner --version 0.16.1 --locked
+      - name: Measure and print the new baseline
+        run: |
+          set -euo pipefail
+          cargo bench --locked --bench hot_path 2>&1 | tee bench.log
+          python3 scripts/check_instruction_baseline.py --update bench.log
+          cpu="$(lscpu | sed -n 's/^Model name: *//p')"
+          echo "::notice title=Instruction baseline (${cpu})::$(tr -d ' \n' < benchmark/baselines/instructions.json)"
+          { echo "CPU: ${cpu}"; echo '```json'; cat benchmark/baselines/instructions.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   # Miri interprets every instruction, so even small model tests take minutes.
   # It only adds value where unsafe code lives (the hash-table fork and the
