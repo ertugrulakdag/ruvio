@@ -65,8 +65,11 @@ jobs:
             .
             clients/ruvio-client
       - run: cargo fmt --manifest-path clients/ruvio-client/Cargo.toml --all -- --check
-      - run: cargo test --manifest-path clients/ruvio-client/Cargo.toml --locked
       - run: cargo build --locked --bin ruvio
+      # Without RUVIO_TEST_ADDR the live tests return early and pass, so run them against
+      # real servers (standalone plus a 3-shard cluster).
+      - name: Rust client tests against a live server
+        run: scripts/run_with_servers.sh "$GITHUB_WORKSPACE/target/debug/ruvio" 17400 -- cargo test --manifest-path clients/ruvio-client/Cargo.toml --locked
       - name: Verify shard routing and live Rust client
         run: |
           set -euo pipefail
@@ -84,24 +87,60 @@ jobs:
             cargo test --manifest-path clients/ruvio-client/Cargo.toml --locked \
               --test cluster_live -- --test-threads=1
 
+  # Live tests are skipped without RUVIO_TEST_ADDR, so the C# client and the .NET
+  # integrations run against the shared server binary.
   dotnet-client:
+    needs: server-binary
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: ruvio-server
+          path: server-bin
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
       - uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
-          key: nuget-${{ runner.os }}-${{ hashFiles('clients/csharp/**/*.csproj') }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('clients/csharp/**/*.csproj', 'integrations/dotnet/**/*.csproj') }}
           restore-keys: nuget-${{ runner.os }}-
-      - run: dotnet test clients/csharp/Ruvio.Client.Tests/Ruvio.Client.Tests.csproj --nologo
-      - run: dotnet test clients/csharp/Ruvio.Client.AspNetCore.Tests/Ruvio.Client.AspNetCore.Tests.csproj --nologo
+      - run: chmod +x server-bin/ruvio
+      - name: C# client and .NET integrations against a live server
+        run: |
+          scripts/run_with_servers.sh "$PWD/server-bin/ruvio" 17400 -- bash -euo pipefail -c '
+            dotnet test clients/csharp/Ruvio.Client.Tests/Ruvio.Client.Tests.csproj --nologo
+            dotnet test clients/csharp/Ruvio.Client.AspNetCore.Tests/Ruvio.Client.AspNetCore.Tests.csproj --nologo
+            for project in integrations/dotnet/*Tests/*Tests.csproj; do
+              dotnet test "$project" --nologo
+            done
+          '
 
-  # The Node, Python and Java client suites need a live server (standalone and
-  # a 3-shard cluster), so the server is built once and shared as an artifact.
+  go-client:
+    needs: server-binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: ruvio-server
+          path: server-bin
+      # The go.mod version is the supported floor, so test on it.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: clients/go/go.mod
+          cache: false
+      - run: chmod +x server-bin/ruvio
+      - run: go vet ./...
+        working-directory: clients/go
+      - name: Test against a live server
+        run: scripts/run_with_servers.sh "$PWD/server-bin/ruvio" 17400 -- go -C clients/go test -count=1 ./...
+
+  # The C#, Go, Node, Python and Java client suites need a live server (standalone
+  # and a 3-shard cluster), so the server is built once and shared as an artifact.
   server-binary:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -184,5 +223,7 @@ jobs:
           java-version: 17
           cache: maven
       - run: chmod +x server-bin/ruvio
+      - name: Generated files match their sources
+        run: python3 clients/java/tools/generate.py --check
       - name: Test against a live server, build sources and javadoc jars
         run: scripts/run_with_servers.sh "$PWD/server-bin/ruvio" 17400 -- mvn -B -f clients/java/pom.xml verify
