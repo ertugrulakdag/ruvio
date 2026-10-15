@@ -1944,7 +1944,7 @@
       "same_slot": true,
       "limitations": "Runs a memory-only FUNCTION LOAD body. Same key rules as EVAL. Lua is not replayed.",
       "coverage": [
-        "src/script.rs"
+        "src/script/tests.rs"
       ]
     },
     {
@@ -1954,7 +1954,7 @@
       "same_slot": false,
       "limitations": "Stores one named Lua body on the shard. Not a Redis library shebang. Lost on restart.",
       "coverage": [
-        "src/script.rs"
+        "src/script/tests.rs"
       ]
     },
     {
@@ -1964,7 +1964,7 @@
       "same_slot": false,
       "limitations": "Returns loaded function names in byte order.",
       "coverage": [
-        "src/script.rs"
+        "src/script/tests.rs"
       ]
     },
     {
@@ -1974,7 +1974,7 @@
       "same_slot": false,
       "limitations": "Removes one memory-only function. Returns 1 or 0.",
       "coverage": [
-        "src/script.rs"
+        "src/script/tests.rs"
       ]
     },
     {
