@@ -56,6 +56,7 @@
   </header>
   <main class="wrap layout">
     <nav class="side">
+      <a href="#binary">Download</a>
       <a href="#run">Run</a>
       <a href="#adapters">Adapters</a>
       <a href="#docker">Docker</a>
@@ -67,10 +68,22 @@
       <p>The default bind is loopback. <code>redis-cli PING</code> should answer <code>PONG</code>.</p>
       
 <section class="panel">
+<h2 id="binary">Prebuilt binary</h2>
+      <p><a href="https://github.com/salihcantekin/ruvio/releases/latest">GitHub Releases</a> has prebuilt binaries for Linux x64 and arm64, macOS arm64 and Windows x64. Each archive holds <code>ruvio</code> (the server), <code>ruvio-ctl</code> (backup, restore and checks), <code>ruvio.example.toml</code>, the README and the license; <code>SHA256SUMS</code> lists the checksums.</p>
+<pre># Linux x64; swap the platform for linux-arm64 or macos-arm64
+v=0.3.2
+curl -LO https://github.com/salihcantekin/ruvio/releases/download/ruvio-$v/ruvio-$v-linux-x64.tar.gz
+tar xzf ruvio-$v-linux-x64.tar.gz
+cd ruvio-$v-linux-x64
+./ruvio --requirepass change-me --data-dir ./data</pre>
+      <p>On Windows, unzip <code>ruvio-&lt;version&gt;-windows-x64.zip</code> and run <code>ruvio.exe</code>. On macOS, a binary downloaded by a browser is quarantined; <code>xattr -d com.apple.quarantine ruvio ruvio-ctl</code> clears it (downloads with <code>curl</code> are not quarantined). <code>ruvio --help</code> lists every flag.</p>
+</section>
+
+<section class="panel">
 <h2 id="run">From a checkout</h2>
 <pre>cargo run --bin ruvio
 redis-cli -h 127.0.0.1 -p 6379 PING</pre>
-      <p>Settings resolve in this order: built-in defaults, <code>ruvio.toml</code> (or <code>--config</code> / <code>RUVIO_CONFIG</code>), <code>RUVIO_*</code> environment variables, then explicit command-line options. Unknown TOML fields are rejected. Environment overrides are written back at startup; editing the file while the process is running waits for the next start. Details are on <a href="configuration.html#apply">Configuration</a>.</p>
+      <p>Settings resolve in this order: built-in defaults, <code>ruvio.toml</code> (or <code>--config</code> / <code>RUVIO_CONFIG</code>), <code>RUVIO_*</code> environment variables, then explicit command-line options. Unknown TOML fields are rejected. The file is left as it is unless the server starts with <code>--write-config</code>, which writes the effective values back. Editing the file while the process is running waits for the next start. Details are on <a href="configuration.html#apply">Configuration</a>.</p>
 </section>
 
 <section class="panel">
@@ -97,7 +110,7 @@ docker run --rm -p 6379:6379 -v ruvio-data:/data salihcantekin/ruvio:linux</pre>
 
 <section class="panel">
 <h2 id="clients">Which client</h2>
-      <p>Use <code>ruvio-client</code>, <code>Ruvio.Client</code>, or <code>Ruvio.Client.AspNetCore</code>. See <a href="examples.html">Clients</a> and <a href="packages.html">Packages</a>.</p>
+      <p>First-party clients exist for Rust, C#, Go, Java, Python and Node.js. Each page has its install line: <a href="clients.html">Clients</a>. Registry versions are on <a href="packages.html">Packages</a>.</p>
 </section>
 
 <section class="panel">
