@@ -601,3 +601,5 @@ jobs:
           Maven ${{ needs.versions.outputs.java }}
           EOF
           )" release-assets/*
+
+# Started by hand from the Actions tab only.

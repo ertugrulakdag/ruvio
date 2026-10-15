@@ -29,3 +29,5 @@ jobs:
           path: site
       - id: deployment
         uses: actions/deploy-pages@v5
+
+# Started by hand from the Actions tab only.

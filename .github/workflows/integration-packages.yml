@@ -107,3 +107,5 @@ jobs:
       - name: Publish
         if: inputs.publish
         run: dotnet nuget push "dist/*.nupkg" --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+# Started by hand from the Actions tab only.
