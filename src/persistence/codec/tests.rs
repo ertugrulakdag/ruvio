@@ -1,4 +1,3 @@
-
 #[test]
 fn borrowed_encoding_matches_owned_encoding() {
     use std::borrow::Cow;

@@ -1,4 +1,3 @@
-
 use std::{borrow::Cow, fs, io::Write, time::Duration};
 
 use crate::persistence::codec::encode_record;

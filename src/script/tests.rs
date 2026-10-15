@@ -1,4 +1,3 @@
-
 use super::*;
 
 /// Keyless commands a script may call. Every other keyless command is refused, and

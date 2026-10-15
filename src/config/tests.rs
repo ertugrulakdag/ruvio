@@ -1,4 +1,3 @@
-
 /// Every key the config file accepts, as `key` or `section.key`. Read from serde's
 /// unknown-field error, so the list follows the structs without a hand-kept copy.
 fn file_keys() -> Vec<String> {
