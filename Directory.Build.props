@@ -1,0 +1,20 @@
+<Project>
+  <!-- Shared by every .NET project in the repository: the C# client, the integrations and the test harnesses. -->
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- Package metadata. A project sets its own Version, PackageId, Description, PackageTags and README. -->
+  <PropertyGroup>
+    <Authors>Salih Cantekin</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageIcon>ruvio-icon.png</PackageIcon>
+    <RepositoryUrl>https://github.com/salihcantekin/ruvio</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://salihcantekin.github.io/ruvio/</PackageProjectUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+</Project>

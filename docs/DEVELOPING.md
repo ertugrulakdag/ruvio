@@ -13,6 +13,7 @@ Where the code lives, how to check a change quickly, and every place a new comma
 | `benches/hot_path.rs` | Instruction-count bench behind the PR gate's +2% limit |
 | `clients/` | Rust, C#, Go, Java, Node and Python clients, plus `ruvio-ui`. MIT except `ruvio-ui` |
 | `integrations/dotnet/` | ASP.NET Core and `IDistributedCache` packages on top of the C# client. MIT |
+| `Directory.Build.props`, `Directory.Packages.props` | Settings and package metadata shared by every .NET project, and the one version of each NuGet dependency (a `PackageReference` has no `Version`) |
 | `docs/` | Reference docs and `compatibility-matrix.json`, the list of supported commands |
 | `scripts/` | Local gates, release helpers, fault and benchmark harnesses ([scripts/README.md](../scripts/README.md)) |
 | `site/` | GitHub Pages site |
