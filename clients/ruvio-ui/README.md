@@ -1,4 +1,37 @@
-# Ruvio UI
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+</p>
+
+<h1 align="center">Ruvio UI</h1>
+
+<p align="center">Browser operator UI for one running <a href="https://salihcantekin.github.io/ruvio/">Ruvio</a> server: data, command forms, Pub/Sub and ACL users.</p>
+
+<p align="center">
+  <a href="https://hub.docker.com/r/salihcantekin/ruvio-ui"><img alt="Docker" src="https://img.shields.io/docker/v/salihcantekin/ruvio-ui?sort=semver&label=docker"></a>
+  <a href="https://hub.docker.com/r/salihcantekin/ruvio-ui"><img alt="Docker pulls" src="https://img.shields.io/docker/pulls/salihcantekin/ruvio-ui?label=pulls"></a>
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/ruvio-ui/LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
+</p>
+
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/ui.html">Operator UI guide</a> ·
+  <a href="https://hub.docker.com/r/salihcantekin/ruvio-ui">Docker Hub</a> ·
+  <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
+</p>
+
+---
+
+## Run it
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e RUVIO_UI_TARGET_HOST=127.0.0.1 \
+  -e RUVIO_UI_TARGET_PORT=6379 \
+  salihcantekin/ruvio-ui:linux
+```
+
+Open http://127.0.0.1:8080. `RUVIO_UI_TARGET_HOST` and `RUVIO_UI_TARGET_PORT` are the Ruvio server, the same address `redis-cli` uses. Port `8080` is only the UI.
+
+## Sign-in and users
 
 The browser talks HTTP to this process. This process talks RESP through
 `ruvio-client`. Sign-in is the server’s ACL user. An empty user and password

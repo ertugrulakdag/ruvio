@@ -1,4 +1,25 @@
-# C# client and ASP.NET Core registration
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/"><img src="../../site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+</p>
+
+<h1 align="center">C# client and ASP.NET Core registration</h1>
+
+<p align="center">The .NET projects under <code>clients/csharp</code>: the <a href="Ruvio.Client/README.md">Ruvio.Client</a> SDK and its ASP.NET Core registration.</p>
+
+<p align="center">
+  <a href="https://www.nuget.org/packages/Ruvio.Client"><img alt="NuGet" src="https://img.shields.io/nuget/v/Ruvio.Client?label=nuget"></a>
+  <a href="https://www.nuget.org/packages/Ruvio.Client"><img alt="Downloads" src="https://img.shields.io/nuget/dt/Ruvio.Client?label=downloads"></a>
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
+
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/client-csharp.html">C# guide</a> ·
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/README.md">All clients</a> ·
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/integrations/dotnet/README.md">Integrations</a> ·
+  <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
+</p>
+
+---
 
 | Project | NuGet package | What it is |
 | --- | --- | --- |

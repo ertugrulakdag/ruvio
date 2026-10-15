@@ -1,4 +1,24 @@
-# Ruvio.Extensions.Caching
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+</p>
+
+<h1 align="center">Ruvio.Extensions.Caching <sub>NuGet</sub></h1>
+
+<p align="center"><code>IDistributedCache</code> provider for web, worker and console applications.</p>
+
+<p align="center">
+  <a href="https://www.nuget.org/packages/Ruvio.Extensions.Caching"><img alt="NuGet" src="https://img.shields.io/nuget/v/Ruvio.Extensions.Caching?label=nuget"></a>
+  <a href="https://www.nuget.org/packages/Ruvio.Extensions.Caching"><img alt="Downloads" src="https://img.shields.io/nuget/dt/Ruvio.Extensions.Caching?label=downloads"></a>
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/integrations/dotnet/README.md">All .NET integrations</a> ·
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/csharp/Ruvio.Client/README.md">Ruvio.Client</a> ·
+  <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
+</p>
+
+---
 
 Binary-safe `IDistributedCache` for .NET 8, using Microsoft.Extensions packages only;
 there is no ASP.NET Core shared-framework dependency.

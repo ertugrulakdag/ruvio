@@ -1,3 +1,5 @@
+[Ruvio](../README.md) / Deployment
+
 # Deployment files
 
 | File | Use |
@@ -6,7 +8,9 @@
 | `ruvio.service` | systemd unit that runs `/usr/local/bin/ruvio --config /etc/ruvio/ruvio.toml` as the `ruvio` user |
 | `kubernetes.yaml` | Example Kubernetes manifest |
 
-The Docker image and its environment variables are described in the [main README](../README.md#start-the-server) and in [docs/SETUP.md](../docs/SETUP.md). Review the files before use; they are starting points, not a hardened production setup.
+The Docker image and its environment variables are described in the [main README](../README.md#start-the-server) and in [docs/SETUP.md](../docs/SETUP.md). 
+> [!NOTE]
+> Review the files before use; they are starting points, not a hardened production setup.
 
 ## Local Ruvio, Redis, and UI in Docker
 

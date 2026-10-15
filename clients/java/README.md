@@ -1,7 +1,27 @@
-# ruvio-client (Java)
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+</p>
 
-Multiplexed, allocation-light client for the [Ruvio](https://salihcantekin.github.io/ruvio/) key-value
-server. Zero runtime dependencies, Java 17+, MIT. Maven coordinates:
+<h1 align="center">ruvio-client <sub>Java</sub></h1>
+
+<p align="center">Multiplexed, allocation-light client for <a href="https://salihcantekin.github.io/ruvio/">Ruvio</a>. Zero runtime dependencies, Java 17+.</p>
+
+<p align="center">
+  <a href="https://central.sonatype.com/artifact/io.github.salihcantekin/ruvio-client"><img alt="Maven Central" src="https://img.shields.io/maven-central/v/io.github.salihcantekin/ruvio-client?label=maven%20central"></a>
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
+
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/client-java.html">Java guide</a> ·
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/README.md">All clients</a> ·
+  <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
+</p>
+
+---
+
+## Install
+
+Maven coordinates:
 
 ```xml
 <dependency>

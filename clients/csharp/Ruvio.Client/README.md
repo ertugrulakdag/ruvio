@@ -1,4 +1,40 @@
-# Ruvio.Client
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+</p>
+
+<h1 align="center">Ruvio.Client <sub>NuGet</sub></h1>
+
+<p align="center">RESP2 client for <a href="https://salihcantekin.github.io/ruvio/">Ruvio</a> with typed methods for every server command, single-connection multiplexing and cluster routing.</p>
+
+<p align="center">
+  <a href="https://www.nuget.org/packages/Ruvio.Client"><img alt="NuGet" src="https://img.shields.io/nuget/v/Ruvio.Client?label=nuget"></a>
+  <a href="https://www.nuget.org/packages/Ruvio.Client"><img alt="Downloads" src="https://img.shields.io/nuget/dt/Ruvio.Client?label=downloads"></a>
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
+
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/client-csharp.html">C# guide</a> ·
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/csharp/README.md">All C# projects</a> ·
+  <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
+</p>
+
+---
+
+## Install
+
+```bash
+dotnet add package Ruvio.Client
+```
+
+```csharp
+using Ruvio.Client;
+
+await using var db = await RuvioClient.ConnectAsync("127.0.0.1", 6379);
+await db.SetAsync("session:ada", "hello");
+string? value = await db.GetStringAsync("session:ada");
+```
+
+ASP.NET Core hosts register the client with [`Ruvio.Client.AspNetCore`](../Ruvio.Client.AspNetCore/README.md). Framework integrations are in [`integrations/dotnet`](../../../integrations/dotnet/README.md).
 
 ## Binary commands
 

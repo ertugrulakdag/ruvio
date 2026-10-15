@@ -1,3 +1,5 @@
+[Ruvio](../README.md) / Benchmarks
+
 # Benchmarks
 
 `hot_path.rs` counts instructions for one command on a warm shard with iai-callgrind (Linux, needs `valgrind`).

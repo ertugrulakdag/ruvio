@@ -1,21 +1,113 @@
-# Ruvio
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/"><img src="site/images/ruvio-mark.png" width="140" alt="Ruvio"></a>
+</p>
 
-[![License: AGPL-3.0](https://img.shields.io/badge/server-AGPL--3.0-blue)](LICENSE)
-[![Clients: MIT](https://img.shields.io/badge/clients-MIT-green)](clients/LICENSE)
-[![PR gate](https://img.shields.io/github/actions/workflow/status/salihcantekin/ruvio/pr-gate.yml?branch=main&label=checks)](https://github.com/salihcantekin/ruvio/actions/workflows/pr-gate.yml)
-[![Docker pulls](https://img.shields.io/docker/pulls/salihcantekin/ruvio?label=docker%20pulls)](https://hub.docker.com/r/salihcantekin/ruvio)
-[![crates.io](https://img.shields.io/crates/v/ruvio-client?label=ruvio-client)](https://crates.io/crates/ruvio-client)
-[![NuGet](https://img.shields.io/nuget/v/Ruvio.Client?label=Ruvio.Client)](https://www.nuget.org/packages/Ruvio.Client)
+<h1 align="center">Ruvio</h1>
 
-Ruvio is the process you run instead of a cache plus a lock service, a conditional write, a change feed, and a delay queue. It speaks RESP. `redis-cli` and existing RESP clients connect. The shard that owns a key parses, records, applies, and replies. The hot path does not take a lock and does not hop to another thread.
+<p align="center">
+  <strong>One process instead of a cache, a lock service, a conditional write, a change feed and a delay queue.</strong><br>
+  A Rust key-value server that speaks RESP. <code>redis-cli</code> and existing RESP clients connect.
+</p>
 
-On an Apple M4 Pro, evented, memory durability, one shard, 50 clients, pipeline 16, 64-byte values, fixed key, one invocation per command, median of 3 rounds (2026-10-07): about 2.61M SET/s, 2.74M GET/s, and 2.88M INCR/s. Samples and flags are on the [performance page](https://salihcantekin.github.io/ruvio/testing-performance.html). A feature allocates only when a key uses it. Twenty thousand leases added about 3.6 MB. Twenty thousand versioned 64-byte strings added about 7.2 MB, body included.
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/start.html"><b>Get started</b></a> ·
+  <a href="https://salihcantekin.github.io/ruvio/">Website</a> ·
+  <a href="https://salihcantekin.github.io/ruvio/commands.html">Commands</a> ·
+  <a href="https://salihcantekin.github.io/ruvio/testing-performance.html">Performance</a> ·
+  <a href="https://salihcantekin.github.io/ruvio/packages.html">Packages</a> ·
+  <a href="docs/README.md">Docs</a> ·
+  <a href="https://github.com/salihcantekin/ruvio/releases/latest">Releases</a>
+</p>
 
-Durability is named at startup: `memory`, `snapshot`, `everysec`, or `always`. A write is checked, appended, then applied. If the log cannot take the record, the key stays as it was and later writes return `MISCONF`.
+<p align="center">
+  <a href="https://github.com/salihcantekin/ruvio/actions/workflows/pr-gate.yml"><img alt="Checks" src="https://img.shields.io/github/actions/workflow/status/salihcantekin/ruvio/pr-gate.yml?branch=main&label=checks"></a>
+  <a href="https://github.com/salihcantekin/ruvio/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/salihcantekin/ruvio?label=release"></a>
+  <a href="https://hub.docker.com/r/salihcantekin/ruvio"><img alt="Docker pulls" src="https://img.shields.io/docker/pulls/salihcantekin/ruvio?label=docker%20pulls"></a>
+  <a href="LICENSE"><img alt="Server license: AGPL-3.0" src="https://img.shields.io/badge/server-AGPL--3.0-blue"></a>
+  <a href="clients/LICENSE"><img alt="Clients license: MIT" src="https://img.shields.io/badge/clients-MIT-green"></a>
+  <a href="https://crates.io/crates/ruvio-client"><img alt="crates.io" src="https://img.shields.io/crates/v/ruvio-client?label=crates.io"></a>
+  <a href="https://www.nuget.org/packages/Ruvio.Client"><img alt="NuGet" src="https://img.shields.io/nuget/v/Ruvio.Client?label=NuGet"></a>
+  <a href="https://www.npmjs.com/package/ruvio-client"><img alt="npm" src="https://img.shields.io/npm/v/ruvio-client?label=npm"></a>
+  <a href="https://pypi.org/project/ruvio-client/"><img alt="PyPI" src="https://img.shields.io/pypi/v/ruvio-client?label=PyPI"></a>
+</p>
 
-The command list that CI checks is [docs/compatibility-matrix.json](docs/compatibility-matrix.json).
+<p align="center">
+  <a href="#why-ruvio">Why Ruvio</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#built-in-building-blocks">Building blocks</a> ·
+  <a href="#performance">Performance</a> ·
+  <a href="#clients-and-packages">Clients</a> ·
+  <a href="#operator-ui">Operator UI</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="#license">License</a>
+</p>
 
-## One process, the jobs beside the cache
+---
+
+## Why Ruvio
+
+The shard that owns a key parses, records, applies, and replies. The hot path does not take a lock and does not hop to another thread.
+
+| Strength | What it means |
+| --- | --- |
+| **Owner-per-shard engine** | One owner per shard, no lock on apply. A feature allocates only when a key uses it: twenty thousand leases added about 3.6 MB, twenty thousand versioned 64-byte strings about 7.2 MB, body included. |
+| **Durability you name** | `memory`, `snapshot`, `everysec` or `always`, chosen at startup. A write is checked, appended, then applied. If the log cannot take the record, the key stays as it was and later writes return `MISCONF`. |
+| **Wire compatible** | RESP2 subset; `redis-cli` and existing RESP clients connect. The command list that CI checks is [docs/compatibility-matrix.json](docs/compatibility-matrix.json). |
+| **Six first-party clients** | Rust, C#, Go, Java, Python and Node.js, each with a typed method for every one of the 287 listed commands and cluster routing from one seed address. |
+| **Operator UI** | A browser view of one running server: data, command forms, Pub/Sub and ACL users. |
+
+## Quick start
+
+A default process listens on `127.0.0.1:6379`.
+
+```bash
+docker run --rm -p 6379:6379 \
+  -e RUVIO_REQUIREPASS=change-me \
+  -v ruvio-data:/data \
+  salihcantekin/ruvio:linux
+
+redis-cli -h 127.0.0.1 -p 6379 -a change-me PING
+```
+
+`linux` and `latest` are the same Linux image, as is each version tag, built for linux/amd64. On an arm64 host such as Apple Silicon, Docker runs it under emulation; use a prebuilt binary below for a native arm64 server. The image default durability is `memory`. A persistent deploy sets `RUVIO_DURABILITY` and keeps the volume.
+
+<details>
+<summary><b>Prebuilt binary</b> (Linux x64/arm64, macOS arm64, Windows x64)</summary>
+
+<br>
+
+Download a binary from [GitHub Releases](https://github.com/salihcantekin/ruvio/releases/latest). Each archive holds `ruvio` (the server), `ruvio-ctl` (backup, restore and checks), `ruvio.example.toml`, the README and the license. `SHA256SUMS` lists the checksums.
+
+```bash
+# Linux x64; swap the platform for linux-arm64 or macos-arm64
+v=0.3.2
+curl -LO https://github.com/salihcantekin/ruvio/releases/download/ruvio-$v/ruvio-$v-linux-x64.tar.gz
+tar xzf ruvio-$v-linux-x64.tar.gz
+cd ruvio-$v-linux-x64
+./ruvio --requirepass change-me --data-dir ./data
+```
+
+On Windows, unzip `ruvio-<version>-windows-x64.zip` and run `ruvio.exe`. On macOS, a binary downloaded by a browser is quarantined; `xattr -d com.apple.quarantine ruvio ruvio-ctl` clears it (downloads with `curl` are not quarantined). `ruvio --help` lists every flag.
+
+</details>
+
+<details>
+<summary><b>From source</b></summary>
+
+<br>
+
+```bash
+cargo run --release --bin ruvio
+redis-cli -h 127.0.0.1 -p 6379 PING
+```
+
+The server is installed from the Docker image, a release binary, or built from this checkout; it is not published as a crate.
+
+</details>
+
+Settings merge in this order: built-in defaults, `ruvio.toml` (template: [`ruvio.example.toml`](ruvio.example.toml)), `RUVIO_*` environment variables, then CLI flags. The file is read once, at process start. See [Configuration](https://salihcantekin.github.io/ruvio/configuration.html).
+
+## Built-in building blocks
 
 These commands run on the shard that owns the key. A key that never uses them stores nothing extra. `GET`, `SET`, and `INCR` do not consult them.
 
@@ -30,81 +122,28 @@ These commands run on the shard that owns the key. A key that never uses them st
 
 `DEL` of a lease starts the next token at 1. `SET` replaces a versioned string with a plain string. `INCR` does not accept a versioned string.
 
-**Site:** [salihcantekin.github.io/ruvio](https://salihcantekin.github.io/ruvio/) · [Packages](https://salihcantekin.github.io/ruvio/packages.html) · [How it runs](https://salihcantekin.github.io/ruvio/compare.html) · [Operator UI](https://salihcantekin.github.io/ruvio/ui.html) · [Start](https://salihcantekin.github.io/ruvio/start.html)
+## Performance
 
-Test coverage, recorded results, and open production evidence gates:
-[Testing and evidence](https://salihcantekin.github.io/ruvio/testing.html) ·
-[Contributor test guide](docs/TESTING.md).
+| | Result | Setup |
+| --- | --- | --- |
+| **Against Redis 8.10.2** | 59 of 60 commands at or above 0.97×, geometric mean 1.22× | 4-core Azure x86 VM, one shard, `memory` durability, 50 clients, pipeline 16, 64-byte values, five alternating rounds (2026-10-11) |
+| **Raw throughput** | about 2.61M `SET`/s, 2.74M `GET`/s, 2.88M `INCR`/s | Apple M4 Pro, evented, `memory` durability, one shard, 50 clients, pipeline 16, 64-byte values, fixed key, median of 3 rounds (2026-10-07) |
 
-## Start the server
+Samples, flags and the rows below 1× are on the [performance page](https://salihcantekin.github.io/ruvio/testing-performance.html); memory results are on the [memory page](https://salihcantekin.github.io/ruvio/testing-memory.html). There is no Garnet measurement.
 
-A default process listens on `127.0.0.1:6379`.
 
-```bash
-docker pull salihcantekin/ruvio:linux
-docker run --rm -p 6379:6379 \
-  -e RUVIO_REQUIREPASS=change-me \
-  -v ruvio-data:/data \
-  salihcantekin/ruvio:linux
+## Clients and packages
 
-redis-cli -h 127.0.0.1 -p 6379 -a change-me PING
-```
+First-party clients speak RESP2, do not send `CLIENT SETINFO`, and learn `CLUSTER SLOTS` from one seed address. Guides: [Clients](https://salihcantekin.github.io/ruvio/clients.html) · [`clients/`](clients/README.md).
 
-`linux` and `latest` are the same Linux image, as is each version tag, built for linux/amd64. On an arm64 host such as Apple Silicon, Docker runs it under emulation; use a prebuilt binary below for a native arm64 server. The image default durability is `memory`. A persistent deploy sets `RUVIO_DURABILITY` and keeps the volume.
-
-Without Docker, download a prebuilt binary from [GitHub Releases](https://github.com/salihcantekin/ruvio/releases/latest). Each archive holds `ruvio` (the server), `ruvio-ctl` (backup, restore and checks), `ruvio.example.toml`, the README and the license, for Linux x64 and arm64, macOS arm64 and Windows x64. `SHA256SUMS` lists the checksums.
-
-```bash
-# Linux x64; swap the platform for linux-arm64 or macos-arm64
-v=0.3.2
-curl -LO https://github.com/salihcantekin/ruvio/releases/download/ruvio-$v/ruvio-$v-linux-x64.tar.gz
-tar xzf ruvio-$v-linux-x64.tar.gz
-cd ruvio-$v-linux-x64
-./ruvio --requirepass change-me --data-dir ./data
-```
-
-On Windows, unzip `ruvio-<version>-windows-x64.zip` and run `ruvio.exe`. On macOS, a binary downloaded by a browser is quarantined; `xattr -d com.apple.quarantine ruvio ruvio-ctl` clears it (downloads with `curl` are not quarantined). `ruvio --help` lists every flag.
-
-From a checkout:
-
-```bash
-cargo run --release --bin ruvio
-redis-cli -h 127.0.0.1 -p 6379 PING
-```
-
-The server is installed from the Docker image, a release binary, or built from this checkout; it is not published as a crate.
-
-Settings merge in this order: built-in defaults, `ruvio.toml` (template: [`ruvio.example.toml`](ruvio.example.toml)), `RUVIO_*` environment variables, then CLI flags. The file is read once, at process start. [Configuration](https://salihcantekin.github.io/ruvio/configuration.html).
-
-## Open the operator UI
-
-[salihcantekin/ruvio-ui](https://hub.docker.com/r/salihcantekin/ruvio-ui) is a browser for one running server. `RUVIO_UI_TARGET_HOST` and `RUVIO_UI_TARGET_PORT` are that Ruvio process, the same address `redis-cli` uses. A default server is `127.0.0.1:6379`. Port `8080` is only the UI.
-
-```bash
-docker pull salihcantekin/ruvio-ui:linux
-docker run --rm -p 8080:8080 \
-  -e RUVIO_UI_TARGET_HOST=127.0.0.1 \
-  -e RUVIO_UI_TARGET_PORT=6379 \
-  salihcantekin/ruvio-ui:linux
-```
-
-Open http://127.0.0.1:8080. Sign-in is the server ACL user. An empty user and password connect as `default`. If the server was started with `RUVIO_REQUIREPASS`, type that password on the sign-in screen, or set `RUVIO_UI_TARGET_PASSWORD` so the field is filled in. Tags `linux` and `latest` are the same image.
-
-![Data screen with both shards and the key list](site/images/ui-data-2.png)
-
-All shards lists every key. One shard pins Data, the command screens, and Pub/Sub to that node. Users are `ACL` identities: `default` always exists, extra users that survive a restart live in `ruvio.toml`, and `ACL SETUSER` lasts until the next start.
-
-![Users screen showing the default ACL user](site/images/ui-acl.png)
-
-Install notes: [Operator UI](https://salihcantekin.github.io/ruvio/ui.html).
-
-## Talk to it from an application
-
-First-party clients speak RESP2, do not send `CLIENT SETINFO`, and learn `CLUSTER SLOTS` from one seed address.
-
-```bash
-cargo add ruvio-client
-```
+| Language | Install | Package |
+| --- | --- | --- |
+| Rust | `cargo add ruvio-client` | [crates.io](https://crates.io/crates/ruvio-client) |
+| C# | `dotnet add package Ruvio.Client` | [NuGet](https://www.nuget.org/packages/Ruvio.Client) |
+| Node.js | `npm install ruvio-client` | [npm](https://www.npmjs.com/package/ruvio-client) |
+| Python | `pip install ruvio-client` | [PyPI](https://pypi.org/project/ruvio-client/) |
+| Java | `io.github.salihcantekin:ruvio-client` | [Maven Central](https://central.sonatype.com/artifact/io.github.salihcantekin/ruvio-client) |
+| Go | `go get github.com/salihcantekin/ruvio/clients/go` | [pkg.go.dev](https://pkg.go.dev/github.com/salihcantekin/ruvio/clients/go) |
 
 ```rust
 use ruvio_client::Client;
@@ -115,10 +154,6 @@ let value = db.get_string("session:ada")?;
 db.incr("visits")?;
 ```
 
-```bash
-dotnet add package Ruvio.Client --version 0.3.1
-```
-
 ```csharp
 using Ruvio.Client;
 
@@ -127,21 +162,14 @@ await db.SetAsync("session:ada", "hello");
 string? value = await db.GetStringAsync("session:ada");
 ```
 
-`Ruvio.Client.AspNetCore` registers the same client in a .NET host. Client guides: [Clients](https://salihcantekin.github.io/ruvio/examples.html).
+The [.NET integration packages](integrations/dotnet/README.md) provide an `IDistributedCache` provider, ASP.NET Core output caching and Data Protection key-ring storage, plus opt-in rate limiting, HTTP idempotency and distributed locks. They are separate packages; existing server commands and applications that do not enable them incur no new per-key feature state.
 
-The [.NET integration packages](integrations/dotnet/README.md) provide an
-`IDistributedCache` provider, ASP.NET Core output caching and Data Protection
-key-ring storage, plus opt-in rate limiting and HTTP idempotency.
-They are separate packages; existing server commands and applications
-that do not enable them incur no new per-key feature state.
+[Native `IDEM`](docs/IDEM.md) adds atomic reservation, ownership checks, fingerprint conflicts and binary result replay for any RESP client. The ASP.NET Core idempotency package uses this command, not Lua. `ONCE` remains the simpler TTL marker. Retention and durability bound deduplication; external side effects still require their own transaction/idempotency mechanism.
 
-[Native `IDEM`](docs/IDEM.md) adds atomic reservation, ownership
-checks, fingerprint conflicts and binary result replay for any RESP client.
-The ASP.NET Core idempotency package uses this command, not Lua. `ONCE` remains
-the simpler TTL marker. Retention and durability bound deduplication; external
-side effects still require their own transaction/idempotency mechanism.
+<details>
+<summary><b>All published packages and live versions</b></summary>
 
-## Packages
+<br>
 
 Releases are cut from `main` by hand ([release workflow](.github/workflows/release.yml)). Counts come live from the registries. All clients are in [`clients/`](clients/README.md). The Go module is released by git tag (`clients/go/vX.Y.Z`) and fetched through the Go module proxy.
 
@@ -166,9 +194,30 @@ Releases are cut from `main` by hand ([release workflow](.github/workflows/relea
 
 Live install lines and download counts: [Packages](https://salihcantekin.github.io/ruvio/packages.html).
 
-## Compared with Redis, Dragonfly, and Garnet
+</details>
 
-The differences are about ownership, the durability contract, and how much of the Redis surface is implemented. Measured x86 results against Redis 8.10.2 (4-core Azure VM, 2026-10-11) are on the [performance](https://salihcantekin.github.io/ruvio/testing-performance.html) and [memory](https://salihcantekin.github.io/ruvio/testing-memory.html) pages; there is no Garnet measurement. How a Ruvio process runs is on [How it runs](https://salihcantekin.github.io/ruvio/compare.html).
+## Operator UI
+
+[salihcantekin/ruvio-ui](https://hub.docker.com/r/salihcantekin/ruvio-ui) is a browser for one running server. `RUVIO_UI_TARGET_HOST` and `RUVIO_UI_TARGET_PORT` are that Ruvio process, the same address `redis-cli` uses. A default server is `127.0.0.1:6379`. Port `8080` is only the UI.
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e RUVIO_UI_TARGET_HOST=127.0.0.1 \
+  -e RUVIO_UI_TARGET_PORT=6379 \
+  salihcantekin/ruvio-ui:linux
+```
+
+Open http://127.0.0.1:8080. Sign-in is the server ACL user. An empty user and password connect as `default`. If the server was started with `RUVIO_REQUIREPASS`, type that password on the sign-in screen, or set `RUVIO_UI_TARGET_PASSWORD` so the field is filled in. Tags `linux` and `latest` are the same image.
+
+<p align="center">
+  <img src="site/images/ui-overview.png" width="90%" alt="Operator UI overview of a two-shard server">
+</p>
+
+All shards lists every key. One shard pins Data, the command screens, and Pub/Sub to that node. Users are `ACL` identities: `default` always exists, extra users that survive a restart live in `ruvio.toml`, and `ACL SETUSER` lasts until the next start. Install notes: [Operator UI](https://salihcantekin.github.io/ruvio/ui.html).
+
+## Compared with Redis, Dragonfly and Garnet
+
+The differences are about ownership, the durability contract, and how much of the Redis surface is implemented. Measured results are in [Performance](#performance). How a Ruvio process runs is on [How it runs](https://salihcantekin.github.io/ruvio/compare.html).
 
 | | Redis | Dragonfly | Garnet | Ruvio |
 | --- | --- | --- | --- | --- |
@@ -181,30 +230,29 @@ The differences are about ownership, the durability contract, and how much of th
 
 Not claimed: a cluster bus, online slot migration, failover, replica acknowledgement, or a hardware latency number. Replication copies a WAL tail to a bounded set of replicas. Classic Pub/Sub stays on the shard that accepted the connection.
 
-## Docker Desktop comparison
+### Docker Desktop and memory density
 
 The capped Docker Desktop comparison (containers limited to 4 CPUs and 2 GiB, 2026-10-01) is in [docs/BENCHMARK_RESULTS.md](docs/BENCHMARK_RESULTS.md#capped-docker-desktop-comparison-2026-10-01).
 
 Docker RSS is not the bare-metal result; the memory detail is in [docs/MEMORY_DENSITY.md](docs/MEMORY_DENSITY.md) and on the [memory page](https://salihcantekin.github.io/ruvio/testing-memory.html). Natively on this Mac, 1,000,000 `LIMIT` keys added 148.9 MiB against 85.9 MiB for 1,000,000 plain 64-byte strings, about 1.7× per key.
 
-## What is in this repository
+## Repository layout
 
-| Path | Kept because |
+| Path | Contents |
 | --- | --- |
-| `src/` | The server. |
-| `clients/` | Rust SDK, C# SDK, and the operator UI. |
-| `site/` | The GitHub Pages site. `main` publishes it. |
-| `docs/` | Configuration, compatibility, recovery, threat model. |
-| `examples/` | Four small Cargo examples (`04_store_smoke` and the SIMD, zero-copy, and thread-per-core sketches). |
-| `fuzz/` | The `resp_parsers` libFuzzer target. CI runs it for 15 seconds. |
-| `benchmark/` | The benchmark script. Result files stay local and are gitignored. |
-| `target/` | Local Cargo output. Gitignored. Not part of the source. |
+| [`src/`](src) | The server. |
+| [`clients/`](clients/README.md) | Rust, C#, Go, Java, Python and Node.js SDKs, and the operator UI. |
+| [`integrations/`](integrations/README.md) | .NET framework integrations. |
+| [`docs/`](docs/README.md) | Configuration, compatibility, recovery, threat model. |
+| [`site/`](site) | The GitHub Pages site. `main` publishes it. |
+| [`deploy/`](deploy/README.md) | systemd unit, Kubernetes example, local Docker stack. |
+| [`tests/`](tests/README.md), [`fuzz/`](fuzz/README.md), [`benches/`](benches/README.md) | Integration tests, libFuzzer targets, instruction-count benchmark. |
+| [`examples/`](examples/README.md), [`scripts/`](scripts/README.md), `benchmark/` | Contributor probes, check and release scripts, the benchmark script (result files stay local). |
 | `ruvio.example.toml` | Default server settings; written as `ruvio.toml` on first start. |
-| `LICENSE` | GNU AGPL-3.0, the license of the server. `clients/ruvio-ui/LICENSE` is AGPL-3.0 too; `clients/LICENSE` (SDKs) and `integrations/LICENSE` are MIT. |
 
 ## Documentation
 
-| | |
+| Page | Covers |
 | --- | --- |
 | [Start](https://salihcantekin.github.io/ruvio/start.html) | Checkout, adapters, Docker |
 | [Configuration](https://salihcantekin.github.io/ruvio/configuration.html) | TOML, environment, ACL users |
@@ -212,12 +260,16 @@ Docker RSS is not the bare-metal result; the memory detail is in [docs/MEMORY_DE
 | [Durability](https://salihcantekin.github.io/ruvio/durability.html) | Acknowledgement boundaries |
 | [Replication](https://salihcantekin.github.io/ruvio/replication.html) | WAL tail, no failover |
 | [Operations](https://salihcantekin.github.io/ruvio/operations.html) | Limits, metrics, shutdown |
+| [Testing and evidence](https://salihcantekin.github.io/ruvio/testing.html) | Test coverage, recorded results, open production evidence gates |
 | [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | What the process does and does not defend |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Open gates, including a 24-hour soak and published bare-metal latency |
 | [docs/RECOVERY.md](docs/RECOVERY.md#promote-a-replica-by-hand) | Promote a caught-up replica by hand |
 | [docs/RESILIENCE.md](docs/RESILIENCE.md) | Crash, power-loss and disk-fault testing and what it found |
-| [SECURITY.md](SECURITY.md) | How to report a vulnerability in private |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | What a pull request has to be |
+| [docs/TESTING.md](docs/TESTING.md) | Contributor test guide |
+
+## Contributing and security
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Report a vulnerability in private as described in [SECURITY.md](SECURITY.md).
 
 ## License
 

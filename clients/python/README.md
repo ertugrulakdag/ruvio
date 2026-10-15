@@ -1,4 +1,25 @@
-# ruvio-client (Python)
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+</p>
+
+<h1 align="center">ruvio-client <sub>Python</sub></h1>
+
+<p align="center">Sync and asyncio client for <a href="https://salihcantekin.github.io/ruvio/">Ruvio</a>. No runtime dependencies, typed.</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/ruvio-client/"><img alt="PyPI" src="https://img.shields.io/pypi/v/ruvio-client?label=PyPI"></a>
+  <a href="https://pypi.org/project/ruvio-client/"><img alt="Downloads" src="https://img.shields.io/pypi/dm/ruvio-client?label=downloads"></a>
+  <a href="https://pypi.org/project/ruvio-client/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/ruvio-client?label=python"></a>
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
+
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/client-python.html">Python guide</a> ·
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/README.md">All clients</a> ·
+  <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
+</p>
+
+---
 
 Python client for [Ruvio](https://salihcantekin.github.io/ruvio/). It has no runtime
 dependencies and needs Python 3.9 or newer. It ships type information (`py.typed`).
