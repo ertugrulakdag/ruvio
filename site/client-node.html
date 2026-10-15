@@ -96,15 +96,9 @@
 
 <section class="panel">
 <h2 id="install">Install</h2>
-      <p><span data-pkg="npm:ruvio-client" data-found="Install from npm with <code>npm install ruvio-client</code>, or use the repository checkout:" data-missing="The package is not on the npm registry yet. <code>npm install ruvio-client</code> would fetch a different package or fail, so use the repository checkout:">Use the repository checkout:</span></p>
-<pre>git clone https://github.com/salihcantekin/ruvio
-cd ruvio/clients/node
-npm install        # dev dependencies only (typescript, @types/node, ioredis for the benchmark)
-npm run build      # writes dist/ (ESM + .d.ts)
-
-# then, in your own project:
-npm install ../ruvio/clients/node</pre>
-      <p class="note">The last step (installing from the local path) was not tried; the tests and all examples here import the built <code>dist/index.js</code> directly. Registry release is pending.</p>
+      <p>The client is on npm as <code>ruvio-client</code>. It has no runtime dependencies and ships ESM with TypeScript types.</p>
+<pre>npm install ruvio-client</pre>
+      <p class="note">To try the unreleased repository version: run <code>npm install &amp;&amp; npm run build</code> in <code>clients/node</code> of a checkout, then <code>npm install ../ruvio/clients/node</code> from your project.</p>
 </section>
 
 <section class="panel">

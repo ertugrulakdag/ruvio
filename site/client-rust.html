@@ -96,14 +96,10 @@
 
 <section class="panel">
 <h2 id="install">Install</h2>
-      <p>The crate is published on crates.io. The repository can contain features that are not in the latest release yet; its README lists them under "Unreleased".</p>
-<pre># the latest published release
-cargo add ruvio-client</pre>
-<pre># everything on this page: use the repository checkout (this is what was tested)
-git clone https://github.com/salihcantekin/ruvio
-# then in your Cargo.toml:
-ruvio-client = { path = "../ruvio/clients/ruvio-client", features = ["serde"] }</pre>
-      <p class="note">A <code>git =</code> dependency on the repository was not tried. Registry release of the new version is pending.</p>
+      <p>The crate is on crates.io as <code>ruvio-client</code>.</p>
+<pre>cargo add ruvio-client
+cargo add ruvio-client --features serde   # optional: typed JSON.* helpers</pre>
+      <p class="note">The repository can contain features that are not released yet; its README lists them under "Unreleased". To use them, point a path dependency at a checkout: <code>ruvio-client = { path = "../ruvio/clients/ruvio-client" }</code>.</p>
 </section>
 
 <section class="panel">
