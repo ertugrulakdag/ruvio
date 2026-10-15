@@ -1,7 +1,27 @@
-# ruvio-client (Node.js)
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+</p>
 
-Fast, zero-dependency RESP client for [Ruvio](https://salihcantekin.github.io/ruvio/). TypeScript source, ESM
-output with `.d.ts`, Node 18+. MIT licensed.
+<h1 align="center">ruvio-client <sub>Node.js</sub></h1>
+
+<p align="center">Fast, zero-dependency RESP client for <a href="https://salihcantekin.github.io/ruvio/">Ruvio</a>. TypeScript source, ESM output with <code>.d.ts</code>.</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/ruvio-client"><img alt="npm" src="https://img.shields.io/npm/v/ruvio-client?label=npm"></a>
+  <a href="https://www.npmjs.com/package/ruvio-client"><img alt="Downloads" src="https://img.shields.io/npm/dm/ruvio-client?label=downloads"></a>
+  <a href="https://www.npmjs.com/package/ruvio-client"><img alt="Node" src="https://img.shields.io/node/v/ruvio-client?label=node"></a>
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
+
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/client-node.html">Node.js guide</a> ·
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/README.md">All clients</a> ·
+  <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
+</p>
+
+---
+
+Node 18+, zero dependencies, MIT licensed.
 
 ```sh
 npm install ruvio-client

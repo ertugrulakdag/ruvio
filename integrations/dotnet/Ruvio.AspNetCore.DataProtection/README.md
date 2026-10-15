@@ -1,4 +1,24 @@
-# Ruvio.AspNetCore.DataProtection
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+</p>
+
+<h1 align="center">Ruvio.AspNetCore.DataProtection <sub>NuGet</sub></h1>
+
+<p align="center">Encrypted Data Protection key-ring persistence for shared cookies and protected payloads.</p>
+
+<p align="center">
+  <a href="https://www.nuget.org/packages/Ruvio.AspNetCore.DataProtection"><img alt="NuGet" src="https://img.shields.io/nuget/v/Ruvio.AspNetCore.DataProtection?label=nuget"></a>
+  <a href="https://www.nuget.org/packages/Ruvio.AspNetCore.DataProtection"><img alt="Downloads" src="https://img.shields.io/nuget/dt/Ruvio.AspNetCore.DataProtection?label=downloads"></a>
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/integrations/dotnet/README.md">All .NET integrations</a> ·
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/csharp/Ruvio.Client/README.md">Ruvio.Client</a> ·
+  <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
+</p>
+
+---
 
 An append-only `IXmlRepository` for ASP.NET Core Data Protection key rings.
 Sharing the key ring and application name lets instances decrypt each other's

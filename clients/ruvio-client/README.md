@@ -1,4 +1,26 @@
-# ruvio-client
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+</p>
+
+<h1 align="center">ruvio-client <sub>Rust</sub></h1>
+
+<p align="center">Blocking RESP2 client for <a href="https://salihcantekin.github.io/ruvio/">Ruvio</a>, with cluster routing and a typed method for every listed command.</p>
+
+<p align="center">
+  <a href="https://crates.io/crates/ruvio-client"><img alt="crates.io" src="https://img.shields.io/crates/v/ruvio-client?label=crates.io"></a>
+  <a href="https://crates.io/crates/ruvio-client"><img alt="Downloads" src="https://img.shields.io/crates/d/ruvio-client?label=downloads"></a>
+  <a href="https://docs.rs/ruvio-client"><img alt="docs.rs" src="https://img.shields.io/docsrs/ruvio-client?label=docs.rs"></a>
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
+
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/client-rust.html">Rust guide</a> ·
+  <a href="https://docs.rs/ruvio-client">docs.rs</a> ·
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/README.md">All clients</a> ·
+  <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
+</p>
+
+---
 
 Blocking RESP2 client for [Ruvio](https://salihcantekin.github.io/ruvio/). Connecting does not send `CLIENT SETINFO` or `HELLO`. Give the client one address; it sends `CLUSTER SLOTS` and, on a sharded server, opens one socket per shard and routes by hash slot. `MOVED` refreshes the map. `MGET` / `MSET` / `DEL` split across shards. Methods take `&mut self` and are named after the command they send. They cover every command in [`docs/compatibility-matrix.json`](../../docs/compatibility-matrix.json) (287/287, checked by `tests/coverage.rs`) plus the options that change what Ruvio does. `execute` and `execute_many` send any argument list, as `redis-cli` would; `execute_binary` does the same with raw byte arguments.
 

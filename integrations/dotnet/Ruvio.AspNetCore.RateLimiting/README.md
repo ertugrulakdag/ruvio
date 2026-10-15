@@ -1,4 +1,24 @@
-# Ruvio.AspNetCore.RateLimiting
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+</p>
+
+<h1 align="center">Ruvio.AspNetCore.RateLimiting <sub>NuGet</sub></h1>
+
+<p align="center">Endpoint-opt-in distributed fixed-window rate limiting.</p>
+
+<p align="center">
+  <a href="https://www.nuget.org/packages/Ruvio.AspNetCore.RateLimiting"><img alt="NuGet" src="https://img.shields.io/nuget/v/Ruvio.AspNetCore.RateLimiting?label=nuget"></a>
+  <a href="https://www.nuget.org/packages/Ruvio.AspNetCore.RateLimiting"><img alt="Downloads" src="https://img.shields.io/nuget/dt/Ruvio.AspNetCore.RateLimiting?label=downloads"></a>
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/integrations/dotnet/README.md">All .NET integrations</a> ·
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/csharp/Ruvio.Client/README.md">Ruvio.Client</a> ·
+  <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
+</p>
+
+---
 
 Opt-in distributed, first-request-anchored fixed-window HTTP budgets using
 Ruvio's atomic `LIMIT`. This is middleware, not an implementation of the

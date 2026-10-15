@@ -1,3 +1,5 @@
+[Ruvio](../README.md) / Fuzzing
+
 # Fuzz targets
 
 [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) targets for the parsers that read untrusted bytes.

@@ -1,4 +1,24 @@
-# Ruvio.AspNetCore.DistributedLock
+<p align="center">
+  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+</p>
+
+<h1 align="center">Ruvio.AspNetCore.DistributedLock <sub>NuGet</sub></h1>
+
+<p align="center">Distributed locks with owner-checked release and automatic renewal, plus a <code>[RuvioLock]</code> endpoint attribute.</p>
+
+<p align="center">
+  <a href="https://www.nuget.org/packages/Ruvio.AspNetCore.DistributedLock"><img alt="NuGet" src="https://img.shields.io/nuget/v/Ruvio.AspNetCore.DistributedLock?label=nuget"></a>
+  <a href="https://www.nuget.org/packages/Ruvio.AspNetCore.DistributedLock"><img alt="Downloads" src="https://img.shields.io/nuget/dt/Ruvio.AspNetCore.DistributedLock?label=downloads"></a>
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/integrations/dotnet/README.md">All .NET integrations</a> ·
+  <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/csharp/Ruvio.Client/README.md">Ruvio.Client</a> ·
+  <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
+</p>
+
+---
 
 Distributed mutual exclusion on Ruvio. A lock is one key holding a random owner token, and
 every step is a single server command that only the owner can win:
