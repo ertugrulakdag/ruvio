@@ -408,6 +408,14 @@ jobs:
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: mvn -B -f clients/java/pom.xml -P release deploy -DskipTests -Dcentral.autoPublish=${{ inputs.maven_auto_publish }}
+      - name: Keep the Central bundle for inspection
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: central-bundle
+          path: clients/java/target/central-publishing/central-bundle.zip
+          if-no-files-found: ignore
+          retention-days: 3
 
   server-binaries:
     needs: versions
