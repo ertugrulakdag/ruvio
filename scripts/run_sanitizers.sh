@@ -27,6 +27,7 @@ miri_filters=(
   store::smallbuf::
   transaction::
   list_waiters::
+  hashbrown::
 )
 
 run_miri() {

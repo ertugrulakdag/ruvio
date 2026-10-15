@@ -3257,3 +3257,135 @@ mod tests {
         assert!(HashTable::<u32>::with_capacity(1).allocation_size() > core::mem::size_of::<u32>());
     }
 }
+
+/// Ruvio: tests of the additions. The upstream test modules are compiled out.
+#[cfg(test)]
+mod ruvio_tests {
+    use super::HashTable;
+
+    fn hash(value: &u64) -> u64 {
+        value.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+    }
+
+    fn filled(count: u64) -> HashTable<u64> {
+        let mut table = HashTable::new();
+
+        for value in 0..count {
+            table.insert_unique(hash(&value), value, hash);
+        }
+
+        table
+    }
+
+    #[test]
+    fn ruvio_load_factor_keeps_one_slot_in_64() {
+        let table = HashTable::<u64>::with_capacity(1_000_000);
+
+        assert_eq!(table.allocated_buckets(), 1 << 20);
+        assert_eq!(table.full_capacity(), (1 << 20) - (1 << 14));
+        assert_eq!(table.growth_left(), table.full_capacity());
+    }
+
+    #[test]
+    fn ruvio_reclaim_tombstones_keeps_the_allocation_and_every_element() {
+        // Fill to the last free slot, so removals leave tombstones rather than empty slots.
+        let mut table = HashTable::with_capacity(10_000);
+        let mut count = 0u64;
+
+        while table.growth_left() > 0 {
+            table.insert_unique(hash(&count), count, hash);
+            count += 1;
+        }
+
+        for value in (0..count).step_by(2) {
+            table
+                .find_entry(hash(&value), |other| *other == value)
+                .unwrap()
+                .remove();
+        }
+
+        let buckets = table.allocated_buckets();
+        let growth = table.growth_left();
+        table.reclaim_tombstones(hash);
+
+        assert_eq!(table.allocated_buckets(), buckets);
+        assert!(
+            table.growth_left() > growth,
+            "{growth} -> {}",
+            table.growth_left()
+        );
+        assert_eq!(table.growth_left(), table.full_capacity() - table.len());
+        for value in (1..count).step_by(2) {
+            assert!(table.find(hash(&value), |other| *other == value).is_some());
+        }
+    }
+
+    #[test]
+    fn ruvio_clear_starts_a_new_epoch() {
+        let mut table = filled(10);
+        table.seed_epoch(7);
+        table.clear();
+
+        // Only equality with an old epoch matters; a clear may advance it more than once.
+        assert_ne!(table.epoch(), 7);
+    }
+
+    fn scan(table: &HashTable<u64>, mut during: impl FnMut()) -> Vec<u64> {
+        let mut seen = Vec::new();
+        let mut cursor = 0;
+
+        loop {
+            cursor = table.scan_homes(cursor, 100, usize::MAX, &hash, &mut |value| {
+                seen.push(*value)
+            });
+            during();
+            if cursor == 0 {
+                return seen;
+            }
+        }
+    }
+
+    #[test]
+    fn ruvio_scan_visits_every_element_once_when_nothing_changes() {
+        for count in [1, 100, 5_000] {
+            let table = filled(count);
+            let mut seen = scan(&table, || {});
+
+            seen.sort_unstable();
+            assert_eq!(seen, (0..count).collect::<Vec<_>>(), "{count} elements");
+        }
+    }
+
+    #[test]
+    fn ruvio_scan_finds_every_element_present_across_a_grow() {
+        let table = core::cell::RefCell::new(filled(2_000));
+        let mut seen = Vec::new();
+        let mut cursor = 0;
+        let mut next = 2_000u64;
+
+        loop {
+            cursor = table
+                .borrow()
+                .scan_homes(cursor, 50, usize::MAX, &hash, &mut |value| {
+                    seen.push(*value)
+                });
+            // Grow the table several times while the walk is open.
+            for _ in 0..400 {
+                table.borrow_mut().insert_unique(hash(&next), next, hash);
+                next += 1;
+            }
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        seen.sort_unstable();
+        seen.dedup();
+        for value in 0..2_000 {
+            assert!(
+                seen.binary_search(&value).is_ok(),
+                "{value} was not returned"
+            );
+        }
+    }
+}
