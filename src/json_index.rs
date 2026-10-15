@@ -1,4 +1,4 @@
-//! Field indexes over JSON documents (J10): exact equality on one scalar path.
+//! Field indexes over JSON documents: exact equality on one scalar path.
 //!
 //! An index is a key prefix, one `$.path` and a scalar type. The shard keeps, per index,
 //! `value -> sorted keys` plus `key -> value`, so removing a key never needs its old

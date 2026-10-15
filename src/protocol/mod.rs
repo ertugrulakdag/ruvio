@@ -179,7 +179,7 @@ impl JsonOpKind {
     }
 }
 
-/// `JSON.INDEX` and `JSON.FIND`: field indexes over JSON documents (J10).
+/// `JSON.INDEX` and `JSON.FIND`: field indexes over JSON documents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JsonIndexKind {
     Create,

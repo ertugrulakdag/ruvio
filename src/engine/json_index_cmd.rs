@@ -1,4 +1,4 @@
-//! `JSON.INDEX CREATE|DROP|LIST` and `JSON.FIND` (J10).
+//! `JSON.INDEX CREATE|DROP|LIST` and `JSON.FIND`.
 
 use std::borrow::Cow;
 
