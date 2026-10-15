@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/salihcantekin/ruvio/discussions/categories/q-a
+    about: How do I run, configure, or use Ruvio? Ask in Discussions (Q&A).
+  - name: Share an idea
+    url: https://github.com/salihcantekin/ruvio/discussions/categories/ideas
+    about: Not sure yet whether it is a feature request? Start with an idea in Discussions.
+  - name: Show what you built
+    url: https://github.com/salihcantekin/ruvio/discussions/categories/show-and-tell
+    about: Tell us how you use Ruvio.
+  - name: Report a security problem
+    url: https://github.com/salihcantekin/ruvio/security/advisories/new
+    about: Report vulnerabilities privately. Do not open a public issue.

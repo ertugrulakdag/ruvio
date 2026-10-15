@@ -1,0 +1,40 @@
+name: Performance or memory report
+description: Ruvio is slower or uses more memory than you expect, for example compared with Redis.
+labels: ["performance"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Numbers from your own machine are welcome. Please include enough to repeat the run.
+  - type: input
+    id: version
+    attributes:
+      label: Ruvio version
+      placeholder: "0.3.2"
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware and operating system
+      placeholder: "2 vCPU EPYC, Ubuntu 24.04; or Apple M4 Pro, macOS 15"
+    validations:
+      required: true
+  - type: textarea
+    id: workload
+    attributes:
+      label: Workload
+      description: Commands, value sizes, key count, clients, pipeline depth, shard count, durability mode, and the tool you used.
+    validations:
+      required: true
+  - type: textarea
+    id: results
+    attributes:
+      label: Results
+      description: Ruvio numbers and, if you have them, Redis numbers from the same machine and run.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?

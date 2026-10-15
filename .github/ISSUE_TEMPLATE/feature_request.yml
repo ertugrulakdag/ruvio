@@ -1,0 +1,52 @@
+name: Feature request
+description: Suggest a command, option, client improvement, or behavior change.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ruvio is a product-level alternative to Redis, not a full command clone. Requests that start from a concrete job you need done are the easiest to weigh.
+        Not sure it is a request yet? Start in [Discussions](https://github.com/salihcantekin/ruvio/discussions/categories/ideas).
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The job or workflow, and what you use today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Ruvio to do?
+      description: Command shape, option, or behavior. Example calls and replies help.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Server
+        - ruvio-ui
+        - Client (Rust)
+        - Client (C#)
+        - Client (Go)
+        - Client (Java)
+        - Client (Python)
+        - Client (Node)
+        - Docker image
+        - Documentation or site
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: cost
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched existing issues and discussions.
+          required: true
