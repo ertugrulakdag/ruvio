@@ -64,9 +64,11 @@ proven by these three checks; a task is not accepted until all three pass.
    valgrind and `iai-callgrind-runner 0.16.1`), then
    `python3 scripts/check_instruction_baseline.py <output.log>`. Baselines are
    in `benchmark/baselines/instructions.json`; the tolerance is +2% and at
-   least 32 instructions. Refresh with `--update` for an intentional change and
-   state the reason in the PR. CI: the `instruction-count` job in
-   `pr-gate.yml`. macOS has no valgrind, so it is skipped locally.
+   least 32 instructions. The baseline is measured on a GitHub runner, because
+   counts from another machine differ by several percent: start the CI workflow
+   with `jobs=instruction-baseline` and commit the JSON it prints. Refresh it
+   for an intentional change and state the reason in the PR. CI: the
+   `instruction-count` job in `pr-gate.yml`. macOS has no valgrind, so it is skipped locally.
 
 ## Client sockets stay on shard threads
 

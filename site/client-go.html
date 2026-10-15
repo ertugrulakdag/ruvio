@@ -81,7 +81,7 @@
       <table>
         <tbody>
           <tr><th>Module</th><td><code>github.com/salihcantekin/ruvio/clients/go</code> (<code>go get github.com/salihcantekin/ruvio/clients/go</code>)</td></tr>
-          <tr><th>Version</th><td>Not released. No tag exists yet (see <a href="#install">Install</a>).</td></tr>
+          <tr><th>Version</th><td>0.1.0 (git tag <code>clients/go/v0.1.0</code>, see <a href="#install">Install</a>).</td></tr>
           <tr><th>License</th><td>MIT</td></tr>
           <tr><th>Runtime</th><td>Go 1.22 or newer in <code>go.mod</code>. Built and tested with Go 1.24.7; the 1.22 floor was not tried on a 1.22 toolchain.</td></tr>
           <tr><th>Model</th><td>Synchronous calls with <code>context</code>, safe from many goroutines. One multiplexed connection; blocking commands use a pooled dedicated connection.</td></tr>
@@ -96,15 +96,12 @@
 
 <section class="panel">
 <h2 id="install">Install</h2>
-      <p>The module is not released. A Go module that lives in a subdirectory of a repository is versioned by tags with that directory as prefix, so a release of this client needs a tag such as <code>clients/go/v0.1.0</code>. That tag does not exist yet. Until it does, there is no version number to put in <code>go.mod</code>.</p>
-<pre># what you will run once the tag exists
-go get github.com/salihcantekin/ruvio/clients/go@v0.1.0</pre>
-<pre># what was tested for this page: a local checkout and a replace directive
-git clone https://github.com/salihcantekin/ruvio
+      <p>The module is released by git tag. A Go module that lives in a subdirectory of a repository is versioned by tags with that directory as prefix, so <code>v0.1.0</code> is the tag <code>clients/go/v0.1.0</code>. The Go module proxy serves it and pkg.go.dev lists it.</p>
+<pre>go get github.com/salihcantekin/ruvio/clients/go@v0.1.0</pre>
+      <p>To use the repository version instead, point a <code>replace</code> directive at a local checkout:</p>
+<pre>git clone https://github.com/salihcantekin/ruvio
 # in your go.mod:
-require github.com/salihcantekin/ruvio/clients/go v0.0.0
 replace github.com/salihcantekin/ruvio/clients/go =&gt; ../ruvio/clients/go</pre>
-      <p class="note">Fetching the module from GitHub (an untagged <code>go get</code>, which Go resolves to a pseudo-version) was not tried. Every example here ran against the local checkout. Release by tag is pending.</p>
 </section>
 
 <section class="panel">
