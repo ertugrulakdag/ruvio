@@ -1944,8 +1944,8 @@ const CONFIG_HEADER: &str = "\
 # Effective settings. Ruvio reads this file once, at process start.
 # Editing it while the process is running does not change the live server.
 # Restart to pick up edits.
-# RUVIO_* environment variables and CLI flags override this file and are
-# written back here on startup.
+# RUVIO_* environment variables and CLI flags override this file; they are
+# written back here only when the server starts with --write-config.
 
 ";
 
