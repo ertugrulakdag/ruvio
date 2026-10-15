@@ -83,9 +83,9 @@ A change to persistence, the WAL, unsafe code or memory layout gets a second, in
 | `CONFIG GET` | `introspect` in `src/config.rs` |
 | `--write-config` | `overlay_config` in `src/config.rs` |
 | Template | `ruvio.example.toml` (its values are tested against the code defaults) |
-| Docs | `docs/CONFIGURATION.md`, `site/configuration.html` |
+| Docs | `docs/CONFIGURATION.md` (the key and a row in the environment table), `site/configuration.html` |
 
-Only the template-to-`CONFIG GET` path is tested today, so check the docs rows by hand.
+`every_template_setting_answers_config_get`, `every_file_setting_is_documented` and `every_environment_variable_is_documented` (all in `scripts/check.sh`) catch a template value, file key or variable that is missing; the site page is checked by hand.
 
 ## Adding a client method
 

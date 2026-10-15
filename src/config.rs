@@ -2610,6 +2610,118 @@ fn parse_bool(value: &str, name: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
 
+    /// Every key the config file accepts, as `key` or `section.key`. Read from serde's
+    /// unknown-field error, so the list follows the structs without a hand-kept copy.
+    fn file_keys() -> Vec<String> {
+        fn accepted(document: &str) -> Option<Vec<String>> {
+            let error = toml::from_str::<super::FileConfig>(document)
+                .err()?
+                .to_string();
+            let (_, expected) = error
+                .split_once("unknown field")?
+                .1
+                .split_once("expected")?;
+
+            Some(
+                expected
+                    .split('`')
+                    .skip(1)
+                    .step_by(2)
+                    .map(str::to_owned)
+                    .collect(),
+            )
+        }
+
+        let mut keys = Vec::new();
+
+        for key in accepted("not_a_setting = 1").expect("top-level keys") {
+            match accepted(&format!("[{key}]\nnot_a_setting = 1")) {
+                Some(nested) => {
+                    keys.extend(nested.into_iter().map(|inner| format!("{key}.{inner}")))
+                }
+                None => keys.push(key),
+            }
+        }
+
+        keys
+    }
+
+    /// Environment variable names read by `apply_environment`.
+    fn environment_names() -> Vec<String> {
+        let source = include_str!("config.rs");
+        let start = source
+            .find("pub fn apply_environment")
+            .expect("apply_environment");
+        let body = &source[start..];
+        let body = &body[..body
+            .find("\n        Ok(())\n    }")
+            .expect("end of apply_environment")];
+        let mut names: Vec<String> = body
+            .split('"')
+            .filter(|token| {
+                token.starts_with("RUVIO_")
+                    && token.bytes().all(|byte| {
+                        byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'
+                    })
+            })
+            .map(str::to_owned)
+            .collect();
+
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// A setting the file accepts but `docs/CONFIGURATION.md` never names is a setting
+    /// nobody can find. A key counts as documented as a `key =` line (commented or not) in
+    /// the sample file, or written in backticks as `key` or `section.key`.
+    #[test]
+    fn every_file_setting_is_documented() {
+        let docs = include_str!("../docs/CONFIGURATION.md");
+        let keys = file_keys();
+        assert!(keys.len() > 50, "found only {} keys", keys.len());
+
+        let missing: Vec<&String> = keys
+            .iter()
+            .filter(|path| {
+                let key = path.rsplit('.').next().unwrap_or(path);
+
+                !(docs.contains(&format!("`{path}`"))
+                    || docs.contains(&format!("`{key}`"))
+                    || docs.contains(&format!("[[{path}]]"))
+                    || docs.lines().any(|line| {
+                        let line = line.trim_start().trim_start_matches('#').trim_start();
+                        line.strip_prefix(key)
+                            .is_some_and(|rest| rest.trim_start().starts_with('='))
+                    }))
+            })
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "settings missing from docs/CONFIGURATION.md: {missing:?}"
+        );
+    }
+
+    /// Every `RUVIO_*` variable `apply_environment` reads has a row in the environment table
+    /// of `docs/CONFIGURATION.md`.
+    #[test]
+    fn every_environment_variable_is_documented() {
+        let docs = include_str!("../docs/CONFIGURATION.md");
+        let names = environment_names();
+        assert!(names.len() > 50, "found only {} names", names.len());
+
+        let missing: Vec<&String> = names
+            .iter()
+            .filter(|name| !docs.contains(&format!("| `{name}` |")))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "variables missing from docs/CONFIGURATION.md: {missing:?}"
+        );
+    }
+
     #[test]
     fn a_script_time_limit_too_large_to_add_to_the_clock_is_refused() {
         let limits = super::ScriptLimits {
