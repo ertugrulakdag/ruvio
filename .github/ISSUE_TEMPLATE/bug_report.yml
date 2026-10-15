@@ -1,0 +1,80 @@
+name: Bug report
+description: Ruvio does something it should not, or fails to do something it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. A short, exact reproduction is the fastest way to a fix.
+        Questions about usage belong in [Discussions](https://github.com/salihcantekin/ruvio/discussions). Security problems go through [private advisories](https://github.com/salihcantekin/ruvio/security/advisories/new).
+  - type: input
+    id: version
+    attributes:
+      label: Ruvio version
+      description: Output of `ruvio --version`, a Docker tag, or a commit SHA.
+      placeholder: "0.3.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Server
+        - ruvio-ui
+        - Client (Rust)
+        - Client (C#)
+        - Client (Go)
+        - Client (Java)
+        - Client (Python)
+        - Client (Node)
+        - Docker image
+        - Documentation or site
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      placeholder: "Ubuntu 24.04 x86_64, macOS 15 arm64, Windows 11 x64"
+    validations:
+      required: true
+  - type: dropdown
+    id: durability
+    attributes:
+      label: Durability mode
+      description: Only if the bug involves persistence, restart, or replication.
+      options:
+        - Not relevant
+        - memory
+        - snapshot
+        - everysec
+        - always
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Commands sent (for example with `redis-cli`), config values, and the order they ran in.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Replies, error messages, and relevant server log lines.
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Relevant parts of `ruvio.toml` or the flags you started with. Remove passwords and tokens.
+      render: toml
