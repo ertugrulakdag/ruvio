@@ -560,7 +560,7 @@ go vet ./...
 go test ./...                                   # codec, routing, scripted fake cluster, coverage; live tests skip
 RUVIO_TEST_ADDR=127.0.0.1:17390 go test -race ./...    # also the live suites (databases 11 and 12, FLUSHDB)
 RUVIO_CLUSTER_ADDR=127.0.0.1:17410 go test -race ./... # also the cluster live tests (3 shards, per-shard ports)</pre>
-      <p>Counts from my run (Go 1.24.7, no <code>-race</code>): without the environment variables, 30 tests pass and 44 skip (74 in total). With both <code>RUVIO_TEST_ADDR</code> (17390) and <code>RUVIO_CLUSTER_ADDR</code> (17410) set, all 74 pass and none skip. <code>go vet</code> was clean.</p>
+      <p>Without the environment variables the live tests are skipped. With both <code>RUVIO_TEST_ADDR</code> and <code>RUVIO_CLUSTER_ADDR</code> set, every test runs.</p>
       <p>I did not run the <code>-race</code> form. The live suites flush databases 11 and 12 on the standalone server and database 0 on the cluster, so point them at a throwaway server. The live suite covers every command family, JSON.INDEX / JSON.FIND (database 0, own key prefix), Pub/Sub, RESP3 client tracking, pipelines, transactions and every helper. <code>TestCoverage</code> reads <code>docs/compatibility-matrix.json</code> and fails if a command has no typed method.</p>
       <p>Start a server for the tests as on <a href="start.html">Start</a>. For three shards, set <code>shards = 3</code> and <code>port_mode = "per-shard"</code> in the config; shard <em>i</em> listens on base port + <em>i</em>. Benchmarks: <code>RUVIO_TEST_ADDR=127.0.0.1:17390 go test -run '^$' -bench . -benchmem -benchtime=1s</code>; the cluster ones also need <code>RUVIO_CLUSTER_ADDR</code>.</p>
 

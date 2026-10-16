@@ -443,8 +443,8 @@ catch (OperationCanceledException) { }   // and the connection still answers PIN
 <h2 id="testing">Testing</h2>
 <pre>dotnet test clients/csharp/Ruvio.Client.Tests
 RUVIO_TEST_ADDR=127.0.0.1:6379 RUVIO_CLUSTER_ADDR=127.0.0.1:6379 dotnet test clients/csharp/Ruvio.Client.Tests</pre>
-      <p>Without a server: 198 tests, 193 pass and 5 live tests are skipped. With <code>RUVIO_TEST_ADDR</code> (standalone) and <code>RUVIO_CLUSTER_ADDR</code> (3 shards): 198 of 198 passed on this run. The suite covers the RESP codec and parser, the generated verbs, multiplexing and reconnect with scripted fake servers, cluster routing with scripted servers, the 287-command matrix mapping, and a live run of every command family and helper.</p>
-      <p>The live tests use databases 12 to 14, flush them and end with <code>FLUSHALL</code>: point them at a disposable server only. <code>Ruvio.Client.AspNetCore.Tests</code>: 11 tests passed.</p>
+      <p>Without a server the live tests are skipped. With <code>RUVIO_TEST_ADDR</code> (standalone) and <code>RUVIO_CLUSTER_ADDR</code> (3 shards) every test runs. The suite covers the RESP codec and parser, the generated verbs, multiplexing and reconnect with scripted fake servers, cluster routing with scripted servers, the 287-command matrix mapping, and a live run of every command family and helper.</p>
+      <p>The live tests use databases 12 to 14, flush them and end with <code>FLUSHALL</code>: point them at a disposable server only. <code>Ruvio.Client.AspNetCore</code> has its own test project, <code>Ruvio.Client.AspNetCore.Tests</code>.</p>
 </section>
 
 <section class="panel">

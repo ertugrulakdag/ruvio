@@ -506,7 +506,7 @@ Client::connect("127.0.0.1", 17399);           // =&gt; Err(Io(ConnectionRefused
 cargo test                                          # unit tests + coverage test, no server needed
 RUVIO_TEST_ADDR=127.0.0.1:17350 cargo test          # also the live suites
 RUVIO_CLUSTER_ADDR=127.0.0.1:17360 cargo test --test cluster_live -- --test-threads=1</pre>
-      <p>Counts from my run (with a live standalone server, debug build): 27 unit tests, 1 coverage test, 12 tests in <code>tests/live.rs</code> (databases 0 to 7), 9 in <code>tests/live_ext.rs</code> (databases 0 and 8 to 15), 2 in <code>tests/cluster_live.rs</code>, and 5 doc tests.</p>
+      <p>The suites: unit tests, a coverage test, <code>tests/live.rs</code> (databases 0 to 7), <code>tests/live_ext.rs</code> (databases 0 and 8 to 15), <code>tests/cluster_live.rs</code>, and doc tests.</p>
       <p>All passed; the same counts passed with <code>--features serde</code>. The live suites flush those databases, so point them at a throwaway server. Without the environment variables the live tests return early and report as passed. <code>tests/coverage.rs</code> reads <code>docs/compatibility-matrix.json</code> and fails if a command has no typed method.</p>
       <p>Start a server for the tests as on <a href="start.html">Start</a>. For three shards, set <code>shards = 3</code> and <code>port_mode = "per-shard"</code> in the config; shard <em>i</em> listens on base port + <em>i</em>.</p>
 

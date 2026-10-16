@@ -487,10 +487,10 @@ catch (RuvioServerException e) { /* e.code() == "WRONGTYPE" */ }</pre>
 <section class="panel">
 <h2 id="testing">Testing</h2>
 <pre>mvn -q test                                              # unit tests; live tests are skipped
-RUVIO_TEST_ADDR=127.0.0.1:6379 mvn -q test              # + live tests (59 per the README); logical DBs 9, 10, 11, 0 with FLUSHDB
-RUVIO_CLUSTER_ADDR=127.0.0.1:17450 RUVIO_TEST_ADDR=127.0.0.1:17394 mvn -q test   # + cluster live tests (91 per the README)
+RUVIO_TEST_ADDR=127.0.0.1:6379 mvn -q test              # + live tests; logical DBs 9, 10, 11, 0 with FLUSHDB
+RUVIO_CLUSTER_ADDR=127.0.0.1:17450 RUVIO_TEST_ADDR=127.0.0.1:17394 mvn -q test   # + cluster live tests
 RUVIO_TEST_ADDR=127.0.0.1:17394 mvn -q test -Dtest=BenchTest -DexcludedGroups=none   # few-second benchmark</pre>
-      <p>My run on this page: <code>mvn test</code> without a server ran 41 tests with 17 skipped (the live ones). With <code>RUVIO_TEST_ADDR=127.0.0.1:17394</code> and <code>RUVIO_CLUSTER_ADDR=127.0.0.1:17450</code> (a 3-shard server with <code>shards = 3</code> and <code>port_mode = "per-shard"</code>) it ran 91 tests, all passed.</p>
+      <p>Without a server, <code>mvn test</code> skips the live tests. With <code>RUVIO_TEST_ADDR</code> and <code>RUVIO_CLUSTER_ADDR</code> (a 3-shard server with <code>shards = 3</code> and <code>port_mode = "per-shard"</code>) every test runs.</p>
       <p>A command refused inside <code>MULTI</code> now makes <code>EXEC</code> answer <code>EXECABORT</code> and run nothing, as Redis does; the test for it was updated together with the server change.</p>
       <p>What the suites cover: <code>CodecTest</code> (RESP encode and parse), <code>CoverageTest</code> (all 287 matrix names map to a method, and every command has a cluster key rule), live tests per family (strings, keys, hashes, lists, sets, sorted sets, geo, streams, JSON, Bloom, scripting, server), helpers and concurrency, pipelines, transactions, pub/sub with reconnect, <code>ClusterUnitTest</code> (slot table, hashtags, key extraction, split and reassembly, MOVED once, no replay after a drop; scripted fake servers, always runs), <code>ClusterLiveTest</code> (spread over all shards, <code>CLUSTER KEYSLOT</code> agreement, cross-slot MGET/MSET/DEL order, pipeline order, forced stale slot table, transactions, helpers, scan, shard pub/sub, dropped node connection) and <code>ClusterFallbackLiveTest</code> (<code>cluster(true)</code> against a plain server).</p>
       <p>The live suites flush their databases, so point them at a disposable server. Start one as on <a href="start.html">Start</a>; for three shards set <code>shards = 3</code> and <code>port_mode = "per-shard"</code>, and shard <em>i</em> listens on base port + <em>i</em>.</p>
