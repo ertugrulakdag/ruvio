@@ -13,7 +13,7 @@ listener is opened. Unknown TOML fields are rejected.
 ```toml
 address = "127.0.0.1:6379"
 shards = 1
-port_mode = "per-shard"  # shards > 1: "per-shard" (default) = port + i per shard and cluster discovery; "single" = one port only. Both forward a key's command to its owning shard
+port_mode = "per-shard"  # shards > 1: "per-shard" (default) = port + i per shard and cluster discovery; "single" (deprecated) = one port only. Both forward a key's command to its owning shard
 advertised_host = "127.0.0.1"  # host in CLUSTER SLOTS/SHARDS/NODES
 # advertised_port = 6379       # shard 0's announced port; omitted = bind port
 hot_keys = []          # Redis globs; empty keeps every key on its shard
@@ -593,11 +593,12 @@ sends `MOVED` (sharded Pub/Sub channels are the exception: `SSUBSCRIBE` on the
 wrong shard is redirected, as a subscription cannot be forwarded). Cluster-aware
 clients find the other shards from `CLUSTER SLOTS`, `CLUSTER SHARDS`, or
 `CLUSTER NODES`, connect to each owner and pay no hop; any other client works on
-any one port, with the hop. `port_mode = "single"` opens one port only, spreads
-connections over the shards, runs keyless commands (`DBSIZE`, `KEYS`, `FLUSHALL`,
-`SCAN`) across every shard and lets `WAIT` cover every shard; in `per-shard`
-those stay per shard, as in Redis Cluster, and cluster clients fan them out
-themselves. Classic `PUBLISH` reaches subscribers on every shard in both modes.
+any one port, with the hop. `port_mode = "single"` (deprecated: it logs a
+warning at startup and will be removed; any one per-shard port already serves
+every key) opens one port only, spreads connections over the shards, runs
+keyless commands (`DBSIZE`, `KEYS`, `FLUSHALL`, `SCAN`) across every shard and
+lets `WAIT` cover every shard; in `per-shard` those stay per shard, as in Redis
+Cluster, and cluster clients fan them out themselves. Classic `PUBLISH` reaches subscribers on every shard in both modes.
 `advertised_host` (`RUVIO_ADVERTISE_HOST`, `--advertised-host`, default
 `127.0.0.1`) is the host the cluster replies name. `advertised_port` (`RUVIO_ADVERTISE_PORT`, `--advertised-port`) is the
 port they name for shard 0; shard `i` is that port plus `i`. Leave it unset

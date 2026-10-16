@@ -801,7 +801,8 @@ pub(super) async fn handle_client(
                                 // commands also run locally through `gate`, which counts the
                                 // rate there; inside MULTI the command is queued locally.
                                 let leaves = !matches!(owner, Owner::Local)
-                                    || (state.single_port && matches!(command, Command::Scan { .. }));
+                                    || (state.single_port
+                                        && matches!(command, Command::Scan { .. }));
 
                                 if leaves || fan {
                                     let counted = !session.is_multi();
@@ -1021,7 +1022,11 @@ pub(super) async fn handle_client(
                             consumed += frame_length;
                             batch_commands += 1;
 
-                            if plain_command(&command) && lean_session(&state, &session, &auth) {
+                            if plain_command(&command)
+                                && lean_session(&state, &session, &auth)
+                                && (state.route.is_none()
+                                    || crate::routing::command_slot(&command).is_ok())
+                            {
                                 dispatch_plain(
                                     &state,
                                     &mut output,
@@ -1427,7 +1432,9 @@ fn plain_command(command: &Command<'_>) -> bool {
 
 /// Nothing `gate` or `dispatch_inner` checks can change a plain command's outcome on this
 /// connection: authenticated with unrestricted ACL rules, no transaction, pub/sub, client
-/// tracking, cluster, replication or hot store.
+/// tracking, replication or hot store. In cluster mode the gate only refuses `SELECT`,
+/// `SWAPDB` and `MOVE` (never plain commands) and `dispatch_inner` only adds the `CROSSSLOT`
+/// check, which the caller does with `command_slot` for a command on several keys.
 #[inline]
 fn lean_session(
     state: &ShardState,
@@ -1440,7 +1447,6 @@ fn lean_session(
         && auth.authenticated
         && auth.rules.all_commands
         && auth.rules.all_keys
-        && state.route.is_none()
         && state.published_config.replication.role == crate::config::ReplicationRole::Off
         && (state.hot_store.is_none() || state.published_config.hot_keys.is_empty())
         && state.tracker.borrow().is_empty()

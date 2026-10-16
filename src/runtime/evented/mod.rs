@@ -531,6 +531,13 @@ fn run_cluster(config: &AppConfig, shutdown: ShutdownToken, force: bool) -> io::
     }
     let mut joins = Vec::with_capacity(config.shards);
     let single = config.port_mode == crate::config::PortMode::Single;
+
+    if single {
+        warn!(
+            "port_mode = \"single\" is deprecated and will be removed: every shard of a \
+             per-shard server also forwards misrouted keys, so one port serves every client"
+        );
+    }
     // Both modes forward a command to the shard that owns its key; `single` also spreads
     // connections over the shards from one port, `per-shard` lets cluster clients connect
     // to the owner directly and never sends `MOVED`.

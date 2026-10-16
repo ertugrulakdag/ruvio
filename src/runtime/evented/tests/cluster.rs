@@ -1503,7 +1503,10 @@ fn evented_exec_fails_when_queued_keys_span_shards() {
     assert_eq!(replies[..3], ["+OK", "+QUEUED", "+QUEUED"], "{text}");
     assert_eq!(
         replies[3..],
-        ["-CROSSSLOT Keys in request do not hash to the same slot", ":0"],
+        [
+            "-CROSSSLOT Keys in request do not hash to the same slot",
+            ":0"
+        ],
         "{text}"
     );
     stop.request();
