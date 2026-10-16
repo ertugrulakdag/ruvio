@@ -110,10 +110,10 @@ func routeFrame(b []byte) (spec cmdSpec, slot, nargs int, err error) {
 		return spec, -1, 0, ErrProtocol
 	}
 	spec, _ = specOf(args[0])
-	switch spec.kind {
-	case kNone:
+	switch r := spec.keys; {
+	case r.kind == ruleNone:
 		return spec, -1, n, nil
-	case kFirst:
+	case r.kind == ruleRange && r.a == 1 && r.b == 1: // the key is argument 1 (the common case)
 		if n < 2 {
 			return spec, -1, n, nil
 		}
@@ -125,7 +125,7 @@ func routeFrame(b []byte) (spec cmdSpec, slot, nargs int, err error) {
 		return spec, -1, n, ErrProtocol
 	}
 	var ks [16][]byte
-	keys := keysOf(spec.kind, full, ks[:0])
+	keys := keysOf(spec.keys, full, ks[:0])
 	if len(keys) == 0 {
 		return spec, -1, n, nil
 	}
@@ -170,7 +170,7 @@ func (cl *cluster) split(ctx context.Context, t *topology, spec cmdSpec, r *requ
 		return Value{}, ErrProtocol
 	}
 	name := args[0]
-	pairs := spec.kind == kPairs
+	pairs := spec.keys.c == 2 // MSET: key value key value ...
 	var keys [][]byte
 	if pairs {
 		for i := 1; i < len(args); i += 2 {

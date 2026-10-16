@@ -4,6 +4,8 @@ Notable changes to the Go client `github.com/salihcantekin/ruvio/clients/go`. A 
 
 ## Unreleased
 
+- The cluster client now takes each command's key positions from the server's command table (`command_keys_gen.go`, generated from `clients/testdata/commands.json`) instead of hand-kept lists, and is checked against the shared `clients/testdata/key_vectors.json`. No routing bug was found: the old lists already gave the server's keys for all 1,062 vectors.
+
 ## v0.1.0
 
 - First release.
