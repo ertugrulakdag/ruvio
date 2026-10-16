@@ -1,10 +1,10 @@
 diff --git a/src/engine/keyspace.rs b/src/engine/keyspace.rs
-index 90d926c..b8c3a1e 100644
+index a899093..af917a8 100644
 --- a/src/engine/keyspace.rs
 +++ b/src/engine/keyspace.rs
-@@ -174,10 +174,30 @@ pub(super) fn rename_key<'a, C: Clock, I: StorageIndex, S: MutationSink>(
-         return Ok(rejected);
-     }
+@@ -172,10 +172,30 @@ pub(super) fn rename_key<'a, C: Clock, I: StorageIndex, S: MutationSink>(
+ 
+     before_mutation_allow_oom(shard, sink, [source.as_ref(), destination.as_ref()], extra)?;
  
 -    sink.record(Mutation::Rename {
 -        source: &source,

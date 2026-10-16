@@ -1,8 +1,8 @@
 diff --git a/src/replication.rs b/src/replication.rs
-index f86e39e..992f08f 100644
+index a998b5d..8be71d1 100644
 --- a/src/replication.rs
 +++ b/src/replication.rs
-@@ -367,6 +367,10 @@ pub(crate) fn accept_replica_frame(
+@@ -372,6 +372,10 @@ pub(crate) fn accept_replica_frame(
      limits: ProtocolLimits,
  ) -> Result<(u8, OwnedMutation, bool), ApplyFailure> {
      let record = decode_record(frame, wal.shard_id(), limits).map_err(decode_failure)?;
@@ -10,10 +10,10 @@ index f86e39e..992f08f 100644
 +    if record.sequence != 0 && record.sequence == wal.last_sequence() {
 +        return Ok((record.database, record.mutation, false));
 +    }
-     if record.sequence != wal.last_sequence() + 1 {
-         return Err(ApplyFailure::Sequence);
-     }
-@@ -1746,7 +1750,8 @@ fn read_primary(
+     // The link resumes from the last applied sequence, while frames an earlier link already
+     // queued may still be waiting in the shard's queue: the new link resends those. Under one
+     // history a sequence names one record, so the copy is already in the log.
+@@ -1858,7 +1862,8 @@ fn read_primary(
          0 // A persisted incomplete image has no trustworthy resume cursor.
      } else {
          let wal = link.wal.lock().unwrap_or_else(|error| error.into_inner());

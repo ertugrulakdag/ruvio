@@ -1,12 +1,15 @@
 diff --git a/src/runtime/evented/mod.rs b/src/runtime/evented/mod.rs
-index e85fb25..e43da41 100644
+index 6603e1a..dee6de1 100644
 --- a/src/runtime/evented/mod.rs
 +++ b/src/runtime/evented/mod.rs
-@@ -1151,10 +1151,16 @@ async fn serve_async(
- 
-     // Even with a failed log the checkpoint can still save the data held in memory. It is
-     // tried once more: the cause may have passed (space freed, a transient I/O error).
+@@ -1204,13 +1204,19 @@ async fn serve_async(
+     // first attempt already handed the final round a copy of the last published file).
+     let log_refuses = flushed.is_err()
+         && state.published_config.persistence.profile == crate::DurabilityProfile::Always;
 -    let saved = publish_checkpoint(&state).or_else(|error| {
+-        if log_refuses {
+-            return Err(error);
+-        }
 -        warn!(%error, "final checkpoint failed; trying once more");
 -        publish_checkpoint(&state)
 -    });
@@ -16,6 +19,9 @@ index e85fb25..e43da41 100644
 +        Ok(())
 +    } else {
 +        publish_checkpoint(&state).or_else(|error| {
++            if log_refuses {
++                return Err(error);
++            }
 +            warn!(%error, "final checkpoint failed; trying once more");
 +            publish_checkpoint(&state)
 +        })
