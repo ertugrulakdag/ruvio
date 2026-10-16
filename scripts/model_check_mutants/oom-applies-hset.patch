@@ -1,7 +1,7 @@
-diff --git a/src/engine/mod.rs b/src/engine/mod.rs
+diff --git a/src/engine/dispatch.rs b/src/engine/dispatch.rs
 index 374380a..bd0fe0f 100644
---- a/src/engine/mod.rs
-+++ b/src/engine/mod.rs
+--- a/src/engine/dispatch.rs
++++ b/src/engine/dispatch.rs
 @@ -1191,6 +1191,10 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
                  .sum::<usize>()
                  + key.len()

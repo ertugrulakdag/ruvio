@@ -27,7 +27,7 @@ Each shard is owned by one thread: it parses, records to the WAL, applies and re
 | --- | --- | --- |
 | Network and sessions | `runtime/evented/` (`connection.rs`, `forward.rs`, `wal_group.rs`, `checkpoint.rs`, `replica.rs`), `runtime/session.rs`, `runtime/cluster.rs`, `tls.rs` | `connection.rs` is the hottest async code; measure before restructuring it |
 | Protocol | `protocol/` (`resp.rs`, `table.rs`, `parse/`, `direct.rs`, `hot.rs`, `command.rs`, `validate.rs`, `consistency.rs`), `routing.rs`, `slots.rs` | `table.rs` is the one row per command; `consistency.rs` tests the hand-kept lists against it |
-| Execution | `engine/` (one file per family, dispatch in `engine/mod.rs`), `transaction.rs`, `script.rs`, `lua_library.rs`, `lua_pattern.rs` | |
+| Execution | `engine/` (one file per family, dispatch in `engine/dispatch.rs`), `transaction.rs`, `script.rs`, `lua_library.rs`, `lua_pattern.rs` | |
 | Storage | `store/` (values, collections, eviction, expiry), `index.rs`, `arena.rs`, `chunked.rs`, `hot_store/`, `stream.rs`, `stream_blocks.rs`, `id_map.rs`, `json.rs`, `json_index.rs`, `geo.rs`, `hashbrown/` | `hashbrown/` is a trimmed copy of hashbrown 0.17.1 (`HashTable` only); its README lists every change |
 | Durability | `mutation.rs` (the change vocabulary), `persistence/` (`wal.rs`, `codec.rs`, `snapshot.rs`, `sync_worker.rs`), `dump.rs`, `changes.rs` (CDC) | Format changes need a format-minor bump and a fixture |
 | Replication | `replication.rs`, `runtime/evented/replica.rs` | The preflight matches list every `OwnedMutation`; a new variant does not compile until classified |
@@ -57,7 +57,7 @@ The compiler or a test catches a missed step where the last column says so; the 
 | 3. Owned copy and validation | `src/protocol/command.rs` (`into_owned_measured`), `src/protocol/validate.rs` | compiler |
 | 4. Routing | `src/routing.rs` (`command_slot`, `command_keys`) | compiler, `consistency.rs` |
 | 5. ACL name | `src/acl.rs` | compiler, `consistency.rs` |
-| 6. Execution | `src/engine/<family>.rs`, dispatch arm in `src/engine/mod.rs` | compiler |
+| 6. Execution | `src/engine/<family>.rs`, dispatch arm in `src/engine/dispatch.rs` | compiler |
 | 7. Keyless commands: scripts and fan-out | `KEYLESS_IN_SCRIPTS` / `KEYLESS_REFUSED_IN_SCRIPTS` in `src/script.rs`, the fan-out list in `src/runtime/evented/forward.rs` | `every_keyless_command_is_decided_for_scripts`, `every_keyless_command_is_decided_for_fan_out` |
 | 8. Durability group (optional speed) | `src/runtime/evented/wal_group.rs` | not caught: an unlisted command takes the slower, correct path |
 | 9. Tests | `src/engine/tests/<family>.rs` | |
@@ -92,9 +92,9 @@ A change to persistence, the WAL, unsafe code or memory layout gets a second, in
 
 ## Adding a client method
 
-Every client has a coverage test that loads `docs/compatibility-matrix.json` and fails when a command has no method.
+Every client has a coverage test that loads `docs/compatibility-matrix.json` and fails when a command has no method. The method each client sends a command with is one row of `clients/testdata/command_methods.json`, shared by all six coverage tests: a new command adds that one row (sorted by command, one field per client), not a line in six tables.
 
-| Client | Method | Coverage table | Live test |
+| Client | Method | Coverage test | Live test |
 | --- | --- | --- | --- |
 | Rust | `clients/ruvio-client/src/commands.rs` or `extra.rs` | `tests/coverage.rs` | `tests/live*.rs` |
 | C# | `Ruvio.Client/Commands/*.cs` and `IRuvioClient*.cs` | `Ruvio.Client.Tests/MatrixCoverageTests.cs` | `Ruvio.Client.Tests` |
