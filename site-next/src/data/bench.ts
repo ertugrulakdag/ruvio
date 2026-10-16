@@ -80,3 +80,15 @@ export const fmtOps = (v: number) => (v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : `$
 export const fmtX = (v: number) => `${v.toFixed(2)}×`;
 export const fmtMiB = (kib: number) => (kib / 1024).toFixed(1);
 export const pct = (v: number) => `${Math.round(v * 100)}%`;
+
+// Durability defaults, read from the example configuration that ships with the server.
+const exampleToml = fs.readFileSync(path.join(repo, "ruvio.example.toml"), "utf8");
+const tomlNumber = (key: string) => {
+  const m = exampleToml.match(new RegExp(`^\\s*${key}\\s*=\\s*(\\d+)`, "m"));
+  if (!m) throw new Error(`ruvio.example.toml has no ${key}`);
+  return Number(m[1]);
+};
+export const durabilityDefaults = {
+  syncIntervalMs: tomlNumber("sync_interval_ms"),
+  snapshotIntervalMs: tomlNumber("snapshot_interval_ms"),
+};
