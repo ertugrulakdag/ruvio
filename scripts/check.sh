@@ -36,6 +36,10 @@ run() {
 run python3 scripts/check_compatibility_matrix.py
 run python3 scripts/site_chrome.py --check
 run python3 scripts/gen_client_keys.py --check
+# The model checker's mutation test applies these; one that no longer applies tests nothing.
+for patch in scripts/model_check_mutants/*.patch; do
+	git apply --check "$patch" || { echo "$patch no longer applies; redo it on the current code" >&2; exit 1; }
+done
 # Workflows install the toolchain rust-toolchain.toml pins, so CI downloads one toolchain.
 pinned="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
 if grep -n 'dtolnay/rust-toolchain@' .github/workflows/*.yml | grep -v '@nightly' | grep -v "@$pinned\$"; then
