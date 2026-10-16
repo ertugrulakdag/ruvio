@@ -287,7 +287,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.versions.outputs.sha }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: clients/ruvio-client
@@ -331,7 +331,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.versions.outputs.sha }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: cluster-server
@@ -476,7 +476,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.versions.outputs.sha }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: server-binaries-${{ matrix.platform }}
@@ -552,7 +552,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: clients/ruvio-ui/web/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: clients/ruvio-ui
@@ -622,20 +622,29 @@ jobs:
       - name: Create the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Inputs and outputs reach the script as variables, never as script text.
+          GIT_TAG: ${{ inputs.git_tag }}
+          SERVER: ${{ needs.versions.outputs.server }}
+          RUST_CLIENT: ${{ needs.versions.outputs.rust_client }}
+          CSHARP: ${{ needs.versions.outputs.csharp }}
+          UI: ${{ needs.versions.outputs.ui }}
+          NODE: ${{ needs.versions.outputs.node }}
+          PYTHON: ${{ needs.versions.outputs.python }}
+          JAVA: ${{ needs.versions.outputs.java }}
         run: |
           set -euo pipefail
-          tag="${{ inputs.git_tag }}"
+          tag="$GIT_TAG"
           if [ -z "$tag" ]; then
-            tag="ruvio-${{ needs.versions.outputs.server }}"
+            tag="ruvio-$SERVER"
           fi
           gh release create "$tag" --title "$tag" --notes "$(cat <<EOF
-          Server ${{ needs.versions.outputs.server }}
-          Rust client ${{ needs.versions.outputs.rust_client }}
-          C# ${{ needs.versions.outputs.csharp }}
-          UI ${{ needs.versions.outputs.ui }}
-          npm ${{ needs.versions.outputs.node }}
-          PyPI ${{ needs.versions.outputs.python }}
-          Maven ${{ needs.versions.outputs.java }}
+          Server $SERVER
+          Rust client $RUST_CLIENT
+          C# $CSHARP
+          UI $UI
+          npm $NODE
+          PyPI $PYTHON
+          Maven $JAVA
           EOF
           )" release-assets/*
 

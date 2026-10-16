@@ -36,6 +36,12 @@ run() {
 run python3 scripts/check_compatibility_matrix.py
 run python3 scripts/site_chrome.py --check
 run python3 scripts/gen_client_keys.py --check
+# Workflows install the toolchain rust-toolchain.toml pins, so CI downloads one toolchain.
+pinned="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
+if grep -n 'dtolnay/rust-toolchain@' .github/workflows/*.yml | grep -v '@nightly' | grep -v "@$pinned\$"; then
+	echo "workflows above install a toolchain other than $pinned (rust-toolchain.toml)" >&2
+	exit 1
+fi
 run cargo check -q --all-targets
 run cargo clippy -q --lib -- -D warnings
 
