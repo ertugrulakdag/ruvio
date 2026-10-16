@@ -33,16 +33,17 @@ Client CPU per request on the cluster path against the plain single-connection p
 | Python | GET 64 | 676 | 1443 → 1245 (1.84×) | 1399 → 1138 (1.68×) | not measured |
 | Python | SET 16 | 854 | 1929 → 1698 (1.99×) | 1746 → 1505 (1.76×) | not measured |
 | Python | SET 64 | 657 | 1395 → 1162 (1.77×) | 1354 → 1126 (1.71×) | not measured |
-| Go | GET 16 | 421 | 2240 → 1971 (4.68×) | 298 → 293 (0.70×) | 229 → 105 (plain 104) |
-| Go | GET 64 | 144 | 844 → 669 (4.65×) | 146 → 151 (1.05×) | 213 → 110 (plain 108) |
-| Go | SET 16 | 391 | 2233 → 2076 (5.31×) | 285 → 287 (0.73×) | 229 → 73 (plain 72) |
-| Go | SET 64 | 147 | 843 → 635 (4.32×) | 149 → 149 (1.01×) | 216 → 79 (plain 76) |
+| Go | GET 16 | 387 | 2240 → 775 (2.00×) | 298 → 326 (0.84×) | 229 → 105 (plain 104) |
+| Go | GET 64 | 152 | 844 → 320 (2.11×) | 146 → 141 (0.93×) | 213 → 109 (plain 108) |
+| Go | SET 16 | 385 | 2233 → 747 (1.94×) | 285 → 285 (0.74×) | 229 → 73 (plain 72) |
+| Go | SET 64 | 137 | 843 → 295 (2.15×) | 149 → 147 (1.07×) | 216 → 78 (plain 76) |
 
 Reading:
 - Rust had the costly path: 11-13 allocations per command (upper-cased name, key list, `host:port` strings, owned argument copies, a map per pipeline) and one round trip per node. After: allocations equal the plain path, every node is written before any is read, and the routing code costs 1.04-1.21× plain. Cluster user CPU dropped 3.6-21×.
 - C#, Java and Node already routed without allocating on the single-key path; their routing code now costs 0.87-1.19× plain, and C# and Java pipeline allocation per request fell by a fifth to three quarters. The remaining gap on the spread rows is the per-socket cost of their multiplexed connections (one request, completion and thread hop per node), outside routing.
 - Python's routing code still costs about 1.7× plain: each command is matched and looked up in the interpreter. Down 8-17% on the spread rows and 14-19% on the one-node rows.
-- Go already routed without allocating and its routing code cost the same as plain; the spread path allocated a map, slices and a goroutine per node on every pipeline. It now allocates only the reply slice, writes every node before waiting, and costs 7-25% less CPU. The rest of the gap is one background reader wakeup and two system calls per node.
+- Go already routed without allocating and its routing code cost the same as plain; the spread path allocated a map, slices and a goroutine per node on every pipeline, and each node's replies were handed to that node's background reader. It now allocates only the reply slice, writes every node before reading any, and the calling goroutine reads every node nobody else is reading: 2.6-3.0× less CPU on the spread rows. The Go rows were measured with the one-minute tool (two seconds per row).
+- Per-socket floor: a depth-16 pipeline over four nodes leaves batches of four on each socket. Plain depth 4 on one socket costs (user ns per request) Rust 251, C# 3603, Go 1333, Java 708, Node 1963, Python 1649; the spread cluster rows of every client are now at or below that, so what remains is the cost of one round trip per socket in each client's transport, not routing. In C# that round trip is the most expensive (the async socket engine and thread-pool dispatch on macOS); Linux was not measured.
 - Single commands (depth 1, not in the table) cost the same or less than before in every client; they are dominated by system calls on this machine.
 
 Not measured: Linux and x86; allocation per request in Node and Python; latency percentiles.
