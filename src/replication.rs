@@ -112,23 +112,26 @@ pub fn encode_handshake(handshake: &Handshake) -> Result<Vec<u8>, ()> {
     Ok(bytes)
 }
 
-pub fn decode_handshake(bytes: &[u8]) -> Result<Handshake, ()> {
+/// Why a handshake or reply frame was refused; it ends up in the connection's error.
+pub type FrameError = &'static str;
+
+pub fn decode_handshake(bytes: &[u8]) -> Result<Handshake, FrameError> {
     if bytes.len() < HANDSHAKE_MIN {
-        return Err(());
+        return Err("short handshake");
     }
 
     if &bytes[..HANDSHAKE_MAGIC.len()] != HANDSHAKE_MAGIC {
-        return Err(());
+        return Err("bad handshake magic");
     }
 
     let password_len = usize::from(read_u16(bytes, PASSWORD_LEN_OFFSET));
 
     if bytes.len() != HANDSHAKE_MIN + password_len {
-        return Err(());
+        return Err("handshake length does not match its password length");
     }
 
     if !checksum_matches(bytes) {
-        return Err(());
+        return Err("handshake checksum mismatch");
     }
 
     let version = read_u16(bytes, 8);
@@ -183,21 +186,23 @@ fn encode_legacy_reply(status: HandshakeStatus) -> Vec<u8> {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn decode_reply(bytes: &[u8]) -> Result<(HandshakeStatus, u64), ()> {
+pub fn decode_reply(bytes: &[u8]) -> Result<(HandshakeStatus, u64), FrameError> {
     decode_reply_with_history(bytes).map(|(status, next, _)| (status, next))
 }
 
-pub fn decode_reply_with_history(bytes: &[u8]) -> Result<(HandshakeStatus, u64, HistoryId), ()> {
+pub fn decode_reply_with_history(
+    bytes: &[u8],
+) -> Result<(HandshakeStatus, u64, HistoryId), FrameError> {
     if bytes.len() != REPLY_LEN {
-        return Err(());
+        return Err("handshake reply length");
     }
 
     if &bytes[..HANDSHAKE_MAGIC.len()] != HANDSHAKE_MAGIC {
-        return Err(());
+        return Err("bad handshake reply magic");
     }
 
     if !checksum_matches(bytes) {
-        return Err(());
+        return Err("handshake reply checksum mismatch");
     }
 
     let status = status_from_u16(read_u16(bytes, 8))?;
@@ -905,7 +910,7 @@ fn persist_failure(error: PersistenceError) -> ApplyFailure {
     ApplyFailure::Persist(error.to_string())
 }
 
-fn status_from_u16(value: u16) -> Result<HandshakeStatus, ()> {
+fn status_from_u16(value: u16) -> Result<HandshakeStatus, FrameError> {
     match value {
         1 => Ok(HandshakeStatus::Ok),
         2 => Ok(HandshakeStatus::Gap),
@@ -916,7 +921,7 @@ fn status_from_u16(value: u16) -> Result<HandshakeStatus, ()> {
         7 => Ok(HandshakeStatus::Local),
         8 => Ok(HandshakeStatus::Snapshot),
         9 => Ok(HandshakeStatus::History),
-        _ => Err(()),
+        _ => Err("unknown handshake reply status"),
     }
 }
 
@@ -2235,11 +2240,7 @@ fn enqueue_frame(
 }
 
 fn frame_sequence(frame: &[u8]) -> u64 {
-    if frame.len() < 24 {
-        return u64::MAX;
-    }
-
-    u64::from_le_bytes(frame[16..24].try_into().unwrap())
+    crate::persistence::record_sequence(frame).unwrap_or(u64::MAX)
 }
 
 enum Incoming {
@@ -2284,7 +2285,7 @@ fn read_handshake(stream: &mut TcpStream) -> io::Result<Incoming> {
     bytes.extend_from_slice(&rest);
     decode_handshake(&bytes)
         .map(Incoming::Handshake)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad handshake"))
+        .map_err(|reason| io::Error::new(io::ErrorKind::InvalidData, reason))
 }
 
 /// A fake primary's side of the handshake, for tests outside this module.
@@ -2323,7 +2324,7 @@ fn read_reply(stream: &mut TcpStream) -> io::Result<(HandshakeStatus, u64, Histo
 
     stream.read_exact(&mut bytes)?;
     decode_reply_with_history(&bytes)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad reply"))
+        .map_err(|reason| io::Error::new(io::ErrorKind::InvalidData, reason))
 }
 
 fn refuse_handshake(stream: &mut TcpStream, status: HandshakeStatus) -> io::Result<()> {

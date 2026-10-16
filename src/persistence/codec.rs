@@ -1,4 +1,7 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    ops::Range,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use crate::{OwnedMutation, mutation::Mutation, protocol::ProtocolLimits};
 
@@ -8,6 +11,65 @@ pub(crate) const WAL_MAGIC: &[u8; 8] = b"RUVWAL01";
 pub(crate) const WAL_HEADER_LEN: usize = 52;
 pub(crate) const RECORD_HEADER_LEN: usize = 28;
 pub(crate) const RECORD_MIN_LEN: usize = 32;
+
+/// Byte ranges of the segment header fields. Every number is little endian; the checksum is
+/// CRC32C over everything before it.
+mod header {
+    use std::ops::Range;
+
+    pub(super) const MAGIC: Range<usize> = 0..8;
+    pub(super) const MAJOR: Range<usize> = 8..10;
+    pub(super) const MINOR: Range<usize> = 10..12;
+    pub(super) const LENGTH: Range<usize> = 12..16;
+    pub(super) const SHARD: Range<usize> = 16..20;
+    pub(super) const SEGMENT: Range<usize> = 20..28;
+    pub(super) const FIRST_SEQUENCE: Range<usize> = 28..36;
+    pub(super) const CREATED: Range<usize> = 36..44;
+    pub(super) const FLAGS: Range<usize> = 44..48;
+    pub(super) const CHECKSUM: Range<usize> = 48..52;
+}
+
+/// Byte ranges of a record's fixed header. The payload follows it, then a CRC32C of
+/// everything after `LENGTH`.
+mod field {
+    use std::ops::Range;
+
+    pub(super) const LENGTH: Range<usize> = 0..4;
+    pub(super) const VERSION: Range<usize> = 4..6;
+    pub(super) const TYPE: Range<usize> = 6..8;
+    pub(super) const FLAGS: Range<usize> = 8..12;
+    pub(super) const SHARD: Range<usize> = 12..16;
+    pub(super) const SEQUENCE: Range<usize> = 16..24;
+    pub(super) const PAYLOAD_LENGTH: Range<usize> = 24..28;
+}
+
+const _: () = {
+    assert!(header::MAGIC.end == WAL_MAGIC.len());
+    assert!(header::CHECKSUM.end == WAL_HEADER_LEN);
+    assert!(field::PAYLOAD_LENGTH.end == RECORD_HEADER_LEN);
+    assert!(RECORD_MIN_LEN == RECORD_HEADER_LEN + 4);
+};
+
+/// The only record header version.
+const RECORD_VERSION: u16 = 1;
+
+fn le_u16(bytes: &[u8], at: Range<usize>) -> u16 {
+    u16::from_le_bytes(bytes[at].try_into().unwrap())
+}
+
+fn le_u32(bytes: &[u8], at: Range<usize>) -> u32 {
+    u32::from_le_bytes(bytes[at].try_into().unwrap())
+}
+
+fn le_u64(bytes: &[u8], at: Range<usize>) -> u64 {
+    u64::from_le_bytes(bytes[at].try_into().unwrap())
+}
+
+/// The sequence number in a record frame's header, without checking anything else; `None`
+/// when the frame is too short to hold one.
+pub(crate) fn record_sequence(frame: &[u8]) -> Option<u64> {
+    (frame.len() >= field::SEQUENCE.end).then(|| le_u64(frame, field::SEQUENCE))
+}
 const FORMAT_MAJOR: u16 = 1;
 /// Minor 1 adds SetRange (58) and ListSet/ListInsert/ListRemove (59-61). A minor-0
 /// reader refuses these files instead of misreading them. Minor 2 adds BloomReserve with an
@@ -146,21 +208,20 @@ pub(crate) fn encode_segment_header_at(
     created: u64,
     flags: u32,
 ) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(WAL_HEADER_LEN);
+    let mut bytes = vec![0; WAL_HEADER_LEN];
 
-    bytes.extend_from_slice(WAL_MAGIC);
-    put_u16(&mut bytes, major);
-    put_u16(&mut bytes, minor);
-    put_u32(&mut bytes, WAL_HEADER_LEN as u32);
-    put_u32(&mut bytes, shard_id);
-    put_u64(&mut bytes, segment_id);
-    put_u64(&mut bytes, first_sequence);
-    put_u64(&mut bytes, created);
-    put_u32(&mut bytes, flags);
-    let checksum = crc32c::crc32c(&bytes);
+    bytes[header::MAGIC].copy_from_slice(WAL_MAGIC);
+    bytes[header::MAJOR].copy_from_slice(&major.to_le_bytes());
+    bytes[header::MINOR].copy_from_slice(&minor.to_le_bytes());
+    bytes[header::LENGTH].copy_from_slice(&(WAL_HEADER_LEN as u32).to_le_bytes());
+    bytes[header::SHARD].copy_from_slice(&shard_id.to_le_bytes());
+    bytes[header::SEGMENT].copy_from_slice(&segment_id.to_le_bytes());
+    bytes[header::FIRST_SEQUENCE].copy_from_slice(&first_sequence.to_le_bytes());
+    bytes[header::CREATED].copy_from_slice(&created.to_le_bytes());
+    bytes[header::FLAGS].copy_from_slice(&flags.to_le_bytes());
+    let checksum = crc32c::crc32c(&bytes[..header::CHECKSUM.start]);
 
-    put_u32(&mut bytes, checksum);
-    debug_assert_eq!(bytes.len(), WAL_HEADER_LEN);
+    bytes[header::CHECKSUM].copy_from_slice(&checksum.to_le_bytes());
     bytes
 }
 
@@ -171,20 +232,18 @@ pub(crate) fn decode_segment_header(bytes: &[u8]) -> Result<SegmentHeader, Persi
         ));
     }
 
-    if &bytes[..8] != WAL_MAGIC {
+    if &bytes[header::MAGIC] != WAL_MAGIC {
         return Err(PersistenceError::Corruption("invalid WAL magic".into()));
     }
 
-    let expected = u32::from_le_bytes(bytes[48..52].try_into().unwrap());
-
-    if crc32c::crc32c(&bytes[..48]) != expected {
+    if crc32c::crc32c(&bytes[..header::CHECKSUM.start]) != le_u32(bytes, header::CHECKSUM) {
         return Err(PersistenceError::Corruption(
             "WAL header checksum mismatch".into(),
         ));
     }
 
-    let major = u16::from_le_bytes(bytes[8..10].try_into().unwrap());
-    let minor = u16::from_le_bytes(bytes[10..12].try_into().unwrap());
+    let major = le_u16(bytes, header::MAJOR);
+    let minor = le_u16(bytes, header::MINOR);
 
     if major != FORMAT_MAJOR {
         return Err(PersistenceError::Unsupported(format!(
@@ -198,13 +257,13 @@ pub(crate) fn decode_segment_header(bytes: &[u8]) -> Result<SegmentHeader, Persi
         )));
     }
 
-    if u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize != WAL_HEADER_LEN {
+    if le_u32(bytes, header::LENGTH) as usize != WAL_HEADER_LEN {
         return Err(PersistenceError::Corruption(
             "invalid WAL header length".into(),
         ));
     }
 
-    if u32::from_le_bytes(bytes[44..48].try_into().unwrap()) != 0 {
+    if le_u32(bytes, header::FLAGS) != 0 {
         return Err(PersistenceError::Unsupported(
             "WAL required feature flags".into(),
         ));
@@ -212,9 +271,9 @@ pub(crate) fn decode_segment_header(bytes: &[u8]) -> Result<SegmentHeader, Persi
 
     Ok(SegmentHeader {
         minor,
-        shard_id: u32::from_le_bytes(bytes[16..20].try_into().unwrap()),
-        segment_id: u64::from_le_bytes(bytes[20..28].try_into().unwrap()),
-        first_sequence: u64::from_le_bytes(bytes[28..36].try_into().unwrap()),
+        shard_id: le_u32(bytes, header::SHARD),
+        segment_id: le_u64(bytes, header::SEGMENT),
+        first_sequence: le_u64(bytes, header::FIRST_SEQUENCE),
     })
 }
 
@@ -388,18 +447,18 @@ fn finish_record(
     let total_length = u32::try_from(bytes.len() + 4)
         .map_err(|_| PersistenceError::Failed("WAL record exceeds 4 GiB".into()))?;
 
-    bytes[..4].copy_from_slice(&total_length.to_le_bytes());
-    bytes[4..6].copy_from_slice(&1u16.to_le_bytes());
-    bytes[6..8].copy_from_slice(&record_type.to_le_bytes());
-    bytes[8..12].copy_from_slice(&u32::from(database).to_le_bytes());
-    bytes[12..16].copy_from_slice(&shard_id.to_le_bytes());
-    bytes[16..24].copy_from_slice(&sequence.to_le_bytes());
-    bytes[24..28].copy_from_slice(
+    bytes[field::LENGTH].copy_from_slice(&total_length.to_le_bytes());
+    bytes[field::VERSION].copy_from_slice(&RECORD_VERSION.to_le_bytes());
+    bytes[field::TYPE].copy_from_slice(&record_type.to_le_bytes());
+    bytes[field::FLAGS].copy_from_slice(&u32::from(database).to_le_bytes());
+    bytes[field::SHARD].copy_from_slice(&shard_id.to_le_bytes());
+    bytes[field::SEQUENCE].copy_from_slice(&sequence.to_le_bytes());
+    bytes[field::PAYLOAD_LENGTH].copy_from_slice(
         &u32::try_from(payload_len)
             .map_err(|_| PersistenceError::Failed("WAL payload exceeds 4 GiB".into()))?
             .to_le_bytes(),
     );
-    let checksum = crc32c::crc32c(&bytes[4..]);
+    let checksum = crc32c::crc32c(&bytes[field::LENGTH.end..]);
 
     put_u32(bytes, checksum);
     Ok(())
@@ -450,14 +509,12 @@ pub(crate) fn record_header_plausible(
     if frame.len() < RECORD_MIN_LEN {
         return false;
     }
-    let field = |at: usize| u32::from_le_bytes(frame[at..at + 4].try_into().unwrap());
-
-    field(0) as usize == frame.len()
-        && u16::from_le_bytes(frame[4..6].try_into().unwrap()) == 1
-        && field(8) & !RECORD_DATABASE_MASK == 0
-        && field(12) == expected_shard
-        && u64::from_le_bytes(frame[16..24].try_into().unwrap()) >= min_sequence
-        && field(24) as usize == frame.len() - RECORD_MIN_LEN
+    le_u32(frame, field::LENGTH) as usize == frame.len()
+        && le_u16(frame, field::VERSION) == RECORD_VERSION
+        && le_u32(frame, field::FLAGS) & !RECORD_DATABASE_MASK == 0
+        && le_u32(frame, field::SHARD) == expected_shard
+        && le_u64(frame, field::SEQUENCE) >= min_sequence
+        && le_u32(frame, field::PAYLOAD_LENGTH) as usize == frame.len() - RECORD_MIN_LEN
 }
 
 pub(crate) fn decode_record(
@@ -473,7 +530,7 @@ pub(crate) fn decode_record(
         ));
     }
 
-    let declared = u32::from_le_bytes(frame[..4].try_into().unwrap()) as usize;
+    let declared = le_u32(frame, field::LENGTH) as usize;
 
     if declared != frame.len() {
         return Err(PersistenceError::Corruption(
@@ -490,19 +547,18 @@ pub(crate) fn decode_record(
     let checksum_offset = frame.len() - 4;
     let expected_checksum = u32::from_le_bytes(frame[checksum_offset..].try_into().unwrap());
 
-    if crc32c::crc32c(&frame[4..checksum_offset]) != expected_checksum {
+    if crc32c::crc32c(&frame[field::LENGTH.end..checksum_offset]) != expected_checksum {
         return Err(PersistenceError::Corruption(
             "WAL record checksum mismatch".into(),
         ));
     }
 
-    if u16::from_le_bytes(frame[4..6].try_into().unwrap()) != 1 {
+    if le_u16(frame, field::VERSION) != RECORD_VERSION {
         return Err(PersistenceError::Unsupported("WAL record version".into()));
     }
 
-    let record_type = u16::from_le_bytes(frame[6..8].try_into().unwrap());
-
-    let flags = u32::from_le_bytes(frame[8..12].try_into().unwrap());
+    let record_type = le_u16(frame, field::TYPE);
+    let flags = le_u32(frame, field::FLAGS);
 
     if flags & !RECORD_DATABASE_MASK != 0 {
         return Err(PersistenceError::Unsupported(
@@ -512,7 +568,7 @@ pub(crate) fn decode_record(
 
     let database = (flags & RECORD_DATABASE_MASK) as u8;
 
-    let shard_id = u32::from_le_bytes(frame[12..16].try_into().unwrap());
+    let shard_id = le_u32(frame, field::SHARD);
 
     if shard_id != expected_shard {
         return Err(PersistenceError::Corruption(
@@ -520,8 +576,8 @@ pub(crate) fn decode_record(
         ));
     }
 
-    let sequence = u64::from_le_bytes(frame[16..24].try_into().unwrap());
-    let payload_length = u32::from_le_bytes(frame[24..28].try_into().unwrap()) as usize;
+    let sequence = le_u64(frame, field::SEQUENCE);
+    let payload_length = le_u32(frame, field::PAYLOAD_LENGTH) as usize;
 
     if payload_length != checksum_offset - RECORD_HEADER_LEN {
         return Err(PersistenceError::Corruption(
@@ -529,7 +585,11 @@ pub(crate) fn decode_record(
         ));
     }
 
-    let mutation = decode_payload(record_type, &frame[28..checksum_offset], limits)?;
+    let mutation = decode_payload(
+        record_type,
+        &frame[RECORD_HEADER_LEN..checksum_offset],
+        limits,
+    )?;
 
     Ok(DecodedRecord {
         sequence,
@@ -1564,10 +1624,6 @@ fn put_bytes(output: &mut Vec<u8>, value: &[u8]) -> Result<(), PersistenceError>
     );
     output.extend_from_slice(value);
     Ok(())
-}
-
-fn put_u16(output: &mut Vec<u8>, value: u16) {
-    output.extend_from_slice(&value.to_le_bytes());
 }
 
 fn put_u32(output: &mut Vec<u8>, value: u32) {

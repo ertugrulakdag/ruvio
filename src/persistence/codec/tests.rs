@@ -1153,3 +1153,48 @@ fn to_hex(bytes: &[u8]) -> String {
     text.push('\n');
     text
 }
+
+#[test]
+fn header_fields_sit_at_their_documented_offsets() {
+    // Absolute offsets, not the codec's own ranges: two same-width fields swapped in the
+    // codec must fail here. The fixtures cannot catch that, they use shard 0 and database 0.
+    let bytes = encode_segment_header_at(1, 2, 0x0304_0506, 0x0708, 0x090a, 0x0b0c, 0x0d0e);
+
+    assert_eq!(&bytes[0..8], WAL_MAGIC);
+    assert_eq!(bytes[8..10], 1u16.to_le_bytes());
+    assert_eq!(bytes[10..12], 2u16.to_le_bytes());
+    assert_eq!(bytes[12..16], 52u32.to_le_bytes());
+    assert_eq!(bytes[16..20], 0x0304_0506u32.to_le_bytes());
+    assert_eq!(bytes[20..28], 0x0708u64.to_le_bytes());
+    assert_eq!(bytes[28..36], 0x090au64.to_le_bytes());
+    assert_eq!(bytes[36..44], 0x0b0cu64.to_le_bytes());
+    assert_eq!(bytes[44..48], 0x0d0eu32.to_le_bytes());
+    assert_eq!(bytes[48..52], crc32c::crc32c(&bytes[..48]).to_le_bytes());
+
+    let unflagged = encode_segment_header_at(1, 2, 0x0304_0506, 0x0708, 0x090a, 0x0b0c, 0);
+    let header = decode_segment_header(&unflagged).unwrap();
+
+    assert_eq!(header.minor, 2);
+    assert_eq!(header.shard_id, 0x0304_0506);
+    assert_eq!(header.segment_id, 0x0708);
+    assert_eq!(header.first_sequence, 0x090a);
+
+    let record = encode_record(7, 0x1122_3344, 3, &OwnedMutation::FlushAll).unwrap();
+
+    assert_eq!(record[0..4], (record.len() as u32).to_le_bytes());
+    assert_eq!(record[4..6], 1u16.to_le_bytes());
+    assert_eq!(record[8..12], 3u32.to_le_bytes());
+    assert_eq!(record[12..16], 7u32.to_le_bytes());
+    assert_eq!(record[16..24], 0x1122_3344u64.to_le_bytes());
+    assert_eq!(record[24..28], ((record.len() - 32) as u32).to_le_bytes());
+
+    let decoded = decode_record(&record, 7, ProtocolLimits::default()).unwrap();
+
+    assert_eq!(decoded.sequence, 0x1122_3344);
+    assert_eq!(decoded.database, 3);
+    assert_eq!(super::record_sequence(&record), Some(0x1122_3344));
+    assert_eq!(super::record_sequence(&record[..23]), None);
+    assert!(super::record_header_plausible(&record, 7, 0x1122_3344));
+    assert!(!super::record_header_plausible(&record, 7, 0x1122_3345));
+    assert!(!super::record_header_plausible(&record, 6, 0));
+}

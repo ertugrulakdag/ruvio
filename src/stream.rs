@@ -653,17 +653,17 @@ impl StreamValue {
         self.entries.contains(millis, sequence)
     }
 
-    /// Sequence for `XADD <millis>-*`. A millis behind the top id is refused.
-    pub(crate) fn next_seq_at(&self, millis: u64) -> Result<u64, ()> {
+    /// Sequence for `XADD <millis>-*`; `None` when no id at `millis` can follow the top id.
+    pub(crate) fn next_seq_at(&self, millis: u64) -> Option<u64> {
         if !self.started || millis > self.last_millis {
-            return Ok(0);
+            return Some(0);
         }
 
-        if millis < self.last_millis || self.last_sequence == u64::MAX {
-            return Err(());
+        if millis < self.last_millis {
+            return None;
         }
 
-        Ok(self.last_sequence + 1)
+        self.last_sequence.checked_add(1)
     }
 
     pub(crate) fn next_auto_id(&self, now_millis: u64) -> (u64, u64) {

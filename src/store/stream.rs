@@ -23,7 +23,7 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
             Some(Value::Stream(stream)) => stream
                 .next_seq_at(millis)
                 .map(|sequence| (millis, sequence))
-                .map_err(|_| StreamWriteError::Id),
+                .ok_or(StreamWriteError::Id),
             Some(_) => Err(StreamWriteError::WrongType),
         }
     }

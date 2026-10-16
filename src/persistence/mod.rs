@@ -51,7 +51,7 @@ pub use wal::{FrameRead, RecoveredMutations, RecoveryReport, WalSink, read_frame
 
 #[cfg(test)]
 pub(crate) use codec::encode_record;
-pub(crate) use codec::{WAL_RECORD_MAX_BYTES, decode_record};
+pub(crate) use codec::{WAL_RECORD_MAX_BYTES, decode_record, record_sequence};
 pub(crate) use codec::{decode_dump_record, encode_dump_record};
 pub(crate) use wal::discover_wal_shards;
 #[cfg(test)]
@@ -326,6 +326,11 @@ impl fmt::Display for PersistenceError {
 
 impl std::error::Error for PersistenceError {}
 
+/// A replayed mutation found its key holding another type than the log says it had.
+fn type_conflict<E>(kind: &'static str) -> impl FnOnce(E) -> PersistenceError {
+    move |_| PersistenceError::Corruption(format!("{kind} type conflict"))
+}
+
 impl From<io::Error> for PersistenceError {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
@@ -432,7 +437,7 @@ fn apply_in_active(
         }
         OwnedMutation::SetInteger { key, value } => shard
             .set_integer(key, *value)
-            .map_err(|_| PersistenceError::Corruption("integer type conflict".into()))?,
+            .map_err(type_conflict("integer"))?,
         OwnedMutation::Delete { keys } => {
             for key in keys {
                 shard.delete(key);
@@ -442,25 +447,21 @@ fn apply_in_active(
         OwnedMutation::ListPushFront { key, values } => {
             shard
                 .list_push_front(key, values)
-                .map_err(|_| PersistenceError::Corruption("list type conflict".into()))?;
+                .map_err(type_conflict("list"))?;
         }
 
         OwnedMutation::ListPopFront { key } => {
-            shard
-                .list_pop_front(key)
-                .map_err(|_| PersistenceError::Corruption("list type conflict".into()))?;
+            shard.list_pop_front(key).map_err(type_conflict("list"))?;
         }
 
         OwnedMutation::ListPushBack { key, values } => {
             shard
                 .list_push_back(key, values)
-                .map_err(|_| PersistenceError::Corruption("list type conflict".into()))?;
+                .map_err(type_conflict("list"))?;
         }
 
         OwnedMutation::ListPopBack { key } => {
-            shard
-                .list_pop_back(key)
-                .map_err(|_| PersistenceError::Corruption("list type conflict".into()))?;
+            shard.list_pop_back(key).map_err(type_conflict("list"))?;
         }
 
         OwnedMutation::ListTrim { key, start, stop } => {
@@ -471,7 +472,7 @@ fn apply_in_active(
 
             shard
                 .list_trim(key, start, stop)
-                .map_err(|_| PersistenceError::Corruption("list type conflict".into()))?;
+                .map_err(type_conflict("list"))?;
         }
 
         OwnedMutation::SetRange { key, offset, bytes } => {
@@ -480,13 +481,13 @@ fn apply_in_active(
 
             shard
                 .set_range(key, offset, bytes)
-                .map_err(|_| PersistenceError::Corruption("string type conflict".into()))?;
+                .map_err(type_conflict("string"))?;
         }
 
         OwnedMutation::ListSet { key, index, value } => {
             shard
                 .list_set(key, *index, value)
-                .map_err(|_| PersistenceError::Corruption("list type conflict".into()))?
+                .map_err(type_conflict("list"))?
                 .map_err(|_| PersistenceError::Corruption("LSET out of range".into()))?;
         }
 
@@ -498,25 +499,23 @@ fn apply_in_active(
         } => {
             shard
                 .list_insert(key, *before, pivot, value)
-                .map_err(|_| PersistenceError::Corruption("list type conflict".into()))?;
+                .map_err(type_conflict("list"))?;
         }
 
         OwnedMutation::ListRemove { key, count, value } => {
             shard
                 .list_remove(key, *count, value)
-                .map_err(|_| PersistenceError::Corruption("list type conflict".into()))?;
+                .map_err(type_conflict("list"))?;
         }
 
         OwnedMutation::SetAdd { key, members } => {
-            shard
-                .set_add(key, members)
-                .map_err(|_| PersistenceError::Corruption("set type conflict".into()))?;
+            shard.set_add(key, members).map_err(type_conflict("set"))?;
         }
 
         OwnedMutation::SetRemove { key, members } => {
             shard
                 .set_remove(key, members)
-                .map_err(|_| PersistenceError::Corruption("set type conflict".into()))?;
+                .map_err(type_conflict("set"))?;
         }
 
         OwnedMutation::SetStore { key, members } => {
@@ -530,7 +529,7 @@ fn apply_in_active(
         } => {
             if !shard
                 .set_move(source, destination, member)
-                .map_err(|_| PersistenceError::Corruption("set type conflict".into()))?
+                .map_err(type_conflict("set"))?
             {
                 return Err(PersistenceError::Corruption(
                     "set move source member missing during replay".into(),
@@ -539,15 +538,13 @@ fn apply_in_active(
         }
 
         OwnedMutation::HashSet { key, pairs } => {
-            shard
-                .hash_set(key, pairs)
-                .map_err(|_| PersistenceError::Corruption("hash type conflict".into()))?;
+            shard.hash_set(key, pairs).map_err(type_conflict("hash"))?;
         }
 
         OwnedMutation::HashDelete { key, fields } => {
             shard
                 .hash_delete(key, fields)
-                .map_err(|_| PersistenceError::Corruption("hash type conflict".into()))?;
+                .map_err(type_conflict("hash"))?;
         }
 
         OwnedMutation::HashFieldExpire {
@@ -557,7 +554,7 @@ fn apply_in_active(
         } => {
             shard
                 .hash_expire_fields(key, fields, *unix_millis)
-                .map_err(|_| PersistenceError::Corruption("hash type conflict".into()))?;
+                .map_err(type_conflict("hash"))?;
         }
 
         OwnedMutation::SemaphoreAcquire {
@@ -581,7 +578,7 @@ fn apply_in_active(
         OwnedMutation::HashFieldPersist { key, fields } => {
             shard
                 .hash_persist_fields(key, fields)
-                .map_err(|_| PersistenceError::Corruption("hash type conflict".into()))?;
+                .map_err(type_conflict("hash"))?;
         }
 
         OwnedMutation::SortedSetAdd { key, pairs } => {
@@ -603,7 +600,7 @@ fn apply_in_active(
         OwnedMutation::SortedSetRemove { key, members } => {
             shard
                 .sorted_set_remove(key, members)
-                .map_err(|_| PersistenceError::Corruption("sorted-set type conflict".into()))?;
+                .map_err(type_conflict("sorted-set"))?;
         }
 
         OwnedMutation::BloomReserve {
