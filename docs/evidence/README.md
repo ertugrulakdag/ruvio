@@ -9,7 +9,7 @@ Current numbers are on the [performance](https://ruviodb.com/benchmarks/) and [m
 | Date | Record | What it measured |
 | --- | --- | --- |
 | 2026-10-16 | [Eight shards against Redis](2026-10-16-azure-8-shards.md) | 60 commands and 12 data structures, Ruvio with eight shards against one Redis core and an eight-node Redis Cluster on one Azure EPYC 9V74 VM; one-shard control run |
-| 2026-10-16 | [Client cluster routing cost](2026-10-16-client-cluster-routing.md) | CPU and allocation per request on the cluster path against the plain path, before and after, for the Rust, C#, Java, Node and Python clients on a 4-shard local server |
+| 2026-10-16 | [Client cluster routing cost](2026-10-16-client-cluster-routing.md) | CPU and allocation per request on the cluster path against the plain path, before and after, for all six clients on a 4-shard local server |
 | 2026-10-11 | [Azure command comparison](2026-10-11-azure-command-comparison.md) | 60 commands and 12 data structures against Redis 8.10.2, throughput and memory, one Azure EPYC VM |
 | 2026-10-01 to 2026-10-07 | [Benchmark results](2026-10-07-benchmark-results.md) | Native Redis comparison and native JSON vs RedisJSON on an Apple M4 Pro, capped Docker Desktop comparison, hash-field TTL, sorted-set pop, `SEMAPHORE` and `INCRBY MAX` commands |
 | 2026-10-03 | [.NET scenario lab](2026-10-03-dotnet-scenario-lab.md) | k6 load on a .NET API using Ruvio or Redis through the C# client, persistence on and off, client multiplexing |

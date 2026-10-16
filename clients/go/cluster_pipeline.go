@@ -35,10 +35,17 @@ func (cl *cluster) execMany(ctx context.Context, r *request, n int) ([]Value, er
 	if t == nil {
 		return cl.seed.execManyLocal(ctx, r, n)
 	}
-	// pass 1: where does each command go? Allocation-free when they share one node.
+	// pass 1: where does each command go? Allocation-free: the frame offsets and node indexes
+	// go to pooled scratch, which the spread path reuses.
 	first, uniform, sawMulti, differ, split, firstSlot := -1, true, false, false, false, -1
+	s := pipePool.Get().(*pipeScratch)
+	defer pipePool.Put(s)
+	s.offs, s.target = s.offs[:0], s.target[:0]
+	seedIndex := len(t.nodes) // keyless commands, and slots without an owner, go to the seed
+	cur := -1
 	off := 0
 	for i := 0; i < n; i++ {
+		s.offs = append(s.offs, off)
 		spec, slot, _, err := routeFrame(r.buf[off:])
 		if err != nil {
 			putReq(r)
@@ -60,9 +67,11 @@ func (cl *cluster) execMany(ctx context.Context, r *request, n int) ([]Value, er
 				return nil, err
 			}
 			split, differ, uniform = true, true, false // sent per slot, like the plain command
+			s.target = append(s.target, cur)
 			continue
 		}
 		if slot < 0 {
+			s.target = append(s.target, cur) // keyless commands follow the previous keyed one
 			continue
 		}
 		if firstSlot < 0 {
@@ -76,7 +85,12 @@ func (cl *cluster) execMany(ctx context.Context, r *request, n int) ([]Value, er
 		} else if ni != first {
 			uniform = false
 		}
+		if cur = ni; ni == noOwner {
+			cur = seedIndex
+		}
+		s.target = append(s.target, cur)
 	}
+	s.offs = append(s.offs, off)
 	if sawMulti && differ {
 		putReq(r)
 		return nil, fmt.Errorf("%w (MULTI)", ErrCrossSlot)
@@ -91,7 +105,130 @@ func (cl *cluster) execMany(ctx context.Context, r *request, n int) ([]Value, er
 		}
 		return cl.pipeOne(ctx, node, r, n)
 	}
-	return cl.pipeMany(ctx, t, r, n, split)
+	if split {
+		return cl.pipeMany(ctx, t, r, n, split)
+	}
+	return cl.pipeSpread(ctx, t, r, n, s)
+}
+
+// pipeScratch is the per-pipeline routing state of execMany, pooled so a pipeline spread over
+// nodes allocates only its reply slice.
+type pipeScratch struct {
+	offs   []int      // frame start of each command, then the end of the last
+	target []int      // node index of each command (len(nodes) is the seed)
+	subs   []*request // one pipelined request per node in use
+	vals   [][]Value  // reply buffers handed to each node's request, kept between calls
+}
+
+var pipePool = sync.Pool{New: func() any { return new(pipeScratch) }}
+
+// pipeSpread sends a pipeline whose commands go to several nodes: each node's frames are
+// copied once into one request, every node is written before any reply is awaited (so the
+// pipeline costs one round trip, without a goroutine per node), and each reply is stored at
+// its command's index.
+func (cl *cluster) pipeSpread(ctx context.Context, t *topology, r *request, n int, s *pipeScratch) ([]Value, error) {
+	if err := ctx.Err(); err != nil {
+		putReq(r)
+		return nil, err
+	}
+	for i := 0; i < n && s.target[i] < 0; i++ { // leading keyless commands join the first keyed node
+		for _, tg := range s.target {
+			if tg >= 0 {
+				s.target[i] = tg
+				break
+			}
+		}
+	}
+	nodes := len(t.nodes) + 1
+	for len(s.subs) < nodes {
+		s.subs = append(s.subs, nil)
+		s.vals = append(s.vals, nil)
+	}
+	subs := s.subs[:nodes]
+	for i := 0; i < n; i++ {
+		ni := s.target[i]
+		sub := subs[ni]
+		if sub == nil {
+			sub = getReq()
+			sub.expect = 0
+			subs[ni] = sub
+		}
+		sub.buf = append(sub.buf, r.buf[s.offs[i]:s.offs[i+1]]...)
+		sub.expect++
+	}
+	var first error
+	for ni, sub := range subs {
+		if sub == nil {
+			continue
+		}
+		node := cl.seed
+		if ni < len(t.nodes) {
+			node = t.nodes[ni]
+		}
+		// A non-nil reply slice marks a pipeline for the reader, even for one command.
+		if sub.vals = s.vals[ni][:0]; sub.vals == nil {
+			sub.vals = make([]Value, 0, sub.expect)
+		}
+		cn, err := node.shared(ctx)
+		if err == nil {
+			_, err = cn.send(sub, false) // the node's reader resolves it; this goroutine only waits
+		}
+		if err != nil {
+			if first == nil {
+				first = err
+			}
+			putReq(sub)
+			subs[ni] = nil
+			continue
+		}
+	}
+	out := make([]Value, n)
+	for ni, sub := range subs {
+		if sub == nil {
+			continue
+		}
+		subs[ni] = nil
+		ok, err := sub.wait(ctx)
+		if !ok { // abandoned: the reader owns the request now
+			s.vals[ni] = nil
+			if first == nil {
+				first = err
+			}
+			continue
+		}
+		if err == nil {
+			err = sub.err
+		}
+		if err != nil {
+			if first == nil {
+				first = err
+			}
+			putReq(sub)
+			continue
+		}
+		j := 0
+		for i := 0; i < n; i++ {
+			if s.target[i] == ni {
+				out[i] = sub.vals[j]
+				j++
+			}
+		}
+		s.vals[ni] = sub.vals[:0]
+		putReq(sub)
+	}
+	if first != nil {
+		putReq(r)
+		return nil, first
+	}
+	for i := range out {
+		if out[i].Kind == KindError {
+			if _, _, isMoved := parseMoved(out[i].Bytes); isMoved {
+				cl.redo(ctx, r.buf[s.offs[i]:s.offs[i+1]], &out[i])
+			}
+		}
+	}
+	putReq(r)
+	return out, nil
 }
 
 func cmdName(b []byte) []byte {

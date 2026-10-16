@@ -1,11 +1,11 @@
 # Cluster routing cost in the clients: before and after
 
-Client CPU per request on the cluster path against the plain single-connection path, before and after the routing rules in [CLIENT_BEHAVIOR.md](../CLIENT_BEHAVIOR.md#routing-cost) were applied to the Rust, C#, Java, Node and Python clients. Go is not measured (no Go toolchain on the measuring machine).
+Client CPU per request on the cluster path against the plain single-connection path, before and after the routing rules in [CLIENT_BEHAVIOR.md](../CLIENT_BEHAVIOR.md#routing-cost) were applied to the Rust, C#, Java, Node, Python and Go clients.
 
 ## Conditions (read before quoting any number)
 
 - Host: Apple M4 Pro, 12 cores, macOS, loopback. One `release-fast` Ruvio server, four shards, `port_mode = "per-shard"`, `memory` durability. Every client ran alone, one after another, on the same server.
-- Each client's own tool: `ruvio-client/examples/cluster_cost.rs`, `csharp/Ruvio.Client.Benchmarks --cluster-cost` (with `DOTNET_ThreadPool_UnfairSemaphoreSpinLimit=0`; without it thread-pool spinning dominates the CPU numbers), `java/.../RoutingCostBench` (thread CPU of the client's threads), `node npm run bench:cluster-cost`, `python benchmarks/bench.py --cluster-cost`. Eight workers with a connection each (Python: one), keys `key:0`..`key:4095`, 32-byte values, 3-4 s per row after a warmup, one run.
+- Each client's own tool: `ruvio-client/examples/cluster_cost.rs`, `csharp/Ruvio.Client.Benchmarks --cluster-cost` (with `DOTNET_ThreadPool_UnfairSemaphoreSpinLimit=0`; without it thread-pool spinning dominates the CPU numbers), `java/.../RoutingCostBench` (thread CPU of the client's threads), `node npm run bench:cluster-cost`, `python benchmarks/bench.py --cluster-cost`, Go `RUVIO_COST_ADDR=... go test -run TestClusterCost -v`. Eight workers with a connection each (Python: one), keys `key:0`..`key:4095`, 32-byte values, 3-4 s per row after a warmup, one run.
 - Rows: **plain** connects to one port without discovery (the server forwards keys it does not own); **cluster** routes keys spread over the four shards; **one node** is the cluster client with every key in one hash tag. *One node* against *plain* is the routing code's own cost. *Cluster* adds the extra writes, reads and wakeups of four sockets instead of one, which no routing code removes.
 - "Before" is the parent commit with the same measuring tool. Numbers are user CPU nanoseconds per request; compare rows with each other only.
 
@@ -33,11 +33,16 @@ Client CPU per request on the cluster path against the plain single-connection p
 | Python | GET 64 | 676 | 1443 → 1245 (1.84×) | 1399 → 1138 (1.68×) | not measured |
 | Python | SET 16 | 854 | 1929 → 1698 (1.99×) | 1746 → 1505 (1.76×) | not measured |
 | Python | SET 64 | 657 | 1395 → 1162 (1.77×) | 1354 → 1126 (1.71×) | not measured |
+| Go | GET 16 | 421 | 2240 → 1971 (4.68×) | 298 → 293 (0.70×) | 229 → 105 (plain 104) |
+| Go | GET 64 | 144 | 844 → 669 (4.65×) | 146 → 151 (1.05×) | 213 → 110 (plain 108) |
+| Go | SET 16 | 391 | 2233 → 2076 (5.31×) | 285 → 287 (0.73×) | 229 → 73 (plain 72) |
+| Go | SET 64 | 147 | 843 → 635 (4.32×) | 149 → 149 (1.01×) | 216 → 79 (plain 76) |
 
 Reading:
 - Rust had the costly path: 11-13 allocations per command (upper-cased name, key list, `host:port` strings, owned argument copies, a map per pipeline) and one round trip per node. After: allocations equal the plain path, every node is written before any is read, and the routing code costs 1.04-1.21× plain. Cluster user CPU dropped 3.6-21×.
 - C#, Java and Node already routed without allocating on the single-key path; their routing code now costs 0.87-1.19× plain, and C# and Java pipeline allocation per request fell by a fifth to three quarters. The remaining gap on the spread rows is the per-socket cost of their multiplexed connections (one request, completion and thread hop per node), outside routing.
 - Python's routing code still costs about 1.7× plain: each command is matched and looked up in the interpreter. Down 8-17% on the spread rows and 14-19% on the one-node rows.
+- Go already routed without allocating and its routing code cost the same as plain; the spread path allocated a map, slices and a goroutine per node on every pipeline. It now allocates only the reply slice, writes every node before waiting, and costs 7-25% less CPU. The rest of the gap is one background reader wakeup and two system calls per node.
 - Single commands (depth 1, not in the table) cost the same or less than before in every client; they are dominated by system calls on this machine.
 
-Not measured: Go; Linux and x86; allocation per request in Node and Python; latency percentiles.
+Not measured: Linux and x86; allocation per request in Node and Python; latency percentiles.

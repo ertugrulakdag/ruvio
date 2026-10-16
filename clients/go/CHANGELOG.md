@@ -4,6 +4,7 @@ Notable changes to the Go client `github.com/salihcantekin/ruvio/clients/go`. A 
 
 ## Unreleased
 
+- A cluster pipeline spread over several nodes no longer allocates a map, per-node slices and a goroutine per node: commands are routed once into pooled scratch, every node is written before any reply is awaited, and only the reply slice is allocated. See `docs/evidence/2026-10-16-client-cluster-routing.md`.
 - **Behaviour change:** a cluster command now follows up to 3 `MOVED` redirects (was 1) before the `MOVED` error is returned. Each `MOVED` patches that slot; the whole slot table is reloaded only when the named node is unknown or from the second `MOVED` of the same command on (before, any second moved slot since the last reload triggered a reload). Pipelined commands follow the same limit.
 - **Behaviour change:** a pipeline holding `MGET`, `MSET`, `DEL`, `UNLINK`, `EXISTS` or `TOUCH` whose keys span slots is no longer refused as a whole with `ErrCrossSlot`; the command is split per slot like the plain command and its merged reply sits at its index. Other cross-slot commands, and any cross-slot key inside a `MULTI` pipeline, still fail with `ErrCrossSlot` before anything is sent.
 - Fixed: the `ErrCrossSlot` error for a pipeline could be built from an already recycled buffer (a panic or a wrong command name in the message).
