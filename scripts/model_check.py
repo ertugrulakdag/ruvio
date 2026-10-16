@@ -1715,7 +1715,7 @@ class Checker:
         op.conn = conn.index
         op.send_t = time.time() * 1000
         op.send_ev = self.ev
-        op.shards = {self.shard[k] for k in op.keys} if op.kind != "barrier" else set(range(self.shards))
+        op.shards = {self.shard[k] for k in op.keys} if op.kind != "barrier" else {0}
 
         for key in op.keys:
             self.locks[key] += 1
@@ -2171,7 +2171,10 @@ class Checker:
         w = rng.random()
 
         if w < 0.004 and not self.cfg.get("maxmemory"):
-            return Op("FLUSHDB", [[b"FLUSHDB"]], list(self.all_keys), True, kind="barrier")
+            # Every connection is on the first shard's port, and in per-shard mode FLUSHDB
+            # empties only the shard it arrives on.
+            own = [key for key in self.all_keys if self.shard[key] == 0]
+            return Op("FLUSHDB", [[b"FLUSHDB"]], own, True, kind="barrier")
         if w < 0.012:
             label = rng.choice(["SAVE", "BGSAVE"])
             return Op(label, [[label.encode()]], [], True, kind="save")
@@ -2591,9 +2594,9 @@ class Checker:
 
     def never_rule(self, how, shard):
         """Entries on `shard` that may not survive a restart. A refused write's records on a
-        shard whose WAL sync failed are cut. An op over several shards (FLUSHDB) is refused
-        when any of them fails, but its part on a shard whose sync succeeded is durable, so
-        only the failed shards' parts are ruled out."""
+        shard whose WAL sync failed are cut. An op over several shards is refused when any of
+        them fails, but its part on a shard whose sync succeeded is durable, so only the failed
+        shards' parts are ruled out."""
 
         strict = (
             how == "kill9"

@@ -87,6 +87,24 @@ fn read_exactly(client: &mut StdTcpStream, expected: &[u8]) {
     );
 }
 
+/// Whether a server on `address` answers `PING`.
+fn pings(address: SocketAddr) -> bool {
+    let Ok(mut client) = StdTcpStream::connect(address) else {
+        return false;
+    };
+    let mut reply = [0u8; 7];
+
+    let _ = client.set_read_timeout(Some(Duration::from_secs(1)));
+
+    client.write_all(&resp(&[&[b"PING"]])).is_ok()
+        && client.read_exact(&mut reply).is_ok()
+        && &reply == b"+PONG\r\n"
+}
+
+fn next_port(address: SocketAddr) -> SocketAddr {
+    SocketAddr::new(address.ip(), address.port() + 1)
+}
+
 fn connect(address: SocketAddr) -> StdTcpStream {
     let client = StdTcpStream::connect(address).unwrap();
 
@@ -1683,18 +1701,16 @@ fn evented_hot_keys_serve_database_zero_only() {
 fn per_shard_wait_counts_the_shards_a_connection_forwarded_to() {
     let directory = tempfile::tempdir().unwrap();
     // Two consecutive data ports low enough for their cluster bus ports (data + 10000), and a
-    // replication port. A port found free can be taken by a parallel test before the server
-    // binds it: a start that fails is retried on other ports.
+    // replication port after them. A start that fails is retried on other ports.
     let mut started = None;
 
     for attempt in 0..20u16 {
         // Below every OS's ephemeral range (Linux from 32768), so no other test's sockets sit
-        // there, with room for the bus ports.
+        // there, with room for the bus ports. The replication port is fixed too: one taken from
+        // the ephemeral range can be grabbed by a parallel test before the server binds it,
+        // after the data ports already answer.
         let base = 10_000 + (std::process::id() as u16 % 600) * 17 + attempt * 37;
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let replication_port = probe.local_addr().unwrap().port();
-
-        drop(probe);
+        let replication_port = base + 2;
         let address: std::net::SocketAddr = format!("127.0.0.1:{base}").parse().unwrap();
         let mut config = AppConfig {
             address: address.to_string(),
@@ -1716,16 +1732,21 @@ fn per_shard_wait_counts_the_shards_a_connection_forwarded_to() {
         let stop = shutdown.clone();
         let server = thread::spawn(move || run(&config, shutdown));
 
-        for _ in 0..200 {
-            if server.is_finished() || StdTcpStream::connect(address).is_ok() {
+        // Ready once both data ports answer PING and the replication listener accepts. A
+        // connect can reach another process on a port while this server's bind fails: give the
+        // failure time to show before trusting the ports.
+        for _ in 0..400 {
+            if server.is_finished()
+                || (pings(address)
+                    && pings(next_port(address))
+                    && StdTcpStream::connect(("127.0.0.1", replication_port)).is_ok())
+            {
                 break;
             }
 
             thread::sleep(Duration::from_millis(5));
         }
 
-        // A connect can reach another process on the port while this server's bind fails: give
-        // the failure time to show before trusting the port.
         thread::sleep(Duration::from_millis(100));
 
         if server.is_finished() {
