@@ -225,7 +225,7 @@ const one = at(1);
         <div class="how">
           <p>The whole-machine grids come from <code>scripts/shard_compare.py</code>: {scale.shards} shards in one Ruvio process (<code>port_mode = "per-shard"</code>), a Redis Cluster of {scale.shards} masters created with <code>redis-cli --cluster create</code>, and one Redis process, each driven by one <code>redis-benchmark</code> per shard with hash-tagged keys. The {scale.shards}-shard systems hold {scale.shards} copies of each data shape, so a shard holds what the single process holds.</p>
           <p>The single-machine rows come from <code>scripts/redis_compare_features.py</code>, which runs <code>redis-benchmark</code> against each server in turn. Absolute numbers describe one host; the ratio between the two servers is the result. Shared cloud machines vary from run to run, so a row within a few percent of 1× is a tie.</p>
-          <p><a class="btn ghost small" href="/docs/benchmarking/">Benchmarking guide</a> <a class="btn ghost small" href={`${site.github}/tree/main/site/data`}>All records</a></p>
+          <p><a class="btn ghost small" href="/docs/benchmarking/">Benchmarking guide</a> <a class="btn ghost small" href={`${site.github}/tree/main/benchmark/records`}>All records</a></p>
         </div>
       </div>
     </div>

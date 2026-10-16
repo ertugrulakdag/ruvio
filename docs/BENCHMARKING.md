@@ -24,7 +24,7 @@ python3 scripts/redis_compare.py --out target/redis-compare
 
 **LRANGE check:** `LLEN mylist` is read after each LRANGE test, so a test cannot pass against an empty list.
 
-**Outputs:** `results.json`, `table.md`, and `table.html`. The last file holds the rows used on the site.
+**Outputs:** `results.json`, `table.md`, and `table.html` (the same rows as an HTML table).
 
 **Run time:** about 75 s on an Apple M4 Pro.
 

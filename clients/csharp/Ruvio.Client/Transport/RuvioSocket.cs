@@ -103,7 +103,23 @@ internal sealed class RuvioSocket : IDisposable
                 ? ["AUTH", options.Password]
                 : ["AUTH", options.Username, options.Password];
 
-            ThrowOnError(await connection.SendAsync(auth, cancellationToken));
+            if (dedicatedReader)
+            {
+                // The blocking stream ignores tokens: run AUTH off the caller's thread, and let the
+                // token close the socket so a server that never answers cannot hang the connect.
+                using CancellationTokenRegistration abort = cancellationToken.Register(connection.Dispose);
+                ThrowOnError(await Task.Run(() => connection.SendAsync(auth, CancellationToken.None).AsTask(), CancellationToken.None).ConfigureAwait(false));
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            else
+            {
+                ThrowOnError(await connection.SendAsync(auth, cancellationToken));
+            }
+        }
+        catch (Exception) when (dedicatedReader && cancellationToken.IsCancellationRequested)
+        {
+            connection.Dispose();
+            throw new OperationCanceledException(cancellationToken);
         }
         catch
         {

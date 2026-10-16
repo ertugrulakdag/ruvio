@@ -457,8 +457,10 @@ class Router {
     return n;
   }
 
+  // The frame is copied: the retry may wait for a slot-map refresh, and a reconnect of the node
+  // meanwhile starts writing its write slab from the beginning again.
   private readonly onMoved: MovedHandler = (e, buf, off, len, tf, fl, res, rej) => {
-    this.moved(e, buf.subarray(off, off + len), tf, fl).then(res, rej);
+    this.moved(e, Buffer.from(buf.subarray(off, off + len)), tf, fl).then(res, rej);
   };
 
   private drop(n: ClusterNode): void {

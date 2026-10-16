@@ -994,7 +994,10 @@ public sealed partial class RuvioClient : IRuvioClient
         }
     }
 
-    private async Task<RuvioSocket> OpenWithRetryAsync(string host, int port, CancellationToken cancellationToken)
+    private Task<RuvioSocket> OpenWithRetryAsync(string host, int port, CancellationToken cancellationToken) =>
+        OpenWithRetryAsync(host, port, cancellationToken, subscriber: false);
+
+    private async Task<RuvioSocket> OpenWithRetryAsync(string host, int port, CancellationToken cancellationToken, bool subscriber)
     {
         int attempt = 0;
 
@@ -1004,7 +1007,7 @@ public sealed partial class RuvioClient : IRuvioClient
 
             try
             {
-                return await RuvioSocket.OpenAsync(host, port, _options, cancellationToken);
+                return await RuvioSocket.OpenAsync(host, port, _options, cancellationToken, subscriber);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
@@ -1088,7 +1091,7 @@ public sealed partial class RuvioClient : IRuvioClient
 
     private async Task ReplaceSubscriberAsync(string host, int port, string key)
     {
-        RuvioSocket connection = await OpenWithRetryAsync(host, port, CancellationToken.None);
+        RuvioSocket connection = await OpenWithRetryAsync(host, port, CancellationToken.None, subscriber: true);
         var link = new PubSubLink(connection, DispatchMessage, FailSubscriber);
 
         string[][] replay;

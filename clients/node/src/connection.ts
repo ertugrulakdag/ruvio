@@ -100,7 +100,8 @@ export class Connection extends EventEmitter {
   /** Database to restore on reconnect (tracks SELECT through the typed client). */
   db: number;
   // Cluster routing keeps, per pending single command, where its frame sits in the write slab
-  // (slab bytes are never overwritten), so a `-MOVED` reply can re-send it without a copy.
+  // (not overwritten while the command waits for its reply), so a `-MOVED` reply can re-send it;
+  // the router copies the frame before any wait, since a reconnect rewinds the slab.
   private onMoved: MovedHandler | null = null;
   private rFB: (Buffer | null)[] | null = null;
   private rFO: Int32Array | null = null;

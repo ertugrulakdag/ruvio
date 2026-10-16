@@ -83,9 +83,10 @@ full-text search; those are planned work, not part of this compatibility contrac
 - Sharded Pub/Sub is supported: `SPUBLISH`, `SSUBSCRIBE`, and `SUNSUBSCRIBE`.
   Channels in one command must hash to the same slot. Messages are delivered
   only to subscribers on that slot owner, are not stored, and are not written
-  to the WAL. Classic `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, and
-  `PUNSUBSCRIBE` stay on the shard that accepted the connection. They are not
-  stored, not written to the WAL, and not sent to other shards. Patterns use
+  to the WAL. Classic `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, and `PUNSUBSCRIBE` stay on
+  the shard that accepted the connection; a classic `PUBLISH` reaches
+  subscribers on every shard of the process (see the Pub/Sub row below).
+  Messages are not stored and not written to the WAL. Patterns use
   `*` and `?`. After any subscription, the connection accepts `SUBSCRIBE`,
   `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`, `SSUBSCRIBE`, `SUNSUBSCRIBE`,
   and `PING` until its subscription count returns to zero. Replies stay RESP2

@@ -127,7 +127,8 @@ var pipePool = sync.Pool{New: func() any { return new(pipeScratch) }}
 // pipeSpread sends a pipeline whose commands go to several nodes: each node's frames are
 // copied once into one request, every node is written before any reply is awaited (so the
 // pipeline costs one round trip, without a goroutine per node), the caller reads the replies of
-// every node nobody else is reading, and each reply is stored at its command's index.
+// every node nobody else is reading itself (one node if a command may block), and each reply is
+// stored at its command's index.
 func (cl *cluster) pipeSpread(ctx context.Context, t *topology, r *request, n int, s *pipeScratch) ([]Value, error) {
 	if err := ctx.Err(); err != nil {
 		putReq(r)
@@ -193,8 +194,24 @@ func (cl *cluster) pipeSpread(ctx context.Context, t *topology, r *request, n in
 				first = err
 			}
 			putReq(sub)
-			subs[ni] = nil
+			subs[ni], s.conns[ni], s.leads[ni] = nil, nil, false
 			continue
+		}
+	}
+	// This goroutine reads the nodes one after another. A pipeline that may block (BLPOP, XREAD
+	// BLOCK, WAIT, ...) reads only one node here and hands the others to their background readers:
+	// holding a second node's read side while the first waits would stall every other caller on
+	// that node until the blocking command returns.
+	if mayBlock(r.buf, s.offs, n) {
+		led := false
+		for ni := range subs {
+			if s.leads[ni] {
+				if led {
+					s.conns[ni].releaseRead()
+					s.leads[ni] = false
+				}
+				led = true
+			}
 		}
 	}
 	out := make([]Value, n)
@@ -456,4 +473,32 @@ func (cl *cluster) pipeMany(ctx context.Context, t *topology, r *request, n int,
 	}
 	putReq(r)
 	return out, nil
+}
+
+// mayBlock reports whether a pipeline holds a command that can wait on the server: a blocking
+// pop or move, XREAD/XREADGROUP (BLOCK), or WAIT/WAITAOF. Only names starting with B, X or W are
+// compared in full; other commands cost one byte test after their name is read.
+func mayBlock(buf []byte, offs []int, n int) bool {
+	for i := 0; i < n; i++ {
+		name := cmdName(buf[offs[i]:offs[i+1]])
+		if len(name) == 0 {
+			continue
+		}
+		switch name[0] | 0x20 {
+		case 'b', 'x', 'w':
+		default:
+			continue
+		}
+		for _, blocking := range blockingNames {
+			if upperEq(name, blocking) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var blockingNames = [...]string{
+	"BLPOP", "BRPOP", "BLMOVE", "BRPOPLPUSH", "BLMPOP", "BZPOPMIN", "BZPOPMAX", "BZMPOP",
+	"XREAD", "XREADGROUP", "WAIT", "WAITAOF",
 }

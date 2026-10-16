@@ -146,9 +146,10 @@ internal sealed class CommandMultiplexer
                     continue;
                 }
 
-                // Its request is not in the reply queue yet: still being written, or waiting for capacity.
-                if (!await _pending.Reader.WaitToReadAsync().ConfigureAwait(false))
-                    break;
+                // Its request is not in the reply queue yet: another caller is writing, it waits for
+                // capacity, or it failed before it was sent. Give up the read side and wait like any
+                // caller; the writer starts a reader when the request is queued.
+                break;
             }
         }
         finally

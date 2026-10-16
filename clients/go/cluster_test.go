@@ -985,3 +985,38 @@ func TestFakeNodeDownAtStartupRecovers(t *testing.T) {
 		t.Fatalf("A must keep working: %v", err)
 	}
 }
+
+func TestMayBlockFindsBlockingCommandsInAPipeline(t *testing.T) {
+	frames := func(cmds ...[]string) ([]byte, []int) {
+		var buf []byte
+		offs := []int{0}
+		for _, c := range cmds {
+			args := make([]any, len(c))
+			for i, a := range c {
+				args[i] = a
+			}
+			var err error
+			if buf, err = AppendCommand(buf, args...); err != nil {
+				t.Fatal(err)
+			}
+			offs = append(offs, len(buf))
+		}
+		return buf, offs
+	}
+	cases := []struct {
+		cmds [][]string
+		want bool
+	}{
+		{[][]string{{"GET", "a"}, {"SET", "b", "1"}}, false},
+		{[][]string{{"GET", "a"}, {"blpop", "q", "0"}}, true},
+		{[][]string{{"XREAD", "BLOCK", "0", "STREAMS", "s", "$"}}, true},
+		{[][]string{{"BITCOUNT", "a"}, {"WATCH", "a"}}, false},
+		{[][]string{{"wait", "1", "0"}}, true},
+	}
+	for _, c := range cases {
+		buf, offs := frames(c.cmds...)
+		if got := mayBlock(buf, offs, len(c.cmds)); got != c.want {
+			t.Errorf("mayBlock(%v) = %v, want %v", c.cmds, got, c.want)
+		}
+	}
+}
