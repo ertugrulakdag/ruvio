@@ -128,3 +128,14 @@ Geometric mean 1.04× against the cluster (median 1.02×, 48 rows at or above 0.
 | `SADD` (existing member) 0.72× | | the record is written before the member is checked (`dispatch.rs`, `Command::SetAdd`), so a no-op `SADD` logs a record on every call; Redis logs nothing when nothing changed |
 
 Open: extend the WAL group list to the synchronous in-place commands above (each needs the "no await before the reply" review that list demands), and skip the record for a `SADD`/`ZADD` that changes nothing.
+
+## After the three fixes (same evening, commit `7376885`)
+
+Data: [x86-azure-2026-10-16-8-shards-everysec-after.json](../../site/data/x86-azure-2026-10-16-8-shards-everysec-after.json) and [x86-azure-2026-10-16-8-shards-p64-after.json](../../site/data/x86-azure-2026-10-16-8-shards-p64-after.json), same host and method as the two grids above. The fixes: `SLOWLOG` timed with the cycle counter instead of two vDSO clock calls per command; `INCRBYFLOAT`, `SETRANGE`, `BITFIELD`, `COPY`, `LSET` and plain `LMOVE` join the WAL group; a `SADD` whose members are all present logs nothing.
+
+| Grid (59 rows, Ruvio / Redis Cluster) | Before, geometric mean | After | Rows below 0.90× | Rows at or above 0.97× |
+| --- | ---: | ---: | ---: | ---: |
+| `everysec` against AOF `everysec` | 1.03× | **1.14×** | 8 → 0 | 47 → 54 |
+| memory, pipeline 64 | 1.15× | **1.23×** | 6 → 1 | 45 → 55 |
+
+The rows the fixes aimed at, `everysec`: `LSET` 0.53× → 1.09×, `SETRANGE` 0.48× → 1.47×, `BITFIELD INCRBY` 0.55× → 1.37×, `COPY REPLACE` 0.63× → 1.68×, `LMOVE` 0.57× → 1.23×, `INCRBYFLOAT` 0.69× → 1.30×, `SADD` existing 0.72× → 1.04×. Memory mode, pipeline 64: `SADD` existing 0.87× → 1.12×, `APPEND` 0.88× → 0.95×, `BITCOUNT` 0.90× → 0.93×, `LSET` 0.93× → 1.06×; the generic path gained 5.8% (geometric mean over all rows, min 0.94×, max 1.23×). Hot-path rows did not move (`GET` 1.75×, `SET` 2.21×). The one row still below 0.90× is `HDEL` of a missing field on a 10-field hash (0.89×); `FILLGET` against plain `GET` is 0.91×. Both are open.
