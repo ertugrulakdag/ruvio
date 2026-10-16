@@ -1,0 +1,44 @@
+---
+// Starlight footer override: Starlight's edit link and pagination, then a slim site footer.
+import Default from "@astrojs/starlight/components/Footer.astro";
+import { footerNav } from "../../config/site";
+
+const seen = new Set<string>();
+const links = footerNav
+  .flatMap((col) => col.items)
+  .filter((item) => (seen.has(item.href) ? false : (seen.add(item.href), true)));
+---
+
+<Default />
+<div class="site-foot print:hidden">
+  <nav aria-label="Site">
+    {links.map((item) => <a href={item.href}>{item.href === "/" ? "Home" : item.label}</a>)}
+  </nav>
+  <p>Server AGPL-3.0 · Clients MIT</p>
+</div>
+
+<style>
+  .site-foot {
+    margin-top: 3rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--sl-color-hairline-light);
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.25rem;
+  }
+  a {
+    color: var(--sl-color-gray-3);
+    text-decoration: none;
+  }
+  a:hover {
+    color: var(--sl-color-white);
+  }
+  p {
+    margin: 0.75rem 0 0;
+    color: var(--sl-color-gray-4);
+  }
+</style>
