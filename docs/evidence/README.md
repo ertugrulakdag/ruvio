@@ -4,7 +4,7 @@
 
 Each file is one dated measurement: the machine, the build, the method and the numbers as they were recorded that day. A record is not updated afterwards, so its commit, its numbers and its "open" notes describe that date only. A new measurement goes in a new file named `YYYY-MM-DD-topic.md`. Rules for measuring are in [PERFORMANCE](../PERFORMANCE.md) and [BENCHMARKING](../BENCHMARKING.md).
 
-Current numbers are on the [performance](https://salihcantekin.github.io/ruvio/testing-performance.html) and [memory](https://salihcantekin.github.io/ruvio/testing-memory.html) pages.
+Current numbers are on the [performance](https://ruviodb.com/benchmarks/) and [memory](https://ruviodb.com/benchmarks/#memory) pages.
 
 | Date | Record | What it measured |
 | --- | --- | --- |

@@ -1,10 +1,10 @@
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+  <a href="https://ruviodb.com/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/docs/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
 </p>
 
 <h1 align="center">Ruvio Go client</h1>
 
-<p align="center">Fast, allocation-light client for <a href="https://salihcantekin.github.io/ruvio/">Ruvio</a>. Go 1.22+, standard library only.</p>
+<p align="center">Fast, allocation-light client for <a href="https://ruviodb.com/">Ruvio</a>. Go 1.22+, standard library only.</p>
 
 <p align="center">
   <a href="https://pkg.go.dev/github.com/salihcantekin/ruvio/clients/go"><img alt="Go Reference" src="https://pkg.go.dev/badge/github.com/salihcantekin/ruvio/clients/go.svg"></a>
@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/client-go.html">Go guide</a> ·
+  <a href="https://ruviodb.com/docs/clients/go/">Go guide</a> ·
   <a href="https://pkg.go.dev/github.com/salihcantekin/ruvio/clients/go">pkg.go.dev</a> ·
   <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/README.md">All clients</a> ·
   <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>

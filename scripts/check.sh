@@ -34,7 +34,6 @@ run() {
 }
 
 run python3 scripts/check_compatibility_matrix.py
-run python3 scripts/site_chrome.py --check
 run python3 scripts/gen_client_keys.py --check
 # The model checker's mutation test applies these; one that no longer applies tests nothing.
 for patch in scripts/model_check_mutants/*.patch; do

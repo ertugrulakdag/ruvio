@@ -269,8 +269,7 @@ newest first: the 2026-10-11 Azure command and memory comparison, native and
 Docker Desktop runs from 2026-10-01 to 2026-10-07, the .NET scenario lab, and
 the 2026-09-28 Cherry EPYC Linux run with Redis comparisons, durability
 profiles, two 15-minute soaks and `SIGKILL` recovery trials. Current numbers
-are on the [performance](../site/testing-performance.html) and
-[memory](../site/testing-memory.html) pages.
+are on the site's [benchmarks page](https://ruviodb.com/benchmarks/).
 
 Laptop and Docker Desktop measurements are useful for repeatable functional
 checks and same-machine regression detection. They are not substitutes for

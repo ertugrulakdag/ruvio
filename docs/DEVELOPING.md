@@ -16,7 +16,7 @@ Where the code lives, how to check a change quickly, and every place a new comma
 | `Directory.Build.props`, `Directory.Packages.props` | Settings and package metadata shared by every .NET project, and the one version of each NuGet dependency (a `PackageReference` has no `Version`) |
 | `docs/` | Reference docs and `compatibility-matrix.json`, the list of supported commands |
 | `scripts/` | Local gates, release helpers, fault and benchmark harnesses ([scripts/README.md](../scripts/README.md)) |
-| `site/` | GitHub Pages site. The menu, footer and stylesheet links come from `scripts/site_chrome/`; edit them there and run `python3 scripts/site_chrome.py` |
+| `site-next/` | The website ([ruviodb.com](https://ruviodb.com)): Astro, docs generated from `docs/`, `clients/` and `integrations/` by `scripts/sync-docs.mjs`; published by the manual `site-azure` workflow. Measurement records it charts are in `benchmark/records/` |
 | `.github/workflows/` | `pr-gate` runs on pull requests and pushes to `main`; every other workflow is started by hand |
 
 ## Server module map
@@ -86,7 +86,7 @@ A change to persistence, the WAL, unsafe code or memory layout gets a second, in
 | `CONFIG GET` | `introspect` in `src/config.rs` |
 | `--write-config` | `overlay_config` in `src/config.rs` |
 | Template | `ruvio.example.toml` (its values are tested against the code defaults) |
-| Docs | `docs/CONFIGURATION.md` (the key and a row in the environment table), `site/configuration.html` |
+| Docs | `docs/CONFIGURATION.md` (the key and a row in the environment table); the site's configuration page is generated from it |
 
 `every_template_setting_answers_config_get`, `every_file_setting_is_documented`, `every_environment_variable_is_documented` and `every_command_line_flag_is_documented` (all in `scripts/check.sh`) catch a template value, file key, variable or flag that is missing; the site page is checked by hand.
 

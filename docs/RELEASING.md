@@ -8,7 +8,7 @@ No release runs on its own. Every workflow in `.github/workflows/` is started by
 | `ci` | Wider checks: three operating systems, clippy, supply chain, fuzz, container and fault tests |
 | `release` | Publishes the packages below; choose one target or `all` |
 | `integration-packages` | Builds and optionally publishes the .NET integration packages |
-| `pages` | Publishes the `site/` folder to GitHub Pages |
+| `site-azure` | Builds `site-next/` and publishes it to Azure Static Web Apps (ruviodb.com) |
 
 ## What `release` publishes
 
@@ -26,7 +26,7 @@ The Go client has no registry; Go modules are versions of a git tag. The server 
 
 Binary archives are workflow artifacts. Turn on `create_github_release` to attach them, with a `SHA256SUMS` file, to a GitHub Release. The binaries use the release profile (fat LTO, no profile-guided optimization). Performance numbers come from the builds described on each results page, so check those before quoting one for a downloaded binary.
 
-Leave a version input empty to bump that package's patch number, or fill it to publish that exact version. `docker` and `server-binaries` share the server version, and `docker-ui` and `ui-host` share the UI version; run alone, these four targets refuse an empty version, so the two halves of a pair cannot ship under different numbers. The site shows the current published versions by asking the registries when a page loads. `server-binaries` (and `all`) also point the `v=x.y.z` download line in `README.md`, `site/start.html` and `site/packages.html` at the server version, and the version commit carries it.
+Leave a version input empty to bump that package's patch number, or fill it to publish that exact version. `docker` and `server-binaries` share the server version, and `docker-ui` and `ui-host` share the UI version; run alone, these four targets refuse an empty version, so the two halves of a pair cannot ship under different numbers. The site shows the current published versions by asking the registries when a page loads. `server-binaries` (and `all`) also point the `v=x.y.z` download line in `README.md` at the server version, and the version commit carries it.
 
 ## Changelogs
 
@@ -54,5 +54,5 @@ With `publish` ticked, the workflow stops when NuGet already has the version in 
 | Go client | No workflow: move its `Unreleased` notes under the version by hand and push the tag `clients/go/vX.Y.Z`. A published tag is never moved |
 | Integration packages | Bump with `release_version.py`, commit, then run `integration-packages` with `publish` |
 | npm | A trusted publish can land as "staged"; approve it on npmjs.com |
-| Site | Run `pages` after the version commit if the site should show the new download line |
+| Site | Run `site-azure` after the version commit if the site should show the new version |
 

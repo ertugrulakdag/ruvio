@@ -1,10 +1,10 @@
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+  <a href="https://ruviodb.com/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/docs/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
 </p>
 
 <h1 align="center">ruvio-client <sub>Node.js</sub></h1>
 
-<p align="center">Fast, zero-dependency RESP client for <a href="https://salihcantekin.github.io/ruvio/">Ruvio</a>. TypeScript source, ESM output with <code>.d.ts</code>.</p>
+<p align="center">Fast, zero-dependency RESP client for <a href="https://ruviodb.com/">Ruvio</a>. TypeScript source, ESM output with <code>.d.ts</code>.</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/ruvio-client"><img alt="npm" src="https://img.shields.io/npm/v/ruvio-client?label=npm"></a>
@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/client-node.html">Node.js guide</a> ·
+  <a href="https://ruviodb.com/docs/clients/node/">Node.js guide</a> ·
   <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/README.md">All clients</a> ·
   <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
 </p>

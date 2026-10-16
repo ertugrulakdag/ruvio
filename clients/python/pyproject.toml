@@ -34,8 +34,8 @@ hiredis = ["hiredis>=2.0"]
 test = ["pytest>=7", "pytest-asyncio>=0.23"]
 
 [project.urls]
-Homepage = "https://salihcantekin.github.io/ruvio/client-python.html"
-Documentation = "https://salihcantekin.github.io/ruvio/client-python.html"
+Homepage = "https://ruviodb.com/docs/clients/python/"
+Documentation = "https://ruviodb.com/docs/clients/python/"
 Repository = "https://github.com/salihcantekin/ruvio"
 Issues = "https://github.com/salihcantekin/ruvio/issues"
 

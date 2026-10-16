@@ -6,7 +6,7 @@ roadmap items are not claimed complete.
 
 For a user-facing summary of test coverage, observed Docker results, benchmark
 evidence, and remaining gates, see [Testing and Evidence](TESTING.md) and the
-[GitHub Pages testing page](../site/testing.html).
+[testing guide](TESTING.md).
 
 ## Automatable gates (defined in CI)
 

@@ -3,9 +3,9 @@
 Ruvio is a memory-first key-value server that speaks the Redis protocol (RESP2). `redis-cli` and existing RESP clients connect to it. It adds jobs that usually need a second system: leases and fencing tokens, semaphores, conditional writes, a change feed and delayed stream entries.
 
 - Source: https://github.com/salihcantekin/ruvio
-- Documentation: https://salihcantekin.github.io/ruvio/
-- Supported commands: https://salihcantekin.github.io/ruvio/commands.html
-- Performance and memory results: https://salihcantekin.github.io/ruvio/testing-performance.html and https://salihcantekin.github.io/ruvio/testing-memory.html
+- Documentation: https://ruviodb.com/
+- Supported commands: https://ruviodb.com/docs/commands/
+- Performance and memory results: https://ruviodb.com/benchmarks/ and https://ruviodb.com/benchmarks/#memory
 - Security reports: https://github.com/salihcantekin/ruvio/blob/main/SECURITY.md
 
 ## Run it
@@ -19,7 +19,7 @@ docker run --rm -p 6379:6379 \
 redis-cli -h 127.0.0.1 -p 6379 -a change-me PING
 ```
 
-The default durability is `memory`. For a persistent deployment set `RUVIO_DURABILITY` (`snapshot`, `everysec` or `always`) and keep the `/data` volume. Settings are described at https://salihcantekin.github.io/ruvio/configuration.html.
+The default durability is `memory`. For a persistent deployment set `RUVIO_DURABILITY` (`snapshot`, `everysec` or `always`) and keep the `/data` volume. Settings are described at https://ruviodb.com/docs/configuration/.
 
 ## Tags
 

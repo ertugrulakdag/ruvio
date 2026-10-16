@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/"><img src="site/images/ruvio-mark.png" width="140" alt="Ruvio"></a>
+  <a href="https://ruviodb.com/"><img src="docs/images/ruvio-mark.png" width="140" alt="Ruvio"></a>
 </p>
 
 <h1 align="center">Ruvio</h1>
@@ -10,11 +10,11 @@
 </p>
 
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/start.html"><b>Get started</b></a> ·
-  <a href="https://salihcantekin.github.io/ruvio/">Website</a> ·
-  <a href="https://salihcantekin.github.io/ruvio/commands.html">Commands</a> ·
-  <a href="https://salihcantekin.github.io/ruvio/testing-performance.html">Performance</a> ·
-  <a href="https://salihcantekin.github.io/ruvio/packages.html">Packages</a> ·
+  <a href="https://ruviodb.com/get-started/"><b>Get started</b></a> ·
+  <a href="https://ruviodb.com/">Website</a> ·
+  <a href="https://ruviodb.com/docs/commands/">Commands</a> ·
+  <a href="https://ruviodb.com/benchmarks/">Performance</a> ·
+  <a href="https://ruviodb.com/get-started/">Packages</a> ·
   <a href="docs/README.md">Docs</a> ·
   <a href="https://github.com/salihcantekin/ruvio/releases/latest">Releases</a>
 </p>
@@ -105,7 +105,7 @@ The server is installed from the Docker image, a release binary, or built from t
 
 </details>
 
-Settings merge in this order: built-in defaults, `ruvio.toml` (template: [`ruvio.example.toml`](ruvio.example.toml)), `RUVIO_*` environment variables, then CLI flags. The file is read once, at process start. See [Configuration](https://salihcantekin.github.io/ruvio/configuration.html).
+Settings merge in this order: built-in defaults, `ruvio.toml` (template: [`ruvio.example.toml`](ruvio.example.toml)), `RUVIO_*` environment variables, then CLI flags. The file is read once, at process start. See [Configuration](https://ruviodb.com/docs/configuration/).
 
 ## Built-in building blocks
 
@@ -130,12 +130,12 @@ These commands run on the shard that owns the key. A key that never uses them st
 | **Whole machine, 8 shards** | against an 8-node Redis Cluster on the same 8 cores: geometric mean 1.13× over 59 commands at pipeline 16 (55 at or above 0.97×, none below 0.90×), 1.23× at pipeline 64 (`GET` 1.75×, `SET` 2.21×, 29M and 30M req/s), 1.14× with every write logged (`everysec` against AOF `everysec`); memory per shard 0.96× of one Redis | 16-core Azure EPYC 9V74 VM, one process with 8 shards (`port_mode = "per-shard"`), one `redis-benchmark` per shard, three alternating rounds ([record](docs/evidence/2026-10-16-azure-8-shards.md), 2026-10-16) |
 | **Raw throughput** | about 2.61M `SET`/s, 2.74M `GET`/s, 2.88M `INCR`/s | Apple M4 Pro, evented, `memory` durability, one shard, 50 clients, pipeline 16, 64-byte values, fixed key, median of 3 rounds (2026-10-07) |
 
-Samples, flags and the rows below 1× are on the [performance page](https://salihcantekin.github.io/ruvio/testing-performance.html); memory results are on the [memory page](https://salihcantekin.github.io/ruvio/testing-memory.html). There is no Garnet measurement.
+Samples, flags and the rows below 1× are on the [performance page](https://ruviodb.com/benchmarks/); memory results are on the [memory page](https://ruviodb.com/benchmarks/#memory). There is no Garnet measurement.
 
 
 ## Clients and packages
 
-First-party clients speak RESP2, do not send `CLIENT SETINFO`, and learn `CLUSTER SLOTS` from one seed address. Guides: [Clients](https://salihcantekin.github.io/ruvio/clients.html) · [`clients/`](clients/README.md).
+First-party clients speak RESP2, do not send `CLIENT SETINFO`, and learn `CLUSTER SLOTS` from one seed address. Guides: [Clients](https://ruviodb.com/docs/clients/) · [`clients/`](clients/README.md).
 
 | Language | Install | Package |
 | --- | --- | --- |
@@ -194,7 +194,7 @@ Releases are cut from `main` by hand ([release workflow](.github/workflows/relea
 | [salihcantekin/ruvio](https://hub.docker.com/r/salihcantekin/ruvio) | Server image (linux/amd64) | ![v](https://img.shields.io/docker/v/salihcantekin/ruvio?sort=semver&label=) | ![dl](https://img.shields.io/docker/pulls/salihcantekin/ruvio?label=) |
 | [salihcantekin/ruvio-ui](https://hub.docker.com/r/salihcantekin/ruvio-ui) | Operator UI image | ![v](https://img.shields.io/docker/v/salihcantekin/ruvio-ui?sort=semver&label=) | ![dl](https://img.shields.io/docker/pulls/salihcantekin/ruvio-ui?label=) |
 
-Live install lines and download counts: [Packages](https://salihcantekin.github.io/ruvio/packages.html).
+Live install lines and download counts: [Packages](https://ruviodb.com/get-started/).
 
 </details>
 
@@ -212,14 +212,14 @@ docker run --rm -p 8080:8080 \
 Open http://127.0.0.1:8080. Sign-in is the server ACL user. An empty user and password connect as `default`. If the server was started with `RUVIO_REQUIREPASS`, type that password on the sign-in screen, or set `RUVIO_UI_TARGET_PASSWORD` so the field is filled in. Tags `linux` and `latest` are the same image.
 
 <p align="center">
-  <img src="site/images/ui-overview.png" width="90%" alt="Operator UI overview of a two-shard server">
+  <img src="docs/images/ui-overview.png" width="90%" alt="Operator UI overview of a two-shard server">
 </p>
 
-All shards lists every key. One shard pins Data, the command screens, and Pub/Sub to that node. Users are `ACL` identities: `default` always exists, extra users that survive a restart live in `ruvio.toml`, and `ACL SETUSER` lasts until the next start. Install notes: [Operator UI](https://salihcantekin.github.io/ruvio/ui.html).
+All shards lists every key. One shard pins Data, the command screens, and Pub/Sub to that node. Users are `ACL` identities: `default` always exists, extra users that survive a restart live in `ruvio.toml`, and `ACL SETUSER` lasts until the next start. Install notes: [Operator UI](https://ruviodb.com/get-started/#ui).
 
 ## Compared with Redis, Dragonfly and Garnet
 
-The differences are about ownership, the durability contract, and how much of the Redis surface is implemented. Measured results are in [Performance](#performance). How a Ruvio process runs is on [How it runs](https://salihcantekin.github.io/ruvio/compare.html).
+The differences are about ownership, the durability contract, and how much of the Redis surface is implemented. Measured results are in [Performance](#performance). How a Ruvio process runs is on [How it runs](https://ruviodb.com/benchmarks/).
 
 | | Redis | Dragonfly | Garnet | Ruvio |
 | --- | --- | --- | --- | --- |
@@ -236,7 +236,7 @@ Not claimed: a cluster bus, online slot migration, failover, replica acknowledge
 
 The capped Docker Desktop comparison (containers limited to 4 CPUs and 2 GiB, 2026-10-01) is in [the 2026-10-07 benchmark record](docs/evidence/2026-10-07-benchmark-results.md#capped-docker-desktop-comparison-2026-10-01).
 
-Docker RSS is not the bare-metal result; the memory detail is in [the string memory density record](docs/evidence/2026-09-28-string-memory-density.md) and on the [memory page](https://salihcantekin.github.io/ruvio/testing-memory.html). Natively on this Mac, 1,000,000 `LIMIT` keys added 148.9 MiB against 85.9 MiB for 1,000,000 plain 64-byte strings, about 1.7× per key.
+Docker RSS is not the bare-metal result; the memory detail is in [the string memory density record](docs/evidence/2026-09-28-string-memory-density.md) and on the [memory page](https://ruviodb.com/benchmarks/#memory). Natively on this Mac, 1,000,000 `LIMIT` keys added 148.9 MiB against 85.9 MiB for 1,000,000 plain 64-byte strings, about 1.7× per key.
 
 ## Repository layout
 
@@ -246,7 +246,7 @@ Docker RSS is not the bare-metal result; the memory detail is in [the string mem
 | [`clients/`](clients/README.md) | Rust, C#, Go, Java, Python and Node.js SDKs, and the operator UI. |
 | [`integrations/`](integrations/README.md) | .NET framework integrations. |
 | [`docs/`](docs/README.md) | Configuration, compatibility, recovery, threat model. |
-| [`site/`](site) | The GitHub Pages site, published from `main` by the manual `pages` workflow. |
+| [`site-next/`](site-next) | The website, [ruviodb.com](https://ruviodb.com), built with Astro from `docs/`, `clients/` and `integrations/` and published by the manual `site-azure` workflow. |
 | [`deploy/`](deploy/README.md) | systemd unit, Kubernetes example, local Docker stack. |
 | [`tests/`](tests/README.md), [`fuzz/`](fuzz/README.md), [`benches/`](benches/README.md) | Integration tests, libFuzzer targets, instruction-count benchmark. |
 | [`examples/`](examples/README.md), [`scripts/`](scripts/README.md), `benchmark/` | Contributor probes, check and release scripts, the benchmark script (result files stay local). |
@@ -256,13 +256,13 @@ Docker RSS is not the bare-metal result; the memory detail is in [the string mem
 
 | Page | Covers |
 | --- | --- |
-| [Start](https://salihcantekin.github.io/ruvio/start.html) | Checkout, adapters, Docker |
-| [Configuration](https://salihcantekin.github.io/ruvio/configuration.html) | TOML, environment, ACL users |
-| [Commands](https://salihcantekin.github.io/ruvio/commands.html) | The supported surface |
-| [Durability](https://salihcantekin.github.io/ruvio/durability.html) | Acknowledgement boundaries |
-| [Replication](https://salihcantekin.github.io/ruvio/replication.html) | WAL tail, no failover |
-| [Operations](https://salihcantekin.github.io/ruvio/operations.html) | Limits, metrics, shutdown |
-| [Testing and evidence](https://salihcantekin.github.io/ruvio/testing.html) | Test coverage, recorded results, open production evidence gates |
+| [Start](https://ruviodb.com/get-started/) | Checkout, adapters, Docker |
+| [Configuration](https://ruviodb.com/docs/configuration/) | TOML, environment, ACL users |
+| [Commands](https://ruviodb.com/docs/commands/) | The supported surface |
+| [Durability](https://ruviodb.com/docs/recovery/) | Acknowledgement boundaries |
+| [Replication](https://ruviodb.com/docs/recovery/) | WAL tail, no failover |
+| [Operations](https://ruviodb.com/docs/observability/) | Limits, metrics, shutdown |
+| [Testing and evidence](https://ruviodb.com/docs/testing/) | Test coverage, recorded results, open production evidence gates |
 | [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | What the process does and does not defend |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Open gates, including a 24-hour soak and published bare-metal latency |
 | [docs/RECOVERY.md](docs/RECOVERY.md#promote-a-replica-by-hand) | Promote a caught-up replica by hand |

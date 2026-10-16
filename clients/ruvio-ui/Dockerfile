@@ -25,8 +25,8 @@ FROM debian:bookworm-slim
 LABEL org.opencontainers.image.title="Ruvio UI" \
       org.opencontainers.image.description="Browser operator console for a Ruvio server." \
       org.opencontainers.image.source="https://github.com/salihcantekin/ruvio" \
-      org.opencontainers.image.url="https://salihcantekin.github.io/ruvio/" \
-      org.opencontainers.image.documentation="https://salihcantekin.github.io/ruvio/" \
+      org.opencontainers.image.url="https://ruviodb.com/" \
+      org.opencontainers.image.documentation="https://ruviodb.com/" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
       org.opencontainers.image.authors="Salih Cantekin"
 

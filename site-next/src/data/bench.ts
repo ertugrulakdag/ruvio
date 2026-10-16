@@ -69,16 +69,16 @@ function load(id: Platform["id"], file: string, name: string, short: string): Pl
 }
 
 export const platforms: Platform[] = [
-  load("mac", "site/data/mac-2026-10-14.json", "Apple M4 Pro", "Apple M4 Pro"),
-  load("linux", "site/data/linux-hostinger-2026-10-14.json", "AMD EPYC, 2 vCPU", "AMD EPYC (x86)"),
+  load("mac", "benchmark/records/mac-2026-10-14.json", "Apple M4 Pro", "Apple M4 Pro"),
+  load("linux", "benchmark/records/linux-hostinger-2026-10-14.json", "AMD EPYC, 2 vCPU", "AMD EPYC (x86)"),
 ];
 export const primary = platforms[0];
 
 // Throughput and p99 under load on one Azure VM: client counts, pipelining, fsync and shard counts.
-const azure = readJson("site/data/x86-azure-2026-10-11.json");
+const azure = readJson("benchmark/records/x86-azure-2026-10-11.json");
 export type LoadRow = { label: string; shards: number; ruvio: { rps: number; p99: number }; redis: { rps: number; p99: number } };
 export const loadRun = {
-  file: "site/data/x86-azure-2026-10-11.json",
+  file: "benchmark/records/x86-azure-2026-10-11.json",
   date: azure.date as string,
   machine: `${azure.host.cpu}, ${azure.host.vcpus} vCPU (Azure VM)`,
   commit: azure.build.ruvio_commit as string,
@@ -172,6 +172,6 @@ function loadScale(file: string): Scale {
   };
 }
 
-export const scale = loadScale("site/data/x86-azure-2026-10-16-8-shards-final.json");
-export const scaleDeep = loadScale("site/data/x86-azure-2026-10-16-8-shards-p64-after.json");
-export const scaleEverysec = loadScale("site/data/x86-azure-2026-10-16-8-shards-everysec-after.json");
+export const scale = loadScale("benchmark/records/x86-azure-2026-10-16-8-shards-final.json");
+export const scaleDeep = loadScale("benchmark/records/x86-azure-2026-10-16-8-shards-p64-after.json");
+export const scaleEverysec = loadScale("benchmark/records/x86-azure-2026-10-16-8-shards-everysec-after.json");

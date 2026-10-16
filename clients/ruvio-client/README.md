@@ -1,10 +1,10 @@
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+  <a href="https://ruviodb.com/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/docs/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
 </p>
 
 <h1 align="center">ruvio-client <sub>Rust</sub></h1>
 
-<p align="center">Blocking RESP2 client for <a href="https://salihcantekin.github.io/ruvio/">Ruvio</a>, with cluster routing and a typed method for every listed command.</p>
+<p align="center">Blocking RESP2 client for <a href="https://ruviodb.com/">Ruvio</a>, with cluster routing and a typed method for every listed command.</p>
 
 <p align="center">
   <a href="https://crates.io/crates/ruvio-client"><img alt="crates.io" src="https://img.shields.io/crates/v/ruvio-client?label=crates.io"></a>
@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/client-rust.html">Rust guide</a> ·
+  <a href="https://ruviodb.com/docs/clients/rust/">Rust guide</a> ·
   <a href="https://docs.rs/ruvio-client">docs.rs</a> ·
   <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/README.md">All clients</a> ·
   <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
@@ -22,7 +22,7 @@
 
 ---
 
-Blocking RESP2 client for [Ruvio](https://salihcantekin.github.io/ruvio/). Connecting does not send `CLIENT SETINFO` or `HELLO`. Give the client one address; it sends `CLUSTER SLOTS` and, on a sharded server, opens one socket per shard and routes by hash slot. `MOVED` is followed up to three times per command. `MGET` / `MSET` / `DEL` / `EXISTS` / `UNLINK` / `TOUCH` split across slots; other commands whose keys span slots fail with `CROSSSLOT` before anything is sent. Methods take `&mut self` and are named after the command they send. They cover every command in [`docs/compatibility-matrix.json`](../../docs/compatibility-matrix.json) (287/287, checked by `tests/coverage.rs`) plus the options that change what Ruvio does. `execute` and `execute_many` send any argument list, as `redis-cli` would; `execute_binary` does the same with raw byte arguments.
+Blocking RESP2 client for [Ruvio](https://ruviodb.com/). Connecting does not send `CLIENT SETINFO` or `HELLO`. Give the client one address; it sends `CLUSTER SLOTS` and, on a sharded server, opens one socket per shard and routes by hash slot. `MOVED` is followed up to three times per command. `MGET` / `MSET` / `DEL` / `EXISTS` / `UNLINK` / `TOUCH` split across slots; other commands whose keys span slots fail with `CROSSSLOT` before anything is sent. Methods take `&mut self` and are named after the command they send. They cover every command in [`docs/compatibility-matrix.json`](../../docs/compatibility-matrix.json) (287/287, checked by `tests/coverage.rs`) plus the options that change what Ruvio does. `execute` and `execute_many` send any argument list, as `redis-cli` would; `execute_binary` does the same with raw byte arguments.
 
 ```rust
 use std::time::Duration;

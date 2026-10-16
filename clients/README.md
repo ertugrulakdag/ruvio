@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/"><img src="../site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+  <a href="https://ruviodb.com/"><img src="../docs/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
 </p>
 
 <h1 align="center">Ruvio clients</h1>
@@ -11,8 +11,8 @@
 </p>
 
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/clients.html">Clients guide</a> ·
-  <a href="https://salihcantekin.github.io/ruvio/packages.html">Packages</a> ·
+  <a href="https://ruviodb.com/docs/clients/">Clients guide</a> ·
+  <a href="https://ruviodb.com/get-started/">Packages</a> ·
   <a href="https://github.com/salihcantekin/ruvio/blob/main/integrations/README.md">Integrations</a> ·
   <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
 </p>

@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/"><img src="../../site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+  <a href="https://ruviodb.com/"><img src="../../docs/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
 </p>
 
 <h1 align="center">C# client and ASP.NET Core registration</h1>
@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/client-csharp.html">C# guide</a> ·
+  <a href="https://ruviodb.com/docs/clients/csharp/">C# guide</a> ·
   <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/README.md">All clients</a> ·
   <a href="https://github.com/salihcantekin/ruvio/blob/main/integrations/dotnet/README.md">Integrations</a> ·
   <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>

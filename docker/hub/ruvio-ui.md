@@ -3,7 +3,7 @@
 A browser console for one running Ruvio server: browse keys, run commands, manage ACL users and watch Pub/Sub.
 
 - Source: https://github.com/salihcantekin/ruvio (`clients/ruvio-ui`)
-- Documentation: https://salihcantekin.github.io/ruvio/ui.html
+- Documentation: https://ruviodb.com/get-started/#ui
 - Server image: https://hub.docker.com/r/salihcantekin/ruvio
 
 ## Run it

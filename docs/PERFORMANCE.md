@@ -33,7 +33,7 @@ must not be published as one.
 One noisy sample is not a regression and not a win. Repeat it before
 publishing a number. A new measurement goes in a new dated file in
 `docs/evidence/` (see [its README](evidence/README.md)); older records stay as
-they were. `site/testing-performance.html` shows the current numbers, and
+they were. The site's [benchmarks page](https://ruviodb.com/benchmarks/) shows the current numbers, and
 `README.md` links to them without copying the table.
 
 ## Changes that were measured and rejected

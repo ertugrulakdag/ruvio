@@ -1,10 +1,10 @@
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+  <a href="https://ruviodb.com/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/docs/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
 </p>
 
 <h1 align="center">Ruvio.Client <sub>NuGet</sub></h1>
 
-<p align="center">RESP2 client for <a href="https://salihcantekin.github.io/ruvio/">Ruvio</a> with typed methods for every server command, single-connection multiplexing and cluster routing.</p>
+<p align="center">RESP2 client for <a href="https://ruviodb.com/">Ruvio</a> with typed methods for every server command, single-connection multiplexing and cluster routing.</p>
 
 <p align="center">
   <a href="https://www.nuget.org/packages/Ruvio.Client"><img alt="NuGet" src="https://img.shields.io/nuget/v/Ruvio.Client?label=nuget"></a>
@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/client-csharp.html">C# guide</a> ·
+  <a href="https://ruviodb.com/docs/clients/csharp/">C# guide</a> ·
   <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/csharp/README.md">All C# projects</a> ·
   <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
 </p>
@@ -62,7 +62,7 @@ keys must share one slot, or the call fails with `CROSSSLOT` before anything is 
 Cluster transactions are deliberately not supported by this API; unsupported commands fail
 explicitly. Existing string APIs are unchanged.
 
-RESP2 client for [Ruvio](https://salihcantekin.github.io/ruvio/). Connecting does not send `CLIENT SETINFO` or `HELLO`. The typed methods cover every command in `docs/compatibility-matrix.json` (287/287) and the options that change what Ruvio does; `MatrixCoverageTests` fails when a matrix command has no typed method, and `LiveCommandTests` sends every one of them to a real server. `FLUSHDB ASYNC` (it runs synchronously) and `HELLO AUTH`/`SETNAME` have no typed form. Anything else can go through `ExecuteAsync` with the same argument lists as `redis-cli`.
+RESP2 client for [Ruvio](https://ruviodb.com/). Connecting does not send `CLIENT SETINFO` or `HELLO`. The typed methods cover every command in `docs/compatibility-matrix.json` (287/287) and the options that change what Ruvio does; `MatrixCoverageTests` fails when a matrix command has no typed method, and `LiveCommandTests` sends every one of them to a real server. `FLUSHDB ASYNC` (it runs synchronously) and `HELLO AUTH`/`SETNAME` have no typed form. Anything else can go through `ExecuteAsync` with the same argument lists as `redis-cli`.
 
 ## Command coverage
 

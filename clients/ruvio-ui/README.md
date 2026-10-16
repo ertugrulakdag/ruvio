@@ -1,10 +1,10 @@
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+  <a href="https://ruviodb.com/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/docs/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
 </p>
 
 <h1 align="center">Ruvio UI</h1>
 
-<p align="center">Browser operator UI for one running <a href="https://salihcantekin.github.io/ruvio/">Ruvio</a> server: data, command forms, Pub/Sub and ACL users.</p>
+<p align="center">Browser operator UI for one running <a href="https://ruviodb.com/">Ruvio</a> server: data, command forms, Pub/Sub and ACL users.</p>
 
 <p align="center">
   <a href="https://hub.docker.com/r/salihcantekin/ruvio-ui"><img alt="Docker" src="https://img.shields.io/docker/v/salihcantekin/ruvio-ui?sort=semver&label=docker"></a>
@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/ui.html">Operator UI guide</a> ·
+  <a href="https://ruviodb.com/get-started/#ui">Operator UI guide</a> ·
   <a href="https://hub.docker.com/r/salihcantekin/ruvio-ui">Docker Hub</a> ·
   <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
 </p>

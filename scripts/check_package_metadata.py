@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 REPO = "https://github.com/salihcantekin/ruvio"
-SITE = "https://salihcantekin.github.io/ruvio/"
+SITE = "https://ruviodb.com/"
 errors = []
 
 

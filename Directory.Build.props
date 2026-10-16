@@ -12,7 +12,7 @@
     <PackageIcon>ruvio-icon.png</PackageIcon>
     <RepositoryUrl>https://github.com/salihcantekin/ruvio</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageProjectUrl>https://salihcantekin.github.io/ruvio/</PackageProjectUrl>
+    <PackageProjectUrl>https://ruviodb.com/</PackageProjectUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>

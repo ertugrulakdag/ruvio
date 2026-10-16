@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+  <a href="https://ruviodb.com/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/docs/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
 </p>
 
 <h1 align="center">Ruvio.Client.AspNetCore <sub>NuGet</sub></h1>
@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/client-csharp.html">C# guide</a> ·
+  <a href="https://ruviodb.com/docs/clients/csharp/">C# guide</a> ·
   <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/csharp/README.md">All C# projects</a> ·
   <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
 </p>

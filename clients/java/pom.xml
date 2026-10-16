@@ -11,7 +11,7 @@
 
   <name>ruvio-client</name>
   <description>Multiplexed, allocation-light RESP client for the Ruvio key-value server</description>
-  <url>https://salihcantekin.github.io/ruvio/</url>
+  <url>https://ruviodb.com/</url>
 
   <licenses>
     <license>

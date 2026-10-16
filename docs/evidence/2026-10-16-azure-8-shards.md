@@ -1,6 +1,6 @@
 # Eight shards on one machine against Redis: one core and an eight-node cluster
 
-Throughput and memory for the 60 commands of `scripts/redis_compare_features.py`, Ruvio with eight shards in one process (`port_mode = "per-shard"`) against one Redis process on one core and against a Redis Cluster of eight masters on the same eight cores. Raw data, every sample and the one-shard control run: [site/data/x86-azure-2026-10-16-8-shards.json](../../site/data/x86-azure-2026-10-16-8-shards.json).
+Throughput and memory for the 60 commands of `scripts/redis_compare_features.py`, Ruvio with eight shards in one process (`port_mode = "per-shard"`) against one Redis process on one core and against a Redis Cluster of eight masters on the same eight cores. Raw data, every sample and the one-shard control run: [benchmark/records/x86-azure-2026-10-16-8-shards.json](../../benchmark/records/x86-azure-2026-10-16-8-shards.json).
 
 ## Conditions (read before quoting any number)
 
@@ -101,7 +101,7 @@ What the day's two runs changed: the first eight-shard run of the same binary me
 
 ## Follow-up runs the same evening
 
-Data: [x86-azure-2026-10-16-8-shards-everysec.json](../../site/data/x86-azure-2026-10-16-8-shards-everysec.json) and [x86-azure-2026-10-16-8-shards-p64.json](../../site/data/x86-azure-2026-10-16-8-shards-p64.json); same host, same method, Ruvio at `f4920ac` (non-blocking `PUBLISH` fan-out added).
+Data: [x86-azure-2026-10-16-8-shards-everysec.json](../../benchmark/records/x86-azure-2026-10-16-8-shards-everysec.json) and [x86-azure-2026-10-16-8-shards-p64.json](../../benchmark/records/x86-azure-2026-10-16-8-shards-p64.json); same host, same method, Ruvio at `f4920ac` (non-blocking `PUBLISH` fan-out added).
 
 ### `PUBLISH` after the non-blocking fan-out
 
@@ -131,7 +131,7 @@ Open: extend the WAL group list to the synchronous in-place commands above (each
 
 ## After the three fixes (same evening, commit `7376885`)
 
-Data: [x86-azure-2026-10-16-8-shards-everysec-after.json](../../site/data/x86-azure-2026-10-16-8-shards-everysec-after.json) and [x86-azure-2026-10-16-8-shards-p64-after.json](../../site/data/x86-azure-2026-10-16-8-shards-p64-after.json), same host and method as the two grids above. The fixes: `SLOWLOG` timed with the cycle counter instead of two vDSO clock calls per command; `INCRBYFLOAT`, `SETRANGE`, `BITFIELD`, `COPY`, `LSET` and plain `LMOVE` join the WAL group; a `SADD` whose members are all present logs nothing.
+Data: [x86-azure-2026-10-16-8-shards-everysec-after.json](../../benchmark/records/x86-azure-2026-10-16-8-shards-everysec-after.json) and [x86-azure-2026-10-16-8-shards-p64-after.json](../../benchmark/records/x86-azure-2026-10-16-8-shards-p64-after.json), same host and method as the two grids above. The fixes: `SLOWLOG` timed with the cycle counter instead of two vDSO clock calls per command; `INCRBYFLOAT`, `SETRANGE`, `BITFIELD`, `COPY`, `LSET` and plain `LMOVE` join the WAL group; a `SADD` whose members are all present logs nothing.
 
 | Grid (59 rows, Ruvio / Redis Cluster) | Before, geometric mean | After | Rows below 0.90× | Rows at or above 0.97× |
 | --- | ---: | ---: | ---: | ---: |
@@ -142,4 +142,4 @@ The rows the fixes aimed at, `everysec`: `LSET` 0.53× → 1.09×, `SETRANGE` 0.
 
 ## Final grid with the fixed binary (pipeline 16, memory table included)
 
-[x86-azure-2026-10-16-8-shards-final.json](../../site/data/x86-azure-2026-10-16-8-shards-final.json), the run the site shows: same method as the first table, Ruvio at `7376885`. Against the eight-node Redis Cluster the geometric mean over the 59 rows without `PUBLISH` is 1.13× (median 1.05×, 55 rows at or above 0.97×, none below 0.90×); per core against one Redis 1.09×; memory per shard against one Redis, geometric mean over the twelve shapes, 0.96×. `PUBLISH` 2.98M/s against 2.19M/s (1.36×). `GET` stays 0.96× at this pipeline depth, where one client core per shard is the limit (see the pipeline-64 grid above).
+[x86-azure-2026-10-16-8-shards-final.json](../../benchmark/records/x86-azure-2026-10-16-8-shards-final.json), the run the site shows: same method as the first table, Ruvio at `7376885`. Against the eight-node Redis Cluster the geometric mean over the 59 rows without `PUBLISH` is 1.13× (median 1.05×, 55 rows at or above 0.97×, none below 0.90×); per core against one Redis 1.09×; memory per shard against one Redis, geometric mean over the twelve shapes, 0.96×. `PUBLISH` 2.98M/s against 2.19M/s (1.36×). `GET` stays 0.96× at this pipeline depth, where one client core per shard is the limit (see the pipeline-64 grid above).

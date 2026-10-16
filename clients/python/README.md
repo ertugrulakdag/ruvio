@@ -1,10 +1,10 @@
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/site/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
+  <a href="https://ruviodb.com/"><img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/docs/images/ruvio-mark.png" width="88" alt="Ruvio"></a>
 </p>
 
 <h1 align="center">ruvio-client <sub>Python</sub></h1>
 
-<p align="center">Sync and asyncio client for <a href="https://salihcantekin.github.io/ruvio/">Ruvio</a>. No runtime dependencies, typed.</p>
+<p align="center">Sync and asyncio client for <a href="https://ruviodb.com/">Ruvio</a>. No runtime dependencies, typed.</p>
 
 <p align="center">
   <a href="https://pypi.org/project/ruvio-client/"><img alt="PyPI" src="https://img.shields.io/pypi/v/ruvio-client?label=PyPI"></a>
@@ -14,14 +14,14 @@
 </p>
 
 <p align="center">
-  <a href="https://salihcantekin.github.io/ruvio/client-python.html">Python guide</a> ·
+  <a href="https://ruviodb.com/docs/clients/python/">Python guide</a> ·
   <a href="https://github.com/salihcantekin/ruvio/blob/main/clients/README.md">All clients</a> ·
   <a href="https://github.com/salihcantekin/ruvio">Ruvio server</a>
 </p>
 
 ---
 
-Python client for [Ruvio](https://salihcantekin.github.io/ruvio/). It has no runtime
+Python client for [Ruvio](https://ruviodb.com/). It has no runtime
 dependencies and needs Python 3.9 or newer. It ships type information (`py.typed`).
 
 - `ruvio.Ruvio` is the synchronous client. It uses one socket and a reusable `recv_into` buffer.

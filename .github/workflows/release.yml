@@ -195,7 +195,7 @@ jobs:
           fi
           git add Cargo.toml Cargo.lock clients/ruvio-client/Cargo.toml clients/ruvio-client/Cargo.lock clients/ruvio-ui/Cargo.toml clients/ruvio-ui/Cargo.lock clients/csharp/Ruvio.Client/Ruvio.Client.csproj clients/csharp/Ruvio.Client.AspNetCore/Ruvio.Client.AspNetCore.csproj clients/node/package.json clients/node/package-lock.json clients/python/pyproject.toml clients/python/ruvio/__init__.py clients/java/pom.xml docs/compatibility-matrix.json \
             CHANGELOG.md clients/ruvio-client/CHANGELOG.md clients/csharp/CHANGELOG.md clients/ruvio-ui/CHANGELOG.md clients/node/CHANGELOG.md clients/python/CHANGELOG.md clients/java/CHANGELOG.md \
-            README.md site/start.html site/packages.html
+            README.md
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "Set release versions to server ${server}, rust client ${rust_client}, C# ${csharp}, UI ${ui}, npm ${node}, PyPI ${python}, and Maven ${java}."
           git push origin HEAD
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"

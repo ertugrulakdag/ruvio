@@ -2,7 +2,7 @@
 
 # Examples and probes
 
-Small programs that exercise one part of the server in-process or against a running instance. They are for contributors; the client examples are on the [site](https://salihcantekin.github.io/ruvio/examples.html).
+Small programs that exercise one part of the server in-process or against a running instance. They are for contributors; the client examples are on the [site](https://ruviodb.com/examples/).
 
 | File | What it measures or shows |
 | --- | --- |
