@@ -12,7 +12,7 @@ const jobs = [
   { title: "Caches without stampedes", cmds: ["FILLGET", "FILLSET"], text: "When a hot key expires, one caller refills it while the others wait or get the stale copy.", href: "/use-cases/#cache" },
   { title: "Locks and leases", cmds: ["LEASE", "RELEASE", "SEMAPHORE"], text: "A named lease returns a fencing token; a semaphore caps holders, each with its own expiry.", href: "/use-cases/#locks" },
   { title: "Conditional writes", cmds: ["SETV", "TAKE", "IDEM"], text: "Versioned writes, stock that cannot go negative, and request replays that return the stored answer.", href: "/use-cases/#versions" },
-  { title: "Rate limits", cmds: ["LIMIT"], text: "A fixed window per key in one call, returning what is left of the allowance.", href: "/use-cases/#ratelimit" },
+  { title: "Rate limits", cmds: ["LIMIT"], text: "A fixed window per key in one call, returning what is left of the allowance.", href: "/use-cases/#rate-limits" },
   { title: "Change feeds", cmds: ["CHANGES"], text: "Read the writes on a shard from a cursor instead of polling keys.", href: "/use-cases/#changes" },
   { title: "Delayed jobs", cmds: ["XADD … DELAY"], text: "A stream entry stays hidden from consumer groups until its delay passes.", href: "/use-cases/#delayed" },
 ];
