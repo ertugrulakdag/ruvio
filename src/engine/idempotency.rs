@@ -179,6 +179,74 @@ fn state(value: &'static [u8]) -> Response<'static> {
     Response::Array(vec![Some(Cow::Borrowed(value))])
 }
 
+#[inline(always)]
+pub(super) fn limit<'a, C: Clock, I: StorageIndex, S: MutationSink>(
+    shard: &'a mut KvShard<C, I>,
+    sink: &mut S,
+    key: crate::protocol::Bytes<'a>,
+    max: u64,
+    window_ms: u64,
+) -> Result<Response<'a>, S::Error> {
+    let planned = match shard.plan_limit(&key, max, window_ms) {
+        Ok(planned) => planned,
+        Err(_) => return Ok(wrong_type()),
+    };
+
+    let crate::store::LimitDecision::Allow {
+        used,
+        window_end,
+        remaining,
+    } = planned
+    else {
+        return Ok(Response::Bulk(None));
+    };
+
+    let fresh = used == 1;
+
+    if let Some(rejected) = before_mutation(
+        shard,
+        sink,
+        [key.as_ref()],
+        if fresh {
+            key.len() + ADMISSION_OVERHEAD_BYTES
+        } else {
+            0
+        },
+    )? {
+        return Ok(rejected);
+    }
+
+    match window_end {
+        // A new window: the counter and its end in one record.
+        Some(expires_at) => sink.record(Mutation::Transaction {
+            mutations: &[
+                OwnedMutation::LimitPut {
+                    key: key.to_vec(),
+                    used,
+                    expires_at: None,
+                },
+                OwnedMutation::ExpireAt {
+                    key: key.to_vec(),
+                    unix_millis: expires_at,
+                },
+            ],
+        })?,
+        None => sink.record(Mutation::LimitPut { key: &key, used })?,
+    }
+
+    if shard.put_limit(&key, used).is_err() {
+        debug_assert!(false, "limit put failed after validation");
+
+        return Ok(wrong_type());
+    }
+
+    if let Some(expires_at) = window_end {
+        shard.expire_at(&key, UnixMillis::new(expires_at));
+    }
+
+    Ok(Response::Integer(remaining as i64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

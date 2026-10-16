@@ -411,3 +411,63 @@ pub(super) fn block_pop_sorted<'a, C: Clock, I: StorageIndex, S: MutationSink>(
         sorted: Some(max),
     })
 }
+
+#[inline(always)]
+pub(super) fn sorted_set_incr<'a, C: Clock, I: StorageIndex, S: MutationSink, W: ListWaiterSink>(
+    shard: &'a mut KvShard<C, I>,
+    sink: &mut S,
+    waiters: &mut W,
+    key: crate::protocol::Bytes<'a>,
+    delta: f64,
+    member: crate::protocol::Bytes<'a>,
+) -> Result<Response<'a>, S::Error> {
+    if delta.is_nan() {
+        return Ok(sorted_set_error(SortedSetError::InvalidIncrement));
+    }
+
+    if !accepts_type(shard, &key, ValueKind::SortedSet) {
+        return Ok(wrong_type());
+    }
+
+    let current = shard
+        .sorted_set_score(&key, &member)
+        .expect("type was validated");
+    let next = current.unwrap_or(0.0) + delta;
+
+    if next.is_nan() {
+        return Ok(sorted_set_error(SortedSetError::InvalidIncrement));
+    }
+
+    if let Some(rejected) = before_mutation(
+        shard,
+        sink,
+        [key.as_ref()],
+        key.len() + member.len() + ADMISSION_OVERHEAD_BYTES,
+    )? {
+        return Ok(rejected);
+    }
+
+    if !shard.sorted_set_make_room(&key, false, std::iter::once(member.as_ref())) {
+        return Ok(sorted_set_error(SortedSetError::Full));
+    }
+
+    let pair = [(next, member)];
+
+    sink.record(Mutation::SortedSetAdd {
+        key: &key,
+        pairs: &pair,
+    })?;
+
+    match shard.sorted_set_add(&key, next, &pair[0].1) {
+        Ok(_) => {
+            wake_sorted_waiters(shard, sink, waiters, &key)?;
+
+            Ok(Response::Double(next))
+        }
+
+        Err(error) => {
+            debug_assert!(false, "sorted-set increment failed after validation");
+            Ok(sorted_set_error(error))
+        }
+    }
+}

@@ -219,3 +219,252 @@ pub(super) fn json_value<C: Clock, I: StorageIndex>(
         Err(_) => Err(wrong_type()),
     }
 }
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn json_op<'a, C: Clock, I: StorageIndex, S: MutationSink, W: ListWaiterSink>(
+    shard: &'a mut KvShard<C, I>,
+    sink: &mut S,
+    waiters: &mut W,
+    database: u8,
+    op: crate::protocol::JsonOpKind,
+    key: crate::protocol::Bytes<'a>,
+    path: crate::protocol::Bytes<'a>,
+    args: Vec<crate::protocol::Bytes<'a>>,
+) -> Result<Response<'a>, S::Error> {
+    if op == crate::protocol::JsonOpKind::ArrAppend {
+        return arr_append(shard, sink, waiters, database, key, path, args);
+    }
+    let current = match json_value(shard, &key, &path) {
+        Ok(Some(current)) => current,
+        Ok(None) => return Ok(Response::Bulk(None)),
+        Err(response) => return Ok(response),
+    };
+    match json_ops::plan(op, &current, &args) {
+        json_ops::Plan::Respond(response) => Ok(response),
+        json_ops::Plan::Delete { index, popped } => {
+            let mut element = path.to_vec();
+
+            element.extend_from_slice(format!("[{index}]").as_bytes());
+
+            let removed = execute_in_database(
+                shard,
+                Command::JsonDel {
+                    key,
+                    path: Cow::Owned(element),
+                },
+                sink,
+                waiters,
+                database,
+            )?;
+            Ok(match removed {
+                Response::Integer(_) => Response::Bulk(Some(Cow::Owned(popped))),
+                other => other,
+            })
+        }
+        json_ops::Plan::Write { value, reply } => {
+            // CLEAR and ARRTRIM only shrink the document; Redis does not flag them
+            // `denyoom`, so a full store still runs them.
+            let on_oom = if matches!(
+                op,
+                crate::protocol::JsonOpKind::Clear | crate::protocol::JsonOpKind::ArrTrim
+            ) {
+                OnOom::Allow
+            } else {
+                OnOom::Refuse
+            };
+            let written = json_set_at(shard, sink, key, path, Cow::Owned(value), true, on_oom)?;
+            Ok(match written {
+                Response::Simple(_) => reply.into_response(),
+                other => other,
+            })
+        }
+    }
+}
+
+#[inline(always)]
+pub(super) fn json_merge<'a, C: Clock, I: StorageIndex, S: MutationSink>(
+    shard: &'a mut KvShard<C, I>,
+    sink: &mut S,
+    key: crate::protocol::Bytes<'a>,
+    path: crate::protocol::Bytes<'a>,
+    value: crate::protocol::Bytes<'a>,
+) -> Result<Response<'a>, S::Error> {
+    if path.as_ref() != b"$"
+        && let Some(tree) = shard.json_tree(&key)
+    {
+        let edit = match tree.prepare(&path, Some(&value), true) {
+            Ok(Some(edit)) => edit,
+            Ok(None) => return Ok(Response::Bulk(None)),
+            Err(crate::json::JsonError::MissingRoot) => {
+                return Ok(Response::Bulk(None));
+            }
+            Err(crate::json::JsonError::Syntax) => {
+                return Ok(Response::Error(b"ERR invalid JSON value"));
+            }
+            Err(crate::json::JsonError::Path) => {
+                return Ok(Response::Error(b"ERR invalid JSON path"));
+            }
+        };
+        if edit.len() > crate::protocol::DEFAULT_MAX_VALUE_BYTES {
+            return Ok(Response::Error(
+                b"ERR JSON document exceeds maximum value size",
+            ));
+        }
+        let extra = edit.charge().saturating_sub(tree.charge());
+        if let Some(rejected) = before_mutation(shard, sink, [key.as_ref()], extra)? {
+            return Ok(rejected);
+        }
+        sink.record(Mutation::JsonMergePath {
+            key: &key,
+            path: &path,
+            value: &value,
+        })?;
+        shard.apply_json_tree_edit(&key, edit);
+        return Ok(Response::Simple(b"OK"));
+    }
+    let tree_document = shard.json_tree(&key).map(|tree| tree.to_vec());
+    let current = match shard.json_view(&key) {
+        Err(_) if tree_document.is_some() => tree_document.as_deref(),
+        Ok(current) => current,
+        Err(_) => return Ok(wrong_type()),
+    };
+    let previous_len = current.map_or(0, <[u8]>::len);
+    let existing = current.is_some();
+    let document = match crate::json::merge(current, &path, &value) {
+        Ok(Some(document)) => document,
+        Ok(None) => return Ok(Response::Bulk(None)),
+        Err(crate::json::JsonError::MissingRoot) => {
+            return Ok(Response::Error(
+                b"ERR new JSON documents must be created at root",
+            ));
+        }
+        Err(crate::json::JsonError::Syntax) => {
+            return Ok(Response::Error(b"ERR invalid JSON value"));
+        }
+        Err(crate::json::JsonError::Path) => {
+            return Ok(Response::Error(b"ERR invalid JSON path"));
+        }
+    };
+    if document.len() > crate::protocol::DEFAULT_MAX_VALUE_BYTES {
+        return Ok(Response::Error(
+            b"ERR JSON document exceeds maximum value size",
+        ));
+    }
+    let stored_charge = shard
+        .json_tree(&key)
+        .map_or(previous_len, |tree| tree.charge());
+    // Same rule replay applies to the recorded path merge: a small merge into a
+    // large compact document keeps it compact.
+    let small_edit = path.as_ref() != b"$"
+        && value.len() <= crate::store::SMALL_JSON_EDIT
+        && tree_document.is_none()
+        && previous_len >= crate::json::TREE_THRESHOLD;
+    let candidate_tree = if small_edit {
+        None
+    } else {
+        crate::json::TreeDocument::from_bytes(&document)
+    };
+    let candidate_charge = candidate_tree
+        .as_ref()
+        .map_or(document.capacity(), |tree| tree.charge());
+    let extra = candidate_charge.saturating_sub(stored_charge)
+        + if current.is_none() {
+            key.len() + ADMISSION_OVERHEAD_BYTES
+        } else {
+            0
+        };
+    if let Some(rejected) = before_mutation(shard, sink, [key.as_ref()], extra)? {
+        return Ok(rejected);
+    }
+    if path.as_ref() != b"$" && existing {
+        sink.record(Mutation::JsonMergePath {
+            key: &key,
+            path: &path,
+            value: &value,
+        })?;
+    } else {
+        sink.record(Mutation::JsonPut {
+            key: &key,
+            value: &document,
+        })?;
+    }
+    shard
+        .put_json_edit_with(
+            &key,
+            document,
+            small_edit,
+            (!small_edit).then_some(candidate_tree),
+        )
+        .expect("JSON type validated before recording");
+    Ok(Response::Simple(b"OK"))
+}
+
+#[inline(always)]
+pub(super) fn json_del<'a, C: Clock, I: StorageIndex, S: MutationSink>(
+    shard: &'a mut KvShard<C, I>,
+    sink: &mut S,
+    key: crate::protocol::Bytes<'a>,
+    path: crate::protocol::Bytes<'a>,
+) -> Result<Response<'a>, S::Error> {
+    if let Some(tree) = shard.json_tree(&key) {
+        if path.as_ref() == b"$" {
+            before_mutation_allow_oom(shard, sink, [key.as_ref()], 0)?;
+            sink.record(Mutation::Delete {
+                keys: std::slice::from_ref(&key),
+            })?;
+            shard.delete(&key);
+            return Ok(Response::Integer(1));
+        }
+        let edit = match tree.prepare(&path, None, false) {
+            Ok(Some(edit)) => edit,
+            Ok(None) | Err(crate::json::JsonError::MissingRoot) => {
+                return Ok(Response::Integer(0));
+            }
+            Err(_) => return Ok(Response::Error(b"ERR invalid JSON path")),
+        };
+        before_mutation_allow_oom(shard, sink, [key.as_ref()], 0)?;
+        sink.record(Mutation::JsonDelPath {
+            key: &key,
+            path: &path,
+        })?;
+        shard.apply_json_tree_edit(&key, edit);
+        return Ok(Response::Integer(1));
+    }
+    let current = match shard.json_view(&key) {
+        Ok(None) if crate::json::validate_path(&path).is_err() => {
+            return Ok(Response::Error(b"ERR invalid JSON path"));
+        }
+        Ok(None) => return Ok(Response::Integer(0)),
+        Ok(Some(current)) => current,
+        Err(_) => return Ok(wrong_type()),
+    };
+    let root = path.as_ref() == b"$";
+    let document = if root {
+        None
+    } else {
+        match crate::json::del(current, &path) {
+            Ok(Some(document)) => Some(document),
+            Ok(None) => return Ok(Response::Integer(0)),
+            Err(_) => return Ok(Response::Error(b"ERR invalid JSON path")),
+        }
+    };
+    before_mutation_allow_oom(shard, sink, [key.as_ref()], 0)?;
+    if let Some(document) = document {
+        sink.record(Mutation::JsonDelPath {
+            key: &key,
+            path: &path,
+        })?;
+        // A delete must not turn a large compact document into a tree: that can
+        // double its size on a store too full for anything but deletes.
+        shard
+            .put_json_edit(&key, document, true)
+            .expect("JSON type validated before recording");
+    } else {
+        sink.record(Mutation::Delete {
+            keys: std::slice::from_ref(&key),
+        })?;
+        shard.delete(&key);
+    }
+    Ok(Response::Integer(1))
+}
