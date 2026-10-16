@@ -1,3 +1,5 @@
+[Ruvio](../README.md) / [Docs](README.md) / Architecture
+
 # Ruvio Architecture
 
 Ruvio is structured as a shared-nothing in-memory key-value store. The design goal is to keep hot data local to a single execution context and avoid the cache-line bouncing, mutex contention, and scheduler churn that appear in traditional multi-threaded designs.
@@ -18,9 +20,9 @@ The storage, protocol, and routing layers remain independent of asynchronous run
 
 The tradeoff is that ownership matters. Data must be routed to the right shard up front, but the gain is that once the request arrives, the shard can operate without locks in its hot path.
 
-Redis-compatible key hashing selects a slot and its static shard owner. Online rebalancing and cross-slot transactions are not implemented. A slow shard can delay other requests on that shard; a fast shard is not guaranteed to retain its unloaded throughput under skew. See `INFRASTRUCTURE_IMPROVEMENTS.md`.
+Redis-compatible key hashing selects a slot and its static shard owner. Online rebalancing and cross-slot transactions are not implemented. A slow shard can delay other requests on that shard; a fast shard is not guaranteed to retain its unloaded throughput under skew.
 
-Linux, macOS, and Windows run the same evented runtime. The command engine does not depend on epoll, kqueue, or IOCP. See `PORTABILITY.md`.
+Linux, macOS, and Windows run the same evented runtime. The command engine does not depend on epoll, kqueue, or IOCP. See [PORTABILITY](PORTABILITY.md).
 
 Multi-shard mode divides the Redis-compatible 16,384 hash slots across shard owners. Each executor listens on a consecutive port and owns its shard exclusively. Requests arriving at the wrong shard receive `MOVED`, while multi-key requests spanning slots receive `CROSSSLOT`. `CLUSTER SLOTS` / `SHARDS` / `NODES` / `INFO` / `MYID` / `KEYSLOT` describe that static map. Official clients take one seed address and route by slot. There is no cluster bus, slot migration, or failover.
 
@@ -42,7 +44,7 @@ The `examples/02_simd_search.rs` file demonstrates the core pattern: compare mul
 
 ## Zero-Copy Networking
 
-Zero-copy in this project means zero-copy parsing: the wire format is designed so incoming bytes can be viewed directly as structured data rather than decoded into temporary heap allocations. It does not claim that the kernel-to-userspace network transfer is copy-free.
+Zero-copy in this project means zero-copy parsing: a command's arguments are spans into the connection's input buffer (`Args` in `src/protocol/table.rs`), so a command whose arguments are single values is parsed without a heap allocation; `tests/zero_alloc.rs` holds that for the hot commands. It does not claim that the kernel-to-userspace network transfer is copy-free.
 
 That is a mechanical advantage because it removes:
 
@@ -50,15 +52,18 @@ That is a mechanical advantage because it removes:
 - extra memcpy work,
 - unnecessary cache pollution from transient objects.
 
-The wire header uses network byte order and alignment-1 integer wrappers so it can be read from arbitrary packet boundaries. Lengths must be validated before slicing. In production, pair that format with bounded length-prefixed frames, registered or pooled buffers, and careful ownership boundaries so a buffer cannot be reused while a parsed view still borrows it.
+`examples/03_zero_copy.rs` shows the same idea for a binary header: network byte order and alignment-1 integer wrappers, so the header can be read at any offset. In both cases lengths are validated before slicing, frames are bounded, and a buffer is not reused while a parsed view still borrows it.
 
 ## Current Storage Core
 
-`KvShard` is a correctness-oriented, single-owner reference shard. It deliberately has no locks. Keys and values are copied once into shard-owned boxed slices; reads borrow those stored bytes without allocating.
+`KvShard` (`src/store/`) is the single-owner shard. It has no locks. Its key index, `AHashIndex` in `src/index.rs`, keeps each key once and stores almost nothing per key besides it:
 
-The shard uses randomized AHash indexes. This is not a claim of peak performance; open-addressing layouts, deletion behavior, and memory fragmentation still require realistic workload measurements.
+- **Key log.** Every key is a record in a paged byte log (`ValueLog`): a 4-byte header, the key bytes, and a small payload. The payload is the value itself when it is an integer, an offset and length into the shard's value log for a string of at most 64 bytes, or the id of a heap string, an object, or a slab slot.
+- **Slot table.** A trimmed hashbrown `HashTable` (`src/slots.rs`, `src/hashbrown/`) holds a 4-byte key-log address per key, hashed with a randomized AHash seed. It grows incrementally, so one write never rehashes the whole table.
+- **Values.** Strings of at most 64 bytes live in the shard's value log; longer strings are heap buffers, recycled through a bounded size-class pool up to 64 KiB. Small sets, sorted sets, lists and hashes are packed into slab pages by size class; larger collections become objects (`Entry`, `src/store/value.rs`). Log pages whose live bytes reach zero are returned to the allocator, and sparse pages are compacted during maintenance.
+- **Side tables.** TTL deadlines and eviction recency live outside the key record. A key with no deadline pays nothing for TTL, and the recency cells stay unallocated until an eviction policy needs them.
 
-The current shard uses AHash indexes and a bounded size-class pool for byte-value buffers up to 64 KiB. Deletes return eligible buffers to the owning shard, and later writes reuse them without cross-thread synchronization. The pool is intentionally bounded per size class; unlike an unbounded bump arena, it does not retain every deleted value indefinitely.
+`tests/layout.rs` pins the sizes this layout depends on. The memory per structure, measured against Redis, is in the [measurement records](evidence/README.md).
 
 Expiration metadata is stored as absolute Unix milliseconds rather than
 process-local `Instant` values, making it suitable for snapshots and restart.
@@ -73,14 +78,14 @@ payloads, collection capacity, primary-index capacity, and retained pool
 buffers are charged separately. Signed deltas between snapshots describe a
 mutation without scanning the keyspace. The charge model is deterministic for
 limits and eviction decisions; it is deliberately not presented as process
-RSS. See `MEMORY_ACCOUNTING.md`.
+RSS. See [MEMORY_ACCOUNTING](MEMORY_ACCOUNTING.md).
 
-The primary key index is a compile-time `StorageIndex` parameter. Production
+The key index is a compile-time `StorageIndex` parameter. Production
 uses `AHashIndex`; an ordered `BTreeIndex` provides a conformance baseline.
 The index trait is deliberately incompatible with trait objects, so alternate
 layouts do not add virtual dispatch to shard operations. Storage semantics,
 expiration, memory accounting, and persistence remain outside the index. See
-`STORAGE_LAYOUT.md`.
+[STORAGE_LAYOUT](STORAGE_LAYOUT.md).
 
 The server binary uses mimalloc by default. The `mimalloc-allocator` feature can be disabled to compare against the system allocator. Allocator choices must be retained only when repeated workload-specific measurements justify them.
 
@@ -88,7 +93,9 @@ The server binary uses mimalloc by default. The `mimalloc-allocator` feature can
 
 The `ruvio` binary runs the evented runtime only. Each shard owner parses requests from its sockets, applies commands and encodes responses on its Tokio `current_thread` executor; borrowed reads stay on the owner until encoded. Hot and fallback RESP parsers borrow from bounded connection input buffers. The server validates protocol and connection limits before opening listeners, enforces connection timeouts, and bounds global and per-source-IP admission. Shard owners share the admission tracker on accept/disconnect, not for each command.
 
-WAL-backed `primary` and `replica` roles provide asynchronous per-shard WAL tail replication. A replica can install a usable checkpoint after a compacted WAL gap and then catch up from the tail. The writer does not wait for replicas unless a client explicitly uses `WAIT`; `WAIT` does not roll back a write on timeout. No election, automatic promotion, online slot migration or cluster bus is provided. See `RECOVERY.md` and `COMPATIBILITY.md`.
+WAL-backed `primary` and `replica` roles provide asynchronous per-shard WAL tail replication. A replica can install a usable checkpoint after a compacted WAL gap and then catch up from the tail. The writer does not wait for replicas unless a client explicitly uses `WAIT`; `WAIT` does not roll back a write on timeout. No election, automatic promotion, online slot migration or cluster bus is provided. See [RECOVERY](RECOVERY.md) and [COMPATIBILITY](COMPATIBILITY.md).
+
+One structure is shared between shards on purpose: string keys matching a configured `hot_keys` glob live in one process-wide striped map (`src/hot_store/`), so every shard serves them without `MOVED`; only `GET`, `SET` and `DEL` are allowed on them ([CONFIGURATION](CONFIGURATION.md)). Everything else is owned by exactly one shard.
 
 ## Production Gaps
 
@@ -101,11 +108,11 @@ This is not a certified production cluster. Before making stronger availability 
 
 Report at least p50, p95, p99, and p99.9 latency together with throughput, CPU utilization, allocation rate, key/value distribution, connection count, compiler version, kernel version, and CPU model. Compare against a scalar or conventional threaded baseline.
 
-## Practical Boundary
+## Invariants
 
-This scaffold is intentionally small. The examples show the core techniques in isolation so the eventual storage engine can be built around a few stable invariants:
+The module map is in [DEVELOPING](DEVELOPING.md#server-module-map). Whatever the module, these hold:
 
-- one shard owns one memory region,
-- one executor owns one shard,
-- wire data stays layout-compatible with its Rust representation,
-- hot scans use cache-friendly data layout and SIMD where it helps.
+- one shard owns its memory, and one executor owns one shard;
+- cross-shard work is a message to the owner, never shared state (the `hot_keys` store above is the one exception);
+- a command is parsed from borrowed spans and, on the hot paths, allocates nothing (`tests/zero_alloc.rs`);
+- a write reaches the WAL in the shard's mutation order before its reply, as the durability profile requires.
