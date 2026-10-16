@@ -10,6 +10,8 @@ What the six clients do when a cluster redirects, a command spans slots, or a so
 | --- | --- |
 | `testdata/slots.json` (key to hash slot, with hash tags and non-ASCII keys) | the server (`src/routing.rs`) and one test per client (`slot_vectors`) |
 | `../docs/compatibility-matrix.json` (every command) | each client's coverage test |
+| `testdata/commands.json` (arity, flags and key rule per command) | the server (`src/protocol/client_spec.rs`); `scripts/gen_client_keys.py` turns it into each client's key table |
+| `testdata/key_vectors.json` (commands with the keys the server routes them by) | the server and one test per client (`key_vectors`) |
 
 ## Same in every client
 
@@ -34,11 +36,11 @@ What the six clients do when a cluster redirects, a command spans slots, or a so
 
 ## Where it lives
 
-| Client | Routing and redirects | Key rules |
+| Client | Routing and redirects | Key rules (interpreter, and the generated table) |
 | --- | --- | --- |
-| Rust | `ruvio-client/src/cluster.rs` | `ruvio-client/src/cluster.rs` |
-| C# | `csharp/Ruvio.Client/Cluster/ClusterRouter.cs` | `csharp/Ruvio.Client/Cluster/ClusterKeys.cs` |
-| Go | `go/cluster.go`, `go/cluster_route.go`, `go/cluster_pipeline.go` | `go/cluster_keys.go` |
-| Java | `java/.../internal/ClusterRouter.java`, `RoutedRequest.java` | `java/.../internal/ClusterKeys.java` |
-| Node | `node/src/cluster.ts` | `ROUTED_COMMANDS` in `node/src/cluster.ts` |
-| Python | `python/ruvio/cluster.py`, `python/ruvio/asyncio/cluster.py` | `SPEC` in `python/ruvio/_cluster.py` |
+| Rust | `ruvio-client/src/cluster.rs` | `ruvio-client/src/cluster.rs`, `command_keys.rs` |
+| C# | `csharp/Ruvio.Client/Cluster/ClusterRouter.cs` | `csharp/Ruvio.Client/Cluster/ClusterKeys.cs`, `CommandKeyRules.g.cs` |
+| Go | `go/cluster.go`, `go/cluster_route.go`, `go/cluster_pipeline.go` | `go/cluster_keys.go`, `command_keys_gen.go` |
+| Java | `java/.../internal/ClusterRouter.java`, `RoutedRequest.java` | `java/.../internal/ClusterKeys.java`, `CommandKeyRules.java` |
+| Node | `node/src/cluster.ts` | `node/src/cluster.ts`, `command-keys.ts` |
+| Python | `python/ruvio/cluster.py`, `python/ruvio/asyncio/cluster.py` | `python/ruvio/_cluster.py`, `_command_keys.py` |

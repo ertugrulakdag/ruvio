@@ -62,7 +62,7 @@ The compiler or a test catches a missed step where the last column says so; the 
 | 8. Durability group (optional speed) | `src/runtime/evented/wal_group.rs` | not caught: an unlisted command takes the slower, correct path |
 | 9. Tests | `src/engine/tests/<family>.rs` | |
 | 10. Matrix and docs | `docs/compatibility-matrix.json`, `docs/COMPATIBILITY.md`, `docs/DATA_TYPES.md` | `scripts/check_compatibility_matrix.py` |
-| 11. Client command spec: arity, flags and where the keys are, for the clients' routing | `RULES` in `src/protocol/client_spec.rs` when a first/last/step range cannot place the keys; then `RUVIO_WRITE_CLIENT_SPEC=1 cargo test --lib client_spec` rewrites `clients/testdata/commands.json` and `key_vectors.json` | `client_command_spec_matches_the_server` (`scripts/check.sh`) |
+| 11. Client command spec: arity, flags and where the keys are, for the clients' routing | `RULES` in `src/protocol/client_spec.rs` when a first/last/step range cannot place the keys; then `RUVIO_WRITE_CLIENT_SPEC=1 cargo test --lib client_spec` rewrites `clients/testdata/commands.json` and `key_vectors.json`, and `python3 scripts/gen_client_keys.py` rewrites the six clients' key tables from them | `client_command_spec_matches_the_server`, `gen_client_keys.py --check` (`scripts/check.sh`); each client's key-vector test |
 | 12. Clients | see "Adding a client method" | each client's coverage test |
 
 A write that needs a new WAL record also touches:
@@ -94,16 +94,16 @@ A change to persistence, the WAL, unsafe code or memory layout gets a second, in
 
 Every client has a coverage test that loads `docs/compatibility-matrix.json` and fails when a command has no method.
 
-| Client | Method | Coverage and routing tables | Live test |
+| Client | Method | Coverage table | Live test |
 | --- | --- | --- | --- |
 | Rust | `clients/ruvio-client/src/commands.rs` or `extra.rs` | `tests/coverage.rs` | `tests/live*.rs` |
-| C# | `Ruvio.Client/Commands/*.cs` and `IRuvioClient*.cs` | `Ruvio.Client.Tests/MatrixCoverageTests.cs`, `Cluster/ClusterKeys.cs` | `Ruvio.Client.Tests` |
-| Go | `cmds_*.go` | `coverage_test.go`, `cluster_keys.go` | `live_*_test.go` |
-| Java | `commands/*Commands.java`, then `python3 clients/java/tools/generate.py` | `internal/CoverageTest.java`, `internal/ClusterKeys.java` | `*LiveTest.java` |
-| Node | `src/commands.ts`, `src/command-names.ts` | `test/coverage.test.ts`, `ROUTED_COMMANDS` in `src/cluster.ts` | `test/live-*.test.ts` |
-| Python | `ruvio/_commands.py` | `tests/test_coverage.py`, `SPEC` in `ruvio/_cluster.py` | `tests/test_live.py` |
+| C# | `Ruvio.Client/Commands/*.cs` and `IRuvioClient*.cs` | `Ruvio.Client.Tests/MatrixCoverageTests.cs` | `Ruvio.Client.Tests` |
+| Go | `cmds_*.go` | `coverage_test.go` | `live_*_test.go` |
+| Java | `commands/*Commands.java`, then `python3 clients/java/tools/generate.py` | `internal/CoverageTest.java` | `*LiveTest.java` |
+| Node | `src/commands.ts`, `src/command-names.ts` | `test/coverage.test.ts` | `test/live-*.test.ts` |
+| Python | `ruvio/_commands.py` | `tests/test_coverage.py` | `tests/test_live.py` |
 
-The Java blocking facade and command words are generated; the PR gate runs `generate.py --check`. Cluster routing, redirects and retries are compared across clients in [CLIENT_BEHAVIOR.md](CLIENT_BEHAVIOR.md); every client's slot function is tested against `clients/testdata/slots.json`.
+`python3 scripts/client_stubs.py <COMMAND> --reply integer|bulk|ok|array` prints a starting skeleton for each client. Cluster key routing needs no hand edit: every client reads the key table `scripts/gen_client_keys.py` writes from `clients/testdata/commands.json`, and tests it against `clients/testdata/key_vectors.json`. The Java blocking facade and command words are generated; the PR gate runs `generate.py --check`. Cluster routing, redirects and retries are compared across clients in [CLIENT_BEHAVIOR.md](CLIENT_BEHAVIOR.md); every client's slot function is tested against `clients/testdata/slots.json`.
 
 ## Releases
 

@@ -62,6 +62,8 @@ Most scripts take the path to a built `ruvio` binary and start their own server.
 | --- | --- |
 | `redis_compare.py`, `redis_compare_features.py`, `docker_compare.py` | Ruvio vs Redis tables published on the site |
 | `site_chrome.py` | Writes the shared head links, menu and footer from `site_chrome/` into every site page; `--check` runs in `check.sh` |
+| `gen_client_keys.py` | Writes each client's command key table from `clients/testdata/commands.json`; `--check` runs in `check.sh` |
+| `client_stubs.py` | Prints a method skeleton per client, and the coverage lines, for a command already in `clients/testdata/commands.json` |
 | `render_compare_pages.py` | Renders a `redis_compare_features.py` result into the site pages |
 | `render_azure_pages.py`, `render_x86_pages.py` | Rendered two dated site sections; frozen, refuse to run without `--force` |
 | `bench_matrix.py`, `perf_matrix.py`, `benchmark.sh`, `benchmark_regression.py`, `pinned_run.py` | Throughput matrices and repeatable samples |
