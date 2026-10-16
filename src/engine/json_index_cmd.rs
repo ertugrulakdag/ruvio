@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use super::*;
-use crate::json_index::{Definition, FieldType, IndexState};
+use crate::json::index::{Definition, FieldType, IndexState};
 use crate::protocol::{Bytes, JsonIndexKind};
 use crate::store::json_indexing::{FindError, definition_key};
 

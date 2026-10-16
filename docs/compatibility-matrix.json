@@ -1510,7 +1510,7 @@
       "limitations": "Ruvio extension (no RedisJSON/RediSearch equivalent): JSON.INDEX CREATE name PREFIX p PATH $.field [TYPE string|number|bool] | DROP name | LIST. Exact equality on one field only; database 0 only. Definitions are stored as reserved keys (visible to KEYS/DBSIZE) and dropped by FLUSHDB 0 / FLUSHALL; postings are rebuilt incrementally at startup.",
       "coverage": [
         "src/engine/tests/json.rs",
-        "src/json_index.rs"
+        "src/json/index.rs"
       ]
     },
     {

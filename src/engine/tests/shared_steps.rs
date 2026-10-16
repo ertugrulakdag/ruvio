@@ -659,7 +659,7 @@ fn a_refused_transaction_rolls_back_json_indexes() {
     let before = shard.json_index_list();
 
     assert_eq!(before.len(), 1);
-    assert_eq!(before[0].1, crate::json_index::IndexState::Ready);
+    assert_eq!(before[0].1, crate::json::index::IndexState::Ready);
     assert_eq!(before[0].2, 1);
 
     let refused = execute_transaction(

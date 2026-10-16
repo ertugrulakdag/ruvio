@@ -1,7 +1,9 @@
 use crate::id_map::IdMap;
-use crate::stream_blocks::Blocks;
+use blocks::Blocks;
 use std::cmp::Ordering;
 use std::ops::Bound;
+
+mod blocks;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StreamEntry {
