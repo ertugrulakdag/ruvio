@@ -368,6 +368,7 @@ internal sealed class RuvioSocket : IDisposable
         {
             ThrowIfClosed();
             CommandMultiplexer? existing = Volatile.Read(ref _multiplexer);
+
             if (existing is not null)
                 return existing;
 
@@ -375,6 +376,7 @@ internal sealed class RuvioSocket : IDisposable
             {
                 ThrowIfClosed();
                 existing = _multiplexer;
+
                 if (existing is not null)
                     return existing;
 

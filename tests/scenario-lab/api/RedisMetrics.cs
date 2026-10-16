@@ -46,10 +46,12 @@ internal static class RedisMetrics
                          .Split('\n', StringSplitOptions.RemoveEmptyEntries)))
         {
             string line = raw.TrimEnd('\r');
+
             if (line.Length == 0 || line[0] == '#')
                 continue;
 
             int colon = line.IndexOf(':');
+
             if (colon <= 0)
                 continue;
 
@@ -72,6 +74,7 @@ internal static class RedisMetrics
                 foreach (string field in value.Split(','))
                 {
                     int equals = field.IndexOf('=');
+
                     if (equals <= 0 ||
                         !double.TryParse(field[(equals + 1)..], NumberStyles.Float, CultureInfo.InvariantCulture, out number))
                         continue;
@@ -83,6 +86,7 @@ internal static class RedisMetrics
                         "usec_per_call" => "scenario_redis_command_cpu_microseconds_per_call",
                         _ => ""
                     };
+
                     if (metric.Length > 0)
                         Write(output, declared, metric, number, counter: metric.EndsWith("_total", StringComparison.Ordinal),
                             ("command", command));
@@ -105,6 +109,7 @@ internal static class RedisMetrics
             output.Append("# TYPE ").Append(name).Append(counter ? " counter\n" : " gauge\n");
 
         output.Append(name);
+
         if (label is { } item)
             output.Append("{").Append(item.Key).Append("=\"").Append(item.Value).Append("\"}");
 

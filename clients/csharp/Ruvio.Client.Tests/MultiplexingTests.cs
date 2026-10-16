@@ -400,6 +400,7 @@ public class MultiplexingTests
             int writes = Interlocked.Increment(ref Writes);
             Started.TrySetResult();
             await Resume.Task.WaitAsync(token);
+
             if (FailSecondWrite && writes == 2)
                 throw new IOException("Injected batch write failure.");
 

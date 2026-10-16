@@ -12,10 +12,12 @@ internal static class SocketPhases
             throw new ArgumentException("Expected port seconds (1-60) [concurrency (1/16/128)], using a disposable standalone server.");
 
         int concurrency = args.Length >= 3 ? int.Parse(args[2]) : 1;
+
         if (concurrency is not (1 or 16 or 128))
             throw new ArgumentException("Concurrency must be 1, 16 or 128.");
 
         bool pipeline = args.Length == 4 && args[3] == "--pipeline";
+
         if (args.Length == 4 && !pipeline)
             throw new ArgumentException("Expected --pipeline as the fourth argument.");
 
@@ -43,6 +45,7 @@ internal static class SocketPhases
                     while (Stopwatch.GetTimestamp() < deadline)
                     {
                         IReadOnlyList<RespValue> replies = await client.ExecuteManyAsync(batch);
+
                         if (replies.Count != batch.Length || replies.Any(reply => operation == "get"
                             ? reply.Kind != RespKind.Bulk || reply.Bytes?.Length != 256
                             : reply.AsString() != "OK"))

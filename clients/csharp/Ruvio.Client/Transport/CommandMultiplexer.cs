@@ -68,6 +68,7 @@ internal sealed class CommandMultiplexer
         IReadOnlyList<IReadOnlyList<string>> commands, CancellationToken token)
     {
         Request? request = Admit(commands.Count, token, out Exception? error);
+
         if (request is null)
             return ValueTask.FromException<IReadOnlyList<RespValue>>(error!);
 
@@ -80,6 +81,7 @@ internal sealed class CommandMultiplexer
     internal ValueTask<RespValue> SendCommandAsync(in RespCommand command, CancellationToken token)
     {
         Request? request = Admit(1, token, out Exception? error);
+
         if (request is null)
             return ValueTask.FromException<RespValue>(error!);
 
@@ -92,6 +94,7 @@ internal sealed class CommandMultiplexer
     internal ValueTask<RespValue> SendAsync(IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken token)
     {
         Request? request = Admit(1, token, out Exception? error);
+
         if (request is null)
             return ValueTask.FromException<RespValue>(error!);
 
@@ -105,6 +108,7 @@ internal sealed class CommandMultiplexer
         ReadOnlyMemory<byte> payload, int replies, CancellationToken token)
     {
         Request? request = Admit(replies, token, out Exception? error);
+
         if (request is null)
             return ValueTask.FromException<IReadOnlyList<RespValue>>(error!);
 
@@ -195,6 +199,7 @@ internal sealed class CommandMultiplexer
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(replies);
         error = token.IsCancellationRequested ? new OperationCanceledException(token)
             : IsBroken ? Failure() : null;
+
         if (error is not null)
             return null;
 
@@ -211,6 +216,7 @@ internal sealed class CommandMultiplexer
     private bool TryPublish(Request request, out Exception? error)
     {
         error = null;
+
         if (!_capacity.Wait(0))
             return false;
 
@@ -341,6 +347,7 @@ internal sealed class CommandMultiplexer
                 {
                     long encodeStarted = RuvioSocket.PhaseMetricsEnabled ? Stopwatch.GetTimestamp() : 0;
                     encoded = request.Encode();
+
                     if (encodeStarted != 0)
                         RuvioSocket.RecordSocketPhase("encode", encodeStarted);
                 }
@@ -443,6 +450,7 @@ internal sealed class CommandMultiplexer
                     {
                         long started = RuvioSocket.PhaseMetricsEnabled ? Stopwatch.GetTimestamp() : 0;
                         frame = request.Encode();
+
                         if (started != 0)
                             RuvioSocket.RecordSocketPhase("encode", started);
                     }
@@ -452,6 +460,7 @@ internal sealed class CommandMultiplexer
                         request.DisposePayload();
                         Finish(request);
                         current = null;
+
                         if (consumed < 15 && _outgoing.Reader.TryRead(out current))
                             consumed++;
 
@@ -528,6 +537,7 @@ internal sealed class CommandMultiplexer
     private int WriterFinished()
     {
         int remaining = Interlocked.Decrement(ref _scheduled);
+
         if (remaining == 0 && IsBroken)
             Volatile.Read(ref _writerStopped)?.TrySetResult();
 
@@ -769,6 +779,7 @@ internal sealed class CommandMultiplexer
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Interlocked.CompareExchange(ref _writerStopped, stopped, null);
         Fail(new RuvioException("connection is closed"));
+
         if (Volatile.Read(ref _scheduled) == 0)
             _writerStopped.TrySetResult();
 

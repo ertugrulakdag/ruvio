@@ -100,6 +100,7 @@ internal static class AllocationProfile
 
             int typeIndex = data.PayloadNames.IndexOf("TypeName");
             int amountIndex = data.PayloadNames.IndexOf("AllocationAmount64");
+
             if (typeIndex < 0)
                 return;
 

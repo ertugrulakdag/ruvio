@@ -103,6 +103,7 @@ internal sealed class ScenarioStorage(
                 [Text("SET"), Text(key), value, Text("PX"), Text(
                     ((long)lifetime.TotalMilliseconds).ToString(CultureInfo.InvariantCulture))],
                 cancellationToken).ConfigureAwait(false);
+
             if (reply.Kind != RespKind.Simple || reply.Text != "OK")
                 throw new RuvioException("Unexpected cache SET response.");
         });
@@ -134,6 +135,7 @@ internal sealed class ScenarioStorage(
                     Text(((long)lifetime.TotalMilliseconds).ToString(CultureInfo.InvariantCulture))
                 ],
                 cancellationToken).ConfigureAwait(false);
+
             if (reply.Kind != RespKind.Array || reply.Items is not { Count: > 0 } items)
                 throw new RuvioException("Unexpected IDEM BEGIN response.");
 
@@ -151,6 +153,7 @@ internal sealed class ScenarioStorage(
             {
                 long completed = (long)await Database.ScriptEvaluateAsync(
                     CompleteScript, [key], [fingerprint, owner, result]).ConfigureAwait(false);
+
                 if (completed != 1)
                     throw new InvalidOperationException("Redis idempotency completion did not match its owner.");
 

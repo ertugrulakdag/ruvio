@@ -147,6 +147,7 @@ app.Use(async (context, next) =>
     Activity.Current?.SetTag("scenario.backend", backend);
     Activity.Current?.SetTag("test_run", testRun);
     Activity.Current?.SetTag("load_stage", loadStage);
+
     if (Activity.Current is { } requestActivity)
         context.Response.Headers["X-Lab-Trace-ID"] = requestActivity.TraceId.ToString();
 
@@ -257,6 +258,7 @@ app.MapPost("/bench/orders", async (
     CancellationToken cancellationToken) =>
 {
     string key = context.Request.Headers["Idempotency-Key"].ToString();
+
     if (key.Length is < 1 or > 128)
         return Results.BadRequest();
 
@@ -295,11 +297,13 @@ app.MapGet("/bench/rate-limited", async (
     CancellationToken cancellationToken) =>
 {
     string partition = context.Request.Headers["X-Lab-Run"].ToString();
+
     if (partition.Length is < 1 or > 128)
         return Results.BadRequest();
 
     long? remaining = await storage.LimitAsync(
         $"scenario:bench:rate:{partition}", 20, TimeSpan.FromSeconds(60), cancellationToken);
+
     if (remaining is null)
         return Results.StatusCode(StatusCodes.Status429TooManyRequests);
 

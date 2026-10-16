@@ -558,6 +558,7 @@ internal sealed class RespReader : IDisposable
     private async ValueTask<RespValue> ReadSlowAsync(CancellationToken cancellationToken)
     {
         await EnsureAsync(1, cancellationToken);
+
         if (TryReadBuffered(out RespValue? buffered))
             return buffered!;
 

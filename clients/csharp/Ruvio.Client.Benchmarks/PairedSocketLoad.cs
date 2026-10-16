@@ -42,6 +42,7 @@ internal static class PairedSocketLoad
         int ruvioPort = int.Parse(args[1], CultureInfo.InvariantCulture);
         int redisPort = int.Parse(args[2], CultureInfo.InvariantCulture);
         int seconds = int.Parse(args[3], CultureInfo.InvariantCulture);
+
         if (seconds is < 5 or > 120)
             throw new ArgumentOutOfRangeException(nameof(args), "Case duration must be 5-120 seconds.");
 
@@ -99,6 +100,7 @@ internal static class PairedSocketLoad
                     while (Stopwatch.GetTimestamp() < deadline)
                     {
                         int op = (int)(counter++ & 1);
+
                         // Change every SET so identical-value optimizations cannot bias the comparison.
                         if (profile == "hot" && op == 1)
                             set[2] = value[..240] + counter.ToString("D16", CultureInfo.InvariantCulture);
@@ -115,6 +117,7 @@ internal static class PairedSocketLoad
                                 : op == 0 ? reply.Items is { Count: > 0 } items &&
                                     items[0].AsString() is "acquired" or "pending"
                                           : reply.Kind == RespKind.Integer && reply.Integer >= 0;
+
                             if (!valid)
                                 throw new InvalidOperationException("Unexpected Ruvio reply.");
                         }
@@ -123,6 +126,7 @@ internal static class PairedSocketLoad
                             if (op == 0)
                             {
                                 RedisValue reply = await database!.StringGetAsync(key);
+
                                 if (reply.IsNull || ((byte[]?)reply)?.Length != 256)
                                     throw new InvalidOperationException("Unexpected Redis GET.");
                             }
@@ -134,6 +138,7 @@ internal static class PairedSocketLoad
                             RedisResult result = await database!.ScriptEvaluateAsync(
                                 BeginScript, [key + ":idem"], ["fp", "owner", 60000]);
                             RedisResult[] items = (RedisResult[])result!;
+
                             if (items.Length == 0 || items[0].ToString() is not ("acquired" or "pending"))
                                 throw new InvalidOperationException("Unexpected Redis BEGIN equivalent.");
                         }
@@ -178,6 +183,7 @@ internal static class PairedSocketLoad
                     for (int i = 0; i < buckets[op].Length; i++)
                     {
                         sum += buckets[op][i];
+
                         if (sum >= target)
                             return (i + 1) / 1000.0;
                     }

@@ -93,6 +93,7 @@ public class RespCommandTests
         foreach (string line in File.ReadLines(Path.Combine(RespVerbGeneratorTests.FindClientDirectory(), "RespVerbs.txt")))
         {
             string verb = line.Trim();
+
             if (verb.Length == 0 || verb.StartsWith('#'))
                 continue;
 
@@ -101,6 +102,7 @@ public class RespCommandTests
             for (int arguments = 0; arguments <= 5; arguments++)
             {
                 Assert.Equal(RespCodec.Encode(command.AsList()), Encode(command));
+
                 if (arguments < 5)
                     command = command.With(arguments % 2 == 0 ? (RespArg)"kéy" : (RespArg)long.MinValue);
             }

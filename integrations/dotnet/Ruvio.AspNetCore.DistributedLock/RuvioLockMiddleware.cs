@@ -137,6 +137,7 @@ public sealed class RuvioLockMiddleware(RequestDelegate next)
         while (index < templateSpan.Length)
         {
             int open = templateSpan[index..].IndexOf('{');
+
             if (open >= 0)
                 open += index;
 

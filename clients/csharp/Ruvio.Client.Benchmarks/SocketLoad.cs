@@ -15,6 +15,7 @@ internal static class SocketLoad
         if (args.Length == 4)
         {
             string[] selected = args[3].Split(':');
+
             if (selected.Length != 2 ||
                 selected[0] is not ("get" or "set" or "limit") ||
                 !int.TryParse(selected[1], out int concurrency) ||
@@ -83,6 +84,7 @@ internal static class SocketLoad
                                 "set" => reply.AsString() == "OK",
                                 _ => reply.Kind == RespKind.Integer,
                             };
+
                             if (!valid)
                                 throw new InvalidOperationException($"Unexpected {operation} reply: {reply.Kind}");
 
@@ -120,6 +122,7 @@ internal static class SocketLoad
                     for (int i = 0; i < buckets.Length; i++)
                     {
                         sum += buckets[i];
+
                         if (sum >= target)
                             return i / 1000.0;
                     }
