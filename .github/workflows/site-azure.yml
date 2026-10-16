@@ -40,6 +40,5 @@ jobs:
           action: upload
           app_location: site-next/dist
           skip_app_build: true
-          skip_api_build: true
 
 # Started by hand from the Actions tab only.
