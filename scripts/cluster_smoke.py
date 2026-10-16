@@ -105,13 +105,9 @@ def main(left: int = 6379, right: int = 6380) -> None:
         port = owner_port(key, left, right)
         assert command(port, "SET", key, "stored") == b"OK"
         assert command(port, "GET", key) == b"stored"
+        # The other shard forwards a key it does not own to its owner instead of answering MOVED.
         wrong_port = right if port == left else left
-        try:
-            command(wrong_port, "GET", key)
-        except RespError as error:
-            assert error.args[0].startswith(f"MOVED {slot(key)} 127.0.0.1:{port}")
-        else:
-            raise AssertionError("wrong shard did not return MOVED")
+        assert command(wrong_port, "GET", key) == b"stored", "wrong shard did not forward"
 
     try:
         command(left, "DEL", "{left}:a", "{right}:b")

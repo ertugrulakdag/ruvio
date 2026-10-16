@@ -1680,47 +1680,57 @@ fn evented_hot_keys_serve_database_zero_only() {
 #[test]
 fn per_shard_wait_counts_the_shards_a_connection_forwarded_to() {
     let directory = tempfile::tempdir().unwrap();
-    // Two consecutive data ports low enough for their cluster bus ports (data + 10000).
-    let base = (0..2000u16)
-        .map(|step| 20_000 + (std::process::id() as u16 % 997) * 17 + step * 7)
-        .find(|port| {
-            [*port, port + 1, port + 10_000, port + 10_001]
-                .iter()
-                .all(|candidate| std::net::TcpListener::bind(("127.0.0.1", *candidate)).is_ok())
-        })
-        .expect("free ports");
-    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let replication_port = probe.local_addr().unwrap().port();
+    // Two consecutive data ports low enough for their cluster bus ports (data + 10000), and a
+    // replication port. A port found free can be taken by a parallel test before the server
+    // binds it: a start that fails is retried on other ports.
+    let mut started = None;
 
-    drop(probe);
-    let address: std::net::SocketAddr = format!("127.0.0.1:{base}").parse().unwrap();
-    let mut config = AppConfig {
-        address: address.to_string(),
-        shards: 2,
-        port_mode: crate::config::PortMode::PerShard,
-        shutdown_grace: Duration::from_secs(1),
-        ..AppConfig::default()
-    };
+    for attempt in 0..20u16 {
+        let base = 20_000 + (std::process::id() as u16 % 997) * 17 + attempt * 331;
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let replication_port = probe.local_addr().unwrap().port();
 
-    config.persistence = PersistenceConfig {
-        profile: crate::DurabilityProfile::Everysec,
-        data_dir: directory.path().to_path_buf(),
-        sync_interval: Duration::from_millis(1),
-        ..PersistenceConfig::default()
-    };
-    config.replication.role = crate::config::ReplicationRole::Primary;
-    config.replication.listen = Some(format!("127.0.0.1:{replication_port}").parse().unwrap());
-    let shutdown = ShutdownToken::default();
-    let stop = shutdown.clone();
-    let server = thread::spawn(move || run(&config, shutdown).unwrap());
+        drop(probe);
+        let address: std::net::SocketAddr = format!("127.0.0.1:{base}").parse().unwrap();
+        let mut config = AppConfig {
+            address: address.to_string(),
+            shards: 2,
+            port_mode: crate::config::PortMode::PerShard,
+            shutdown_grace: Duration::from_secs(1),
+            ..AppConfig::default()
+        };
 
-    for _ in 0..200 {
-        if StdTcpStream::connect(address).is_ok() {
-            break;
+        config.persistence = PersistenceConfig {
+            profile: crate::DurabilityProfile::Everysec,
+            data_dir: directory.path().join(attempt.to_string()),
+            sync_interval: Duration::from_millis(1),
+            ..PersistenceConfig::default()
+        };
+        config.replication.role = crate::config::ReplicationRole::Primary;
+        config.replication.listen = Some(format!("127.0.0.1:{replication_port}").parse().unwrap());
+        let shutdown = ShutdownToken::default();
+        let stop = shutdown.clone();
+        let server = thread::spawn(move || run(&config, shutdown));
+
+        for _ in 0..200 {
+            if server.is_finished() || StdTcpStream::connect(address).is_ok() {
+                break;
+            }
+
+            thread::sleep(Duration::from_millis(5));
         }
 
-        thread::sleep(Duration::from_millis(5));
+        if server.is_finished() {
+            // Bind failed (AddrInUse): try other ports.
+            let _ = server.join();
+            continue;
+        }
+
+        started = Some((address, replication_port, stop, server));
+        break;
     }
+
+    let (address, replication_port, stop, server) = started.expect("free ports");
 
     // A replica of shard 0 only, which acknowledges everything that shard will ever write.
     let mut replica = None;
@@ -1794,5 +1804,5 @@ fn per_shard_wait_counts_the_shards_a_connection_forwarded_to() {
 
     drop(replica);
     stop.request();
-    server.join().unwrap();
+    server.join().unwrap().unwrap();
 }
