@@ -1,12 +1,24 @@
 ---
 import Page from "../layouts/Page.astro";
-import CodeBlock from "../components/content/CodeBlock.astro";
+import CodeTabs from "../components/content/CodeTabs.astro";
+import { clientExamples } from "../data/client-examples";
+import { clients } from "../config/site";
 import SideNav from "../components/content/SideNav.astro";
+import PageIntro from "../components/PageIntro.astro";
 
 type Ref = { label: string; href: string };
 type UseCase = { id: string; nav: string; title: string; problem: string; code: string; body: string; note?: string; refs: Ref[] };
 
 const commands = "/docs/commands/";
+
+// The redis-cli lines first, then the same steps in every client that has an example for this case.
+const tabsFor = (c: UseCase) => [
+  { key: "cli", label: "redis-cli", code: c.code },
+  ...clients.flatMap((k) => {
+    const code = clientExamples[c.id]?.[k.slug];
+    return code ? [{ key: k.slug, label: k.language, code }] : [];
+  }),
+];
 
 const cases: UseCase[] = [
   {
@@ -115,7 +127,8 @@ GETEX session:9f3 1800000
 # [HIT, value]          -> served from memory
 # [FILL, token]         -> you refill it
 # [BUSY, nil]           -> someone else is filling
-# [STALE, value, token] -> inside a stale-while-revalidate window
+# [STALE, value, token] -> stale copy, and you refresh it (SWR window)
+# [STALE, value, nil]   -> stale copy, another caller is refreshing
 FILLSET product:42 "{...}" 60000 <token> SWR 30000
 # 1 -> stored (0 if the token is no longer live)`,
     body: "One round trip decides who loads from the database. <code>WAIT</code> holds a caller that would get <code>BUSY</code> until the filler writes, so there is no retry loop in the client.",
@@ -130,7 +143,7 @@ FILLSET product:42 "{...}" 60000 <token> SWR 30000
     code: `XGROUP CREATE jobs workers $ MKSTREAM
 XADD jobs DELAY 30000 * kind send-reminder user 42
 XREADGROUP GROUP workers w1 COUNT 10 BLOCK 5000 STREAMS jobs >
-# the entry appears here after 30 s
+# nil until the 30 s delay has passed; the worker keeps reading in a loop
 XACK jobs workers <id>`,
     body: "The entry is stored right away. <code>XREADGROUP</code> skips it until the delay passes, and <code>XREAD</code> can still see it. Pending entries, <code>XCLAIM</code> and <code>XAUTOCLAIM</code> work as in Redis streams.",
     note: "The hold is a WAL record and is written only when a delay is set.",
@@ -144,7 +157,7 @@ XACK jobs workers <id>`,
     code: `CHANGES SUBSCRIBE FROM NOW MATCH user:* TYPES put,del
 # a durable stream of changes, resumable with FROM <shard>:<seq>`,
     body: "The durable feed is built from the WAL and can resume from a saved position, with optional key patterns, types and values. <code>CHANGES START</code> is the lighter in-memory feed of up to 1024 notes per shard.",
-    note: "Limits and retention are under <em>Change stream</em> in the configuration reference.",
+    note: "The stream needs a durability profile with a WAL and is refused on a replica. It takes over its connection, so give it a connection of its own. Limits and retention are under <em>Change stream</em> in the configuration reference.",
     refs: [{ label: "CHANGES", href: commands }, { label: "Change stream settings", href: "/docs/configuration/#change-stream" }],
   },
   {
@@ -154,10 +167,12 @@ XACK jobs workers <id>`,
     problem: "The data types you already use, plus JSON documents with an exact-match index.",
     code: `ZADD leaderboard 1200 ada 980 grace
 ZRANGE leaderboard 0 9 REV WITHSCORES
+# cities was filled earlier with GEOADD
 GEOSEARCH cities FROMLONLAT 13.36 38.11 BYRADIUS 50 km COUNT 10
 JSON.SET user:7 $ '{"plan":"pro","country":"TR"}'
 JSON.INDEX CREATE by_plan PREFIX user: PATH $.plan TYPE string
-JSON.FIND by_plan VALUE pro COUNT 20`,
+JSON.FIND by_plan VALUE pro COUNT 20
+# ERR index is building -> the first build runs in the background; retry`,
     body: "Strings, lists, sets, hashes, sorted sets, streams, geo, Bloom filters and JSON are covered. <code>JSON.INDEX</code> is an exact-equality index on one scalar field; it works on database 0 and keeps its postings in memory.",
     refs: [{ label: "Data types", href: "/docs/data-types/" }, { label: "Commands", href: commands }],
   },
@@ -165,63 +180,78 @@ JSON.FIND by_plan VALUE pro COUNT 20`,
 ---
 
 <Page title="Use cases" description="Coordination jobs Ruvio finishes in one command on the shard that owns the key: rate limits, locks, idempotency, cache fills, delayed jobs and change feeds.">
-  <section class="section intro">
+  <PageIntro title="Use cases" kicker="Coordination in one command">
+    Ruvio speaks RESP, so any Redis client can talk to it. What sets it apart is a set of commands that finish a
+    coordination job on the shard that owns the key, in one call. Below are the jobs people reach for, with the
+    commands as you would type them in <code>redis-cli</code> and a link to the reference.
+  </PageIntro>
+
+  <div class="reading">
     <div class="wrap">
-      <h1 class="title">Use cases</h1>
-      <p class="lede">
-        Ruvio speaks RESP, so any Redis client can talk to it. What sets it apart is a set of commands that
-        finish a coordination job on the shard that owns the key, in one call. Below are the jobs people reach
-        for, with the commands as you would type them in <code>redis-cli</code> and a link to the reference.
-      </p>
+      <SideNav items={[...cases.map((c) => ({ id: c.id, label: c.nav })), { id: "from-redis", label: "Moving from Redis" }]} label="Use cases">
+        <div class="cases">
+          {cases.map((c, i) => (
+            <article class="case panel" id={c.id} aria-labelledby={`${c.id}-h`}>
+              <header class="case-head">
+                <span class="case-no" aria-hidden="true">{String(i + 1).padStart(2, "0")}</span>
+                <div>
+                  <h2 id={`${c.id}-h`}>{c.title}</h2>
+                  <p class="problem">{c.problem}</p>
+                </div>
+              </header>
+              <div class="case-grid">
+                <div class="prose">
+                  <p set:html={c.body} />
+                  {c.note && <p class="callout"><b>Keep in mind</b><span set:html={c.note} /></p>}
+                  <p class="refs">
+                    <span>Reference</span>
+                    {c.refs.map((r) => <a href={r.href}>{r.label}</a>)}
+                  </p>
+                </div>
+                <CodeTabs id={c.id} label={`${c.title}: code`} tabs={tabsFor(c)} />
+              </div>
+            </article>
+          ))}
+
+          <article class="case panel" id="from-redis" aria-labelledby="from-redis-h">
+            <header class="case-head">
+              <span class="case-no" aria-hidden="true">{String(cases.length + 1).padStart(2, "0")}</span>
+              <div>
+                <h2 id="from-redis-h">Moving from Redis</h2>
+                <p class="problem">
+                  Ruvio is not a full Redis clone. It speaks RESP2 and covers the commands listed in the command
+                  reference. Check that the commands you use are there before you switch.
+                </p>
+              </div>
+            </header>
+            <div class="prose">
+              <p>
+                <code>ruvio-ctl import</code> copies keys with their TTLs from a running Redis and can verify the copy.
+                It does not move consumer groups, Lua scripts, ACL users or module types.
+              </p>
+              <p>
+                Start with <a href="/get-started/">Get started</a>, then pick a <a href="/docs/clients/">client</a>.
+                For durability modes and what each one promises, see <a href="/docs/configuration/">Configuration</a>{" "}
+                and <a href="/docs/recovery/">Recovery</a>.
+              </p>
+              <p class="refs">
+                <span>Reference</span>
+                <a href="/docs/import/">Import</a>
+                <a href="/docs/compatibility/">Compatibility</a>
+                <a href="/docs/commands/">Commands</a>
+              </p>
+            </div>
+          </article>
+        </div>
+      </SideNav>
     </div>
-  </section>
-
-  <div class="wrap body">
-    <SideNav items={[...cases.map((c) => ({ id: c.id, label: c.nav })), { id: "from-redis", label: "Moving from Redis" }]} label="Use cases">
-      {cases.map((c) => (
-        <section class="case" id={c.id} aria-labelledby={`${c.id}-h`}>
-          <h2 id={`${c.id}-h`}>{c.title}</h2>
-          <p class="problem">{c.problem}</p>
-          <CodeBlock code={c.code} title="redis-cli" />
-          <p class="body-text" set:html={c.body} />
-          {c.note && <p class="note"><span class="note-label">Keep in mind</span> <span set:html={c.note} /></p>}
-          <p class="refs">
-            <span>Reference</span>
-            {c.refs.map((r) => <a href={r.href}>{r.label}</a>)}
-          </p>
-        </section>
-      ))}
-
-      <section class="case" id="from-redis" aria-labelledby="from-redis-h">
-        <h2 id="from-redis-h">Moving from Redis</h2>
-        <p class="problem">
-          Ruvio is not a full Redis clone. It speaks RESP2 and covers the commands listed in the{" "}
-          <a href="/docs/commands/">command reference</a>. Check that the commands you use are there before you switch.
-        </p>
-        <p class="body-text">
-          <code>ruvio-ctl import</code> copies keys with their TTLs from a running Redis and can verify the copy.
-          It does not move consumer groups, Lua scripts, ACL users or module types.
-        </p>
-        <p class="body-text">
-          Start with <a href="/get-started/">Get started</a>, then pick a <a href="/docs/clients/">client</a>.
-          For durability modes and what each one promises, see <a href="/docs/configuration/">Configuration</a>{" "}
-          and <a href="/docs/recovery/">Recovery</a>.
-        </p>
-        <p class="refs">
-          <span>Reference</span>
-          <a href="/docs/import/">Import</a>
-          <a href="/docs/compatibility/">Compatibility</a>
-          <a href="/docs/commands/">Commands</a>
-        </p>
-      </section>
-    </SideNav>
   </div>
 
   <section class="section band next">
     <div class="wrap next-row">
       <div>
         <h2 class="title">Try it on your machine</h2>
-        <p class="lede">One Docker command or a prebuilt binary, then <code>redis-cli</code>.</p>
+        <p class="lede">One Docker command or a prebuilt binary, then <code>redis-cli</code>. Or try three of these commands <a href="/examples/">in the browser</a>.</p>
       </div>
       <div class="next-actions">
         <a class="btn" href="/get-started/">Get started</a>
@@ -232,32 +262,33 @@ JSON.FIND by_plan VALUE pro COUNT 20`,
 </Page>
 
 <style>
-  .intro { padding-bottom: 40px; }
-  .intro .title { max-width: none; }
-  .lede code, .body-text code, .problem code, .note code { color: var(--ink); }
-  .body { padding-bottom: var(--section-y); }
-  .case { padding-block: 40px; border-top: 1px solid var(--line); scroll-margin-top: 80px; }
-  .case:first-child { border-top: 0; padding-top: 0; }
-  .case h2 { margin: 0 0 8px; font-size: 24px; line-height: 1.25; }
-  .problem { margin: 0 0 20px; color: var(--ink); font-size: 17px; max-width: 64ch; }
-  .body-text { margin: 18px 0 0; color: var(--mute); max-width: 68ch; }
-  .case a:not(.btn) { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line-soft); text-underline-offset: 3px; }
-  .case a:not(.btn):hover { text-decoration-color: var(--mute); }
-  .note {
-    margin: 18px 0 0; padding: 12px 16px; max-width: 68ch;
-    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-s);
-    color: var(--mute); font-size: 15px;
+  .cases { display: grid; gap: 20px; container-type: inline-size; }
+  .case { scroll-margin-top: 88px; }
+  .case-head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: start; margin-bottom: 22px; }
+  .case-no {
+    font-family: var(--f-mono); font-size: 13px; font-weight: 500; color: var(--c1);
+    padding: 4px 8px; border: 1px solid color-mix(in srgb, var(--c1) 45%, var(--paper-line)); border-radius: 4px; margin-top: 4px;
   }
-  .note-label { font-weight: 600; color: var(--ink); margin-right: 4px; }
-  .refs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin: 18px 0 0; font-size: 14px; }
+  .case h2 { margin: 0 0 6px; font-size: 24px; line-height: 1.25; }
+  .problem { margin: 0; color: var(--ink); font-size: 17px; line-height: 1.6; max-width: 62ch; }
+  .case-grid { display: grid; gap: 20px; }
+  /* Client snippets are longer than the redis-cli lines: the code gets the full width and scrolls
+     sideways instead of breaking identifiers mid-word. */
+  .case-grid :global(pre) { font-size: 13px; white-space: pre; overflow-x: auto; }
+  .case-grid > :first-child { max-width: 72ch; }
+  .refs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; font-size: 14px; }
   .refs span { color: var(--faint); }
+  .lede a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--accent); }
   .next-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 24px 40px; }
   .next-row .title { font-size: clamp(24px, 3vw, 32px); }
   .next-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+  @container (min-width: 760px) {
+    .case-head { margin-bottom: 26px; }
+  }
   @media (max-width: 900px) {
-    .intro { padding-bottom: 24px; }
     .case { scroll-margin-top: 124px; }
-    .case:first-child { padding-top: 28px; }
     .case h2 { font-size: 21px; }
+    .case-head { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+    .case-no { justify-self: start; }
   }
 </style>

@@ -29,7 +29,8 @@ dotnet add package Ruvio.Client
 ```csharp
 using Ruvio.Client;
 
-await using var db = await RuvioClient.ConnectAsync("127.0.0.1", 6379);
+await using var connection = await RuvioConnection.ConnectAsync("127.0.0.1", 6379);
+var db = await connection.GetDefaultDatabaseAsync();
 await db.SetAsync("session:ada", "hello");
 string? value = await db.GetStringAsync("session:ada");
 ```
