@@ -53,7 +53,6 @@ type cluster struct {
 	seed       *Client
 	t          atomic.Pointer[topology]
 	standalone atomic.Bool // the seed answered "cluster mode is disabled"
-	moved      atomic.Int32
 
 	mu    sync.Mutex // guards nodes, refresh and slot patches
 	nodes map[string]*Client
@@ -148,7 +147,6 @@ func (cl *cluster) refresh(ctx context.Context, first bool) (*topology, error) {
 			return nil, err
 		}
 		cl.t.Store(t)
-		cl.moved.Store(0)
 		return t, nil
 	}
 	return nil, lastErr
@@ -221,10 +219,14 @@ func parseMoved(msg []byte) (slot int, addr string, ok bool) {
 	return n, string(rest[sp+1:]), true
 }
 
-// applyMoved updates the table after -MOVED and returns the node to retry on. The slot
-// is patched at once; the table is reloaded when the target is unknown or when more than
-// one slot has moved since the last reload.
-func (cl *cluster) applyMoved(ctx context.Context, slot int, addr string) (*Client, error) {
+// maxRedirects is how many -MOVED replies one command follows before the last one is
+// returned to the caller.
+const maxRedirects = 3
+
+// applyMoved updates the table after -MOVED and returns the node to retry on: the one the
+// MOVED named. The slot is patched at once; the whole table is reloaded only when the target
+// is unknown or when reload is set (the second or later MOVED of one command).
+func (cl *cluster) applyMoved(ctx context.Context, slot int, addr string, reload bool) (*Client, error) {
 	cl.mu.Lock()
 	t := cl.t.Load()
 	n := cl.node(addr)
@@ -238,10 +240,8 @@ func (cl *cluster) applyMoved(ctx context.Context, slot int, addr string) (*Clie
 		cl.t.Store(&nt)
 	}
 	cl.mu.Unlock()
-	if idx < 0 || cl.moved.Add(1) > 1 {
-		if nt, err := cl.refresh(ctx, false); err == nil && nt != nil {
-			return nt.nodeAt(slot, n), nil
-		} else if err != nil && idx < 0 {
+	if idx < 0 || reload {
+		if _, err := cl.refresh(ctx, false); err != nil && idx < 0 {
 			return nil, err
 		}
 	}

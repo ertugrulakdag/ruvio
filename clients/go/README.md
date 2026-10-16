@@ -162,16 +162,22 @@ by `TestRoutingCoversMatrix`; the key table is in `cluster_keys.go`):
 | `SCAN` | walks the nodes one after the other; the cursor encodes `serverCursor*nodes+nodeIndex`, `"0"` ends the walk. `ScanIter` just works. Treat the cursor as opaque; a topology change in the middle of a walk can skip or repeat keys. `HSCAN/SSCAN/ZSCAN` are per key |
 | Blocking commands (`BLPOP`, `BLMOVE`, `XREAD BLOCK`, `FILLGET WAIT`, ...) | a dedicated connection to the owning node |
 
-`-MOVED slot host:port`: the slot is patched in the table at once, the table is reloaded with
-`CLUSTER SLOTS` when the target node is unknown or when a second slot moved since the last
-reload, and the command is sent **once** more to the new node (the server did not run it, so
-this is safe). A second `MOVED` is returned to the caller as `*Error`.
+`-MOVED slot host:port`: the slot is patched in the table at once and the command is sent
+again to the named node (the server did not run it, so this is safe). The whole table is
+reloaded with `CLUSTER SLOTS` only when the named node is unknown or from the second `MOVED` for
+the same command. A command follows at most **3** redirects; a fourth `MOVED` is returned to
+the caller as `*Error`.
 
 Pipelines: commands are grouped by node, each group is one pipelined write, groups run
 concurrently, replies come back in the caller's order; `MOVED` replies inside a pipeline are
-repaired one by one. A pipeline containing `MULTI` is a transaction: all its keys must share a
-slot or the call fails with `ErrCrossSlot` unsent. A pipeline does not split multi-key
-commands and does not fan out `DBSIZE`/`SCAN` (they go to one node as plain commands).
+repaired one by one, with the same 3-redirect limit. `MGET`, `MSET`, `DEL`, `UNLINK`, `EXISTS`
+and `TOUCH` whose keys span slots are split exactly like the plain command: one command per
+slot, each sent in its place in its node's write, and the merged reply (`MGET` in key order,
+counts summed, `MSET` OK) sits at the command's index; an error in one part becomes that
+index's error. Any other command whose keys span slots fails the whole pipeline with
+`ErrCrossSlot` unsent. A pipeline containing `MULTI` is a transaction: all its keys must share
+a slot (nothing is split) or the call fails with `ErrCrossSlot` unsent. A pipeline does not fan
+out `DBSIZE`/`SCAN` (they go to one node as plain commands).
 
 Transactions and dedicated connections (`Tx`, `Transaction`, `Conn`): the connection is taken
 from the node owning the first key it sees (`Watch`, the queued commands, or an explicit
@@ -285,7 +291,7 @@ ruvio --config $D/ruvio.toml --address 127.0.0.1:17310 --data-dir $D/data &
 
 The cluster tests (`cluster_test.go`: slot table, hashtags, key extraction for every key
 position kind, `MOVED`, scripted fake nodes; `cluster_live_test.go`: keys spread over all
-shards, cross-slot `MGET/MSET/DEL` order, pipeline order, forced stale-table recovery,
+shards, cross-slot `MGET/MSET/DEL` order (plain and in pipelines), pipeline order, forced stale-table recovery,
 transactions, helpers, blocking, `SCAN`, Pub/Sub, scripts, concurrency, standalone fallback
 with `Cluster: true`) skip without their server variables.
 

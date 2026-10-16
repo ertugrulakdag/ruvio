@@ -228,6 +228,52 @@ func TestClusterLivePipelineOrder(t *testing.T) {
 	}
 }
 
+func TestClusterLivePipelineSplitsCrossSlot(t *testing.T) {
+	c, ctx := liveCluster(t)
+	var keys []string
+	var kv []any
+	for i := 0; i < 30; i++ {
+		keys = append(keys, fmt.Sprintf("ps:%d", i))
+		kv = append(kv, keys[i], fmt.Sprint(i))
+	}
+	vals, err := c.Pipelined(ctx, func(p *Pipeline) {
+		p.Do(append([]any{"MSET"}, kv...)...)
+		p.Incr("ps:ctr")
+		p.Do(append([]any{"MGET", "ps:missing"}, toAny(keys)...)...)
+		p.Do(append([]any{"EXISTS"}, toAny(keys)...)...)
+		p.Del(keys[:10]...)
+		p.Do(append([]any{"UNLINK"}, toAny(keys[10:20])...)...)
+		p.Do(append([]any{"TOUCH"}, toAny(keys)...)...)
+		p.Get(keys[25])
+	})
+	noErr(t, err)
+	eq(t, len(vals), 8)
+	eq(t, vals[0].Str(), "OK")
+	eq(t, vals[1].Int, int64(1))
+	eq(t, len(vals[2].Array), len(keys)+1)
+	eq(t, vals[2].Array[0].Kind, KindNil)
+	for i := range keys {
+		eq(t, vals[2].Array[i+1].Str(), fmt.Sprint(i))
+	}
+	eq(t, vals[3].Int, int64(30))
+	eq(t, vals[4].Int, int64(10))
+	eq(t, vals[5].Int, int64(10))
+	eq(t, vals[6].Int, int64(10))
+	eq(t, vals[7].Str(), "25")
+	eq(t, must[int64](t)(c.DBSize(ctx)), int64(11))
+	// with a stale table every part is redirected and still lands at its index
+	staleTable(c)
+	vals, err = c.Pipelined(ctx, func(p *Pipeline) {
+		p.Do(append([]any{"MGET"}, toAny(keys[20:])...)...)
+		p.Get("ps:ctr")
+	})
+	noErr(t, err)
+	for i, v := range vals[0].Array {
+		eq(t, v.Str(), fmt.Sprint(20+i))
+	}
+	eq(t, vals[1].Str(), "1")
+}
+
 // staleTable rotates the owner of every slot so each key first goes to the wrong node.
 func staleTable(c *Client) {
 	cl := c.cl
@@ -239,7 +285,6 @@ func staleTable(c *Client) {
 		t.owner[i] = (t.owner[i] + 1) % nn
 	}
 	cl.t.Store(&t)
-	cl.moved.Store(0)
 }
 
 func TestClusterLiveMovedRecovery(t *testing.T) {
@@ -247,19 +292,20 @@ func TestClusterLiveMovedRecovery(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		noErr(t, c.Set(ctx, fmt.Sprintf("mv:%d", i), fmt.Sprint(i)))
 	}
-	slot := KeySlot("mv:0")
-	truth := c.cl.t.Load().owner[slot]
+	slot, other := KeySlot("mv:0"), KeySlot("mv:1")
+	truth, otherTruth := c.cl.t.Load().owner[slot], c.cl.t.Load().owner[other]
 	staleTable(c)
 	if c.cl.t.Load().owner[slot] == truth {
 		t.Fatal("test setup: table not stale")
 	}
-	// a single command: MOVED, one retry, correct value, and the slot is patched
+	// a single command: MOVED, one retry, correct value, and the slot is patched (only
+	// that slot: the rest of the table stays stale until its own MOVED)
 	eq(t, must[string](t)(strOf(c.Get(ctx, "mv:0"))), "0")
-	if c.cl.moved.Load() < 1 {
-		t.Fatal("no MOVED was seen: the stale table did not misroute")
-	}
 	if c.cl.t.Load().owner[slot] != truth {
 		t.Fatal("slot not patched")
+	}
+	if c.cl.t.Load().owner[other] == otherTruth {
+		t.Fatal("one MOVED reloaded the whole table")
 	}
 	// the rest of the table heals as commands (and refreshes) come in
 	for i := 0; i < 30; i++ {

@@ -60,14 +60,22 @@ func crossSlotErr(buf []byte) error {
 	return ErrCrossSlot
 }
 
-// run sends r to the node owning slot (the seed for slot < 0) and retries once on -MOVED.
-// It recycles r.
+// run sends r to the node owning slot (the seed for slot < 0), following -MOVED. It
+// recycles r.
 func (cl *cluster) run(ctx context.Context, t *topology, slot int, r *request, blocking bool) (Value, error) {
 	node := cl.seed
 	if slot >= 0 {
 		node = t.nodeAt(slot, cl.seed)
 	}
-	for attempt := 0; ; attempt++ {
+	return cl.send(ctx, node, r, blocking, 0)
+}
+
+// send sends r on node and follows -MOVED until the command has been redirected
+// maxRedirects times in all; redirects is how many it has already followed. Each
+// redirect patches the slot and goes to the node the MOVED named; from the second
+// on it also reloads the table. It recycles r.
+func (cl *cluster) send(ctx context.Context, node *Client, r *request, blocking bool, redirects int) (Value, error) {
+	for {
 		ok, err := node.rt(ctx, r, blocking)
 		if !ok {
 			return Value{}, err
@@ -79,9 +87,10 @@ func (cl *cluster) run(ctx context.Context, t *topology, slot int, r *request, b
 		}
 		v := r.val
 		if v.Kind == KindError {
-			if attempt == 0 {
+			if redirects < maxRedirects {
 				if ms, addr, isMoved := parseMoved(v.Bytes); isMoved {
-					nn, err := cl.applyMoved(ctx, ms, addr)
+					redirects++
+					nn, err := cl.applyMoved(ctx, ms, addr, redirects >= 2)
 					if err != nil {
 						putReq(r)
 						return Value{}, err
@@ -98,6 +107,18 @@ func (cl *cluster) run(ctx context.Context, t *topology, slot int, r *request, b
 		putReq(r)
 		return v, nil
 	}
+}
+
+// redirect resends the command in r after its first -MOVED reply mv (from a pipelined
+// write), with the same limit and table updates as send. It recycles r.
+func (cl *cluster) redirect(ctx context.Context, mv []byte, r *request) (Value, error) {
+	ms, addr, _ := parseMoved(mv)
+	nn, err := cl.applyMoved(ctx, ms, addr, false)
+	if err != nil {
+		putReq(r)
+		return Value{}, err
+	}
+	return cl.send(ctx, nn, r, false, 1)
 }
 
 // routeFrame reads the command at the start of b and reports how to route it. slot is the
@@ -160,63 +181,114 @@ type slotPart struct {
 	pos  []int // key (or pair) positions in the caller's order
 }
 
-// split runs MGET, MSET, DEL, UNLINK, EXISTS and TOUCH whose keys span slots: one command
-// per slot, all concurrent, replies re-assembled in the caller's order. Parts are not
-// atomic with respect to each other.
+// splitPlan is one MGET, MSET, DEL, UNLINK, EXISTS or TOUCH whose keys span slots, cut
+// into one command per slot. args alias the caller's frame.
+type splitPlan struct {
+	args      [][]byte
+	keys      [][]byte
+	parts     []slotPart
+	canonical []byte // the pre-encoded command name
+	pairs     bool   // MSET: key value key value ...
+	isMGet    bool
+}
+
+func newSplitPlan(spec cmdSpec, frame []byte) (*splitPlan, bool) {
+	args, _, _, ok := frameArgs(frame, 0, nil)
+	if !ok {
+		return nil, false
+	}
+	p := &splitPlan{args: args, pairs: spec.keys.c == 2, isMGet: upperEq(args[0], "MGET"), canonical: preEncBytes(args[0])}
+	if p.pairs {
+		for i := 1; i < len(args); i += 2 {
+			p.keys = append(p.keys, args[i])
+		}
+	} else {
+		p.keys = args[1:]
+	}
+	index := make(map[int]int, 4)
+	for i, k := range p.keys {
+		s := hashSlot(k)
+		pi, seen := index[s]
+		if !seen {
+			pi = len(p.parts)
+			index[s] = pi
+			p.parts = append(p.parts, slotPart{slot: s})
+		}
+		p.parts[pi].pos = append(p.parts[pi].pos, i)
+	}
+	return p, true
+}
+
+// appendPart appends the command for part pi to dst.
+func (p *splitPlan) appendPart(dst *request, pi int) {
+	part := p.parts[pi]
+	per := 1
+	if p.pairs {
+		per = 2
+	}
+	dst.buf = appendArrayHeader(dst.buf, 1+per*len(part.pos))
+	dst.buf = append(dst.buf, p.canonical...)
+	for _, i := range part.pos {
+		if p.pairs {
+			dst.b(p.args[1+2*i]).b(p.args[2+2*i])
+		} else {
+			dst.b(p.keys[i])
+		}
+	}
+}
+
+// merge builds the caller's reply from the per-part replies (MGET in key order, MSET OK,
+// counts summed). An error reply of a part is returned as the error.
+func (p *splitPlan) merge(replies []Value) (Value, error) {
+	for _, v := range replies {
+		if v.Kind == KindError {
+			return v, &Error{Msg: b2s(v.Bytes)}
+		}
+	}
+	switch {
+	case p.isMGet:
+		out := make([]Value, len(p.keys))
+		for pi, part := range p.parts {
+			if replies[pi].Kind != KindArray || len(replies[pi].Array) != len(part.pos) {
+				return Value{}, unexpected(replies[pi])
+			}
+			for j, i := range part.pos {
+				out[i] = replies[pi].Array[j]
+			}
+		}
+		return Value{Kind: KindArray, Array: out}, nil
+	case p.pairs:
+		return Value{Kind: KindSimple, Bytes: []byte("OK")}, nil
+	}
+	var sum int64
+	for _, v := range replies {
+		n, err := v.AsInt64()
+		if err != nil {
+			return Value{}, err
+		}
+		sum += n
+	}
+	return Value{Kind: KindInt, Int: sum}, nil
+}
+
+// split runs a split command: one command per slot, all concurrent, replies re-assembled
+// in the caller's order. Parts are not atomic with respect to each other.
 func (cl *cluster) split(ctx context.Context, t *topology, spec cmdSpec, r *request) (Value, error) {
-	args, _, _, ok := frameArgs(r.buf, 0, nil)
+	p, ok := newSplitPlan(spec, r.buf)
 	if !ok {
 		putReq(r)
 		return Value{}, ErrProtocol
 	}
-	name := args[0]
-	pairs := spec.keys.c == 2 // MSET: key value key value ...
-	var keys [][]byte
-	if pairs {
-		for i := 1; i < len(args); i += 2 {
-			keys = append(keys, args[i])
-		}
-	} else {
-		keys = args[1:]
-	}
-	index := make(map[int]int, 4)
-	var parts []slotPart
-	for i, k := range keys {
-		s := hashSlot(k)
-		pi, seen := index[s]
-		if !seen {
-			pi = len(parts)
-			index[s] = pi
-			parts = append(parts, slotPart{slot: s})
-		}
-		parts[pi].pos = append(parts[pi].pos, i)
-	}
+	parts := p.parts
 	replies := make([]Value, len(parts))
 	errs := make([]error, len(parts))
-	isMGet, nkeys := upperEq(name, "MGET"), len(keys)
-	canonical := preEncBytes(name)
-	per := 1
-	if pairs {
-		per = 2
-	}
-	appendPart := func(dst *request, p slotPart) {
-		dst.buf = appendArrayHeader(dst.buf, 1+per*len(p.pos))
-		dst.buf = append(dst.buf, canonical...)
-		for _, i := range p.pos {
-			if pairs {
-				dst.b(args[1+2*i]).b(args[2+2*i])
-			} else {
-				dst.b(keys[i])
-			}
-		}
-	}
 	// One pipelined write per node (the server wants a single slot per command, so a node
 	// gets one command per slot it owns); the nodes run concurrently.
 	type nodeGroup struct{ parts []int }
 	var order []int
 	groups := map[int]*nodeGroup{}
-	for pi, p := range parts {
-		ni := int(t.owner[p.slot])
+	for pi, part := range parts {
+		ni := int(t.owner[part.slot])
 		g := groups[ni]
 		if g == nil {
 			g = &nodeGroup{}
@@ -234,7 +306,7 @@ func (cl *cluster) split(ctx context.Context, t *topology, spec cmdSpec, r *requ
 		}
 		sub := getReq()
 		for _, pi := range g.parts {
-			appendPart(sub, parts[pi])
+			p.appendPart(sub, pi)
 		}
 		ok, err := node.rtMany(ctx, sub, len(g.parts))
 		if !ok || sub.err != nil {
@@ -252,9 +324,8 @@ func (cl *cluster) split(ctx context.Context, t *topology, spec cmdSpec, r *requ
 			if v.Kind == KindError {
 				if _, _, isMoved := parseMoved(v.Bytes); isMoved { // repair this part alone
 					again := getReq()
-					appendPart(again, parts[pi])
-					v, errs[pi] = cl.run(ctx, t, parts[pi].slot, again, false)
-					replies[pi] = v
+					p.appendPart(again, pi)
+					replies[pi], errs[pi] = cl.redirect(ctx, v.Bytes, again)
 					continue
 				}
 				errs[pi] = &Error{Msg: b2s(v.Bytes)}
@@ -270,36 +341,15 @@ func (cl *cluster) split(ctx context.Context, t *topology, spec cmdSpec, r *requ
 	}
 	do(order[0])
 	wg.Wait()
-	putReq(r)
 	for _, err := range errs {
 		if err != nil {
+			putReq(r)
 			return Value{}, err
 		}
 	}
-	switch {
-	case isMGet:
-		out := make([]Value, nkeys)
-		for pi, p := range parts {
-			if replies[pi].Kind != KindArray || len(replies[pi].Array) != len(p.pos) {
-				return Value{}, unexpected(replies[pi])
-			}
-			for j, i := range p.pos {
-				out[i] = replies[pi].Array[j]
-			}
-		}
-		return Value{Kind: KindArray, Array: out}, nil
-	case pairs:
-		return Value{Kind: KindSimple, Bytes: []byte("OK")}, nil
-	}
-	var sum int64
-	for _, v := range replies {
-		n, err := v.AsInt64()
-		if err != nil {
-			return Value{}, err
-		}
-		sum += n
-	}
-	return Value{Kind: KindInt, Int: sum}, nil
+	v, err := p.merge(replies)
+	putReq(r)
+	return v, err
 }
 
 func preEncBytes(name []byte) []byte {

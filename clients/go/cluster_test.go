@@ -503,7 +503,20 @@ func TestFakeSplitKeepsCallerOrder(t *testing.T) {
 	}
 }
 
-func TestFakeMovedRetriesOnceAndPatchesTable(t *testing.T) {
+// slotsAsked counts the CLUSTER SLOTS a node received.
+func (f *fakeNode) slotsAsked() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, a := range f.got {
+		if a[0] == "CLUSTER" {
+			n++
+		}
+	}
+	return n
+}
+
+func TestFakeMovedPatchesSlotWithoutReload(t *testing.T) {
 	k := keyFor(true, 0) // the table says node A, but B really owns it
 	var b *fakeNode
 	a, b := twoNodes(t, func(f *fakeNode, args []string) string {
@@ -528,9 +541,47 @@ func TestFakeMovedRetriesOnceAndPatchesTable(t *testing.T) {
 	if a.count("GET") != 1 || b.count("GET") != 2 {
 		t.Fatalf("table not patched: a=%v b=%v", a.commands(), b.commands())
 	}
+	// a MOVED for another slot (of another command) patches that slot too, still no reload
+	if _, err := getS(c, ctx, keyFor(true, 50)); err != nil {
+		t.Fatal(err)
+	}
+	if n := a.slotsAsked() + b.slotsAsked(); n != 1 { // discovery only
+		t.Fatalf("CLUSTER SLOTS sent %d times; a known node must only patch the slot", n)
+	}
 }
 
-func TestFakeMovedIsRetriedOnlyOnce(t *testing.T) {
+func TestFakeMovedFollowsThreeRedirects(t *testing.T) {
+	// A always sends GET to B; B bounces the first GET back to A. The command goes
+	// A -> B -> (reload) A -> (reload) B: three redirects, then the value.
+	var a, b *fakeNode
+	var bounced atomic.Bool
+	a, b = twoNodes(t, func(f *fakeNode, args []string) string {
+		if strings.ToUpper(args[0]) == "GET" {
+			return fmt.Sprintf("-MOVED %d %s\r\n", KeySlot(args[1]), b.addr)
+		}
+		return defaultFake(f, args)
+	}, func(f *fakeNode, args []string) string {
+		if strings.ToUpper(args[0]) == "GET" && bounced.CompareAndSwap(false, true) {
+			return fmt.Sprintf("-MOVED %d %s\r\n", KeySlot(args[1]), a.addr)
+		}
+		return defaultFake(f, args)
+	})
+	c := newClusterClient(t, a.addr)
+	k := keyFor(true, 0)
+	v, err := getS(c, context.Background(), k)
+	if err != nil || v != "v:"+k+"@"+b.addr {
+		t.Fatalf("%q %v", v, err)
+	}
+	if a.count("GET") != 2 || b.count("GET") != 2 {
+		t.Fatalf("a=%v b=%v", a.commands(), b.commands())
+	}
+	// discovery, then a reload on the second and on the third MOVED (not on the first)
+	if n := a.slotsAsked() + b.slotsAsked(); n != 3 {
+		t.Fatalf("CLUSTER SLOTS sent %d times, want 3", n)
+	}
+}
+
+func TestFakeMovedGivesUpAfterThreeRedirects(t *testing.T) {
 	var a, b *fakeNode
 	mv := func(to func() *fakeNode) func(*fakeNode, []string) string {
 		return func(f *fakeNode, args []string) string {
@@ -545,10 +596,18 @@ func TestFakeMovedIsRetriedOnlyOnce(t *testing.T) {
 	_, err := getS(c, context.Background(), keyFor(true, 0))
 	var se *Error
 	if !errors.As(err, &se) || se.Prefix() != "MOVED" {
-		t.Fatalf("want the second MOVED returned, got %v", err)
+		t.Fatalf("want the fourth MOVED returned, got %v", err)
 	}
-	if a.count("GET")+b.count("GET") != 2 {
-		t.Fatalf("expected exactly one retry: a=%v b=%v", a.commands(), b.commands())
+	if a.count("GET")+b.count("GET") != 4 {
+		t.Fatalf("expected the first send and three redirects: a=%v b=%v", a.commands(), b.commands())
+	}
+	// the same limit holds for a command repaired inside a pipeline
+	vals, err := c.Pipelined(context.Background(), func(p *Pipeline) { p.Get(keyFor(true, 0)) })
+	if !errors.As(err, &se) || se.Prefix() != "MOVED" || vals[0].Kind != KindError {
+		t.Fatalf("pipeline: %v %v", vals, err)
+	}
+	if a.count("GET")+b.count("GET") != 8 {
+		t.Fatalf("pipeline redirects: a=%v b=%v", a.commands(), b.commands())
 	}
 }
 
@@ -693,6 +752,151 @@ func TestFakePipelineMovedIsRepaired(t *testing.T) {
 	if !strings.HasSuffix(vals[0].Str(), "@"+a.addr) || !strings.HasSuffix(vals[2].Str(), "@"+a.addr) {
 		t.Fatalf("neighbours disturbed: %v %v", vals[0], vals[2])
 	}
+}
+
+func TestFakePipelineSplitsCrossSlotCommands(t *testing.T) {
+	a, b := twoNodes(t, nil, nil)
+	c := newClusterClient(t, a.addr)
+	ctx := context.Background()
+	var keys []string
+	for i := 0; i < 6; i++ {
+		keys = append(keys, keyFor(i%2 == 0, i*13))
+	}
+	ka := keyFor(true, 500)
+	vals, err := c.Pipelined(ctx, func(p *Pipeline) {
+		p.Set(ka, "1")
+		p.Do(append([]any{"MGET"}, toAny(keys)...)...)
+		p.Get(keyFor(false, 500))
+		p.Del(keys...)
+		p.Do(append([]any{"EXISTS"}, toAny(keys[:3])...)...)
+		p.Do("MSET", keys[0], "x", keys[1], "y")
+		p.Do("PING")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vals) != 7 || vals[0].Str() != "OK" || vals[6].Str() != "PONG" {
+		t.Fatalf("replies %v", vals)
+	}
+	if vals[1].Kind != KindArray || len(vals[1].Array) != len(keys) {
+		t.Fatalf("MGET reply %v", vals[1])
+	}
+	for i, k := range keys {
+		if vals[1].Array[i].Str() != "v:"+k {
+			t.Fatalf("MGET position %d = %v, want %s", i, vals[1].Array[i], k)
+		}
+	}
+	if !strings.HasSuffix(vals[2].Str(), "@"+b.addr) {
+		t.Fatalf("GET reply %v", vals[2])
+	}
+	if vals[3].Int != int64(len(keys)) || vals[4].Int != 3 || vals[5].Str() != "OK" {
+		t.Fatalf("merged replies %v %v %v", vals[3], vals[4], vals[5])
+	}
+	// every command sent carries one slot, and goes to the node owning it
+	for _, f := range []*fakeNode{a, b} {
+		f.mu.Lock()
+		for _, cmd := range f.got {
+			step := 1
+			switch cmd[0] {
+			case "MSET":
+				step = 2
+			case "MGET", "DEL", "EXISTS":
+			default:
+				continue
+			}
+			s := KeySlot(cmd[1])
+			for i := 1; i < len(cmd); i += step {
+				if KeySlot(cmd[i]) != s {
+					t.Errorf("%s part mixes slots: %v", cmd[0], cmd)
+				}
+			}
+			if (s < 8192) != (f == a) {
+				t.Errorf("part sent to the wrong node: %v", cmd)
+			}
+		}
+		f.mu.Unlock()
+	}
+	// a split command keeps its place on each node: the SET before it is sent first
+	if cmds := a.commands(); !strings.HasPrefix(cmds[0], "SET "+ka) || !strings.HasPrefix(cmds[1], "MGET") {
+		t.Fatalf("order on node A: %v", cmds)
+	}
+}
+
+func TestFakePipelineSplitPartErrorStaysAtItsIndex(t *testing.T) {
+	var b *fakeNode
+	moved := keyFor(true, 7) // its part is answered with MOVED to B, then served there
+	a, b := twoNodes(t, func(f *fakeNode, args []string) string {
+		if strings.ToUpper(args[0]) == "MGET" && args[1] == moved {
+			return fmt.Sprintf("-MOVED %d %s\r\n", KeySlot(moved), b.addr)
+		}
+		return defaultFake(f, args)
+	}, func(f *fakeNode, args []string) string {
+		if strings.ToUpper(args[0]) == "DEL" {
+			return "-ERR boom\r\n"
+		}
+		return defaultFake(f, args)
+	})
+	c := newClusterClient(t, a.addr)
+	ctx := context.Background()
+	kl, kh := keyFor(true, 0), keyFor(false, 0)
+	vals, err := c.Pipelined(ctx, func(p *Pipeline) {
+		p.Get(kl)
+		p.Del(kl, kh)
+		p.Do("MGET", moved, kh)
+		p.Get(kh)
+	})
+	var se *Error
+	if !errors.As(err, &se) || !strings.Contains(se.Msg, "boom") {
+		t.Fatalf("want the DEL part error, got %v", err)
+	}
+	if vals[1].Kind != KindError || !strings.Contains(vals[1].Str(), "boom") {
+		t.Fatalf("DEL reply %v", vals[1])
+	}
+	if vals[0].Kind == KindError || vals[3].Kind == KindError {
+		t.Fatalf("neighbours disturbed: %v %v", vals[0], vals[3])
+	}
+	if vals[2].Kind != KindArray || len(vals[2].Array) != 2 || vals[2].Array[0].Str() != "v:"+moved {
+		t.Fatalf("moved MGET part not repaired: %v", vals[2])
+	}
+	if b.count("MGET "+moved) != 1 {
+		t.Fatalf("b=%v", b.commands())
+	}
+}
+
+func TestFakePipelineCrossSlotNonSplitFails(t *testing.T) {
+	a, b := twoNodes(t, nil, nil)
+	c := newClusterClient(t, a.addr)
+	ctx := context.Background()
+	if err := c.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, err := c.Pipelined(ctx, func(p *Pipeline) {
+		p.Get(keyFor(true, 0))
+		p.Do("SUNION", keyFor(true, 0), keyFor(false, 0))
+	})
+	if !errors.Is(err, ErrCrossSlot) || !strings.Contains(err.Error(), "SUNION") {
+		t.Fatalf("want ErrCrossSlot (SUNION), got %v", err)
+	}
+	// a split command inside MULTI is not split: the transaction must stay in one slot
+	_, err = c.Pipelined(ctx, func(p *Pipeline) {
+		p.Do("MULTI")
+		p.Do("MGET", "{t}a", keyFor(false, 0))
+		p.Do("EXEC")
+	})
+	if !errors.Is(err, ErrCrossSlot) {
+		t.Fatalf("want ErrCrossSlot, got %v", err)
+	}
+	if len(a.commands())+len(b.commands()) != 1 { // only the PING
+		t.Fatalf("a=%v b=%v", a.commands(), b.commands())
+	}
+}
+
+func toAny(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
 }
 
 func TestFakePipelineCrossSlotTransactionFails(t *testing.T) {

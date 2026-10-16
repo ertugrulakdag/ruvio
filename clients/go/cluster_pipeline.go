@@ -36,10 +36,10 @@ func (cl *cluster) execMany(ctx context.Context, r *request, n int) ([]Value, er
 		return cl.seed.execManyLocal(ctx, r, n)
 	}
 	// pass 1: where does each command go? Allocation-free when they share one node.
-	first, uniform, sawMulti, differ, firstSlot := -1, true, false, false, -1
+	first, uniform, sawMulti, differ, split, firstSlot := -1, true, false, false, false, -1
 	off := 0
 	for i := 0; i < n; i++ {
-		_, slot, _, err := routeFrame(r.buf[off:])
+		spec, slot, _, err := routeFrame(r.buf[off:])
 		if err != nil {
 			putReq(r)
 			return nil, err
@@ -54,8 +54,13 @@ func (cl *cluster) execMany(ctx context.Context, r *request, n int) ([]Value, er
 			sawMulti = true
 		}
 		if slot == slotCross {
-			putReq(r)
-			return nil, crossSlotErr(r.buf[off-end:])
+			if !spec.split {
+				err := crossSlotErr(r.buf[off-end:]) // before r is recycled
+				putReq(r)
+				return nil, err
+			}
+			split, differ, uniform = true, true, false // sent per slot, like the plain command
+			continue
 		}
 		if slot < 0 {
 			continue
@@ -84,9 +89,9 @@ func (cl *cluster) execMany(ctx context.Context, r *request, n int) ([]Value, er
 		if firstSlot >= 0 && first != noOwner {
 			node = t.nodes[first]
 		}
-		return cl.pipeOne(ctx, t, node, r, n)
+		return cl.pipeOne(ctx, node, r, n)
 	}
-	return cl.pipeMany(ctx, t, r, n)
+	return cl.pipeMany(ctx, t, r, n, split)
 }
 
 func cmdName(b []byte) []byte {
@@ -110,7 +115,7 @@ func frameAt(buf []byte, i int) []byte {
 }
 
 // pipeOne sends the whole pipeline to one node and repairs -MOVED replies.
-func (cl *cluster) pipeOne(ctx context.Context, t *topology, node *Client, r *request, n int) ([]Value, error) {
+func (cl *cluster) pipeOne(ctx context.Context, node *Client, r *request, n int) ([]Value, error) {
 	ok, err := node.rtMany(ctx, r, n)
 	if !ok {
 		return nil, err
@@ -124,7 +129,7 @@ func (cl *cluster) pipeOne(ctx context.Context, t *topology, node *Client, r *re
 	for i := range vals {
 		if vals[i].Kind == KindError {
 			if _, _, isMoved := parseMoved(vals[i].Bytes); isMoved {
-				cl.redo(ctx, t, frameAt(r.buf, i), &vals[i])
+				cl.redo(ctx, frameAt(r.buf, i), &vals[i])
 			}
 		}
 	}
@@ -134,40 +139,43 @@ func (cl *cluster) pipeOne(ctx context.Context, t *topology, node *Client, r *re
 
 // redo sends one command again after -MOVED (the table is updated first) and stores the
 // outcome in dst.
-func (cl *cluster) redo(ctx context.Context, t *topology, frame []byte, dst *Value) {
+func (cl *cluster) redo(ctx context.Context, frame []byte, dst *Value) {
 	req := getReq()
 	req.buf = append(req.buf, frame...)
-	if ms, addr, ok := parseMoved(dst.Bytes); ok {
-		if nn, err := cl.applyMoved(ctx, ms, addr); err == nil {
-			ok2, err2 := nn.rt(ctx, req, false)
-			if !ok2 {
-				*dst = Value{Kind: KindError, Bytes: []byte(err2.Error())}
-				return
-			}
-			if req.err != nil {
-				*dst = Value{Kind: KindError, Bytes: []byte(req.err.Error())}
-			} else {
-				*dst = req.val
-			}
-			putReq(req)
-			return
-		}
+	v, err := cl.redirect(ctx, dst.Bytes, req)
+	if err != nil && v.Kind != KindError {
+		v = Value{Kind: KindError, Bytes: []byte(err.Error())}
 	}
-	putReq(req)
+	*dst = v
 }
 
 // pipeMany groups the commands by node, sends each group as one pipelined write
-// (concurrently) and puts the replies back in the caller's order.
-func (cl *cluster) pipeMany(ctx context.Context, t *topology, r *request, n int) ([]Value, error) {
+// (concurrently) and puts the replies back in the caller's order. With split set, a split
+// command whose keys span slots goes out as one command per slot, in its place on each
+// node, and its merged reply takes its index.
+func (cl *cluster) pipeMany(ctx context.Context, t *topology, r *request, n int, split bool) ([]Value, error) {
 	offs := make([]int, n+1)
 	target := make([]int, n)
+	var plans []*splitPlan // per command, nil unless it is split
+	if split {
+		plans = make([]*splitPlan, n)
+	}
 	cur := -1
 	off := 0
 	for i := 0; i < n; i++ {
-		_, slot, _, _ := routeFrame(r.buf[off:])
+		spec, slot, _, _ := routeFrame(r.buf[off:])
 		end, _ := frameEnd(r.buf[off:])
 		offs[i] = off
 		off += end
+		if slot == slotCross {
+			p, ok := newSplitPlan(spec, r.buf[offs[i]:off])
+			if !ok {
+				putReq(r)
+				return nil, ErrProtocol
+			}
+			plans[i] = p
+			slot = p.parts[0].slot
+		}
 		if slot >= 0 {
 			cur = int(t.owner[slot])
 		}
@@ -182,20 +190,36 @@ func (cl *cluster) pipeMany(ctx context.Context, t *topology, r *request, n int)
 			}
 		}
 	}
+	// item is one command sent: command i whole (part -1) or part of split command i.
+	type item struct{ i, part int }
 	type group struct {
-		node int
-		idx  []int
+		node  int
+		items []item
 	}
 	var groups []group
 	pos := map[int]int{}
-	for i, tg := range target {
+	add := func(tg int, it item) {
 		gi, ok := pos[tg]
 		if !ok {
 			gi = len(groups)
 			pos[tg] = gi
 			groups = append(groups, group{node: tg})
 		}
-		groups[gi].idx = append(groups[gi].idx, i)
+		groups[gi].items = append(groups[gi].items, it)
+	}
+	var partVals [][]Value // per command, the replies of its parts
+	if split {
+		partVals = make([][]Value, n)
+	}
+	for i, tg := range target {
+		if split && plans[i] != nil {
+			partVals[i] = make([]Value, len(plans[i].parts))
+			for pi, part := range plans[i].parts {
+				add(int(t.owner[part.slot]), item{i, pi})
+			}
+			continue
+		}
+		add(tg, item{i, -1})
 	}
 	out := make([]Value, n)
 	errs := make([]error, len(groups))
@@ -207,10 +231,14 @@ func (cl *cluster) pipeMany(ctx context.Context, t *topology, r *request, n int)
 			node = t.nodes[g.node]
 		}
 		sub := getReq()
-		for _, i := range g.idx {
-			sub.buf = append(sub.buf, r.buf[offs[i]:offs[i+1]]...)
+		for _, it := range g.items {
+			if it.part >= 0 {
+				plans[it.i].appendPart(sub, it.part)
+			} else {
+				sub.buf = append(sub.buf, r.buf[offs[it.i]:offs[it.i+1]]...)
+			}
 		}
-		ok, err := node.rtMany(ctx, sub, len(g.idx))
+		ok, err := node.rtMany(ctx, sub, len(g.items))
 		if !ok {
 			errs[gi] = err
 			return
@@ -220,8 +248,23 @@ func (cl *cluster) pipeMany(ctx context.Context, t *topology, r *request, n int)
 			putReq(sub)
 			return
 		}
-		for j, i := range g.idx {
-			out[i] = sub.vals[j]
+		for j, it := range g.items {
+			v := sub.vals[j]
+			if it.part < 0 {
+				out[it.i] = v
+				continue
+			}
+			if v.Kind == KindError {
+				if _, _, isMoved := parseMoved(v.Bytes); isMoved { // repair this part alone
+					again := getReq()
+					plans[it.i].appendPart(again, it.part)
+					var err error
+					if v, err = cl.redirect(ctx, v.Bytes, again); err != nil && v.Kind != KindError {
+						v = Value{Kind: KindError, Bytes: []byte(err.Error())}
+					}
+				}
+			}
+			partVals[it.i][it.part] = v
 		}
 		putReq(sub)
 	}
@@ -238,9 +281,17 @@ func (cl *cluster) pipeMany(ctx context.Context, t *topology, r *request, n int)
 		}
 	}
 	for i := range out {
+		if split && plans[i] != nil {
+			v, err := plans[i].merge(partVals[i])
+			if err != nil && v.Kind != KindError {
+				v = Value{Kind: KindError, Bytes: []byte(err.Error())}
+			}
+			out[i] = v
+			continue
+		}
 		if out[i].Kind == KindError {
 			if _, _, isMoved := parseMoved(out[i].Bytes); isMoved {
-				cl.redo(ctx, t, r.buf[offs[i]:offs[i+1]], &out[i])
+				cl.redo(ctx, r.buf[offs[i]:offs[i+1]], &out[i])
 			}
 		}
 	}
