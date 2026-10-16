@@ -24,16 +24,21 @@ public class ReconnectTests
     }
 
     [Fact(Timeout = 15000)]
-    public async Task ClosedGetIsSentOnceMoreOnANewSocket()
+    public async Task ClosedGetIsNotSentAgainButTheNextCommandReconnects()
     {
         await using var server = new DropServer();
         await using RuvioConnection connection = await server.Connect();
         RuvioClient client = await connection.GetDefaultDatabaseAsync();
         server.CloseAccepted();
-        ValueTask<string?> get = client.GetStringAsync("k");
+
+        // Before, this read was sent once more on a new socket and would wait here for a reply.
+        RuvioException error = await Assert.ThrowsAsync<RuvioException>(async () => await client.GetStringAsync("k"));
+
+        Assert.True(error.ClosedBeforeReply);
+        ValueTask<string?> again = client.GetStringAsync("k");
 
         await server.AcceptAndNullGet();
-        Assert.Null(await get);
+        Assert.Null(await again);
         Assert.True(connection.IsConnected);
     }
 

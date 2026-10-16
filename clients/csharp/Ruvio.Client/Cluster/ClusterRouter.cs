@@ -6,7 +6,7 @@ namespace Ruvio.Client;
 
 /// <summary>
 /// Routes commands to the shard that owns their slot. Built from <c>CLUSTER SLOTS</c>;
-/// a <c>MOVED</c> reply refreshes the map and retries.
+/// a <c>MOVED</c> reply points that slot at the named node and retries, at most three times.
 /// </summary>
 internal sealed class ClusterRouter : IDisposable
 {
@@ -95,7 +95,14 @@ internal sealed class ClusterRouter : IDisposable
         return new ClusterRouter(seed, options, topology);
     }
 
-    public async Task<RespValue> ExecuteAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    /// <summary>
+    /// Routes one command. <paramref name="redirects"/> counts the <c>MOVED</c> replies the
+    /// caller already followed for it.
+    /// </summary>
+    public async Task<RespValue> ExecuteAsync(
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken,
+        int redirects = 0)
     {
         string name = ClusterKeys.Name(arguments);
 
@@ -126,26 +133,25 @@ internal sealed class ClusterRouter : IDisposable
 
         IReadOnlyList<string> keys = ClusterKeys.Of(name, arguments);
 
-        if (name is "RENAME" or "RENAMENX" && keys.Count == 2 && SpansSlots(keys))
+        if (SpansSlots(keys) && !UnpairedMset(name, arguments))
         {
-            return await RenameAcrossAsync(name == "RENAMENX", keys[0], keys[1], cancellationToken);
-        }
-
-        if (Split.Contains(name) && SpansSlots(keys))
-        {
-            return await SplitAsync(name, arguments, keys, cancellationToken);
+            // Only the split commands can be answered per slot; anything else (RENAME, COPY,
+            // SMOVE, EVAL, ...) is refused here instead of reaching a shard.
+            return Split.Contains(name)
+                ? await SplitAsync(name, arguments, keys, cancellationToken)
+                : CrossSlot();
         }
 
         RuvioSocket connection = await TargetAsync(keys, cancellationToken);
 
-        return await SendRoutedAsync(connection, arguments, cancellationToken);
+        return await SendRoutedAsync(connection, arguments, cancellationToken, redirects);
     }
 
     /// <summary>
     /// Routes an ordinary single-key command without building a string list. Everything
     /// else (transactions, multi-key, fan-out) takes the list path.
     /// </summary>
-    internal ValueTask<RespValue> ExecuteAsync(in RespCommand command, CancellationToken cancellationToken)
+    internal ValueTask<RespValue> ExecuteAsync(in RespCommand command, CancellationToken cancellationToken, int redirects = 0)
     {
         if (_pinned is null && !_multiPending && command.Count >= 2
             && command.Name is { } raw && command.TextAt(1) is { } key)
@@ -154,35 +160,41 @@ internal sealed class ClusterRouter : IDisposable
 
             if (ClusterKeys.IsSingleKey(name))
             {
-                return SendToSlotAsync(command, ClusterKeys.Slot(key), cancellationToken);
+                return SendToSlotAsync(command, ClusterKeys.Slot(key), redirects, cancellationToken);
             }
         }
 
-        return new ValueTask<RespValue>(ExecuteAsync(command.AsList(), cancellationToken));
+        return new ValueTask<RespValue>(ExecuteAsync(command.AsList(), cancellationToken, redirects));
+    }
+
+    /// <summary>The error for keys in several slots, returned before anything is sent.</summary>
+    internal static RespValue CrossSlot()
+    {
+        return RespValue.Error("CROSSSLOT Keys in request do not hash to the same slot (checked by the client, nothing was sent)");
     }
 
     // Pooled builder: each routed call reuses a state machine box instead of allocating a new one.
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
-    private async ValueTask<RespValue> SendToSlotAsync(RespCommand command, int slot, CancellationToken cancellationToken)
+    private async ValueTask<RespValue> SendToSlotAsync(
+        RespCommand command, int slot, int redirects, CancellationToken cancellationToken)
     {
         RuvioSocket connection = await ForSlotAsync(slot, cancellationToken).ConfigureAwait(false);
 
-        for (int redirect = 0; ; redirect++)
+        for (int redirect = redirects; ; redirect++)
         {
             RespValue reply = await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
 
-            if (redirect >= MaxRedirects || MovedTarget(reply) is not { } node)
+            if (redirect >= MaxRedirects || MovedTarget(reply) is not { } moved)
             {
                 return reply;
             }
 
-            await RefreshAsync(cancellationToken).ConfigureAwait(false);
-            connection = await ConnectionAsync(node.Host, node.Port, cancellationToken).ConfigureAwait(false);
+            connection = await FollowMovedAsync(moved, redirect, cancellationToken).ConfigureAwait(false);
         }
     }
 
     internal async Task<RespValue> ExecuteBinaryAsync(
-        IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken cancellationToken)
+        IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken cancellationToken, int redirects = 0)
     {
         if (_pinned is not null || _multiPending)
         {
@@ -228,29 +240,81 @@ internal sealed class ClusterRouter : IDisposable
         {
             if (ClusterKeys.Slot(arguments[first + index].Span) != slot)
             {
-                throw new RuvioException("CROSSSLOT binary commands require keys in one slot");
+                // DEL, UNLINK and EXISTS are split like their string form; a script cannot be.
+                return first == 1
+                    ? await SplitBinaryAsync(arguments, cancellationToken).ConfigureAwait(false)
+                    : CrossSlot();
             }
         }
 
+        return await SendBinaryToSlotAsync(arguments, slot, redirects, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<RespValue> SendBinaryToSlotAsync(
+        IReadOnlyList<ReadOnlyMemory<byte>> arguments, int slot, int redirects, CancellationToken cancellationToken)
+    {
         RuvioSocket connection = await ForSlotAsync(slot, cancellationToken).ConfigureAwait(false);
 
-        for (int redirect = 0; ; redirect++)
+        for (int redirect = redirects; ; redirect++)
         {
             RespValue reply = await connection.SendBinaryAsync(arguments, cancellationToken).ConfigureAwait(false);
 
-            if (redirect >= MaxRedirects || MovedTarget(reply) is not { } node)
+            if (redirect >= MaxRedirects || MovedTarget(reply) is not { } moved)
             {
                 return reply;
             }
 
-            await RefreshAsync(cancellationToken).ConfigureAwait(false);
-            connection = await ConnectionAsync(node.Host, node.Port, cancellationToken).ConfigureAwait(false);
+            connection = await FollowMovedAsync(moved, redirect, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Sends a binary <c>DEL</c>, <c>UNLINK</c> or <c>EXISTS</c> once per slot and sums the counts.</summary>
+    private async Task<RespValue> SplitBinaryAsync(
+        IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken cancellationToken)
+    {
+        var bySlot = new Dictionary<int, List<ReadOnlyMemory<byte>>>();
+
+        for (int index = 1; index < arguments.Count; index++)
+        {
+            int slot = ClusterKeys.Slot(arguments[index].Span);
+
+            if (!bySlot.TryGetValue(slot, out List<ReadOnlyMemory<byte>>? part))
+            {
+                part = [arguments[0]];
+                bySlot[slot] = part;
+            }
+
+            part.Add(arguments[index]);
+        }
+
+        var sends = new Task<RespValue>[bySlot.Count];
+        int next = 0;
+
+        foreach ((int slot, List<ReadOnlyMemory<byte>> part) in bySlot)
+        {
+            sends[next++] = SendBinaryToSlotAsync(part, slot, 0, cancellationToken);
+        }
+
+        long total = 0;
+
+        foreach (RespValue reply in await Task.WhenAll(sends).ConfigureAwait(false))
+        {
+            if (reply.Kind is RespKind.Error)
+            {
+                return reply;
+            }
+
+            total += reply.Integer;
+        }
+
+        return RespValue.FromInteger(total);
     }
 
     /// <summary>
     /// Groups a pipeline by shard and sends each group as one write. Replies come back in
-    /// command order. A pipeline that holds a transaction goes to one shard unchanged.
+    /// command order. A split command whose keys span slots is sent per slot inside the
+    /// groups and its replies merged at its own index. A pipeline that holds a transaction
+    /// goes to one shard unchanged.
     /// </summary>
     public async Task<IReadOnlyList<RespValue>> ExecuteManyAsync(
         IReadOnlyList<IReadOnlyList<string>> commands,
@@ -265,25 +329,39 @@ internal sealed class ClusterRouter : IDisposable
 
         var groups = new Dictionary<RuvioSocket, List<int>>();
 
+        // Per-slot parts of split commands get positions after the pipeline's own commands.
+        List<IReadOnlyList<string>>? extra = null;
+        List<(int Index, string Name, int Keys, List<SplitPart> Parts, int Offset)>? splits = null;
+
         for (int index = 0; index < commands.Count; index++)
         {
             IReadOnlyList<string> command = commands[index];
-            RuvioSocket connection = await TargetKeyAsync(
-                ClusterKeys.First(ClusterKeys.Name(command), command),
-                cancellationToken);
+            string name = ClusterKeys.Name(command);
 
-            if (!groups.TryGetValue(connection, out List<int>? positions))
+            if (Split.Contains(name) && SplitSpansSlots(name, command))
             {
-                positions = [];
-                groups[connection] = positions;
+                IReadOnlyList<string> keys = ClusterKeys.Of(name, command);
+                List<SplitPart> parts = SplitParts(name, command, keys);
+
+                extra ??= [];
+                splits ??= [];
+                splits.Add((index, name, keys.Count, parts, commands.Count + extra.Count));
+
+                foreach (SplitPart part in parts)
+                {
+                    AddToGroup(groups, await ForSlotAsync(part.Slot, cancellationToken), commands.Count + extra.Count);
+                    extra.Add(part.Command);
+                }
+
+                continue;
             }
 
-            positions.Add(index);
+            AddToGroup(groups, await TargetKeyAsync(ClusterKeys.First(name, command), cancellationToken), index);
         }
 
-        var replies = new RespValue[commands.Count];
+        var replies = new RespValue[commands.Count + (extra?.Count ?? 0)];
 
-        if (groups.Count == 1)
+        if (groups.Count == 1 && extra is null)
         {
             foreach ((RuvioSocket only, List<int> _) in groups)
             {
@@ -306,7 +384,9 @@ internal sealed class ClusterRouter : IDisposable
 
                 for (int index = 0; index < batch.Length; index++)
                 {
-                    batch[index] = commands[positions[index]];
+                    int position = positions[index];
+
+                    batch[index] = position < commands.Count ? commands[position] : extra![position - commands.Count];
                 }
 
                 sends[next++] = SendGroupAsync(connection, batch, positions, replies, cancellationToken);
@@ -317,16 +397,38 @@ internal sealed class ClusterRouter : IDisposable
 
         for (int index = 0; index < replies.Length; index++)
         {
-            if (MovedTarget(replies[index]) is { } node)
+            // A split command's own index stays empty until its parts are merged below.
+            if (replies[index] is { } reply && MovedTarget(reply) is { } moved)
             {
-                await RefreshAsync(cancellationToken);
-                RuvioSocket owner = await ConnectionAsync(node.Host, node.Port, cancellationToken);
+                IReadOnlyList<string> command = index < commands.Count ? commands[index] : extra![index - commands.Count];
+                RuvioSocket owner = await FollowMovedAsync(moved, 0, cancellationToken);
 
-                replies[index] = await SendRoutedAsync(owner, commands[index], cancellationToken);
+                replies[index] = await SendRoutedAsync(owner, command, cancellationToken, redirects: 1);
             }
         }
 
-        return replies;
+        if (splits is null)
+        {
+            return replies;
+        }
+
+        foreach ((int index, string name, int keys, List<SplitPart> parts, int offset) in splits)
+        {
+            replies[index] = MergeSplit(name, keys, parts, replies, offset);
+        }
+
+        return replies[..commands.Count];
+    }
+
+    private static void AddToGroup(Dictionary<RuvioSocket, List<int>> groups, RuvioSocket connection, int position)
+    {
+        if (!groups.TryGetValue(connection, out List<int>? positions))
+        {
+            positions = [];
+            groups[connection] = positions;
+        }
+
+        positions.Add(position);
     }
 
     /// <summary>
@@ -540,60 +642,12 @@ internal sealed class ClusterRouter : IDisposable
         IReadOnlyList<string> keys,
         CancellationToken cancellationToken)
     {
-        bool pairs = name == "MSET";
-        var bySlot = new Dictionary<int, List<int>>();
-
-        for (int index = 0; index < keys.Count; index++)
-        {
-            int slot = ClusterKeys.Slot(keys[index]);
-
-            if (!bySlot.TryGetValue(slot, out List<int>? positions))
-            {
-                positions = [];
-                bySlot[slot] = positions;
-            }
-
-            positions.Add(index);
-        }
-
-        var parts = new List<(int Slot, List<int> Positions, string[] Command)>();
-
-        foreach ((int slot, List<int> positions) in bySlot)
-        {
-            var command = new string[1 + (positions.Count * (pairs ? 2 : 1))];
-            int written = 0;
-
-            command[written++] = arguments[0];
-
-            foreach (int position in positions)
-            {
-                if (pairs)
-                {
-                    command[written++] = arguments[1 + (position * 2)];
-                    command[written++] = arguments[2 + (position * 2)];
-                }
-                else
-                {
-                    command[written++] = keys[position];
-                }
-            }
-
-            parts.Add((slot, positions, command));
-        }
-
+        List<SplitPart> parts = SplitParts(name, arguments, keys);
         var byConnection = new Dictionary<RuvioSocket, List<int>>();
 
         for (int part = 0; part < parts.Count; part++)
         {
-            RuvioSocket owner = await ForSlotAsync(parts[part].Slot, cancellationToken);
-
-            if (!byConnection.TryGetValue(owner, out List<int>? indexes))
-            {
-                indexes = [];
-                byConnection[owner] = indexes;
-            }
-
-            indexes.Add(part);
+            AddToGroup(byConnection, await ForSlotAsync(parts[part].Slot, cancellationToken), part);
         }
 
         var replies = new RespValue[parts.Count];
@@ -617,17 +671,78 @@ internal sealed class ClusterRouter : IDisposable
 
         for (int part = 0; part < parts.Count; part++)
         {
-            if (MovedTarget(replies[part]) is { } node)
+            if (MovedTarget(replies[part]) is { } moved)
             {
-                await RefreshAsync(cancellationToken);
-                RuvioSocket owner = await ConnectionAsync(node.Host, node.Port, cancellationToken);
+                RuvioSocket owner = await FollowMovedAsync(moved, 0, cancellationToken);
 
-                replies[part] = await SendRoutedAsync(owner, parts[part].Command, cancellationToken);
+                replies[part] = await SendRoutedAsync(owner, parts[part].Command, cancellationToken, redirects: 1);
+            }
+        }
+
+        return MergeSplit(name, keys.Count, parts, replies, 0);
+    }
+
+    /// <summary>One slot's share of a split command: its key positions and the command to send.</summary>
+    private readonly record struct SplitPart(int Slot, List<int> Positions, string[] Command);
+
+    /// <summary>Breaks a split command into one command per slot, keys in their original order.</summary>
+    private static List<SplitPart> SplitParts(string name, IReadOnlyList<string> arguments, IReadOnlyList<string> keys)
+    {
+        bool pairs = name == "MSET";
+        var bySlot = new Dictionary<int, List<int>>();
+
+        for (int index = 0; index < keys.Count; index++)
+        {
+            int slot = ClusterKeys.Slot(keys[index]);
+
+            if (!bySlot.TryGetValue(slot, out List<int>? positions))
+            {
+                positions = [];
+                bySlot[slot] = positions;
             }
 
-            if (replies[part].Kind is RespKind.Error)
+            positions.Add(index);
+        }
+
+        var parts = new List<SplitPart>(bySlot.Count);
+
+        foreach ((int slot, List<int> positions) in bySlot)
+        {
+            var command = new string[1 + (positions.Count * (pairs ? 2 : 1))];
+            int written = 0;
+
+            command[written++] = arguments[0];
+
+            foreach (int position in positions)
             {
-                return replies[part];
+                if (pairs)
+                {
+                    command[written++] = arguments[1 + (position * 2)];
+                    command[written++] = arguments[2 + (position * 2)];
+                }
+                else
+                {
+                    command[written++] = keys[position];
+                }
+            }
+
+            parts.Add(new SplitPart(slot, positions, command));
+        }
+
+        return parts;
+    }
+
+    /// <summary>
+    /// Merges the part replies at <paramref name="offset"/>: <c>MGET</c> in key order, <c>MSET</c>
+    /// as OK, counts summed. The first error reply wins.
+    /// </summary>
+    private static RespValue MergeSplit(string name, int keyCount, List<SplitPart> parts, RespValue[] replies, int offset)
+    {
+        for (int part = 0; part < parts.Count; part++)
+        {
+            if (replies[offset + part].Kind is RespKind.Error)
+            {
+                return replies[offset + part];
             }
         }
 
@@ -637,11 +752,11 @@ internal sealed class ClusterRouter : IDisposable
                 return RespValue.Simple("OK");
 
             case "MGET":
-                var values = new RespValue[keys.Count];
+                var values = new RespValue[keyCount];
 
                 for (int part = 0; part < parts.Count; part++)
                 {
-                    IReadOnlyList<RespValue> items = replies[part].Items ?? [];
+                    IReadOnlyList<RespValue> items = replies[offset + part].Items ?? [];
 
                     for (int index = 0; index < items.Count; index++)
                     {
@@ -652,9 +767,46 @@ internal sealed class ClusterRouter : IDisposable
                 return RespValue.Array(values);
 
             default:
-                return RespValue.FromInteger(replies.Sum(reply => reply.Integer));
+                long total = 0;
+
+                for (int part = 0; part < parts.Count; part++)
+                {
+                    total += replies[offset + part].Integer;
+                }
+
+                return RespValue.FromInteger(total);
         }
     }
+
+    /// <summary>
+    /// True when a split command's keys span slots, read straight from the arguments so a
+    /// one-slot <c>MGET</c> in a pipeline builds no key list.
+    /// </summary>
+    private static bool SplitSpansSlots(string name, IReadOnlyList<string> command)
+    {
+        int step = name == "MSET" ? 2 : 1;
+
+        if (command.Count < 2 + step || UnpairedMset(name, command))
+        {
+            return false;
+        }
+
+        int first = ClusterKeys.Slot(command[1]);
+
+        for (int index = 1 + step; index < command.Count; index += step)
+        {
+            if (ClusterKeys.Slot(command[index]) != first)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>An <c>MSET</c> with a key and no value is not split; the shard answers with its arity error.</summary>
+    private static bool UnpairedMset(string name, IReadOnlyList<string> arguments) =>
+        name == "MSET" && arguments.Count % 2 == 0;
 
     private static bool HasTransactionCommand(IReadOnlyList<IReadOnlyList<string>> commands)
     {
@@ -704,321 +856,51 @@ internal sealed class ClusterRouter : IDisposable
         return false;
     }
 
-    /// <summary>
-    /// Moves a key whose destination lives on another shard. One shard cannot
-    /// rename into a slot it does not own, so the client copies the value and
-    /// then deletes the source.
-    /// </summary>
-    private async Task<RespValue> RenameAcrossAsync(
-        bool exclusive,
-        string source,
-        string destination,
-        CancellationToken cancellationToken)
-    {
-        if (exclusive)
-        {
-            RespValue exists = await CallAsync(["EXISTS", destination], cancellationToken);
-
-            if (exists.Kind == RespKind.Error) return exists;
-
-            if (exists.Kind == RespKind.Integer && exists.Integer == 1) return RespValue.FromInteger(0);
-        }
-
-        RespValue type = await CallAsync(["TYPE", source], cancellationToken);
-
-        if (type.Kind == RespKind.Error) return type;
-        string kind = type.AsString() ?? "none";
-
-        if (kind == "none") return RespValue.Error("ERR no such key");
-
-        RespValue ttlReply = await CallAsync(["PTTL", source], cancellationToken);
-
-        if (ttlReply.Kind == RespKind.Error) return ttlReply;
-        long ttl = ttlReply.Kind == RespKind.Integer ? ttlReply.Integer : -1;
-        Moved moved = await ReadForRenameAsync(kind, source, cancellationToken);
-
-        RespValue deleted = await CallAsync(["DEL", destination], cancellationToken);
-
-        if (deleted.Kind == RespKind.Error) return deleted;
-        await WriteRenamedAsync(kind, destination, moved, cancellationToken);
-
-        if (ttl > 0)
-        {
-            RespValue expire = await CallAsync(["PEXPIRE", destination, ttl.ToString(CultureInfo.InvariantCulture)], cancellationToken);
-
-            if (expire.Kind == RespKind.Error) return expire;
-        }
-
-        return await CallAsync(["DEL", source], cancellationToken) is { Kind: RespKind.Error } removal
-            ? removal
-            : exclusive ? RespValue.FromInteger(1) : RespValue.Simple("OK");
-    }
-
-    private async Task<Moved> ReadForRenameAsync(string kind, string source, CancellationToken cancellationToken)
-    {
-        switch (kind)
-        {
-            case "string":
-                RespValue value = await CallAsync(["GET", source], cancellationToken);
-
-                if (value.Kind == RespKind.Error) throw new RuvioException(value.Text ?? "GET failed", isServerReply: true);
-
-                return new Moved.Text(value.AsString() ?? "");
-            case "list":
-                return new Moved.Values(await ReadRangeAsync("LRANGE", source, [], cancellationToken));
-            case "set":
-                RespValue members = await CallAsync(["SMEMBERS", source], cancellationToken);
-
-                if (members.Kind == RespKind.Error) throw new RuvioException(members.Text ?? "SMEMBERS failed", isServerReply: true);
-
-                return new Moved.Values(Texts(members));
-            case "hash":
-                return new Moved.Pairs(await ReadHashAsync(source, cancellationToken));
-            case "zset":
-                return new Moved.Pairs(PairUp(await ReadRangeAsync("ZRANGE", source, ["WITHSCORES"], cancellationToken)));
-            case "stream":
-                return new Moved.StreamEntries(await ReadStreamAsync(source, cancellationToken));
-            default:
-                throw new RuvioException($"cross-slot rename does not move a {kind} value");
-        }
-    }
-
-    private async Task WriteRenamedAsync(string kind, string destination, Moved moved, CancellationToken cancellationToken)
-    {
-        switch (kind, moved)
-        {
-            case ("string", Moved.Text text):
-                RespValue set = await CallAsync(["SET", destination, text.Value], cancellationToken);
-
-                if (set.Kind == RespKind.Error) throw new RuvioException(set.Text ?? "SET failed", isServerReply: true);
-                break;
-            case ("list", Moved.Values values):
-                await PushManyAsync("RPUSH", destination, values.Items, cancellationToken);
-                break;
-            case ("set", Moved.Values values):
-                await PushManyAsync("SADD", destination, values.Items, cancellationToken);
-                break;
-            case ("hash", Moved.Pairs pairs):
-                await PushPairsAsync("HSET", destination, pairs.Items, scoreFirst: false, cancellationToken);
-                break;
-            case ("zset", Moved.Pairs pairs):
-                await PushPairsAsync("ZADD", destination, pairs.Items, scoreFirst: true, cancellationToken);
-                break;
-            case ("stream", Moved.StreamEntries entries):
-                foreach ((string id, List<(string Field, string Value)> fields) in entries.Items)
-                {
-                    var arguments = new List<string> { "XADD", destination, id };
-
-                    foreach ((string field, string value) in fields)
-                    {
-                        arguments.Add(field);
-                        arguments.Add(value);
-                    }
-
-                    if (arguments.Count > 3)
-                    {
-                        RespValue added = await CallAsync([.. arguments], cancellationToken);
-
-                        if (added.Kind == RespKind.Error) throw new RuvioException(added.Text ?? "XADD failed", isServerReply: true);
-                    }
-                }
-
-                break;
-            default:
-                throw new RuvioException("cross-slot rename lost the value shape");
-        }
-    }
-
-    private async Task<List<string>> ReadRangeAsync(
-        string command,
-        string source,
-        string[] extra,
-        CancellationToken cancellationToken)
-    {
-        var values = new List<string>();
-
-        for (int start = 0; ; start += 200)
-        {
-            var arguments = new List<string> { command, source, start.ToString(CultureInfo.InvariantCulture), (start + 199).ToString(CultureInfo.InvariantCulture) };
-
-            arguments.AddRange(extra);
-            RespValue page = await CallAsync([.. arguments], cancellationToken);
-
-            if (page.Kind == RespKind.Error) throw new RuvioException(page.Text ?? command + " failed", isServerReply: true);
-            List<string> chunk = Texts(page);
-
-            values.AddRange(chunk);
-
-            if (chunk.Count < 200) break;
-        }
-
-        return values;
-    }
-
-    private async Task<List<(string Left, string Right)>> ReadHashAsync(string source, CancellationToken cancellationToken)
-    {
-        string cursor = "0";
-        var pairs = new List<(string, string)>();
-
-        while (true)
-        {
-            RespValue page = await CallAsync(["HSCAN", source, cursor, "COUNT", "64"], cancellationToken);
-
-            if (page.Kind == RespKind.Error)
-                throw new RuvioException(page.Text ?? "HSCAN failed", isServerReply: true);
-
-            IReadOnlyList<RespValue> items = page.Items ?? [];
-            string next = items.Count > 0 ? items[0].AsString() ?? "0" : "0";
-
-            if (items.Count > 1)
-                pairs.AddRange(PairUp(Texts(items[1])));
-
-            if (next == "0")
-                break;
-
-            cursor = next;
-        }
-
-        return pairs;
-    }
-
-    private async Task<List<(string Id, List<(string Field, string Value)> Fields)>> ReadStreamAsync(
-        string source,
-        CancellationToken cancellationToken)
-    {
-        string start = "-";
-        var entries = new List<(string, List<(string, string)>)>();
-
-        while (true)
-        {
-            RespValue page = await CallAsync(["XRANGE", source, start, "+", "COUNT", "64"], cancellationToken);
-
-            if (page.Kind == RespKind.Error)
-                throw new RuvioException(page.Text ?? "XRANGE failed", isServerReply: true);
-
-            var fresh = new List<(string, List<(string, string)>)>();
-
-            foreach (RespValue entry in page.Items ?? [])
-            {
-                IReadOnlyList<RespValue> parts = entry.Items ?? [];
-                string id = parts.Count > 0 ? parts[0].AsString() ?? "" : "";
-
-                if (id.Length == 0 || id == start)
-                    continue;
-
-                List<(string, string)> fields = parts.Count > 1 ? PairUp(Texts(parts[1])) : [];
-
-                fresh.Add((id, fields));
-            }
-
-            if (fresh.Count == 0)
-                break;
-
-            start = fresh[^1].Item1;
-            bool done = fresh.Count < 63;
-
-            entries.AddRange(fresh);
-
-            if (done)
-                break;
-        }
-
-        return entries;
-    }
-
-    private async Task PushManyAsync(string command, string key, List<string> values, CancellationToken cancellationToken)
-    {
-        for (int offset = 0; offset < values.Count; offset += 32)
-        {
-            var arguments = new List<string> { command, key };
-
-            arguments.AddRange(values.Skip(offset).Take(32));
-            RespValue reply = await CallAsync([.. arguments], cancellationToken);
-
-            if (reply.Kind == RespKind.Error)
-                throw new RuvioException(reply.Text ?? command + " failed", isServerReply: true);
-        }
-    }
-
-    private async Task PushPairsAsync(
-        string command,
-        string key,
-        List<(string Left, string Right)> pairs,
-        bool scoreFirst,
-        CancellationToken cancellationToken)
-    {
-        for (int offset = 0; offset < pairs.Count; offset += 32)
-        {
-            var arguments = new List<string> { command, key };
-
-            foreach ((string left, string right) in pairs.Skip(offset).Take(32))
-            {
-                arguments.Add(scoreFirst ? right : left);
-                arguments.Add(scoreFirst ? left : right);
-            }
-
-            RespValue reply = await CallAsync([.. arguments], cancellationToken);
-
-            if (reply.Kind == RespKind.Error)
-                throw new RuvioException(reply.Text ?? command + " failed", isServerReply: true);
-        }
-    }
-
-    private async Task<RespValue> CallAsync(string[] arguments, CancellationToken cancellationToken)
-    {
-        RuvioSocket connection = await TargetKeyAsync(ClusterKeys.First(ClusterKeys.Name(arguments), arguments), cancellationToken);
-
-        return await SendRoutedAsync(connection, arguments, cancellationToken);
-    }
-
-    private static List<string> Texts(RespValue value)
-    {
-        if (value.Items is not { } items) return [];
-
-        return [.. items.Select(item => item.AsString() ?? "")];
-    }
-
-    private static List<(string Left, string Right)> PairUp(List<string> flat)
-    {
-        var pairs = new List<(string, string)>();
-
-        for (int index = 0; index < flat.Count; index += 2)
-        {
-            pairs.Add((flat[index], index + 1 < flat.Count ? flat[index + 1] : ""));
-        }
-
-        return pairs;
-    }
-
-    private abstract record Moved
-    {
-        public sealed record Text(string Value) : Moved;
-        public sealed record Values(List<string> Items) : Moved;
-        public sealed record Pairs(List<(string Left, string Right)> Items) : Moved;
-        public sealed record StreamEntries(List<(string Id, List<(string Field, string Value)> Fields)> Items) : Moved;
-    }
-
     private async Task<RespValue> SendRoutedAsync(
         RuvioSocket connection,
         IReadOnlyList<string> arguments,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int redirects = 0)
     {
-        for (int redirect = 0; ; redirect++)
+        for (int redirect = redirects; ; redirect++)
         {
             RespValue reply = await connection.SendAsync(arguments, cancellationToken);
 
-            if (redirect >= MaxRedirects || MovedTarget(reply) is not { } node)
+            if (redirect >= MaxRedirects || MovedTarget(reply) is not { } moved)
             {
                 return reply;
             }
 
-            // MOVED means the slot map is stale: refresh it, then connect to the node the reply names.
-            await RefreshAsync(cancellationToken);
-            connection = await ConnectionAsync(node.Host, node.Port, cancellationToken);
+            connection = await FollowMovedAsync(moved, redirect, cancellationToken);
         }
     }
 
-    internal static (string Host, int Port)? MovedTarget(RespValue reply)
+    /// <summary>
+    /// Points the slot a <c>MOVED</c> names at its node and returns that node's socket; the
+    /// retry always goes to the named node. <paramref name="redirect"/> counts the earlier
+    /// <c>MOVED</c> replies for the same command. The whole slot map is read again when the
+    /// node is not in it, and on the command's second and later <c>MOVED</c>.
+    /// </summary>
+    private async Task<RuvioSocket> FollowMovedAsync(
+        (int Slot, string Host, int Port) moved, int redirect, CancellationToken cancellationToken)
+    {
+        if (redirect > 0 || !_topology.Assign(moved.Slot, moved.Host, moved.Port))
+        {
+            await RefreshAsync(cancellationToken).ConfigureAwait(false);
+            _topology.Assign(moved.Slot, moved.Host, moved.Port);
+        }
+
+        return await ConnectionAsync(moved.Host, moved.Port, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Points one slot at the node a <c>MOVED</c> named, when that node is in the map.</summary>
+    internal void PointSlot((int Slot, string Host, int Port) moved)
+    {
+        _topology.Assign(moved.Slot, moved.Host, moved.Port);
+    }
+
+    /// <summary>The slot and node of a <c>MOVED slot host:port</c> reply; null for any other reply.</summary>
+    internal static (int Slot, string Host, int Port)? MovedTarget(RespValue reply)
     {
         if (reply.Kind is not RespKind.Error || reply.Text is not { } text || !text.StartsWith("MOVED ", StringComparison.Ordinal))
         {
@@ -1027,7 +909,8 @@ internal sealed class ClusterRouter : IDisposable
 
         string[] parts = text.Split(' ');
 
-        if (parts.Length < 3)
+        if (parts.Length < 3
+            || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out int slot))
         {
             return null;
         }
@@ -1040,7 +923,7 @@ internal sealed class ClusterRouter : IDisposable
             return null;
         }
 
-        return (parts[2][..colon], port);
+        return (slot, parts[2][..colon], port);
     }
 
     private async Task RefreshAsync(CancellationToken cancellationToken)
@@ -1261,6 +1144,30 @@ internal sealed class ClusterTopology
     }
 
     public int NodeOf(int slot) => _owners[slot];
+
+    /// <summary>
+    /// Points one slot at a node already in the map, after a <c>MOVED</c>. False when the slot
+    /// is out of range or the node is unknown, so the caller reads the whole map instead.
+    /// </summary>
+    public bool Assign(int slot, string host, int port)
+    {
+        if ((uint)slot >= ClusterKeys.SlotCount)
+        {
+            return false;
+        }
+
+        for (int node = 0; node < Nodes.Count; node++)
+        {
+            if (Nodes[node].Port == port && string.Equals(Nodes[node].Host, host, StringComparison.OrdinalIgnoreCase))
+            {
+                _owners[slot] = (short)node;
+
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>Reads a <c>CLUSTER SLOTS</c> reply. Null for an error or an empty map.</summary>
     public static ClusterTopology? Parse(RespValue reply)

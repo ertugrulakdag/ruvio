@@ -55,9 +55,11 @@ This API never replays a command after a transport failure; cancellation after d
 does not establish whether the server executed it. Explicit MOVED rejections may redirect.
 Standalone mode accepts arbitrary commands. Cluster mode supports GET, SET, DEL, UNLINK,
 EXISTS, HGET, HSET, HMGET, HMSET, HDEL, PEXPIRE, PEXPIREAT, PTTL, TTL, PERSIST, IDEM, EVAL,
-EVALSHA, PING, and ECHO. Binary keys use raw-byte hash slots; all keys must share one
-slot. Cross-slot splitting and cluster transactions are deliberately not supported by
-this API; unsupported commands fail explicitly. Existing string APIs are unchanged.
+EVALSHA, PING, and ECHO. Binary keys use raw-byte hash slots. `DEL`, `UNLINK`, and `EXISTS`
+with keys in several slots are sent once per slot and the counts summed; `EVAL`/`EVALSHA`
+keys must share one slot, or the call fails with `CROSSSLOT` before anything is sent.
+Cluster transactions are deliberately not supported by this API; unsupported commands fail
+explicitly. Existing string APIs are unchanged.
 
 RESP2 client for [Ruvio](https://salihcantekin.github.io/ruvio/). Connecting does not send `CLIENT SETINFO` or `HELLO`. The typed methods cover every command in `docs/compatibility-matrix.json` (287/287) and the options that change what Ruvio does; `MatrixCoverageTests` fails when a matrix command has no typed method, and `LiveCommandTests` sends every one of them to a real server. `FLUSHDB ASYNC` (it runs synchronously) and `HELLO AUTH`/`SETNAME` have no typed form. Anything else can go through `ExecuteAsync` with the same argument lists as `redis-cli`.
 
@@ -464,7 +466,7 @@ nor completion renews retention, and no ambiguous write is automatically retried
 See [the native contract](../../../docs/IDEM.md) before using it for
 external side effects.
 
-Give the client one address. On connect it sends `CLUSTER SLOTS`. A standalone server replies with an error and the client keeps that one socket. A sharded server returns the slot map; the client then opens one socket per shard and sends each command to the shard that owns the key. `MOVED` refreshes the map and retries. Multi-key reads and writes (`MGET`, `MSET`, `DEL`, `UNLINK`, `EXISTS`, `TOUCH`) are split by slot and merged. `FLUSHDB`, `FLUSHALL`, and `DBSIZE` go to every shard.
+Give the client one address. On connect it sends `CLUSTER SLOTS`. A standalone server replies with an error and the client keeps that one socket. A sharded server returns the slot map; the client then opens one socket per shard and sends each command to the shard that owns the key. A `MOVED` reply points that slot at the node it names and the command is sent there; the whole map is read again only when that node is unknown, or on the command's second and third `MOVED`. A fourth `MOVED` is returned as the error. Multi-key reads and writes (`MGET`, `MSET`, `DEL`, `UNLINK`, `EXISTS`, `TOUCH`) are split by slot and merged, in a pipeline too: the merged reply sits at that command's index. Any other command whose keys span slots (`RENAME`, `RENAMENX`, `COPY`, `SMOVE`, `LMOVE`, `SINTERSTORE`, `BITOP`, `EVAL`, ...) fails with a `CROSSSLOT` `RuvioException` before anything is sent; use a hash tag such as `{user:1}` to keep related keys in one slot. `FLUSHDB`, `FLUSHALL`, and `DBSIZE` go to every shard.
 
 ```csharp
 await using var clusterConnection = await RuvioConnection.ConnectAsync("127.0.0.1", 6379);
@@ -625,7 +627,7 @@ A blocking read (`BLPOP`, `XREAD BLOCK`, `XREADGROUP BLOCK`) holds the connectio
 
 Subscribe opens a **second TCP socket**. `GET` / `SET` / `PUBLISH` stay on the command socket. Register `Message` or `SubscribeAsync(channel, handler)` (StackExchange / Garnet app style), or `await foreach` `ListenAsync`. `ReadPubSubMessageAsync` still works. `IsConnected` is false when every command socket is broken.
 
-A dropped socket is opened again before the next command, including a shard socket in cluster mode. The command that discovers the drop fails, so a write is not applied twice. One exception: a single `GET`, `MGET`, `EXISTS`, `HGET`, `TTL`, or `PTTL` is sent once more when the socket closes before any byte of the reply arrives. A pipeline is not retried. A reply that has already started is not retried. Pub/Sub channels are subscribed again on the new socket. `ConnectionLost` and `ConnectionRestored` report that, and `ConnectionFailed` still fires on the drop. Set `RuvioClientOptions.Reconnect` to false and call `ReconnectAsync` yourself, or set `ReconnectDelay` to own the wait. `ReconnectDelay` returning null stops the retry.
+A dropped socket is opened again before the next command, including a shard socket in cluster mode. The command that discovers the drop fails and is never sent again, so a write is not applied twice; that includes reads and pipelines. `RuvioException.ClosedBeforeReply` tells you no byte of the reply arrived, so the caller can resend a read. Pub/Sub channels are subscribed again on the new socket. `ConnectionLost` and `ConnectionRestored` report that, and `ConnectionFailed` still fires on the drop. Set `RuvioClientOptions.Reconnect` to false and call `ReconnectAsync` yourself, or set `ReconnectDelay` to own the wait. `ReconnectDelay` returning null stops the retry.
 
 A password is sent as `AUTH` only when `RuvioClientOptions.Password` is set. One client runs commands one at a time. `ExecuteManyAsync` pipelines several commands on that connection. A server error reply leaves the connection usable. A broken read or write closes it.
 

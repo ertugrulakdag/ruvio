@@ -179,7 +179,7 @@ public class ClusterTests
     }
 
     [Fact(Timeout = 15000)]
-    public async Task MovedRefreshesTheMapAndRetriesOnTheNewOwner()
+    public async Task MovedToAnUnknownNodeReloadsTheMapAndRetriesThere()
     {
         using var first = Listen();
         using var second = Listen();
@@ -248,10 +248,215 @@ public class ClusterTests
         await Assert.ThrowsAsync<ArgumentException>(async () =>
             await client.ExecuteBinaryAsync(new ReadOnlyMemory<byte>[]
                 { "EVAL"u8.ToArray(), "return 1"u8.ToArray(), "2"u8.ToArray(), "key"u8.ToArray() }));
+    }
 
-        await Assert.ThrowsAsync<RuvioException>(async () =>
+    [Fact(Timeout = 15000)]
+    public async Task MovedToAKnownNodeRepointsOnlyThatSlot()
+    {
+        using var first = Listen();
+        using var second = Listen();
+        (RuvioConnection opened, NetworkStream seedStream, TcpClient seed) = await ConnectTwoShards(first, second);
+
+        await using RuvioConnection connection = opened;
+        using TcpClient seedClient = seed;
+        RuvioClient client = await connection.GetDefaultDatabaseAsync();
+
+        ValueTask<string?> get = client.GetStringAsync("somekey");
+        using TcpClient owner = await second.AcceptTcpClientAsync();
+        NetworkStream ownerStream = owner.GetStream();
+
+        await ExpectAsync(ownerStream, "GET", "somekey");
+        await ReplyAsync(ownerStream, $"-MOVED 11058 127.0.0.1:{first.Port}\r\n");
+
+        // The named node is in the map: no CLUSTER SLOTS, the command goes straight there.
+        await ExpectAsync(seedStream, "GET", "somekey");
+        await ReplyAsync(seedStream, "$1\r\nv\r\n");
+        Assert.Equal("v", await get);
+
+        ValueTask<string?> again = client.GetStringAsync("somekey");
+
+        await ExpectAsync(seedStream, "GET", "somekey");
+        await ReplyAsync(seedStream, "$1\r\nw\r\n");
+        Assert.Equal("w", await again);
+
+        // Other slots of the old owner stay where they were.
+        ValueTask<string?> neighbour = client.GetStringAsync("123456789");
+
+        await ExpectAsync(ownerStream, "GET", "123456789");
+        await ReplyAsync(ownerStream, "$1\r\nn\r\n");
+        Assert.Equal("n", await neighbour);
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task LaterMovedsReloadTheMapAndTheFourthIsReturned()
+    {
+        using var first = Listen();
+        using var second = Listen();
+        (RuvioConnection opened, NetworkStream seedStream, TcpClient seed) = await ConnectTwoShards(first, second);
+
+        await using RuvioConnection connection = opened;
+        using TcpClient seedClient = seed;
+        RuvioClient client = await connection.GetDefaultDatabaseAsync();
+        string toFirst = $"-MOVED 11058 127.0.0.1:{first.Port}\r\n";
+        string toSecond = $"-MOVED 11058 127.0.0.1:{second.Port}\r\n";
+
+        ValueTask<string?> get = client.GetStringAsync("somekey");
+        using TcpClient owner = await second.AcceptTcpClientAsync();
+        NetworkStream ownerStream = owner.GetStream();
+
+        await ExpectAsync(ownerStream, "GET", "somekey");
+        await ReplyAsync(ownerStream, toFirst);
+        await ExpectAsync(seedStream, "GET", "somekey");
+        await ReplyAsync(seedStream, toSecond);
+        await ExpectAsync(seedStream, "CLUSTER", "SLOTS");
+        await ReplyAsync(seedStream, SlotsReply(first.Port, second.Port));
+        await ExpectAsync(ownerStream, "GET", "somekey");
+        await ReplyAsync(ownerStream, toFirst);
+        await ExpectAsync(seedStream, "CLUSTER", "SLOTS");
+        await ReplyAsync(seedStream, SlotsReply(first.Port, second.Port));
+
+        // The retry goes to the node the MOVED named, not to the owner in the reloaded map.
+        await ExpectAsync(seedStream, "GET", "somekey");
+        await ReplyAsync(seedStream, toSecond);
+
+        RuvioException error = await Assert.ThrowsAsync<RuvioException>(async () => await get);
+
+        Assert.StartsWith("MOVED 11058", error.Message);
+
+        // Nothing else was sent to the seed after the fourth MOVED.
+        ValueTask<string> ping = client.PingAsync();
+
+        await ExpectAsync(seedStream, "PING");
+        await ReplyAsync(seedStream, "+PONG\r\n");
+        Assert.Equal("PONG", await ping);
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task CommandsWhoseKeysSpanSlotsAreRefusedBeforeSending()
+    {
+        using var first = Listen();
+        using var second = Listen();
+        (RuvioConnection opened, NetworkStream seedStream, TcpClient seed) = await ConnectTwoShards(first, second);
+
+        await using RuvioConnection connection = opened;
+        using TcpClient seedClient = seed;
+        RuvioClient client = await connection.GetDefaultDatabaseAsync();
+        const string left = "{user1000}.following";
+        const string right = "somekey";
+        string[][] refused =
+        [
+            ["RENAME", right, left], ["RENAMENX", left, right], ["COPY", left, right],
+            ["SMOVE", left, right, "m"], ["LMOVE", left, right, "LEFT", "RIGHT"],
+            ["SINTERSTORE", left, left, right], ["BITOP", "AND", left, right],
+            ["EVAL", "return 1", "2", left, right],
+        ];
+
+        foreach (string[] command in refused)
+        {
+            RuvioException error = await Assert.ThrowsAsync<RuvioException>(async () => await client.ExecuteAsync(command));
+
+            Assert.StartsWith("CROSSSLOT", error.Message);
+        }
+
+        RuvioException typed = await Assert.ThrowsAsync<RuvioException>(async () => await client.RenameAsync(right, left));
+        Assert.StartsWith("CROSSSLOT", typed.Message);
+
+        RuvioException binary = await Assert.ThrowsAsync<RuvioException>(async () =>
             await client.ExecuteBinaryAsync(new ReadOnlyMemory<byte>[]
-                { "DEL"u8.ToArray(), "somekey"u8.ToArray(), "{user1000}.following"u8.ToArray() }));
+                { "EVAL"u8.ToArray(), "return 1"u8.ToArray(), "2"u8.ToArray(), "somekey"u8.ToArray(), "{user1000}.following"u8.ToArray() }));
+        Assert.StartsWith("CROSSSLOT", binary.Message);
+
+        // A rename inside one slot is sent as it is.
+        ValueTask<RespValue> same = client.ExecuteAsync("RENAME", "{user1000}.a", "{user1000}.b");
+
+        await ExpectAsync(seedStream, "RENAME", "{user1000}.a", "{user1000}.b");
+        await ReplyAsync(seedStream, "+OK\r\n");
+        Assert.Equal("OK", (await same).AsString());
+        Assert.False(second.Pending);
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task PipelineSplitsCrossSlotCommandsLikeThePlainCommand()
+    {
+        using var first = Listen();
+        using var second = Listen();
+        (RuvioConnection opened, NetworkStream seedStream, TcpClient seed) = await ConnectTwoShards(first, second);
+
+        await using RuvioConnection connection = opened;
+        using TcpClient seedClient = seed;
+        RuvioClient client = await connection.GetDefaultDatabaseAsync();
+        const string left = "{user1000}.following";
+        const string right = "somekey";
+
+        ValueTask<IReadOnlyList<RespValue>> pending = client.ExecuteManyAsync(
+        [
+            ["SET", right, "v"],
+            ["MGET", left, right],
+            ["DEL", right, left],
+            ["GET", right],
+            ["MSET", left, "a", right, "b"],
+        ]);
+        Task<TcpClient> secondAccept = second.AcceptTcpClientAsync();
+
+        await ExpectAsync(seedStream, "MGET", left);
+        await ExpectAsync(seedStream, "DEL", left);
+        await ExpectAsync(seedStream, "MSET", left, "a");
+        await ReplyAsync(seedStream, "*1\r\n$4\r\nleft\r\n:1\r\n+OK\r\n");
+        using TcpClient owner = await secondAccept;
+        NetworkStream ownerStream = owner.GetStream();
+
+        await ExpectAsync(ownerStream, "SET", right, "v");
+        await ExpectAsync(ownerStream, "MGET", right);
+        await ExpectAsync(ownerStream, "DEL", right);
+        await ExpectAsync(ownerStream, "GET", right);
+        await ExpectAsync(ownerStream, "MSET", right, "b");
+        await ReplyAsync(ownerStream, "+OK\r\n*1\r\n$5\r\nright\r\n:1\r\n$-1\r\n+OK\r\n");
+        IReadOnlyList<RespValue> replies = await pending;
+
+        Assert.Equal(5, replies.Count);
+        Assert.Equal("OK", replies[0].AsString());
+        Assert.Equal(["left", "right"], replies[1].Items!.Select(item => item.AsString()));
+        Assert.Equal(2, replies[2].Integer);
+        Assert.Equal(RespKind.Null, replies[3].Kind);
+        Assert.Equal("OK", replies[4].AsString());
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task BinaryDeleteIsSplitAcrossSlotsAndCountsSummed()
+    {
+        using var first = Listen();
+        using var second = Listen();
+        (RuvioConnection opened, NetworkStream seedStream, TcpClient seed) = await ConnectTwoShards(first, second);
+
+        await using RuvioConnection connection = opened;
+        using TcpClient seedClient = seed;
+        RuvioClient client = await connection.GetDefaultDatabaseAsync();
+
+        ValueTask<RespValue> deleted = client.ExecuteBinaryAsync(new ReadOnlyMemory<byte>[]
+            { "DEL"u8.ToArray(), "somekey"u8.ToArray(), "{user1000}.following"u8.ToArray() });
+        Task<TcpClient> secondAccept = second.AcceptTcpClientAsync();
+
+        await ExpectAsync(seedStream, "DEL", "{user1000}.following");
+        await ReplyAsync(seedStream, ":1\r\n");
+        using TcpClient owner = await secondAccept;
+        NetworkStream ownerStream = owner.GetStream();
+
+        await ExpectAsync(ownerStream, "DEL", "somekey");
+        await ReplyAsync(ownerStream, ":1\r\n");
+        Assert.Equal(2, (await deleted).Integer);
+    }
+
+    private static async Task<(RuvioConnection Connection, NetworkStream SeedStream, TcpClient Seed)> ConnectTwoShards(
+        Listener first, Listener second)
+    {
+        Task<RuvioConnection> connecting = RuvioConnection.ConnectAsync("127.0.0.1", first.Port);
+        TcpClient seed = await first.AcceptTcpClientAsync();
+        NetworkStream seedStream = seed.GetStream();
+
+        await ExpectAsync(seedStream, "CLUSTER", "SLOTS");
+        await ReplyAsync(seedStream, SlotsReply(first.Port, second.Port));
+
+        return (await connecting, seedStream, seed);
     }
 
     [Fact(Timeout = 15000)]
@@ -421,6 +626,8 @@ public class ClusterTests
         }
 
         public int Port => ((IPEndPoint)_listener.LocalEndpoint!).Port;
+
+        public bool Pending => _listener.Pending();
 
         public Task<TcpClient> AcceptTcpClientAsync()
         {

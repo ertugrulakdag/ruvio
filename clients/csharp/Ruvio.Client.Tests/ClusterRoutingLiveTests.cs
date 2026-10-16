@@ -3,7 +3,7 @@ using Xunit;
 
 namespace Ruvio.Client.Tests;
 
-/// <summary>Cluster routing paths (scan, transactions, split, cross-slot rename, fan-out) against the live 3-shard server.</summary>
+/// <summary>Cluster routing paths (scan, transactions, split, cross-slot refusal, fan-out) against the live 3-shard server.</summary>
 [Collection("Live")]
 public class ClusterRoutingLiveTests
 {
@@ -195,6 +195,22 @@ public class ClusterRoutingLiveTests
             Assert.Equal("x" + keys[i], replies[keys.Count + i].AsString());
         }
 
+        // Split commands inside a pipeline are sent per slot and merged at their own index.
+        IReadOnlyList<RespValue> split = await client.ExecuteManyAsync(
+        [
+            ["MSET", keys[0], "m0", keys[1], "m1", keys[2], "m2"],
+            ["MGET", keys[2], keys[0], "pipert-missing", keys[1]],
+            ["EXISTS", keys[0], keys[1], keys[2], keys[0]],
+            ["PING"],
+            ["DEL", keys[0], keys[1], keys[2]],
+        ]);
+        Assert.Equal(5, split.Count);
+        Assert.Equal("OK", split[0].AsString());
+        Assert.Equal(["m2", "m0", null, "m1"], split[1].Items!.Select(item => item.AsString()));
+        Assert.Equal(4, split[2].Integer);
+        Assert.Equal("PONG", split[3].AsString());
+        Assert.Equal(3, split[4].Integer);
+
         // A pipeline whose keys all live on one shard is sent as one group.
         IReadOnlyList<RespValue> single = await client.ExecuteManyAsync([["SET", "{p}1", "a"], ["GET", "{p}1"]]);
         Assert.Equal("a", single[1].AsString());
@@ -301,8 +317,8 @@ public class ClusterRoutingLiveTests
         Assert.Equal(1, (await client.ExecuteAsync("PUBLISH", "chan-rt", "hello")).Kind == RespKind.Integer ? 1 : 0);
     }
 
-    [Fact(Timeout = 60000)]
-    public async Task RenameAcrossShardsMovesEveryValueType()
+    [Fact(Timeout = 30000)]
+    public async Task CommandsAcrossSlotsAreRefusedBeforeSending()
     {
         if (await Open() is not { } open)
         {
@@ -312,95 +328,33 @@ public class ClusterRoutingLiveTests
         await using RuvioConnection connection = open.Connection;
         RuvioClient client = open.Client;
         (string src, string dst) = await CrossShardPair(client, "renrt");
-        (string src2, string dst2) = await CrossShardPair(client, "renrt2");
 
         Assert.NotEqual(RuvioClient.GetHashSlot(src), RuvioClient.GetHashSlot(dst));
-
-        async Task Clean() => await client.DeleteAsync([src, dst, src2, dst2]);
-
-        // missing source
-        await Clean();
-        await Fails(client, "RENAME", src, dst);
-
-        // string with TTL
+        await client.DeleteAsync([src, dst]);
         await client.SetAsync(src, "text");
-        await client.ExecuteAsync("PEXPIRE", src, "100000");
-        Assert.Equal("OK", (await client.ExecuteAsync("RENAME", src, dst)).AsString());
-        Assert.Equal("text", await client.GetStringAsync(dst));
-        Assert.True((await client.ExecuteAsync("PTTL", dst)).Integer > 0);
-        Assert.Equal(0, (await client.ExecuteAsync("EXISTS", src)).Integer);
 
-        // RENAMENX onto an existing destination does nothing
-        await client.SetAsync(src, "other");
-        Assert.Equal(0, (await client.ExecuteAsync("RENAMENX", src, dst)).Integer);
-        Assert.Equal("text", await client.GetStringAsync(dst));
-        await Clean();
+        string[][] refused =
+        [
+            ["RENAME", src, dst], ["RENAMENX", src, dst], ["COPY", src, dst],
+            ["SMOVE", src, dst, "m"], ["LMOVE", src, dst, "LEFT", "RIGHT"],
+            ["SINTERSTORE", dst, src], ["EVAL", "return 1", "2", src, dst],
+        ];
 
-        // RENAMENX to a fresh destination
-        await client.SetAsync(src, "fresh");
-        Assert.Equal(1, (await client.ExecuteAsync("RENAMENX", src, dst)).Integer);
-        Assert.Equal("fresh", await client.GetStringAsync(dst));
-        await Clean();
-
-        // list larger than one read page (200) and one write chunk (32)
-        var list = new List<string> { "RPUSH", src };
-        list.AddRange(Enumerable.Range(0, 250).Select(i => "i" + i));
-        await client.ExecuteAsync([.. list]);
-        Assert.Equal("OK", (await client.ExecuteAsync("RENAME", src, dst)).AsString());
-        Assert.Equal(250, (await client.ExecuteAsync("LLEN", dst)).Integer);
-        Assert.Equal("i249", (await client.ExecuteAsync("LINDEX", dst, "-1")).AsString());
-        await Clean();
-
-        // exactly one full page of 200
-        var exact = new List<string> { "RPUSH", src };
-        exact.AddRange(Enumerable.Range(0, 200).Select(i => "e" + i));
-        await client.ExecuteAsync([.. exact]);
-        await client.ExecuteAsync("RENAME", src, dst);
-        Assert.Equal(200, (await client.ExecuteAsync("LLEN", dst)).Integer);
-        await Clean();
-
-        // set
-        await client.ExecuteAsync("SADD", src, "a", "b", "c");
-        await client.ExecuteAsync("RENAME", src, dst);
-        Assert.Equal(3, (await client.ExecuteAsync("SCARD", dst)).Integer);
-        await Clean();
-
-        // hash with more fields than one HSCAN page
-        var hash = new List<string> { "HSET", src };
-
-        foreach (int i in Enumerable.Range(0, 100))
+        foreach (string[] command in refused)
         {
-            hash.Add("f" + i);
-            hash.Add("v" + i);
+            RuvioException error = await Assert.ThrowsAsync<RuvioException>(async () => await client.ExecuteAsync(command));
+
+            Assert.StartsWith("CROSSSLOT", error.Message);
         }
 
-        await client.ExecuteAsync([.. hash]);
-        await client.ExecuteAsync("RENAME", src, dst);
-        Assert.Equal(100, (await client.ExecuteAsync("HLEN", dst)).Integer);
-        Assert.Equal("v99", (await client.ExecuteAsync("HGET", dst, "f99")).AsString());
-        await Clean();
+        // Nothing was moved or copied.
+        Assert.Equal("text", await client.GetStringAsync(src));
+        Assert.Null(await client.GetStringAsync(dst));
 
-        // sorted set
-        await client.ExecuteAsync("ZADD", src, "1", "a", "2.5", "b");
-        await client.ExecuteAsync("RENAME", src, dst);
-        Assert.Equal(2, (await client.ExecuteAsync("ZCARD", dst)).Integer);
-        Assert.Equal("2.5", (await client.ExecuteAsync("ZSCORE", dst, "b")).AsString());
-        await Clean();
-
-        // stream with more entries than one XRANGE page
-        for (int i = 1; i <= 70; i++)
-        {
-            await client.ExecuteAsync("XADD", src, $"{i}-0", "f", "v" + i);
-        }
-
-        await client.ExecuteAsync("RENAME", src, dst);
-        Assert.Equal(70, (await client.ExecuteAsync("XLEN", dst)).Integer);
-        await Clean();
-
-        // same-slot rename stays on the plain path
+        // A rename inside one slot still works.
         await client.SetAsync("{rs}a", "x");
         Assert.Equal("OK", (await client.ExecuteAsync("RENAME", "{rs}a", "{rs}b")).AsString());
-        await client.DeleteAsync(["{rs}b"]);
+        await client.DeleteAsync(["{rs}b", src]);
     }
 
     [Fact(Timeout = 30000)]
@@ -436,9 +390,13 @@ public class ClusterRoutingLiveTests
         RespValue zero = await client.ExecuteBinaryAsync(new[] { B("EVAL"), B("return 7"), B("0") });
         Assert.Equal(7, zero.Integer);
 
-        // CROSSSLOT
-        await Assert.ThrowsAsync<RuvioException>(async () =>
-            await client.ExecuteBinaryAsync(new[] { B("EXISTS"), B(keys[0]), B(keys[1]) }));
+        // DEL/EXISTS across slots are split like their string form; a script is refused.
+        await client.ExecuteBinaryAsync(new[] { B("SET"), B(keys[1]), B("v") });
+        Assert.Equal(1, (await client.ExecuteBinaryAsync(new[] { B("EXISTS"), B(keys[0]), B(keys[1]) })).Integer);
+        Assert.Equal(1, (await client.ExecuteBinaryAsync(new[] { B("DEL"), B(keys[0]), B(keys[1]) })).Integer);
+        RuvioException crossSlot = await Assert.ThrowsAsync<RuvioException>(async () =>
+            await client.ExecuteBinaryAsync(new[] { B("EVAL"), B("return 1"), B("2"), B(keys[0]), B(keys[1]) }));
+        Assert.StartsWith("CROSSSLOT", crossSlot.Message);
 
         // binary commands cannot be mixed with a cluster transaction
         await client.ExecuteAsync("MULTI");

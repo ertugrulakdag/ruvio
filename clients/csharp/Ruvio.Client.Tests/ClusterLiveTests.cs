@@ -36,7 +36,7 @@ public class ClusterLiveTests
     }
 
     [Fact(Timeout = 15000)]
-    public async Task RenamesAKeyOntoAnotherSlot()
+    public async Task RenameOntoAnotherSlotIsRefused()
     {
         string? address = Environment.GetEnvironmentVariable("RUVIO_CLUSTER_ADDR");
 
@@ -55,9 +55,10 @@ public class ClusterLiveTests
         Assert.NotEqual(RuvioClient.GetHashSlot(source), RuvioClient.GetHashSlot(destination));
         await client.DeleteAsync([source, destination]);
         await client.SetAsync(source, "from-screen");
-        await client.ExecuteAsync("RENAME", source, destination);
-        Assert.Equal("from-screen", await client.GetStringAsync(destination));
-        Assert.Null(await client.GetStringAsync(source));
-        await client.DeleteAsync(destination);
+        RuvioException error = await Assert.ThrowsAsync<RuvioException>(async () => await client.RenameAsync(source, destination));
+        Assert.StartsWith("CROSSSLOT", error.Message);
+        Assert.Equal("from-screen", await client.GetStringAsync(source));
+        Assert.Null(await client.GetStringAsync(destination));
+        await client.DeleteAsync(source);
     }
 }

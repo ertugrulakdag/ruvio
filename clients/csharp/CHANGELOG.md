@@ -4,6 +4,12 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 
 ## Unreleased
 
+- Behaviour change: `RENAME` and `RENAMENX` whose keys hash to different slots now fail with a `CROSSSLOT` `RuvioException` before anything is sent, instead of being emulated with `TYPE`, a copy, `PEXPIRE` and `DEL`. Keep both keys in one slot with a hash tag.
+- Behaviour change: any other command whose keys span slots and that is not split (`COPY`, `LMOVE`, `SMOVE`, `SINTERSTORE`, `BITOP`, `EVAL`, ...) now fails with `CROSSSLOT` before it is sent. Before, it went to the first key's shard and the server answered.
+- Behaviour change: in a pipeline (not a transaction), `MGET`, `MSET`, `DEL`, `EXISTS`, `UNLINK` and `TOUCH` with keys in several slots are split per slot like the plain command, and the merged reply sits at that command's index. Before, the whole command went to the first key's shard.
+- Behaviour change: a command whose socket dropped before any reply byte is no longer sent again. Before, a single `GET`, `MGET`, `EXISTS`, `HGET`, `TTL` or `PTTL` was resent once on a new socket when `Reconnect` was on. The socket is still opened again for the next command; `RuvioException.ClosedBeforeReply` says when a read is safe to resend.
+- `MOVED` points that one slot at the named node and retries there, instead of reloading the whole slot map every time. The map is reloaded when the named node is unknown and on a command's second and third `MOVED`; a fourth is returned. The `MOVED` that turns a plain connection into a cluster router counts as the first.
+- `ExecuteBinaryAsync` in cluster mode: `DEL`, `UNLINK` and `EXISTS` with keys in several slots are split per slot and the counts summed (they threw `CROSSSLOT` before); `EVAL`/`EVALSHA` across slots fail with the same `CROSSSLOT` message as the string API.
 - Cluster mode: each command's key positions now come from the server's command table (`Cluster/CommandKeyRules.g.cs`, generated from `clients/testdata/commands.json`) instead of hand-kept lists, and `KeyVectorTests` checks them against `clients/testdata/key_vectors.json`. This fixes routing for `GEORADIUS` and `GEORADIUSBYMEMBER` with `STORE`/`STOREDIST` (the destination key was missed), `GEOSEARCHSTORE` (only the destination was used, not the source), and `XGROUP` and `XINFO` (the subcommand was taken as the key instead of the stream name).
 
 ## 0.2.8 to 0.3.2

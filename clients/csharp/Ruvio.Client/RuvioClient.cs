@@ -512,16 +512,7 @@ public sealed partial class RuvioClient : IRuvioClient
         RespCommand command,
         CancellationToken cancellationToken)
     {
-        RespValue reply;
-
-        try
-        {
-            reply = await pending.ConfigureAwait(false);
-        }
-        catch (RuvioException exception) when (CanRetryClosedRead(command, exception))
-        {
-            return await ExecuteOnceAsync(command, cancellationToken).ConfigureAwait(false);
-        }
+        RespValue reply = await pending.ConfigureAwait(false);
 
         return reply.Kind is RespKind.Error
             ? await RedirectOrThrowAsync(reply, command, cancellationToken).ConfigureAwait(false)
@@ -541,21 +532,14 @@ public sealed partial class RuvioClient : IRuvioClient
 
         RejectSelect(command.Name);
 
-        try
-        {
-            return await ExecuteOnceAsync(command, cancellationToken).ConfigureAwait(false);
-        }
-
-        catch (RuvioException exception) when (CanRetryClosedRead(command, exception))
-        {
-            return await ExecuteOnceAsync(command, cancellationToken).ConfigureAwait(false);
-        }
+        // A command whose socket dropped is not sent again; the next command reopens it.
+        return await ExecuteOnceAsync(command, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Sends raw RESP bulk arguments. Does not replay commands after transport failures.
-    /// Cluster mode supports single-slot string/hash/expiry commands and EVAL/EVALSHA;
-    /// unsupported commands fail explicitly. Do not modify argument memory until completion.
+    /// Cluster mode supports single-key string/hash/expiry commands, EVAL/EVALSHA with keys in
+    /// one slot, and DEL/UNLINK/EXISTS (split per slot); unsupported commands fail explicitly. Do not modify argument memory until completion.
     /// </summary>
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<RespValue> ExecuteBinaryAsync(
@@ -587,13 +571,13 @@ public sealed partial class RuvioClient : IRuvioClient
 
         RespValue reply = await _seed.SendBinaryAsync(arguments, cancellationToken).ConfigureAwait(false);
 
-        if (ClusterRouter.MovedTarget(reply) is not null)
+        if (ClusterRouter.MovedTarget(reply) is { } moved)
         {
-            await AdoptClusterAsync(cancellationToken).ConfigureAwait(false);
+            await AdoptClusterAsync(moved, cancellationToken).ConfigureAwait(false);
 
             if (_cluster is not null)
             {
-                reply = await _cluster.ExecuteBinaryAsync(arguments, cancellationToken).ConfigureAwait(false);
+                reply = await _cluster.ExecuteBinaryAsync(arguments, cancellationToken, redirects: 1).ConfigureAwait(false);
             }
         }
 
@@ -619,48 +603,34 @@ public sealed partial class RuvioClient : IRuvioClient
             : reply;
     }
 
-    /// <summary>Follows a <c>MOVED</c> once by learning the slot map; any other error reply throws.</summary>
+    /// <summary>Follows a <c>MOVED</c> by learning the slot map; any other error reply throws.</summary>
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<RespValue> RedirectOrThrowAsync(
         RespValue reply,
         RespCommand command,
         CancellationToken cancellationToken)
     {
-        if (ClusterRouter.MovedTarget(reply) is null)
+        if (ClusterRouter.MovedTarget(reply) is not { } moved)
         {
             return RuvioSocket.ThrowOnError(reply);
         }
 
-        await AdoptClusterAsync(cancellationToken).ConfigureAwait(false);
+        await AdoptClusterAsync(moved, cancellationToken).ConfigureAwait(false);
 
         if (_cluster is not null)
         {
-            reply = await _cluster.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            // The MOVED that brought the map in counts as the first redirect.
+            reply = await _cluster.ExecuteAsync(command, cancellationToken, redirects: 1).ConfigureAwait(false);
         }
 
         return RuvioSocket.ThrowOnError(reply);
     }
 
-    private bool CanRetryClosedRead(in RespCommand command, RuvioException exception)
-    {
-        if (_disposed || !_options.Reconnect || !exception.ClosedBeforeReply || command.Name is not string name)
-        {
-            return false;
-        }
-
-        return name.Equals("GET", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("MGET", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("EXISTS", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("HGET", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("TTL", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("PTTL", StringComparison.OrdinalIgnoreCase);
-    }
-
     /// <summary>
-    /// Learns the slot map after a <c>MOVED</c> (or a skipped discovery). Later commands
-    /// go to the shard that owns the key.
+    /// Learns the slot map after a <c>MOVED</c> (or a skipped discovery) and points the moved
+    /// slot at the node the reply named. Later commands go to the shard that owns the key.
     /// </summary>
-    private async Task AdoptClusterAsync(CancellationToken cancellationToken)
+    private async Task AdoptClusterAsync((int Slot, string Host, int Port) moved, CancellationToken cancellationToken)
     {
         ClusterRouter? cluster = await ClusterRouter.DiscoverAsync(_seed, _options, cancellationToken);
 
@@ -669,6 +639,7 @@ public sealed partial class RuvioClient : IRuvioClient
             return;
         }
 
+        cluster.PointSlot(moved);
         _cluster = cluster;
     }
 
