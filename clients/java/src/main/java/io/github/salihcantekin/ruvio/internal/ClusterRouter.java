@@ -220,7 +220,7 @@ public final class ClusterRouter implements AutoCloseable {
         byte[] b = f.out.buf;
         ClusterKeys.Spec spec = ClusterKeys.spec(b, f.off[0], f.len[0]);
         int slot = -1;
-        if (spec.kind == ClusterKeys.FIRST) {
+        if (spec.first) {
             if (f.argc >= 2) {
                 slot = HashSlot.of(b, f.off[1], f.len[1]);
             }
@@ -281,7 +281,7 @@ public final class ClusterRouter implements AutoCloseable {
      * run concurrently and the replies are re-assembled in the caller's order.
      */
     private void split(ClusterKeys.Spec spec, Frame f, int n, RoutedRequest<?> r, Sink sink) {
-        boolean pairs = spec.kind == ClusterKeys.EVERY2;
+        boolean pairs = spec.pairs;
         if (pairs && (f.argc & 1) == 0) {
             r.failFinal(new RuvioServerException("ERR wrong number of arguments for '" + spec.name.toLowerCase() + "' command"));
             return;

@@ -388,52 +388,10 @@ class CoverageTest {
         assertTrue(extra.isEmpty(), "table entries not in the matrix: " + extra);
     }
 
-    /** Routing rule per command word when it is not "the key is the first argument". */
-    static Map<String, Integer> routing() {
-        Map<String, Integer> m = new LinkedHashMap<>();
-        for (String w : new String[] {"RUVIO", "PING", "HELLO", "AUTH", "ACL", "CHANGES", "SCAN", "DBSIZE", "SELECT", "FLUSHDB",
-                "FLUSHALL", "SWAPDB", "INFO", "WAIT", "CONFIG", "SAVE", "BGSAVE", "MULTI", "EXEC", "DISCARD", "UNWATCH", "SCRIPT",
-                "FUNCTION", "CLUSTER", "READONLY", "READWRITE", "PUBLISH", "SUBSCRIBE", "UNSUBSCRIBE", "PSUBSCRIBE",
-                "PUNSUBSCRIBE", "CLIENT", "COMMAND", "KEYS", "RANDOMKEY", "ECHO", "SLOWLOG", "LATENCY", "JSON.INDEX", "JSON.FIND"}) {
-            m.put(w, ClusterKeys.KEYLESS);
-        }
-        for (String w : new String[] {"DEL", "UNLINK", "EXISTS", "TOUCH", "MGET", "SINTER", "SUNION", "SDIFF", "SINTERSTORE",
-                "SUNIONSTORE", "SDIFFSTORE", "WATCH", "SSUBSCRIBE", "SUNSUBSCRIBE", "PFCOUNT", "PFMERGE"}) {
-            m.put(w, ClusterKeys.ALL);
-        }
-        for (String w : new String[] {"RENAME", "RENAMENX", "SMOVE", "COPY", "LMOVE", "RPOPLPUSH", "BLMOVE", "GEOSEARCHSTORE"}) {
-            m.put(w, ClusterKeys.TWO);
-        }
-        for (String w : new String[] {"MSET", "MSETNX"}) {
-            m.put(w, ClusterKeys.EVERY2);
-        }
-        for (String w : new String[] {"BLPOP", "BRPOP", "BZPOPMIN", "BZPOPMAX", "JSON.MGET"}) {
-            m.put(w, ClusterKeys.DROP_LAST);
-        }
-        for (String w : new String[] {"SINTERCARD", "ZUNION", "ZINTER", "ZDIFF", "LMPOP"}) {
-            m.put(w, ClusterKeys.COUNTED1);
-        }
-        for (String w : new String[] {"EVAL", "EVALSHA", "FCALL", "BLMPOP"}) {
-            m.put(w, ClusterKeys.COUNTED2);
-        }
-        for (String w : new String[] {"ZUNIONSTORE", "ZINTERSTORE", "ZDIFFSTORE"}) {
-            m.put(w, ClusterKeys.DEST_COUNTED2);
-        }
-        m.put("XREAD", ClusterKeys.STREAMS);
-        m.put("XREADGROUP", ClusterKeys.STREAMS);
-        m.put("BITOP", ClusterKeys.FROM2);
-        for (String w : new String[] {"OBJECT", "MEMORY", "XGROUP", "XINFO"}) {
-            m.put(w, ClusterKeys.ARG2);
-        }
-        m.put("GEORADIUS", ClusterKeys.GEO_STORE);
-        m.put("GEORADIUSBYMEMBER", ClusterKeys.GEO_STORE);
-        return m;
-    }
-
     /**
-     * Every one of the matrix commands must have a deliberate cluster routing rule: the ones in the
-     * table are special, every other command routes by its first argument, and no command the matrix
-     * marks "same_slot" may silently fall into that default.
+     * Every one of the matrix commands must have a routing rule in the server's command table (key
+     * positions themselves are checked against the server in {@link KeyVectorsTest}), and no command
+     * the matrix marks "same_slot" may be routed by its first argument alone.
      */
     @Test
     void everyMatrixCommandHasAClusterRoutingRule() throws IOException {
@@ -441,41 +399,23 @@ class CoverageTest {
         String json = new String(Files.readAllBytes(p), StandardCharsets.UTF_8);
         String section = json.substring(json.indexOf("\"commands\""), json.indexOf("\"unsupported\""));
         Matcher entry = Pattern.compile("\"name\"\\s*:\\s*\"([^\"]+)\"(.*?)\"same_slot\"\\s*:\\s*(true|false)", Pattern.DOTALL).matcher(section);
-        Map<String, Integer> routing = routing();
-        Set<String> seenWords = new LinkedHashSet<>();
         int commands = 0;
         int sameSlot = 0;
-        int special = 0;
         List<String> problems = new ArrayList<>();
         while (entry.find()) {
             commands++;
             String word = entry.group(1).split(" ")[0];
-            boolean flagged = Boolean.parseBoolean(entry.group(3));
-            ClusterKeys.Spec spec = ClusterKeys.spec(word);
-            Integer expected = routing.get(word);
-            seenWords.add(word);
-            if (expected == null) {
-                if (spec.kind != ClusterKeys.FIRST) {
-                    problems.add(word + " is routed as kind " + spec.kind + " but is not in the routing table");
-                }
-                if (flagged) {
-                    problems.add(word + " is same_slot in the matrix but has no multi-key routing rule");
-                }
-            } else {
-                special++;
-                if (spec.kind != expected) {
-                    problems.add(word + ": kind " + spec.kind + ", expected " + expected);
-                }
+            if (!CommandKeyRules.RULES.containsKey(word)) {
+                problems.add(word + " is not in the command key table");
             }
-            if (flagged) {
+            if (Boolean.parseBoolean(entry.group(3))) {
                 sameSlot++;
+                if (ClusterKeys.spec(word).first) {
+                    problems.add(word + " is same_slot in the matrix but is routed by its first argument only");
+                }
             }
         }
         assertTrue(problems.isEmpty(), problems.toString());
-        Set<String> unused = new LinkedHashSet<>(routing.keySet());
-        unused.removeAll(seenWords);
-        assertTrue(unused.isEmpty(), "routing table entries that are not matrix commands: " + unused);
-        System.out.println("[cluster] routing rule for " + commands + " matrix commands (" + special
-                + " special-cased words, " + sameSlot + " flagged same_slot)");
+        System.out.println("[cluster] routing rule for " + commands + " matrix commands (" + sameSlot + " flagged same_slot)");
     }
 }
