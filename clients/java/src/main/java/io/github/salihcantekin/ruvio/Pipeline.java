@@ -24,13 +24,16 @@ public final class Pipeline<K, V> extends RuvioCommands<K, V> {
     private final Link link;
     private final RespOut out = new RespOut(4096);
     private Request<?>[] pending = new Request<?>[16];
+    private Request<?>[] sent = new Request<?>[16];
     private int count;
     private int mark;
 
     // Cluster mode: commands are routed when queued and grouped per node; each group is one write.
     private final ClusterRouter router;
     private final Frame frame;
-    private final ArrayList<Group> groups;
+    private Group[] byNode = new Group[4];
+    private Group[] active = new Group[4];
+    private int activeCount;
     private final ClusterRouter.Sink grouping;
 
     Pipeline(Link link, ClusterRouter router, RuvioCodec<K> keys, RuvioCodec<V> values) {
@@ -39,12 +42,10 @@ public final class Pipeline<K, V> extends RuvioCommands<K, V> {
         this.router = router;
         if (router != null) {
             this.routed = true;
-            this.frame = new Frame();
-            this.groups = new ArrayList<>(4);
+            this.frame = new Frame(true);
             this.grouping = this::group;
         } else {
             this.frame = null;
-            this.groups = null;
             this.grouping = null;
         }
     }
@@ -80,18 +81,34 @@ public final class Pipeline<K, V> extends RuvioCommands<K, V> {
     }
 
     private void group(ClusterNode node, byte[] buf, int off, int len, RoutedRequest<?> request) {
-        Group g = null;
-        for (int i = 0; i < groups.size(); i++) {
-            if (groups.get(i).node == node) {
-                g = groups.get(i);
-                break;
-            }
+        int idx = node.index;
+        if (idx >= byNode.length) {
+            byNode = Arrays.copyOf(byNode, Math.max(idx + 1, byNode.length << 1));
         }
+        Group g = byNode[idx];
         if (g == null) {
             g = new Group(node);
-            groups.add(g);
+            byNode[idx] = g;
+        } else if (g.node != node) {
+            g = other(node);
+        }
+        if (g.n == 0) {
+            if (activeCount == active.length) {
+                active = Arrays.copyOf(active, activeCount << 1);
+            }
+            active[activeCount++] = g;
         }
         g.add(buf, off, len, request);
+    }
+
+    /** A node whose index clashes with another node's (nodes not created by the router): found by scanning. */
+    private Group other(ClusterNode node) {
+        for (int i = 0; i < activeCount; i++) {
+            if (active[i].node == node) {
+                return active[i];
+            }
+        }
+        return new Group(node);
     }
 
     /** The commands of one flush that go to the same node: their frames and requests, in queue order. */
@@ -166,10 +183,8 @@ public final class Pipeline<K, V> extends RuvioCommands<K, V> {
     private int flushCluster() {
         int n = count;
         RuntimeException first = null;
-        for (Group g : groups) {
-            if (g.n == 0) {
-                continue;
-            }
+        for (int gi = 0; gi < activeCount; gi++) {
+            Group g = active[gi];
             try {
                 Connection c = g.node.link.get();
                 RespOut o = c.begin();
@@ -191,7 +206,8 @@ public final class Pipeline<K, V> extends RuvioCommands<K, V> {
                 g.reset();
             }
         }
-        groups.clear();
+        Arrays.fill(active, 0, activeCount, null);
+        activeCount = 0;
         Arrays.fill(pending, 0, n, null);
         count = 0;
         if (first != null) {
@@ -202,14 +218,24 @@ public final class Pipeline<K, V> extends RuvioCommands<K, V> {
 
     /** Flushes and waits for every reply. Failures stay on the individual futures. */
     public void sync() {
-        Request<?>[] sent = Arrays.copyOf(pending, count);
-        flush();
-        for (Request<?> r : sent) {
+        int n = count;
+        if (sent.length < n) {
+            sent = new Request<?>[Math.max(n, sent.length << 1)];
+        }
+        System.arraycopy(pending, 0, sent, 0, n);
+        try {
+            flush();
+        } catch (RuntimeException e) {
+            Arrays.fill(sent, 0, n, null);
+            throw e;
+        }
+        for (int i = 0; i < n; i++) {
             try {
-                r.join();
+                sent[i].join();
             } catch (RuntimeException ignored) {
                 // reported through the command's own future
             }
+            sent[i] = null;
         }
     }
 }

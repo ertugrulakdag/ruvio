@@ -1446,6 +1446,50 @@ fn a_pipeline_is_grouped_by_shard_and_replies_keep_command_order() {
 }
 
 #[test]
+fn a_node_dropping_inside_a_pipeline_leaves_the_other_nodes_in_step() {
+    let cluster = Cluster::start(3);
+    let mut client = cluster.client();
+    let (a, b, c) = (
+        cluster.key_on(0, "a"),
+        cluster.key_on(1, "b"),
+        cluster.key_on(2, "c"),
+    );
+
+    cluster.hang_up("1:SET", 1);
+    // Every node is written before any is read; the first node read fails, and the others'
+    // replies are still read so their sockets do not answer the next command with this one's.
+    assert!(matches!(
+        many(
+            &mut client,
+            vec![
+                vec!["SET", b.as_str(), "2"],
+                vec!["SET", a.as_str(), "1"],
+                vec!["SET", c.as_str(), "3"],
+            ],
+        ),
+        Err(Error::Io(_))
+    ));
+    assert_eq!(
+        many(
+            &mut client,
+            vec![
+                vec!["GET", a.as_str()],
+                vec!["GET", c.as_str()],
+                vec!["SET", b.as_str(), "4"],
+                vec!["GET", b.as_str()],
+            ],
+        )
+        .unwrap(),
+        vec![
+            text("1"),
+            text("3"),
+            RespValue::Simple("OK".into()),
+            text("4"),
+        ]
+    );
+}
+
+#[test]
 fn a_pipeline_follows_moved_for_a_single_command() {
     let cluster = Cluster::start(3);
     let mut client = cluster.client();

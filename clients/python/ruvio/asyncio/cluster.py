@@ -22,8 +22,6 @@ from .client import PubSub, Ruvio, _Batch, _open
 
 __all__ = ["ClusterRuvio"]
 
-_SPEC = cl.SPEC
-_key_slot = cl.key_slot
 _frame_head = cl.frame_head
 
 
@@ -40,7 +38,7 @@ class _Node:
 
 
 class _State:
-    __slots__ = ("mode", "slots", "nodes", "by_addr", "seed", "watch", "gate")
+    __slots__ = ("mode", "slots", "nodes", "by_addr", "seed", "watch", "gate", "targets")
 
     def __init__(self, seed: _Node) -> None:
         self.mode = 0
@@ -50,6 +48,7 @@ class _State:
         self.seed = seed
         self.watch: Optional[_Node] = None
         self.gate: Optional[asyncio.Lock] = None  # serializes discovery / refresh
+        self.targets: List[_Node] = [seed]  # nodes + the seed last: index -1 is the seed
 
 
 class _RoutedFuture(asyncio.Future):  # type: ignore[type-arg]
@@ -136,6 +135,10 @@ class ClusterRuvio(Ruvio):
         proto = node.proto
         if proto is None or proto.closed:
             proto = await self._open_node(node)
+        return await self._node_write(proto, frames, dec)
+
+    def _node_write(self, proto: Any, frames: List[bytes], dec: bool) -> "asyncio.Future[List[Any]]":
+        """Queues ``frames`` on an open connection and returns the future of their replies."""
         fut = proto.loop.create_future()
         n = len(frames)
         idle = not proto.pending and proto.wbuf is None
@@ -146,7 +149,7 @@ class ClusterRuvio(Ruvio):
             proto.transport.write(data)
         else:
             proto.send(data)
-        return await fut
+        return fut
 
     # ---------------------------------------------------------------- topology
     def _new_node(self, host: str, port: int) -> _Node:
@@ -217,6 +220,7 @@ class ClusterRuvio(Ruvio):
         c.nodes = nodes
         c.by_addr = by
         c.slots = topo.slots
+        c.targets = [*nodes, c.seed]
 
     async def _refresh(self) -> bool:
         c = self._cl
@@ -266,16 +270,10 @@ class ClusterRuvio(Ruvio):
         if c.mode == 2:  # standalone fallback: exactly the plain client's path
             return Ruvio._x(self, conv, data, decode)
         if c.mode == 1:
-            name, key = _frame_head(data)
-            if not name.isupper():
-                name = name.upper()
-            if name not in _SPEC and name != b"FILLGET":
+            ni = cl.node_index(data, c.slots)
+            if ni is not None:
                 # warm path: no coroutine, the node's pending-reply future is returned directly
-                if key is None:
-                    node = c.seed
-                else:
-                    i = c.slots[_key_slot(key)]
-                    node = c.nodes[i] if i >= 0 else c.seed
+                node = c.targets[ni]
                 proto = node.proto
                 if proto is not None and not proto.closed:
                     dec = self._decode if decode is None else decode
@@ -309,15 +307,9 @@ class ClusterRuvio(Ruvio):
             if c.mode == 2:
                 return await Ruvio._x(self, conv, data, decode)
         dec = self._decode if decode is None else decode
-        name, key = _frame_head(data)
-        if not name.isupper():
-            name = name.upper()
-        if name not in _SPEC and name != b"FILLGET":
-            if key is None:
-                node = c.seed
-            else:
-                i = c.slots[_key_slot(key)]
-                node = c.nodes[i] if i >= 0 else c.seed
+        ni = cl.node_index(data, c.slots)
+        if ni is not None:
+            node = c.targets[ni]
             proto = node.proto
             if proto is None or proto.closed:
                 proto = await self._open_node(node)
@@ -328,7 +320,8 @@ class ClusterRuvio(Ruvio):
                 return await fut
             except MovedError as err:
                 return await self._redirect(err, data, conv, dec, False)
-        return await self._special(name, data, conv, dec)
+        name, _ = _frame_head(data)
+        return await self._special(name.upper(), data, conv, dec)
 
     async def _redirect(self, err: MovedError, data: bytes, conv: Conv, dec: bool, blocking: bool) -> Any:
         """``-MOVED``: re-sends the command to the node the reply names, at most
@@ -463,8 +456,43 @@ class ClusterRuvio(Ruvio):
         dec = self._decode
         if payload[0] is _MULTI and payload[-1] is _EXEC:
             return await self._batch_tx(payload, dec)
+        bufs: List[List[bytes]] = [[] for _ in c.targets]  # fresh: other coroutines may run while we await
+        idx = cl.route_pipeline(payload, c.slots, bufs)  # one pass; None = a command needs its own path
+        if idx is None:
+            return await self._batch_split(payload, dec)
+        order = [i for i, b in enumerate(bufs) if b]
+        targets = c.targets
+        if len(order) == 1:
+            replies = await self._node_batch(targets[order[0]], payload, dec)
+        else:
+            nodes = [targets[i] for i in order]
+            if all(n.proto is not None and not n.proto.closed for n in nodes):
+                # every connection is open: queue all the writes now, then wait for the replies
+                futs = [self._node_write(n.proto, bufs[i], dec) for n, i in zip(nodes, order)]
+                results = await asyncio.gather(*futs, return_exceptions=True)
+            else:
+                results = await self._gather([self._node_batch(n, bufs[i], dec) for n, i in zip(nodes, order)])
+            failure = next((r for r in results if isinstance(r, BaseException)), None)
+            if failure is not None:
+                raise failure
+            nxt: List[Any] = [None] * len(bufs)
+            for i, r in zip(order, results):
+                nxt[i] = iter(r).__next__
+            replies = [nxt[i]() for i in idx]
+        if MovedError in set(map(type, replies)):
+            for i, v in enumerate(replies):
+                if v.__class__ is MovedError:
+                    try:
+                        replies[i] = await self._redirect(v, payload[i], None, dec, False)
+                    except ResponseError as e:
+                        replies[i] = e
+        return replies
+
+    async def _batch_split(self, payload: List[bytes], dec: bool) -> List[Any]:
+        """A pipeline holding commands with their own routing (split, keyless, fan-out): grouped per node."""
+        c = self._cl
         groups, subs = cl.pipeline_groups(payload, c.slots)  # raises before anything is sent
-        order = [((c.nodes[ni] if ni >= 0 else c.seed), pos, frames) for ni, (pos, frames) in groups.items()]
+        order = [(c.targets[ni], pos, frames) for ni, (pos, frames) in groups.items()]
         results = await self._gather([self._node_batch(node, frames, dec) for node, _, frames in order])
         n = len(payload)
         replies: List[Any] = [None] * (n if subs is None else n + len(subs))

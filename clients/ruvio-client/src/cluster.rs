@@ -170,6 +170,74 @@ fn command_name(arguments: &[&str]) -> String {
         .unwrap_or_default()
 }
 
+/// Longest command name upper-cased on the stack; every name in the key table fits.
+const INLINE_NAME: usize = 32;
+
+/// A command name in upper case, without allocating for any known command.
+struct CommandName {
+    inline: [u8; INLINE_NAME],
+    len: usize,
+    spilled: Option<String>,
+}
+
+impl CommandName {
+    fn of(arguments: &[&str]) -> Self {
+        Self::from_bytes(arguments.first().map_or(&[][..], |name| name.as_bytes()))
+    }
+
+    fn from_bytes(raw: &[u8]) -> Self {
+        let mut inline = [0_u8; INLINE_NAME];
+
+        if raw.len() > INLINE_NAME {
+            return Self {
+                inline,
+                len: 0,
+                spilled: Some(String::from_utf8_lossy(raw).to_ascii_uppercase()),
+            };
+        }
+
+        for (slot, byte) in inline.iter_mut().zip(raw) {
+            *slot = byte.to_ascii_uppercase();
+        }
+
+        Self {
+            inline,
+            len: raw.len(),
+            spilled: None,
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        match &self.spilled {
+            Some(name) => name,
+            // Upper-casing only changes ASCII bytes, so valid UTF-8 stays valid; a binary name
+            // that is not UTF-8 matches no command, as its lossy form would not.
+            None => std::str::from_utf8(&self.inline[..self.len]).unwrap_or("\u{fffd}"),
+        }
+    }
+}
+
+/// The key of a command whose only key is its first argument (`GET`, `SET`, `HSET`, ... and
+/// commands the table does not know), found without building the key list. `None` means the
+/// command has another rule, and [`command_keys`] answers.
+fn single_key<'a>(name: &str, arguments: &[&'a str]) -> Option<&'a str> {
+    let key = *arguments.get(1)?;
+
+    match name {
+        "SPUBLISH" => Some(key),
+        "SSUBSCRIBE" | "SUNSUBSCRIBE" => None,
+        _ => match key_rule(name) {
+            Some(KeyRule::Range {
+                first: 1,
+                last: 1,
+                step: 1,
+            })
+            | None => Some(key),
+            Some(_) => None,
+        },
+    }
+}
+
 fn listed(list: &[&str], name: &str) -> bool {
     list.contains(&name)
 }
@@ -412,6 +480,16 @@ impl Connection {
     }
 
     fn write_commands(&mut self, commands: &[&[&str]]) -> Result<(), Error> {
+        self.write_selected(commands, |_| true)
+    }
+
+    /// Encodes the commands `pick` accepts, in order, and writes them in one go. A pipeline
+    /// spread over nodes calls this once per node with the same command list.
+    pub(crate) fn write_selected(
+        &mut self,
+        commands: &[&[&str]],
+        mut pick: impl FnMut(usize) -> bool,
+    ) -> Result<(), Error> {
         if self.broken {
             return Err(closed_socket());
         }
@@ -420,7 +498,11 @@ impl Connection {
 
         scratch.clear();
 
-        for command in commands {
+        for (index, command) in commands.iter().enumerate() {
+            if !pick(index) {
+                continue;
+            }
+
             if let Err(error) = crate::codec::append_strings(&mut scratch, command) {
                 self.scratch = scratch;
 
@@ -595,19 +677,32 @@ impl Topology {
     }
 }
 
+/// A node the client knows. Its index in [`ClusterRouter::endpoints`] never changes, so the slot
+/// routes and the pinned or subscribed node can hold the index instead of a `host:port` string.
+struct Endpoint {
+    host: String,
+    port: u16,
+    connection: Option<Connection>,
+}
+
 pub(crate) struct ClusterRouter {
     options: ClientOptions,
-    seed: String,
-    connections: HashMap<String, Connection>,
+    seed: usize,
+    endpoints: Vec<Endpoint>,
     topology: Topology,
+    /// The endpoint of each topology node, rebuilt with the topology.
+    routes: Vec<usize>,
+    /// Pipeline scratch kept between calls: each command's endpoint, and the endpoints in use.
+    targets: Vec<usize>,
+    used: Vec<usize>,
     queued: Vec<Vec<String>>,
     reconnect_delay: Option<Arc<dyn Fn(u32) -> Option<Duration> + Send + Sync>>,
     on_lost: NoticeHook,
     on_restored: NoticeHook,
-    pinned: Option<String>,
+    pinned: Option<usize>,
     multi_pending: bool,
     in_multi: bool,
-    subscriber: Option<String>,
+    subscriber: Option<usize>,
 }
 
 impl ClusterRouter {
@@ -623,13 +718,27 @@ impl ClusterRouter {
             return Ok(Discovery::Standalone(seed));
         };
 
-        let key = endpoint(seed.host.as_str(), seed.port);
+        Ok(Discovery::Cluster(Box::new(Self::new(
+            seed, topology, options,
+        ))))
+    }
 
-        Ok(Discovery::Cluster(Box::new(Self {
+    fn new(seed: Connection, topology: Topology, options: ClientOptions) -> Self {
+        let mut router = Self {
             options,
-            seed: key.clone(),
-            connections: HashMap::from([(key, seed)]),
-            topology,
+            seed: 0,
+            endpoints: vec![Endpoint {
+                host: seed.host.clone(),
+                port: seed.port,
+                connection: Some(seed),
+            }],
+            topology: Topology {
+                owners: Vec::new(),
+                nodes: Vec::new(),
+            },
+            routes: Vec::new(),
+            targets: Vec::new(),
+            used: Vec::new(),
             queued: Vec::new(),
             reconnect_delay: None,
             on_lost: Arc::new(Mutex::new(None)),
@@ -638,7 +747,43 @@ impl ClusterRouter {
             multi_pending: false,
             in_multi: false,
             subscriber: None,
-        })))
+        };
+
+        router.install(topology);
+
+        router
+    }
+
+    /// Makes `topology` current and points each of its nodes at an endpoint.
+    fn install(&mut self, topology: Topology) {
+        self.routes.clear();
+
+        for (host, port) in &topology.nodes {
+            let endpoint = self.endpoint_index(host, *port);
+
+            self.routes.push(endpoint);
+        }
+
+        self.topology = topology;
+    }
+
+    /// The endpoint for a node, added (without a connection) the first time it is named.
+    fn endpoint_index(&mut self, host: &str, port: u16) -> usize {
+        if let Some(index) = self
+            .endpoints
+            .iter()
+            .position(|endpoint| endpoint.host == host && endpoint.port == port)
+        {
+            return index;
+        }
+
+        self.endpoints.push(Endpoint {
+            host: host.to_owned(),
+            port,
+            connection: None,
+        });
+
+        self.endpoints.len() - 1
     }
 
     pub(crate) fn node_count(&self) -> usize {
@@ -658,17 +803,15 @@ impl ClusterRouter {
     }
 
     pub(crate) fn reconnect_broken(&mut self) -> Result<(), Error> {
-        let nodes = self.topology.nodes.clone();
-
-        for (host, port) in nodes {
-            self.open_endpoint(&host, port, true)?;
+        for node in 0..self.routes.len() {
+            self.open(self.routes[node], true)?;
         }
 
         Ok(())
     }
 
     pub(crate) fn subscription_endpoint(&self, arguments: &[&str]) -> (String, u16) {
-        let name = command_name(arguments);
+        let name = CommandName::of(arguments);
         let slot = if matches!(name.as_str(), "SSUBSCRIBE" | "SUNSUBSCRIBE") && arguments.len() > 1
         {
             hash_slot(arguments[1])
@@ -680,17 +823,20 @@ impl ClusterRouter {
             return (host, port);
         }
 
-        parse_endpoint(&self.seed)
+        let seed = &self.endpoints[self.seed];
+
+        (seed.host.clone(), seed.port)
     }
 
     pub(crate) fn execute(&mut self, arguments: &[&str]) -> Result<RespValue, Error> {
-        let name = command_name(arguments);
+        let name = CommandName::of(arguments);
+        let name = name.as_str();
 
         if self.pinned.is_some() || self.multi_pending {
-            return self.transaction(&name, arguments);
+            return self.transaction(name, arguments);
         }
 
-        match name.as_str() {
+        match name {
             "MULTI" => {
                 self.multi_pending = true;
 
@@ -698,45 +844,50 @@ impl ClusterRouter {
             }
 
             "WATCH" => return self.watch(arguments),
-            "DBSIZE" | "FLUSHDB" | "FLUSHALL" => return self.every_node(&name, arguments),
+            "DBSIZE" | "FLUSHDB" | "FLUSHALL" => return self.every_node(name, arguments),
             "SCRIPT" | "FUNCTION" if spreads_to_every_node(arguments) => {
-                return self.every_node(&name, arguments);
+                return self.every_node(name, arguments);
             }
 
             "SCAN" => return self.scan(arguments),
             "PUBLISH" => {
-                let key = self.for_slot(0)?;
+                let target = self.for_slot(0)?;
 
-                return self.send_routed(&key, arguments);
+                return self.send_routed(target, arguments);
             }
 
             _ => {}
         }
 
-        let keys = command_keys(&name, arguments);
-        let target = match slots_of(&keys) {
-            Slots::None => self.seed_target()?,
-            Slots::One(slot) => self.for_slot(slot)?,
-            Slots::Many if listed(SPLIT, &name) => return self.split(&name, arguments, &keys),
-            Slots::Many => return Ok(cross_slot()),
+        let target = match single_key(name, arguments) {
+            Some(key) => self.for_slot(hash_slot(key))?,
+            None => {
+                let keys = command_keys(name, arguments);
+
+                match slots_of(&keys) {
+                    Slots::None => self.seed_target()?,
+                    Slots::One(slot) => self.for_slot(slot)?,
+                    Slots::Many if listed(SPLIT, name) => {
+                        return self.split(name, arguments, &keys);
+                    }
+                    Slots::Many => return Ok(cross_slot()),
+                }
+            }
         };
 
-        self.send_routed(&target, arguments)
+        self.send_routed(target, arguments)
     }
 
     /// Binary-safe command. Routed by its second argument (the key) unless the command is
     /// keyless; multi-key splitting and transactions are not applied on this path.
     pub(crate) fn execute_binary(&mut self, arguments: &[&[u8]]) -> Result<RespValue, Error> {
-        let name = arguments
-            .first()
-            .map(|name| String::from_utf8_lossy(name).to_ascii_uppercase())
-            .unwrap_or_default();
+        let name = CommandName::from_bytes(arguments.first().copied().unwrap_or_default());
         let current = match arguments.get(1) {
-            Some(key) if !keyless(&name) => self.for_slot(hash_slot_bytes(key))?,
+            Some(key) if !keyless(name.as_str()) => self.for_slot(hash_slot_bytes(key))?,
             _ => self.seed_target()?,
         };
 
-        let reply = self.connection(&current)?.send_bytes(arguments)?;
+        let reply = self.connection(current)?.send_bytes(arguments)?;
 
         self.follow_moved(reply, |connection| connection.send_bytes(arguments))
     }
@@ -746,19 +897,154 @@ impl ClusterRouter {
             || self.multi_pending
             || commands
                 .iter()
-                .any(|command| listed(TRANSACTION, &command_name(command)))
+                .any(|command| listed(TRANSACTION, CommandName::of(command).as_str()))
         {
-            let key = self.first_keyed_target(commands)?;
+            let target = self.first_keyed_target(commands)?;
             let owned: Vec<Vec<String>> = commands
                 .iter()
                 .map(|command| command.iter().map(|item| (*item).to_owned()).collect())
                 .collect();
 
-            return self.connection(&key)?.send_many_owned(&owned);
+            return self.connection(target)?.send_many_owned(&owned);
         }
 
+        let mut targets = std::mem::take(&mut self.targets);
+        let mut used = std::mem::take(&mut self.used);
+        let routed = self.route_pipeline(commands, &mut targets, &mut used);
+        let result = match routed {
+            Ok(true) => self.send_routed_pipeline(commands, &targets, &used),
+            Ok(false) => self.execute_many_split(commands),
+            Err(error) => Err(error),
+        };
+
+        self.targets = targets;
+        self.used = used;
+
+        result
+    }
+
+    /// Stores each command's endpoint in `targets` and the distinct endpoints in `used`. `false`
+    /// when a command's keys span slots, which the split path handles.
+    fn route_pipeline(
+        &mut self,
+        commands: &[&[&str]],
+        targets: &mut Vec<usize>,
+        used: &mut Vec<usize>,
+    ) -> Result<bool, Error> {
+        targets.clear();
+        used.clear();
+
+        for command in commands {
+            let name = CommandName::of(command);
+            let name = name.as_str();
+            let target = match single_key(name, command) {
+                Some(key) => self.for_slot(hash_slot(key))?,
+                None => match slots_of(&command_keys(name, command)) {
+                    Slots::None => self.seed_target()?,
+                    Slots::One(slot) => self.for_slot(slot)?,
+                    Slots::Many => return Ok(false),
+                },
+            };
+
+            targets.push(target);
+
+            if !used.contains(&target) {
+                used.push(target);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Sends a routed pipeline: one node takes the plain pipeline path; several nodes are all
+    /// written before any is read, so the pipeline costs one round trip, not one per node.
+    fn send_routed_pipeline(
+        &mut self,
+        commands: &[&[&str]],
+        targets: &[usize],
+        used: &[usize],
+    ) -> Result<Vec<RespValue>, Error> {
+        let mut replies = if let [only] = used {
+            self.connection(*only)?.send_many(commands)?
+        } else {
+            self.send_spread(commands, targets, used)?
+        };
+
+        for (index, reply) in replies.iter_mut().enumerate() {
+            if matches!(reply, RespValue::Error(_)) {
+                let first = std::mem::replace(reply, RespValue::Null);
+
+                *reply = self.follow_moved(first, |connection| connection.send(commands[index]))?;
+            }
+        }
+
+        Ok(replies)
+    }
+
+    fn send_spread(
+        &mut self,
+        commands: &[&[&str]],
+        targets: &[usize],
+        used: &[usize],
+    ) -> Result<Vec<RespValue>, Error> {
+        for (written, &endpoint) in used.iter().enumerate() {
+            let write = self.connection(endpoint).and_then(|connection| {
+                connection.write_selected(commands, |index| targets[index] == endpoint)
+            });
+
+            if let Err(error) = write {
+                // The nodes already written have replies on their way; read them so those
+                // sockets stay in step for the next command.
+                self.drain(targets, &used[..written]);
+
+                return Err(error);
+            }
+        }
+
+        let mut replies = vec![RespValue::Null; commands.len()];
+
+        for (read, &endpoint) in used.iter().enumerate() {
+            let connection = self.connection(endpoint)?;
+
+            for (index, target) in targets.iter().enumerate() {
+                if *target != endpoint {
+                    continue;
+                }
+
+                match connection.read_reply() {
+                    Ok(reply) => replies[index] = reply,
+                    Err(error) => {
+                        self.drain(targets, &used[read + 1..]);
+
+                        return Err(error);
+                    }
+                }
+            }
+        }
+
+        Ok(replies)
+    }
+
+    /// Reads and drops the pending replies of `endpoints`, stopping at a node whose socket fails.
+    fn drain(&mut self, targets: &[usize], endpoints: &[usize]) {
+        for &endpoint in endpoints {
+            let Ok(connection) = self.connection(endpoint) else {
+                continue;
+            };
+
+            for _ in targets.iter().filter(|target| **target == endpoint) {
+                if connection.read_reply().is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// A pipeline with a command whose keys span slots: split commands are sent per slot inside
+    /// the node groups and their replies merged at the command's index.
+    fn execute_many_split(&mut self, commands: &[&[&str]]) -> Result<Vec<RespValue>, Error> {
         // Per node: where each reply goes, and the commands in pipeline order.
-        let mut groups: HashMap<String, (Vec<Destination>, Vec<Vec<String>>)> = HashMap::new();
+        let mut groups: HashMap<usize, (Vec<Destination>, Vec<Vec<String>>)> = HashMap::new();
         let mut splits: Vec<PendingSplit> = Vec::new();
         let mut replies = vec![RespValue::Null; commands.len()];
 
@@ -809,7 +1095,7 @@ impl ClusterRouter {
         }
 
         for (target, (destinations, batch)) in groups {
-            let values = self.connection(&target)?.send_many_owned(&batch)?;
+            let values = self.connection(target)?.send_many_owned(&batch)?;
 
             for ((destination, command), value) in destinations.into_iter().zip(&batch).zip(values)
             {
@@ -840,7 +1126,7 @@ impl ClusterRouter {
         arguments: &[&str],
         replies: usize,
     ) -> Result<Vec<RespValue>, Error> {
-        let name = command_name(arguments);
+        let name = CommandName::of(arguments);
         let slot = if matches!(name.as_str(), "SSUBSCRIBE" | "SUNSUBSCRIBE") && arguments.len() > 1
         {
             hash_slot(arguments[1])
@@ -848,10 +1134,10 @@ impl ClusterRouter {
             0
         };
 
-        let key = self.for_slot(slot)?;
+        let target = self.for_slot(slot)?;
 
-        self.subscriber = Some(key.clone());
-        let values = self.connection(&key)?.send_replies(arguments, replies)?;
+        self.subscriber = Some(target);
+        let values = self.connection(target)?.send_replies(arguments, replies)?;
 
         if values.len() < replies {
             return Err(Error::Protocol("missing subscribe confirmation".to_owned()));
@@ -861,22 +1147,24 @@ impl ClusterRouter {
     }
 
     pub(crate) fn read_message(&mut self) -> Result<RespValue, Error> {
-        let key = self.subscriber.clone().unwrap_or_else(|| self.seed.clone());
+        let target = self.subscriber.unwrap_or(self.seed);
 
-        self.connection(&key)?.read()
+        self.connection(target)?.read()
     }
 
     pub(crate) fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
-        for connection in self.connections.values_mut() {
-            connection.set_read_timeout(timeout)?;
+        for endpoint in &mut self.endpoints {
+            if let Some(connection) = endpoint.connection.as_mut() {
+                connection.set_read_timeout(timeout)?;
+            }
         }
 
         Ok(())
     }
 
     fn transaction(&mut self, name: &str, arguments: &[&str]) -> Result<RespValue, Error> {
-        if let Some(pinned) = self.pinned.clone() {
-            let reply = self.connection(&pinned)?.send(arguments)?;
+        if let Some(pinned) = self.pinned {
+            let reply = self.connection(pinned)?.send(arguments)?;
 
             if name == "EXEC" || name == "DISCARD" || (name == "UNWATCH" && !self.in_multi) {
                 self.pinned = None;
@@ -908,12 +1196,12 @@ impl ClusterRouter {
             }
 
             "EXEC" => {
-                let key = self.seed.clone();
+                let target = self.seed;
                 let mut commands = vec![vec!["MULTI".to_owned()]];
 
                 commands.extend(self.queued.iter().cloned());
                 commands.push(arguments.iter().map(|item| (*item).to_owned()).collect());
-                let replies = self.connection(&key)?.send_many_owned(&commands)?;
+                let replies = self.connection(target)?.send_many_owned(&commands)?;
 
                 self.reset_transaction();
 
@@ -937,7 +1225,7 @@ impl ClusterRouter {
 
         commands.extend(self.queued.iter().cloned());
         commands.push(arguments.iter().map(|item| (*item).to_owned()).collect());
-        let replies = self.connection(&owner)?.send_many_owned(&commands)?;
+        let replies = self.connection(owner)?.send_many_owned(&commands)?;
 
         self.queued.clear();
         self.multi_pending = false;
@@ -962,7 +1250,7 @@ impl ClusterRouter {
     fn watch(&mut self, arguments: &[&str]) -> Result<RespValue, Error> {
         let keys = command_keys("WATCH", arguments);
         let owner = self.target(&keys)?;
-        let reply = self.connection(&owner)?.send(arguments)?;
+        let reply = self.connection(owner)?.send(arguments)?;
 
         if !matches!(reply, RespValue::Error(_)) {
             self.pinned = Some(owner);
@@ -972,12 +1260,14 @@ impl ClusterRouter {
     }
 
     fn every_node(&mut self, name: &str, arguments: &[&str]) -> Result<RespValue, Error> {
-        let nodes: Vec<(String, u16)> = self.topology.nodes.clone();
         let mut replies = Vec::new();
 
-        for (host, port) in nodes {
-            let key = self.ensure(&host, port)?;
-            let reply = self.connection(&key)?.send(arguments)?;
+        for node in 0..self.routes.len() {
+            let endpoint = self.routes[node];
+
+            self.open(endpoint, false)?;
+
+            let reply = self.connection(endpoint)?.send(arguments)?;
 
             if let RespValue::Error(_) = reply {
                 return Ok(reply);
@@ -1005,9 +1295,11 @@ impl ClusterRouter {
         let mut forwarded: Vec<String> = arguments.iter().map(|item| (*item).to_owned()).collect();
 
         forwarded[1] = (cursor / nodes).to_string();
-        let (host, port) = self.topology.nodes[node].clone();
-        let key = self.ensure(&host, port)?;
-        let reply = self.connection(&key)?.send_owned(&forwarded)?;
+        let endpoint = self.routes[node];
+
+        self.open(endpoint, false)?;
+
+        let reply = self.connection(endpoint)?.send_owned(&forwarded)?;
         let RespValue::Array(items) = &reply else {
             return Ok(reply);
         };
@@ -1046,8 +1338,8 @@ impl ClusterRouter {
         let mut replies = Vec::with_capacity(parts.len());
 
         for (slot, command) in &parts {
-            let key = self.for_slot(*slot)?;
-            let reply = self.send_routed(&key, &borrowed(command))?;
+            let target = self.for_slot(*slot)?;
+            let reply = self.send_routed(target, &borrowed(command))?;
 
             // The first error stops the remaining parts, as one command would have failed.
             if matches!(reply, RespValue::Error(_)) {
@@ -1060,8 +1352,8 @@ impl ClusterRouter {
         Ok(merge(name, keys.len(), &positions, replies))
     }
 
-    fn send_routed(&mut self, key: &str, arguments: &[&str]) -> Result<RespValue, Error> {
-        let reply = self.connection(key)?.send(arguments)?;
+    fn send_routed(&mut self, target: usize, arguments: &[&str]) -> Result<RespValue, Error> {
+        let reply = self.connection(target)?.send(arguments)?;
 
         self.follow_moved(reply, |connection| connection.send(arguments))
     }
@@ -1081,7 +1373,7 @@ impl ClusterRouter {
 
             let target = self.redirect(slot, &host, port, redirect)?;
 
-            reply = send(self.connection(&target)?)?;
+            reply = send(self.connection(target)?)?;
         }
 
         Ok(reply)
@@ -1097,7 +1389,7 @@ impl ClusterRouter {
         host: &str,
         port: u16,
         redirect: usize,
-    ) -> Result<String, Error> {
+    ) -> Result<usize, Error> {
         let mut node = self.topology.node_index(host, port);
 
         if node.is_none() || redirect > 1 {
@@ -1105,25 +1397,38 @@ impl ClusterRouter {
             node = self.topology.node_index(host, port);
         }
 
-        let node = node.unwrap_or_else(|| {
-            self.topology.nodes.push((host.to_owned(), port));
-            self.topology.nodes.len() - 1
-        });
+        let node = match node {
+            Some(node) => node,
+            None => {
+                let endpoint = self.endpoint_index(host, port);
+
+                self.topology.nodes.push((host.to_owned(), port));
+                self.routes.push(endpoint);
+                self.topology.nodes.len() - 1
+            }
+        };
 
         self.topology.owners[usize::from(slot)] = Some(node);
 
-        self.ensure(host, port)
+        let endpoint = self.routes[node];
+
+        self.open(endpoint, false)?;
+
+        Ok(endpoint)
     }
 
     fn refresh(&mut self) -> Result<(), Error> {
-        let keys: Vec<String> = self.connections.keys().cloned().collect();
         let mut last_error = None;
 
-        for key in keys {
-            match self.connection(&key)?.send(&["CLUSTER", "SLOTS"]) {
+        for index in 0..self.endpoints.len() {
+            let Some(connection) = self.endpoints[index].connection.as_mut() else {
+                continue;
+            };
+
+            match connection.send(&["CLUSTER", "SLOTS"]) {
                 Ok(reply) => {
                     if let Some(topology) = Topology::parse(&reply) {
-                        self.topology = topology;
+                        self.install(topology);
                         return Ok(());
                     }
                     last_error = Some(Error::Protocol("invalid CLUSTER SLOTS topology".to_owned()));
@@ -1135,7 +1440,7 @@ impl ClusterRouter {
         Err(last_error.unwrap_or_else(|| Error::Protocol("no cluster topology source".to_owned())))
     }
 
-    fn target(&mut self, keys: &[&str]) -> Result<String, Error> {
+    fn target(&mut self, keys: &[&str]) -> Result<usize, Error> {
         if let Some(key) = keys.first() {
             return self.for_slot(hash_slot(key));
         }
@@ -1143,15 +1448,15 @@ impl ClusterRouter {
         self.seed_target()
     }
 
-    /// The seed node for commands without a key. Goes through `ensure` so a seed whose socket broke
+    /// The seed node for commands without a key. Goes through `open` so a seed whose socket broke
     /// is opened again (when `reconnect` is on) instead of failing every keyless command for good.
-    fn seed_target(&mut self) -> Result<String, Error> {
-        let (host, port) = parse_endpoint(&self.seed);
+    fn seed_target(&mut self) -> Result<usize, Error> {
+        self.open(self.seed, false)?;
 
-        self.ensure(&host, port)
+        Ok(self.seed)
     }
 
-    fn first_keyed_target(&mut self, commands: &[&[&str]]) -> Result<String, Error> {
+    fn first_keyed_target(&mut self, commands: &[&[&str]]) -> Result<usize, Error> {
         for command in commands {
             let keys = command_keys(&command_name(command), command);
 
@@ -1163,57 +1468,87 @@ impl ClusterRouter {
         self.seed_target()
     }
 
-    fn for_slot(&mut self, slot: u16) -> Result<String, Error> {
-        let (host, port) = self
-            .topology
-            .owner(slot)
-            .cloned()
-            .ok_or_else(|| Error::Protocol(format!("no cluster owner for slot {slot}")))?;
-        match self.ensure(&host, port) {
-            Ok(key) => Ok(key),
+    /// The endpoint that owns `slot`, with an open connection. A node that cannot be reached
+    /// makes the client reload the slot map once and try the owner it names.
+    fn for_slot(&mut self, slot: u16) -> Result<usize, Error> {
+        let endpoint = self.route(slot)?;
+
+        if self.endpoints[endpoint]
+            .connection
+            .as_ref()
+            .is_some_and(|connection| !connection.is_broken())
+        {
+            return Ok(endpoint);
+        }
+
+        match self.open(endpoint, false) {
+            Ok(()) => Ok(endpoint),
             Err(error) => {
                 self.refresh().map_err(|_| error)?;
-                let (host, port) =
-                    self.topology.owner(slot).cloned().ok_or_else(|| {
-                        Error::Protocol(format!("no cluster owner for slot {slot}"))
-                    })?;
-                self.ensure(&host, port)
+
+                let endpoint = self.route(slot)?;
+
+                self.open(endpoint, false)?;
+
+                Ok(endpoint)
             }
         }
     }
 
-    fn ensure(&mut self, host: &str, port: u16) -> Result<String, Error> {
-        self.open_endpoint(host, port, false)
+    fn route(&self, slot: u16) -> Result<usize, Error> {
+        self.topology
+            .owners
+            .get(usize::from(slot))
+            .copied()
+            .flatten()
+            .map(|node| self.routes[node])
+            .ok_or_else(|| Error::Protocol(format!("no cluster owner for slot {slot}")))
     }
 
-    fn open_endpoint(&mut self, host: &str, port: u16, force: bool) -> Result<String, Error> {
-        let key = endpoint(host, port);
-        let broken = self
-            .connections
-            .get(&key)
+    /// The endpoint for a node, with an open connection (see [`Self::open`]).
+    #[cfg(test)]
+    fn open_endpoint(&mut self, host: &str, port: u16, force: bool) -> Result<usize, Error> {
+        let endpoint = self.endpoint_index(host, port);
+
+        self.open(endpoint, force)?;
+
+        Ok(endpoint)
+    }
+
+    /// Opens the endpoint's connection when it has none or its socket broke. A broken socket is
+    /// replaced only when `reconnect` is on or `force` is set (what `Client::reconnect` does).
+    fn open(&mut self, endpoint: usize, force: bool) -> Result<(), Error> {
+        let broken = self.endpoints[endpoint]
+            .connection
+            .as_ref()
             .is_some_and(Connection::is_broken);
+
+        if !broken && self.endpoints[endpoint].connection.is_some() {
+            return Ok(());
+        }
 
         if broken && !force && !self.options.reconnect {
             return Err(closed_socket());
         }
 
+        let host = self.endpoints[endpoint].host.clone();
+        let port = self.endpoints[endpoint].port;
+
         if broken {
-            self.notify_lost(host, port);
-            self.connections.remove(&key);
+            self.notify_lost(&host, port);
+            self.endpoints[endpoint].connection = None;
         }
 
-        if !self.connections.contains_key(&key) {
-            let delay = self.reconnect_delay.clone();
-            let opened = Connection::open_with_retry(host, port, &self.options, delay.as_ref())?;
+        let delay = self.reconnect_delay.clone();
+        let opened = Connection::open_with_retry(&host, port, &self.options, delay.as_ref())?;
 
-            self.connections.insert(key.clone(), opened);
+        self.endpoints[endpoint].connection = Some(opened);
 
-            if broken {
-                self.notify_restored(host, port);
-            }
+        if broken {
+            self.notify_restored(&host, port);
         }
 
-        Ok(key)
+        Ok(())
     }
 
     fn notify_lost(&self, host: &str, port: u16) {
@@ -1240,10 +1575,19 @@ impl ClusterRouter {
         }
     }
 
-    fn connection(&mut self, key: &str) -> Result<&mut Connection, Error> {
-        self.connections
-            .get_mut(key)
-            .ok_or_else(|| Error::Protocol(format!("no connection for {key}")))
+    fn connection(&mut self, endpoint: usize) -> Result<&mut Connection, Error> {
+        match self.endpoints.get_mut(endpoint) {
+            Some(Endpoint {
+                connection: Some(connection),
+                ..
+            }) => Ok(connection),
+            Some(Endpoint { host, port, .. }) => {
+                Err(Error::Protocol(format!("no connection for {host}:{port}")))
+            }
+            None => Err(Error::Protocol(format!(
+                "no connection for endpoint {endpoint}"
+            ))),
+        }
     }
 }
 
@@ -1454,16 +1798,6 @@ fn reconnect_delay(
     let delay = options.reconnect_base_delay.saturating_mul(multiplier);
 
     Some(delay.min(options.reconnect_max_delay))
-}
-
-fn endpoint(host: &str, port: u16) -> String {
-    format!("{host}:{port}")
-}
-
-fn parse_endpoint(seed: &str) -> (String, u16) {
-    seed.rsplit_once(':')
-        .and_then(|(host, port)| port.parse().ok().map(|port| (host.to_owned(), port)))
-        .unwrap_or_else(|| (seed.to_owned(), 6379))
 }
 
 #[cfg(test)]
@@ -1937,14 +2271,18 @@ mod more_tests {
         assert!(matches!(slots_of(&["{a}", "{b}"]), Slots::Many));
         assert!(matches!(slots_of(&["{a}", "{a}x", "{b}"]), Slots::Many));
         assert_eq!(cross_slot(), RespValue::Error(CROSSSLOT.to_owned()));
-        assert_eq!(endpoint("h", 5), "h:5");
-        assert_eq!(parse_endpoint("host:123"), ("host".to_owned(), 123));
-        assert_eq!(parse_endpoint("::1:7"), ("::1".to_owned(), 7));
-        assert_eq!(
-            parse_endpoint("nohostport"),
-            ("nohostport".to_owned(), 6379)
-        );
-        assert_eq!(parse_endpoint("host:bad"), ("host:bad".to_owned(), 6379));
+        assert_eq!(CommandName::of(&[]).as_str(), "");
+        assert_eq!(CommandName::of(&["get", "k"]).as_str(), "GET");
+        assert_eq!(CommandName::of(&["Json.Get", "k"]).as_str(), "JSON.GET");
+        assert_eq!(CommandName::from_bytes(&[0xff, b'a']).as_str(), "\u{fffd}");
+        let long = "x".repeat(40);
+        assert_eq!(CommandName::of(&[long.as_str()]).as_str(), "X".repeat(40));
+        assert_eq!(single_key("GET", &["get", "k"]), Some("k"));
+        assert_eq!(single_key("NOT-A-COMMAND", &["x", "k"]), Some("k"));
+        assert_eq!(single_key("SPUBLISH", &["spublish", "c", "m"]), Some("c"));
+        assert_eq!(single_key("SSUBSCRIBE", &["ssubscribe", "c"]), None);
+        assert_eq!(single_key("MGET", &["mget", "a", "b"]), None);
+        assert_eq!(single_key("GET", &["get"]), None);
         assert_eq!(borrowed(&strs(&["a", "b"])), ["a", "b"]);
     }
 
@@ -2669,34 +3007,19 @@ mod more_tests {
     fn router_notifies_and_reopens_a_broken_endpoint() {
         let script = Script::start(vec![Step::Close]);
         let port = script.port;
-        let mut router = {
-            let listener_less = Topology {
+        let mut router = ClusterRouter::new(
+            script.connect(),
+            Topology {
                 owners: vec![Some(0); SLOT_COUNT as usize],
                 nodes: vec![("127.0.0.1".to_owned(), port)],
-            };
-            let connection = script.connect();
-            let key = endpoint("127.0.0.1", port);
-
-            ClusterRouter {
-                options: ClientOptions {
-                    reconnect_base_delay: Duration::ZERO,
-                    max_reconnect_attempts: 1,
-                    connect_timeout: Duration::from_millis(200),
-                    ..ClientOptions::default()
-                },
-                seed: key.clone(),
-                connections: HashMap::from([(key, connection)]),
-                topology: listener_less,
-                queued: Vec::new(),
-                reconnect_delay: None,
-                on_lost: Arc::new(Mutex::new(None)),
-                on_restored: Arc::new(Mutex::new(None)),
-                pinned: None,
-                multi_pending: false,
-                in_multi: false,
-                subscriber: None,
-            }
-        };
+            },
+            ClientOptions {
+                reconnect_base_delay: Duration::ZERO,
+                max_reconnect_attempts: 1,
+                connect_timeout: Duration::from_millis(200),
+                ..ClientOptions::default()
+            },
+        );
         let events = Arc::new(Mutex::new(Vec::new()));
         let lost = Arc::clone(&events);
         let restored = Arc::clone(&events);
@@ -2729,10 +3052,8 @@ mod more_tests {
     fn with_reconnect_off_a_broken_endpoint_is_not_replaced() {
         let script = Script::start(vec![]);
         let mut router = router_for_topology(&script);
-        let key = endpoint("127.0.0.1", script.port);
-
         router.options.reconnect = false;
-        router.connections.get_mut(&key).unwrap().broken = true;
+        router.endpoints[0].connection.as_mut().unwrap().broken = true;
         assert!(matches!(
             router.open_endpoint("127.0.0.1", script.port, false),
             Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::BrokenPipe
@@ -2762,26 +3083,14 @@ mod more_tests {
     }
 
     fn router_for_topology(script: &Script) -> ClusterRouter {
-        let connection = script.connect();
-        let key = endpoint("127.0.0.1", script.port);
-
-        ClusterRouter {
-            options: ClientOptions::default(),
-            seed: key.clone(),
-            connections: HashMap::from([(key, connection)]),
-            topology: Topology {
+        ClusterRouter::new(
+            script.connect(),
+            Topology {
                 owners: vec![Some(0); SLOT_COUNT as usize],
                 nodes: vec![("127.0.0.1".to_owned(), script.port)],
             },
-            queued: Vec::new(),
-            reconnect_delay: None,
-            on_lost: Arc::new(Mutex::new(None)),
-            on_restored: Arc::new(Mutex::new(None)),
-            pinned: None,
-            multi_pending: false,
-            in_multi: false,
-            subscriber: None,
-        }
+            ClientOptions::default(),
+        )
     }
 
     #[test]
@@ -2790,10 +3099,15 @@ mod more_tests {
         let mut router = router_for_topology(&script);
 
         assert!(matches!(
-            router.connection("nowhere:1"),
+            router.connection(7),
+            Err(Error::Protocol(message)) if message == "no connection for endpoint 7"
+        ));
+        router.endpoint_index("nowhere", 1);
+        assert!(matches!(
+            router.connection(1),
             Err(Error::Protocol(message)) if message == "no connection for nowhere:1"
         ));
-        router.connections.clear();
+        router.endpoints.clear();
         assert!(matches!(
             router.refresh(),
             Err(Error::Protocol(message)) if message == "no cluster topology source"

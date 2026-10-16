@@ -660,9 +660,9 @@ public sealed partial class RuvioClient : IRuvioClient
         }
 
         ThrowIfDisposed();
-        foreach (IReadOnlyList<string> command in commands)
+        for (int index = 0; index < commands.Count; index++)
         {
-            RejectSelect(command);
+            RejectSelect(commands[index]);
         }
 
         await EnsureCommandSocketAsync(cancellationToken);

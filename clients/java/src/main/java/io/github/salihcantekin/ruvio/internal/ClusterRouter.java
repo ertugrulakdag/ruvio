@@ -54,7 +54,7 @@ public final class ClusterRouter implements AutoCloseable {
         c.end(request);
     };
 
-    private static final ThreadLocal<Frame> FRAMES = ThreadLocal.withInitial(Frame::new);
+    private static final ThreadLocal<Frame> FRAMES = ThreadLocal.withInitial(() -> new Frame(true));
 
     /** Runs MOVED follow-ups off the reader threads, which must never wait for a reply. */
     private static final ExecutorService BACKGROUND = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 30, TimeUnit.SECONDS,
@@ -68,12 +68,14 @@ public final class ClusterRouter implements AutoCloseable {
     private final ClusterNode seed;
     private final ConcurrentHashMap<String, ClusterNode> nodes = new ConcurrentHashMap<>();
     private volatile ClusterNode[] table = new ClusterNode[SLOTS];
+    private final AtomicInteger nextIndex = new AtomicInteger();
     private final Object refreshLock = new Object();
     private volatile boolean closed;
 
     private ClusterRouter(RuvioOptions options, ClusterNode seed) {
         this.options = options;
         this.seed = seed;
+        seed.index = 0;
         nodes.put(seed.address, seed);
     }
 
@@ -141,7 +143,9 @@ public final class ClusterRouter implements AutoCloseable {
     private ClusterNode addNode(String host, int port) {
         return nodes.computeIfAbsent(ClusterNode.address(host, port), a -> {
             RuvioOptions o = options.toBuilder().host(host).port(port).database(0).build();
-            return new ClusterNode(host, port, new Link(o, true));
+            ClusterNode n = new ClusterNode(host, port, new Link(o, true));
+            n.index = nextIndex.incrementAndGet();
+            return n;
         });
     }
 
@@ -240,11 +244,18 @@ public final class ClusterRouter implements AutoCloseable {
                 }
             }
         }
-        int total = f.out.pos;
+        int off = f.base;
+        int total = f.out.pos - off;
         r.router = this;
-        byte[] copy = Arrays.copyOf(b, total);
-        r.frame = copy;
-        sink.send(slot < 0 ? anyNode() : owner(slot), copy, 0, total, r);
+        byte[] buf = b;
+        if (f.retains()) {
+            f.keep();
+        } else {
+            buf = Arrays.copyOfRange(b, off, off + total);
+            off = 0;
+        }
+        r.setFrame(buf, off, total);
+        sink.send(slot < 0 ? anyNode() : owner(slot), buf, off, total, r);
     }
 
     /** The slot shared by the keys of the parsed frame; -1 when it has no key; CROSSSLOT error otherwise. */
@@ -332,9 +343,9 @@ public final class ClusterRouter implements AutoCloseable {
             }
             SplitPart part = new SplitPart(parent, g, r);
             part.router = this;
-            part.frame = Arrays.copyOf(tmp.buf, tmp.pos);
+            part.setFrame(Arrays.copyOf(tmp.buf, tmp.pos), 0, tmp.pos);
             try {
-                sink.send(owner(groupSlot[g]), part.frame, 0, part.frame.length, part);
+                sink.send(owner(groupSlot[g]), part.frame, 0, part.frameLen, part);
             } catch (RuntimeException e) {
                 parent.fail(e);
                 return;
@@ -464,7 +475,7 @@ public final class ClusterRouter implements AutoCloseable {
             String host = colon > 0 ? addr.substring(0, colon) : seed.host;
             int port = Integer.parseInt(addr.substring(colon + 1));
             ClusterNode target = onMoved(slot, host, port, r.redirects > 1);
-            DIRECT.send(target, r.frame, 0, r.frame.length, r);
+            DIRECT.send(target, r.frame, r.frameOff, r.frameLen, r);
         } catch (RuntimeException e) {
             r.failFinal(e instanceof NumberFormatException ? error : e);
         }

@@ -9,6 +9,7 @@ arguments and run through :func:`plan`.
 from __future__ import annotations
 
 import binascii
+import re
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ._command_keys import (
@@ -120,6 +121,81 @@ _FAN_SUB = frozenset(
         (b"FUNCTION", b"FLUSH"),
     )
 )
+
+# Fast routing of an ordinary command straight from its encoded frame: one regex match reads the
+# command name and the length of argument 1; _PLAIN remembers per spelling of a name whether it
+# is routed by "argument 1" (not in SPEC), so no upper-cased copy is made per command.
+_HEAD = re.compile(rb"\*\d+\r\n\$\d+\r\n([A-Za-z0-9_.|:-]*)\r\n(?:\$(\d+)\r\n|\Z)").match
+_PLAIN: Dict[bytes, bool] = {}
+
+
+def _classify(name: bytes) -> bool:
+    up = name.upper()
+    plain = up not in SPEC and up != b"FILLGET"  # FILLGET may park the connection (asyncio client)
+    if len(_PLAIN) < 4096:
+        _PLAIN[name] = plain
+    return plain
+
+
+def node_index(data: bytes, table: List[int]) -> Optional[int]:
+    """Index of the node that owns an ordinary command (``-1`` = the seed). None when the frame is
+    not an ordinary single-key command (special routing, odd spelling): use :func:`plan` then."""
+    m = _HEAD(data)
+    if m is None:
+        return None
+    name, n = m.groups()
+    plain = _PLAIN.get(name)
+    if plain is None:
+        plain = _classify(name)
+    if not plain:
+        return None
+    if n is None:
+        return -1
+    e = m.end()
+    key = data[e : e + int(n)]
+    o = key.find(b"{")
+    if o >= 0:
+        c = key.find(b"}", o + 1)
+        if c > o + 1:
+            key = key[o + 1 : c]
+    return table[_crc16(key, 0) & 0x3FFF]
+
+
+def route_pipeline(frames: List[bytes], table: List[int], bufs: List[List[bytes]]) -> Optional[List[int]]:
+    """One pass over a pipeline of ordinary commands: appends each frame to ``bufs[node index]``
+    (``bufs`` has one list per node plus one for the seed, last, which ``-1`` addresses) and returns
+    the node index of every command. None when any command needs :func:`pipeline_groups`; ``bufs``
+    is then in an unspecified state and must be cleared."""
+    idx: List[int] = []
+    add = idx.append
+    head = _HEAD
+    names = _PLAIN
+    crc = _crc16
+    for f in frames:
+        m = head(f)
+        if m is None:
+            return None
+        name, n = m.groups()
+        plain = names.get(name)
+        if plain is None:
+            plain = _classify(name)
+        if not plain:
+            return None
+        if n is None:
+            ni = -1
+        else:
+            e = m.end()
+            key = f[e : e + int(n)]
+            o = key.find(b"{")
+            if o >= 0:
+                c = key.find(b"}", o + 1)
+                if c > o + 1:
+                    key = key[o + 1 : c]
+            ni = table[crc(key, 0) & 0x3FFF]
+        bufs[ni].append(f)
+        add(ni)
+    return idx
+
 
 #: multi-key commands whose keys may live on several nodes: split per node and re-assembled
 SPLITTABLE = frozenset((b"MGET", b"MSET", b"DEL", b"UNLINK", b"EXISTS", b"TOUCH"))

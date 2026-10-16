@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Globalization;
 using System.Text;
 using Ruvio.Client.Cluster;
@@ -8,6 +9,45 @@ namespace Ruvio.Client;
 internal static class ClusterKeys
 {
     public const int SlotCount = 16384;
+
+    /// <summary>What the router needs to know about a command name, found without allocating.</summary>
+    internal sealed record CommandInfo(string Name, bool SingleKey, bool Split, bool Transaction);
+
+    private static readonly FrozenDictionary<string, CommandInfo> Infos = CreateInfos();
+
+    private static FrozenDictionary<string, CommandInfo> CreateInfos()
+    {
+        var infos = new Dictionary<string, CommandInfo>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string name in CommandKeyRules.Rules.Keys
+            .Concat(ClusterRouter.SplitNames).Concat(ClusterRouter.TransactionNames).Append("SPUBLISH"))
+        {
+            infos[name] = new CommandInfo(
+                name,
+                IsSingleKey(name),
+                ClusterRouter.SplitNames.Contains(name),
+                ClusterRouter.TransactionNames.Contains(name));
+        }
+
+        return infos.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>The router's facts about a command name in any letter case; null for a name the tables do not know.</summary>
+    internal static CommandInfo? Info(string name) => Infos.GetValueOrDefault(name);
+
+    /// <summary>
+    /// The first key without allocating: the second argument for a command the table does not
+    /// know and for the ordinary "first argument is the key" rule, the general lookup otherwise.
+    /// </summary>
+    internal static string? FirstKey(CommandInfo? info, IReadOnlyList<string> arguments)
+    {
+        if (info is null || info.SingleKey)
+        {
+            return arguments.Count >= 2 ? arguments[1] : null;
+        }
+
+        return First(info.Name, arguments);
+    }
 
     public static string Name(IReadOnlyList<string> arguments)
     {

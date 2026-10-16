@@ -4,6 +4,7 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 
 ## Unreleased
 
+- Cluster pipelines are cheaper: commands are assigned to nodes in one pass without a dictionary or upper-cased names, each node's commands are encoded once into a pooled frame, every node is written before any reply is awaited, and only error replies are checked for `MOVED`. Pipeline allocation per request fell by a fifth to a half; see `docs/evidence/2026-10-16-client-cluster-routing.md`.
 - Fixed: an integer reply of `-9223372036854775808` (`long.MinValue`, for example from `INCRBY` or `DECRBY`) was rejected as "bad RESP integer" and closed the connection; it is now read as `long.MinValue`.
 - Behaviour change: `RENAME` and `RENAMENX` whose keys hash to different slots now fail with a `CROSSSLOT` `RuvioException` before anything is sent, instead of being emulated with `TYPE`, a copy, `PEXPIRE` and `DEL`. Keep both keys in one slot with a hash tag.
 - Behaviour change: any other command whose keys span slots and that is not split (`COPY`, `LMOVE`, `SMOVE`, `SINTERSTORE`, `BITOP`, `EVAL`, ...) now fails with `CROSSSLOT` before it is sent. Before, it went to the first key's shard and the server answered.

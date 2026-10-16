@@ -10,13 +10,21 @@ import io.github.salihcantekin.ruvio.RuvioCodec;
  */
 public class RoutedRequest<T> extends Request<T> {
     public ClusterRouter router;
-    /** The command as sent, kept for MOVED retries. Null for parents of split commands. */
+    /** The command as sent, kept for MOVED retries: {@code frame[frameOff, frameOff + frameLen)}. Null for parents of split commands. */
     public byte[] frame;
+    public int frameOff;
+    public int frameLen;
     /** How many MOVED redirects this command has followed so far. */
     public byte redirects;
 
     public RoutedRequest(Reply<T> reply, RuvioCodec<?> keys, RuvioCodec<?> values) {
         super(reply, keys, values);
+    }
+
+    public void setFrame(byte[] buf, int off, int len) {
+        frame = buf;
+        frameOff = off;
+        frameLen = len;
     }
 
     @Override
@@ -32,6 +40,7 @@ public class RoutedRequest<T> extends Request<T> {
 
     /** Completes exceptionally without looking at redirects. */
     public void failFinal(Throwable error) {
+        frame = null;
         completeExceptionally(error);
     }
 }

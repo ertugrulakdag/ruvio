@@ -36,7 +36,7 @@ class _Node:
 class _State:
     """Routing state, shared by a client and its ``raw`` view."""
 
-    __slots__ = ("mode", "slots", "nodes", "by_addr", "seed", "watch")
+    __slots__ = ("mode", "slots", "nodes", "by_addr", "seed", "watch", "targets", "bufs")
 
     def __init__(self, seed: _Node) -> None:
         self.mode = 0  # 0 = not discovered yet, 1 = cluster, 2 = standalone fallback
@@ -45,6 +45,8 @@ class _State:
         self.by_addr: Dict[Tuple[str, int], _Node] = {(seed.host, seed.port): seed}
         self.seed = seed
         self.watch: Optional[_Node] = None
+        self.targets: List[_Node] = [seed]  # nodes + the seed last: index -1 is the seed
+        self.bufs: List[List[bytes]] = [[]]  # per-target frame lists, reused by every pipeline
 
 
 def _fail(conn: _Conn, exc: BaseException) -> BaseException:
@@ -175,6 +177,8 @@ class ClusterRuvio(Ruvio):
         c.nodes = nodes
         c.by_addr = by
         c.slots = topo.slots
+        c.targets = [*nodes, c.seed]
+        c.bufs = [[] for _ in c.targets]
 
     def _refresh(self) -> bool:
         c = self._cl
@@ -230,21 +234,25 @@ class ClusterRuvio(Ruvio):
             if c.mode == 2:
                 return Ruvio._x(self, conv, data, decode)
         dec = self._decode if decode is None else decode
-        name, key = cl.frame_head(data)
-        if not name.isupper():
-            name = name.upper()
-        if name not in cl.SPEC:
-            # the common case: one key, argument 1 (the slot table lookup is two list indexes)
-            if key is None:
-                node = c.seed
-            else:
-                i = c.slots[cl.key_slot(key)]
-                node = c.nodes[i] if i >= 0 else c.seed
-            reply = self._rt(node.conn, data, dec)
+        ni = cl.node_index(data, c.slots)
+        if ni is not None:
+            # the common case: an ordinary command, routed from its frame with no copy kept for MOVED
+            conn = c.targets[ni].conn
+            if conn.sock is None:
+                conn.open()
+            p = conn.parser
+            if p.decode is not dec:
+                p.decode = dec
+            try:
+                conn.sock.sendall(data)  # type: ignore[union-attr]
+                reply = conn.read()
+            except BaseException as exc:
+                raise _fail(conn, exc) from None
             if reply.__class__ is MovedError:
                 reply = self._redirect(reply, data, dec)
         else:
-            reply = self._special(name, data, dec)
+            name, _ = cl.frame_head(data)
+            reply = self._special(name.upper(), data, dec)
         if isinstance(reply, ResponseError):
             raise reply
         return reply if conv is None else conv(reply)
@@ -368,9 +376,39 @@ class ClusterRuvio(Ruvio):
         tx = payload[0] is _MULTI and payload[-1] is _EXEC
         if tx:
             return self._batch_tx(payload, dec)
-        # group by node, one pipelined write per node, replies back in the caller's order
+        n = len(payload)
+        bufs = c.bufs
+        try:
+            idx = cl.route_pipeline(payload, c.slots, bufs)  # one pass; None = a command needs its own path
+            if idx is not None:
+                order = [i for i, b in enumerate(bufs) if b]
+                results = self._scatter([(c.targets[i].conn, b"".join(bufs[i]), len(bufs[i])) for i in order], dec)
+        finally:
+            for b in bufs:
+                b.clear()
+        if idx is None:
+            return self._batch_split(payload, dec)
+        failure = next((r for r in results if isinstance(r, BaseException)), None)
+        if failure is not None:
+            raise failure
+        if len(order) == 1:
+            replies = results[0]
+        else:
+            nxt: List[Any] = [None] * len(bufs)
+            for i, r in zip(order, results):
+                nxt[i] = iter(r).__next__
+            replies = [nxt[i]() for i in idx]
+        if MovedError in set(map(type, replies)):
+            for i, v in enumerate(replies):
+                if v.__class__ is MovedError:
+                    replies[i] = self._redirect(v, payload[i], dec)
+        return replies
+
+    def _batch_split(self, payload: List[bytes], dec: bool) -> List[Any]:
+        """A pipeline holding commands with their own routing (split, keyless, fan-out): grouped per node."""
+        c = self._cl
         groups, subs = cl.pipeline_groups(payload, c.slots)  # raises before anything is sent
-        order = [((c.nodes[ni] if ni >= 0 else c.seed), pos, frames) for ni, (pos, frames) in groups.items()]
+        order = [(c.targets[ni], pos, frames) for ni, (pos, frames) in groups.items()]
         results = self._scatter([(node.conn, b"".join(frames), len(frames)) for node, _, frames in order], dec)
         n = len(payload)
         replies: List[Any] = [None] * (n if subs is None else n + len(subs))

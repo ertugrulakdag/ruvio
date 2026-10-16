@@ -198,6 +198,17 @@ internal sealed class RuvioSocket : IDisposable
         }
     }
 
+    /// <summary>Queues an encoded pipeline; on the multiplexed path no task is allocated for the wait.</summary>
+    internal ValueTask<IReadOnlyList<RespValue>> SendFrameAsync(
+        ReadOnlyMemory<byte> payload,
+        int replies,
+        CancellationToken cancellationToken)
+    {
+        return _initialized && !_independentIo
+            ? Multiplexer.SendAsync(payload, replies, cancellationToken)
+            : new ValueTask<IReadOnlyList<RespValue>>(SendManyAsync(payload, replies, cancellationToken));
+    }
+
     internal async Task<IReadOnlyList<RespValue>> SendManyAsync(
         ReadOnlyMemory<byte> payload,
         int replies,

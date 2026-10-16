@@ -8,6 +8,8 @@ public final class ClusterNode {
     public final String address;
     public final Link link;
     public final TxPool txPool;
+    /** Position in the router's node list (0 for the seed); lets a pipeline find the node's group by index. */
+    public int index;
 
     public ClusterNode(String host, int port, Link link) {
         this.host = host;

@@ -45,3 +45,19 @@ What the six clients do when a cluster redirects, a command spans slots, or a so
 | Java | `java/.../internal/ClusterRouter.java`, `RoutedRequest.java` | `java/.../internal/ClusterKeys.java`, `CommandKeyRules.java` |
 | Node | `node/src/cluster.ts` | `node/src/cluster.ts`, `command-keys.ts` |
 | Python | `python/ruvio/cluster.py`, `python/ruvio/asyncio/cluster.py` | `python/ruvio/_cluster.py`, `_command_keys.py` |
+
+## Routing cost
+
+A cluster client pays for routing on every command, so the routing path follows the same shape in every client. The goal: per request, at most 1.3× the user-space CPU of the plain single-connection path at the same pipeline depth, and no allocation per command once the client is warm. Splitting a pipeline over N nodes also means N writes and N reads instead of one; that system-call cost is inherent and is not counted against the goal.
+
+| Step | Rule |
+| --- | --- |
+| Topology | A node list plus a 16384-entry table of node indexes, replaced as a whole on refresh. A node's connection is found by its index, never by building a `host:port` string per command |
+| Command name and keys | Found from the caller's arguments (or the already encoded frame) without allocating: a case-insensitive compare against the key table, and a direct path for the common "first argument is the key" rule |
+| Slot | Hash tag and CRC16 computed in place over the key bytes |
+| One command | After the connection is picked, the same send path as the plain client. Nothing is copied in case a `MOVED` arrives; a redirect re-sends from the caller's arguments |
+| Replies | Only error replies are checked for `MOVED`, by prefix |
+| Pipelines | One pass stores a node index per command in a reused buffer. If every command goes to one node, the plain pipeline path runs unchanged. Otherwise each command is encoded once, straight into its node's write buffer; every node is written before any is read (or the nodes run concurrently), and each reply is stored at its command's index |
+| Split commands and transactions | Keep their own path (`MGET`/`MSET`/... split per slot, a transaction pinned to one node); the rules above are for ordinary commands |
+
+Before and after numbers per client: [evidence/2026-10-16-client-cluster-routing.md](evidence/2026-10-16-client-cluster-routing.md). Each client's benchmark tool has the same plain, cluster and one-node rows (`cluster_cost` example, `--cluster-cost`, `RoutingCostBench`, `bench:cluster-cost`, `bench.py --cluster-cost`).

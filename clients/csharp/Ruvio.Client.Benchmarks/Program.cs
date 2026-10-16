@@ -19,6 +19,12 @@ if (args.Length > 0 && args[0] == "--socket-load")
     return;
 }
 
+if (args.Length > 0 && args[0] == "--cluster-cost")
+{
+    await ClusterCost.RunAsync(args[1..]);
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--quick")
 {
     await QuickBench.RunAsync(args[1..]);

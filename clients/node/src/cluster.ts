@@ -4,13 +4,14 @@
 //
 // How routing works without touching the typed commands: the cluster client encodes every
 // command into a private scratch encoder (the same fast encoder the standalone client uses),
-// then reads the key(s) straight out of the encoded RESP bytes. The frame is a zero-copy view
-// of the encoder slab, so keeping it for a MOVED retry costs nothing extra.
+// then reads the key(s) straight out of the encoded RESP bytes. A single command is copied once
+// into its node's write buffer; the connection remembers where, so a MOVED retry re-sends it
+// without any extra copy.
 // Against a standalone server the client detects `cluster mode is disabled` and from then on
 // encodes straight into the one connection, exactly like RuvioClient.
 
 import { Helpers, RuvioClient, type BinaryCommands, type ClientOptions } from './client.js';
-import type { Connection, BatchSink } from './connection.js';
+import type { Connection, BatchSink, MovedHandler } from './connection.js';
 import { COMMAND_KEY_RULES, KeyRule, type CommandKeyRule } from './command-keys.js';
 import { Encoder } from './encoder.js';
 import { ConnectionError, RuvioError } from './errors.js';
@@ -111,6 +112,8 @@ interface Spec {
   readonly c: number;
   readonly words: readonly string[];
   readonly flags: number;
+  /** The one key is argument 1 (`kind` Range 1..1). */
+  readonly first: boolean;
 }
 
 // Key positions come from COMMAND_KEY_RULES; these lists only say how a command is sent.
@@ -154,11 +157,11 @@ export const ROUTED_COMMANDS: ReadonlyMap<string, number> = (() => {
     const up = Buffer.from(name, 'latin1');
     const h = nameHash(up, 0, up.length);
     if (SPECS.has(h)) throw new Error('ruvio: command name hash collision: ' + name);
-    SPECS.set(h, { name, up, kind, a, b, c, words, flags: flags.get(name) ?? 0 });
+    SPECS.set(h, { name, up, kind, a, b, c, words, flags: flags.get(name) ?? 0, first: kind === KeyRule.Range && a === 1 && b === 1 });
   }
   return flags;
 })();
-const DEFAULT_SPEC: Spec = { name: '', up: Buffer.alloc(0), kind: KeyRule.Range, a: 1, b: 1, c: 1, words: [], flags: 0 };
+const DEFAULT_SPEC: Spec = { name: '', up: Buffer.alloc(0), kind: KeyRule.Range, a: 1, b: 1, c: 1, words: [], flags: 0, first: true };
 
 /** The routing rule of the command in the frame just scanned. */
 function specOfFrame(b: Uint8Array): Spec {
@@ -313,10 +316,8 @@ class Router {
   slots: (ClusterNode | undefined)[] = new Array(SLOT_COUNT);
   nodes = new Map<string, ClusterNode>();
   home: ClusterNode;
-  readonly enc: Encoder;
-  private c0: Buffer | null = null;
-  private more: Buffer[] = [];
-  private nChunks = 0;
+  /** Scratch encoder: every command is written here first and routed from its bytes. */
+  readonly enc = new Encoder(null, 16 * 1024);
   private loading: Promise<void> | null = null;
   private refreshing: Promise<void> | null = null;
   /** Number of CLUSTER SLOTS refreshes done after the first load. */
@@ -332,34 +333,41 @@ class Router {
     this.base = rest;
     const host = rest.host ?? '127.0.0.1';
     const port = rest.port ?? 6379;
-    this.home = new ClusterNode(host, port, rest);
+    this.home = this.track(new ClusterNode(host, port, rest));
     this.nodes.set(this.home.addr, this.home);
-    this.enc = new Encoder((c) => {
-      if (this.nChunks++ === 0) this.c0 = c;
-      else this.more.push(c);
-    });
   }
 
   // ---- encoder hand-off ----
 
-  /** The frame just encoded into the scratch encoder. */
+  /** The frame just encoded into the scratch encoder, copied out (slow paths only). */
   take(): Buffer {
-    this.enc.flush();
-    if (this.nChunks === 1) {
-      const f = this.c0!;
-      this.c0 = null;
-      this.nChunks = 0;
-      return f;
-    }
-    const f = Buffer.concat([this.c0!, ...this.more]);
+    const e = this.enc;
+    const f = Buffer.from(e.buf.subarray(e.start, e.pos));
     this.reset();
     return f;
   }
 
   reset(): void {
-    this.c0 = null;
-    this.more.length = 0;
-    this.nChunks = 0;
+    const e = this.enc;
+    e.pos = e.start = e.frameStart = 0;
+    e.partial = false;
+  }
+
+  /**
+   * Sends the frame just encoded into the scratch encoder. A frame with one owner node and no
+   * blocking is copied once into that node's write buffer; every other shape takes the general path.
+   */
+  send(tf: Tf | null, fl: number): Promise<any> {
+    const e = this.enc;
+    const b = e.buf;
+    const r = this.target(b, e.start);
+    if (typeof r !== 'number' && ((LAST_SPEC.flags & (F_BLOCK | F_BLOCKOPT)) === 0 || !this.blocking(b))) {
+      const conn = r.conn;
+      conn.writeRaw(b, e.start, e.pos);
+      e.pos = e.start = e.frameStart = 0;
+      return conn.trackKept(tf, fl);
+    }
+    return this.dispatch(this.take(), tf, fl);
   }
 
   // ---- topology ----
@@ -440,8 +448,18 @@ class Router {
   private makeNode(host: string, port: number): ClusterNode {
     const o: ClientOptions = { ...this.base, host, port };
     delete o.path;
-    return new ClusterNode(host, port, o);
+    return this.track(new ClusterNode(host, port, o));
   }
+
+  /** Lets the node's connection hand `-MOVED` replies of single commands back to the router. */
+  private track(n: ClusterNode): ClusterNode {
+    n.conn.keepFrames(this.onMoved);
+    return n;
+  }
+
+  private readonly onMoved: MovedHandler = (e, buf, off, len, tf, fl, res, rej) => {
+    this.moved(e, buf.subarray(off, off + len), tf, fl).then(res, rej);
+  };
 
   private drop(n: ClusterNode): void {
     n.client.quit().catch(() => undefined);
@@ -470,6 +488,14 @@ class Router {
     scanFrame(b, p);
     const spec = (LAST_SPEC = specOfFrame(b));
     LAST_SLOT = -1;
+    if (spec.first) {
+      // Direct path: the first argument is the key.
+      if (A_N < 2) return this.home;
+      const o = A_OFF[1]!;
+      const slot = (LAST_SLOT = slotRange(b, o, o + A_LEN[1]!));
+      const node = this.slots[slot];
+      return node === undefined ? T_NOSLOT : node;
+    }
     if (spec.kind === KeyRule.None) return (spec.flags & F_FANOUT) !== 0 ? T_FANOUT : this.home;
     const n = keyIndexes(spec, b);
     if (n === 0) return this.home;
@@ -652,7 +678,12 @@ class Router {
 
   // ---- batches ----
 
-  /** Pipeline: group frames by node, one write per node, replies back into the caller's slots. */
+  /**
+   * Pipeline: one pass over the frames finds each one's owner node. When they all share one node
+   * the batch goes out unchanged; otherwise runs of frames for the same node are copied into that
+   * node's write buffer in call order, every node is written before any is read, and each reply
+   * lands at its command's index.
+   */
   runBatch(bytes: Buffer, n: number, fls: number[], out: PipelineSink): void {
     if (this.standalone) {
       const conn = this.home.conn;
@@ -660,32 +691,59 @@ class Router {
       conn.trackBatch(out, fls, n);
       return;
     }
-    // Frames are routed in call order: each goes into its node's write buffer (or its own
-    // split / fan-out sub-commands) as it is met, so per-node ordering matches the caller's.
-    const sinks = new Map<ClusterNode, GroupSink>();
+    if (n >= B_NODE.length) {
+      B_NODE = new Array(n * 2).fill(null);
+      B_OFF = new Int32Array(n * 2 + 1);
+    }
+    const nodes = B_NODE;
+    const offs = B_OFF;
     let p = 0;
+    let first: ClusterNode | null = null;
+    let same = true;
     for (let i = 0; i < n; i++) {
-      const start = p;
+      offs[i] = p;
       const r = this.target(bytes, p);
       p = A_END;
-      const frame = bytes.subarray(start, p);
-      if (typeof r !== 'number') {
-        let g = sinks.get(r);
-        if (g === undefined) sinks.set(r, (g = new GroupSink(this, out)));
-        const conn = r.conn;
-        conn.writeFrames(frame);
-        g.frames.push(frame);
-        g.idx.push(i);
-        g.fls.push(fls[i]!);
-        conn.trackOne(g, g.idx.length - 1, fls[i]!);
-      } else if (r === T_CROSS) out.set(i, crossSlot());
-      else if (r === T_NOSLOT) out.set(i, noSlot(-1));
-      else {
-        this.dispatch(frame, null, fls[i]!).then(
-          (v) => out.set(i, v),
-          (e) => out.set(i, e),
-        );
+      if (typeof r === 'number') {
+        nodes[i] = null;
+        same = false;
+      } else {
+        nodes[i] = r;
+        if (i === 0) first = r;
+        else if (r !== first) same = false;
       }
+    }
+    offs[n] = p;
+    const sink = new ClusterSink(this, bytes, n, fls, out);
+    if (same) {
+      const conn = first!.conn;
+      conn.writeFrames(bytes);
+      conn.trackBatch(sink, fls, n);
+      return;
+    }
+    for (let i = 0; i < n; ) {
+      const node = nodes[i];
+      if (node === null || node === undefined) {
+        const frame = bytes.subarray(offs[i], offs[i + 1]);
+        const r = this.target(frame, 0);
+        if (typeof r === 'number' && r === T_CROSS) out.set(i, crossSlot());
+        else if (typeof r === 'number' && r === T_NOSLOT) out.set(i, noSlot(-1));
+        else {
+          const k = i;
+          this.dispatch(frame, null, fls[i]!).then(
+            (v) => out.set(k, v),
+            (e) => out.set(k, e),
+          );
+        }
+        i++;
+        continue;
+      }
+      let j = i + 1;
+      while (j < n && nodes[j] === node) j++;
+      const conn = node.conn;
+      conn.writeRaw(bytes, offs[i]!, offs[j]!);
+      conn.trackRange(sink, i, j, fls);
+      i = j;
     }
   }
 
@@ -718,25 +776,45 @@ class Router {
   }
 }
 
-/** Receives one node's share of a pipeline and follows MOVED per command. */
-class GroupSink implements BatchSink {
-  readonly frames: Buffer[] = [];
-  readonly idx: number[] = [];
-  readonly fls: number[] = [];
+// Per-call scratch for runBatch: owner node and start offset of each frame. Used within one
+// synchronous call only.
+let B_NODE: (ClusterNode | null)[] = new Array(256).fill(null);
+let B_OFF = new Int32Array(257);
+
+/** Receives a pipeline's replies at the caller's indexes and follows MOVED per command. */
+class ClusterSink implements BatchSink {
+  private offs: Int32Array | null = null;
   constructor(
     private readonly r: Router,
+    private readonly bytes: Buffer,
+    private readonly n: number,
+    private readonly fls: number[],
     private readonly out: PipelineSink,
   ) {}
-  set(local: number, v: unknown): void {
-    const g = this.idx[local]!;
+  set(i: number, v: unknown): void {
     if (v instanceof RuvioError && v.code === 'MOVED') {
-      this.r.moved(v, this.frames[local]!, null, this.fls[local]!).then(
-        (x) => this.out.set(g, x),
-        (e) => this.out.set(g, e),
+      this.r.moved(v, this.frame(i), null, this.fls[i]!).then(
+        (x) => this.out.set(i, x),
+        (e) => this.out.set(i, e),
       );
       return;
     }
-    this.out.set(g, v);
+    this.out.set(i, v);
+  }
+  /** Frame `i` of the batch bytes (rare path: offsets are rebuilt here). */
+  private frame(i: number): Buffer {
+    let o = this.offs;
+    if (o === null) {
+      o = this.offs = new Int32Array(this.n + 1);
+      let p = 0;
+      for (let k = 0; k < this.n; k++) {
+        o[k] = p;
+        scanFrame(this.bytes, p);
+        p = A_END;
+      }
+      o[this.n] = p;
+    }
+    return this.bytes.subarray(o[i], o[i + 1]);
   }
 }
 
@@ -832,9 +910,11 @@ export class ClusterClient extends Helpers {
   protected _done(tf: Tf | null, fl: number): Promise<any> {
     const r = this.r;
     if (r.direct) return r.home.conn.track(tf, fl);
-    const frame = r.take();
-    if (!r.ready) return r.whenReady().then(() => this.routeLate(frame, tf, fl));
-    return r.dispatch(frame, tf, fl);
+    if (!r.ready) {
+      const frame = r.take();
+      return r.whenReady().then(() => this.routeLate(frame, tf, fl));
+    }
+    return r.send(tf, fl);
   }
   private routeLate(frame: Buffer, tf: Tf | null, fl: number): Promise<any> {
     const r = this.r;

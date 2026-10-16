@@ -47,6 +47,7 @@
     "build:test": "tsc -p tsconfig.test.json",
     "test": "npm run build:test && node --test --test-concurrency=1 --test-timeout=60000 build/test/*.test.js",
     "bench": "npm run build:test && node --expose-gc --min-semi-space-size=64 --max-semi-space-size=64 build/bench/bench.js",
+    "bench:cluster-cost": "npm run build:test && node --expose-gc build/bench/cluster-cost.js",
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {

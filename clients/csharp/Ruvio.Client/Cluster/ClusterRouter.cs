@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Globalization;
 using System.Text;
@@ -12,12 +13,12 @@ internal sealed class ClusterRouter : IDisposable
 {
     private const int MaxRedirects = 3;
 
-    private static readonly HashSet<string> Split = new(StringComparer.Ordinal)
+    internal static readonly HashSet<string> SplitNames = new(StringComparer.Ordinal)
     {
         "DEL", "EXISTS", "MGET", "MSET", "TOUCH", "UNLINK",
     };
 
-    private static readonly HashSet<string> TransactionCommands = new(StringComparer.Ordinal)
+    internal static readonly HashSet<string> TransactionNames = new(StringComparer.Ordinal)
     {
         "DISCARD", "EXEC", "MULTI", "UNWATCH", "WATCH",
     };
@@ -137,7 +138,7 @@ internal sealed class ClusterRouter : IDisposable
         {
             // Only the split commands can be answered per slot; anything else (RENAME, COPY,
             // SMOVE, EVAL, ...) is refused here instead of reaching a shard.
-            return Split.Contains(name)
+            return SplitNames.Contains(name)
                 ? await SplitAsync(name, arguments, keys, cancellationToken)
                 : CrossSlot();
         }
@@ -320,6 +321,264 @@ internal sealed class ClusterRouter : IDisposable
         IReadOnlyList<IReadOnlyList<string>> commands,
         CancellationToken cancellationToken)
     {
+        if (_pinned is not null || _multiPending)
+        {
+            return await ExecuteManyGroupedAsync(commands, cancellationToken);
+        }
+
+        ClusterTopology topology = _topology;
+        int count = commands.Count;
+        int nodes = topology.Nodes.Count;
+
+        // One int per command (its node index) followed by one counter per node; the seed
+        // connection stands in for the last node, for commands without a key.
+        int[] scratch = ArrayPool<int>.Shared.Rent(count + nodes + 1);
+
+        try
+        {
+            Array.Clear(scratch, count, nodes + 1);
+
+            if (!AssignNodes(commands, topology, scratch))
+            {
+                return await ExecuteManyGroupedAsync(commands, cancellationToken);
+            }
+
+            return await SendOnNodesAsync(commands, topology, scratch, cancellationToken);
+        }
+
+        finally
+        {
+            ArrayPool<int>.Shared.Return(scratch);
+        }
+    }
+
+    /// <summary>
+    /// Stores the node index of every command in <paramref name="scratch"/> in one pass. False
+    /// when the pipeline holds a transaction command or a split command spanning slots, which
+    /// take the grouped path.
+    /// </summary>
+    private static bool AssignNodes(
+        IReadOnlyList<IReadOnlyList<string>> commands, ClusterTopology topology, int[] scratch)
+    {
+        int count = commands.Count;
+        int seed = topology.Nodes.Count;
+
+        for (int index = 0; index < count; index++)
+        {
+            IReadOnlyList<string> command = commands[index];
+            ClusterKeys.CommandInfo? info = ClusterKeys.Info(command[0]);
+
+            if (info is not null
+                && (info.Transaction || (info.Split && SplitSpansSlots(info.Name, command))))
+            {
+                return false;
+            }
+
+            int node = seed;
+
+            if (ClusterKeys.FirstKey(info, command) is { } key)
+            {
+                node = topology.NodeOf(ClusterKeys.Slot(key));
+
+                if (node < 0)
+                {
+                    node = seed;
+                }
+            }
+
+            scratch[index] = node;
+            scratch[count + node]++;
+        }
+
+        return true;
+    }
+
+    private async Task<IReadOnlyList<RespValue>> SendOnNodesAsync(
+        IReadOnlyList<IReadOnlyList<string>> commands,
+        ClusterTopology topology,
+        int[] scratch,
+        CancellationToken cancellationToken)
+    {
+        int count = commands.Count;
+        int nodes = topology.Nodes.Count;
+        var sockets = new RuvioSocket?[nodes + 1];
+        int groups = 0;
+        int only = 0;
+
+        for (int node = 0; node <= nodes; node++)
+        {
+            if (scratch[count + node] == 0)
+            {
+                continue;
+            }
+
+            sockets[node] = await NodeSocketAsync(topology, node, cancellationToken);
+
+            // Keyless commands share the seed's connection with the node it serves.
+            if (node == nodes)
+            {
+                for (int other = 0; other < nodes; other++)
+                {
+                    if (ReferenceEquals(sockets[other], sockets[node]))
+                    {
+                        for (int index = 0; index < count; index++)
+                        {
+                            if (scratch[index] == node)
+                            {
+                                scratch[index] = other;
+                            }
+                        }
+
+                        scratch[count + other] += scratch[count + node];
+                        scratch[count + node] = 0;
+                        sockets[node] = null;
+
+                        break;
+                    }
+                }
+            }
+
+            if (scratch[count + node] > 0)
+            {
+                groups++;
+                only = node;
+            }
+        }
+
+        if (groups == 1)
+        {
+            // Every command is for one node: the plain pipeline, unchanged.
+            IReadOnlyList<RespValue> values = await sockets[only]!.SendManyAsync(commands, cancellationToken);
+
+            return HasMoved(values) ? await ResendMovedAsync(values, commands, cancellationToken) : values;
+        }
+
+        var sends = new ValueTask<IReadOnlyList<RespValue>>[nodes + 1];
+        var started = new bool[nodes + 1];
+        var frames = new PooledFrame[nodes + 1];
+        var replies = new RespValue[count];
+
+        try
+        {
+            // Every node's write is queued before any reply is awaited.
+            for (int node = 0; node <= nodes; node++)
+            {
+                if (scratch[count + node] > 0)
+                {
+                    frames[node] = RespCodec.EncodeSelectedPooled(commands, scratch, node);
+                    started[node] = true;
+                    sends[node] = sockets[node]!.SendFrameAsync(
+                        frames[node].Buffer.AsMemory(0, frames[node].Length), scratch[count + node], cancellationToken);
+                }
+            }
+
+            for (int node = 0; node <= nodes; node++)
+            {
+                if (started[node])
+                {
+                    started[node] = false;
+                    Scatter(scratch, count, node, await sends[node], replies);
+                }
+            }
+        }
+
+        finally
+        {
+            // A failed send leaves the others running; wait for them before their buffers are reused.
+            for (int node = 0; node <= nodes; node++)
+            {
+                if (started[node])
+                {
+                    try
+                    {
+                        await sends[node];
+                    }
+                    catch
+                    {
+                        // The first failure is already being thrown; this wait only keeps the buffer alive.
+                    }
+                }
+            }
+
+            foreach (PooledFrame frame in frames)
+            {
+                if (frame.Buffer is not null)
+                {
+                    frame.Dispose();
+                }
+            }
+        }
+
+        return HasMoved(replies) ? await ResendMovedAsync(replies, commands, cancellationToken) : replies;
+    }
+
+    private static void Scatter(int[] scratch, int count, int node, IReadOnlyList<RespValue> values, RespValue[] replies)
+    {
+        int next = 0;
+
+        for (int index = 0; index < count; index++)
+        {
+            if (scratch[index] == node)
+            {
+                replies[index] = values[next++];
+            }
+        }
+    }
+
+    private static bool HasMoved(IReadOnlyList<RespValue> replies)
+    {
+        for (int index = 0; index < replies.Count; index++)
+        {
+            if (replies[index] is { Kind: RespKind.Error, Text: { } text } && text.StartsWith("MOVED ", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Sends each command that got a <c>MOVED</c> again, straight from the caller's arguments, to the node named.</summary>
+    private async Task<IReadOnlyList<RespValue>> ResendMovedAsync(
+        IReadOnlyList<RespValue> values,
+        IReadOnlyList<IReadOnlyList<string>> commands,
+        CancellationToken cancellationToken)
+    {
+        RespValue[] replies = values as RespValue[] ?? [.. values];
+
+        for (int index = 0; index < replies.Length; index++)
+        {
+            if (MovedTarget(replies[index]) is { } moved)
+            {
+                RuvioSocket owner = await FollowMovedAsync(moved, 0, cancellationToken);
+
+                replies[index] = await SendRoutedAsync(owner, commands[index], cancellationToken, redirects: 1);
+            }
+        }
+
+        return replies;
+    }
+
+    private ValueTask<RuvioSocket> NodeSocketAsync(ClusterTopology topology, int node, CancellationToken cancellationToken)
+    {
+        if (node == topology.Nodes.Count)
+        {
+            return TargetKeyAsync(null, cancellationToken);
+        }
+
+        if (topology.Sockets[node] is { IsBroken: false } cached)
+        {
+            return new ValueTask<RuvioSocket>(cached);
+        }
+
+        return OpenForNodeAsync(topology, node, cancellationToken);
+    }
+
+    /// <summary>The grouped path: split commands and transactions, one dictionary entry per connection.</summary>
+    private async Task<IReadOnlyList<RespValue>> ExecuteManyGroupedAsync(
+        IReadOnlyList<IReadOnlyList<string>> commands,
+        CancellationToken cancellationToken)
+    {
         if (_pinned is not null || _multiPending || HasTransactionCommand(commands))
         {
             RuvioSocket single = _pinned ?? await FirstKeyedTargetAsync(commands, cancellationToken);
@@ -338,7 +597,7 @@ internal sealed class ClusterRouter : IDisposable
             IReadOnlyList<string> command = commands[index];
             string name = ClusterKeys.Name(command);
 
-            if (Split.Contains(name) && SplitSpansSlots(name, command))
+            if (SplitNames.Contains(name) && SplitSpansSlots(name, command))
             {
                 IReadOnlyList<string> keys = ClusterKeys.Of(name, command);
                 List<SplitPart> parts = SplitParts(name, command, keys);
@@ -812,7 +1071,7 @@ internal sealed class ClusterRouter : IDisposable
     {
         for (int index = 0; index < commands.Count; index++)
         {
-            if (TransactionCommands.Contains(ClusterKeys.Name(commands[index])))
+            if (TransactionNames.Contains(ClusterKeys.Name(commands[index])))
             {
                 return true;
             }

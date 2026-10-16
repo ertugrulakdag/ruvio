@@ -4,6 +4,7 @@ Notable changes to the Python client `ruvio-client` on PyPI. New entries go unde
 
 ## Unreleased
 
+- Cluster routing is cheaper: the command name and first key are read with one match per frame, a pipeline is routed in one pass into reused per-node buffers, every node is written before any is read, and a pipeline for one node goes out unchanged. Cluster CPU per pipelined request fell 8-17%; see `docs/evidence/2026-10-16-client-cluster-routing.md`.
 - Fixed: with the optional `hiredis` parser installed, commands that answer `OK` (`set`, `select`, `auth`, `client_setname` and others) returned `False` instead of `True` when replies were not decoded (`decode_responses=False` or the `binary` view), because hiredis returns the reply as `b"OK"`.
 - **Behavior change:** the cluster client now follows up to 3 `-MOVED` redirects per command (was 1) before raising `MovedError`. A command's first `MOVED` to a known node updates only that slot; the whole slot map is re-read only when the named node is unknown or the same command gets a second `MOVED` (before, any second `MOVED` since the last reload re-read it). Transactions follow the same limit.
 - **Behavior change:** a cluster pipeline (not a transaction) containing `MGET`, `MSET`, `DEL`, `EXISTS`, `UNLINK` or `TOUCH` with keys in several slots is no longer refused with `CrossSlotError`: the command is split per slot like the plain command, and its place in the reply list holds the merged reply. A transaction must still use one slot.

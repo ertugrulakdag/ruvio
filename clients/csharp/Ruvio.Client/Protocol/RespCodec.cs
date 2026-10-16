@@ -123,6 +123,47 @@ internal static class RespCodec
         }
     }
 
+    /// <summary>
+    /// Encodes only the commands whose <paramref name="owner"/> entry equals <paramref name="node"/>,
+    /// in order, into one pooled frame; used to split a pipeline over several connections.
+    /// </summary>
+    internal static PooledFrame EncodeSelectedPooled(
+        IReadOnlyList<IReadOnlyList<string>> commands, int[] owner, int node)
+    {
+        int size = 0;
+
+        for (int index = 0; index < commands.Count; index++)
+        {
+            if (owner[index] == node)
+            {
+                size += MeasureCommand(commands[index]);
+            }
+        }
+
+        byte[] rented = ArrayPool<byte>.Shared.Rent(size);
+
+        try
+        {
+            Span<byte> destination = rented.AsSpan(0, size);
+            int cursor = 0;
+
+            for (int index = 0; index < commands.Count; index++)
+            {
+                if (owner[index] == node)
+                {
+                    cursor = WriteStrings(destination, cursor, commands[index]);
+                }
+            }
+
+            return new PooledFrame(rented, cursor);
+        }
+        catch
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+            throw;
+        }
+    }
+
     internal static byte[] EncodeMany(IReadOnlyList<IReadOnlyList<string>> commands)
     {
         using PooledFrame frame = EncodeManyPooled(commands);

@@ -41,6 +41,18 @@ export interface ConnectionOptions {
   readBufferSize?: number;
 }
 
+/** Receives a `-MOVED` error for a kept frame `buf[off..off+len)` together with its pending reply slot. */
+export type MovedHandler = (
+  e: RuvioError,
+  buf: Buffer,
+  off: number,
+  len: number,
+  tf: Tf | null,
+  fl: number,
+  res: (v: unknown) => void,
+  rej: (e: unknown) => void,
+) => void;
+
 /** Batch receiver: one slot per frame of a pipeline or transaction. */
 export interface BatchSink {
   set(index: number, value: unknown): void;
@@ -87,6 +99,15 @@ export class Connection extends EventEmitter {
   forceBinary = false;
   /** Database to restore on reconnect (tracks SELECT through the typed client). */
   db: number;
+  // Cluster routing keeps, per pending single command, where its frame sits in the write slab
+  // (slab bytes are never overwritten), so a `-MOVED` reply can re-send it without a copy.
+  private onMoved: MovedHandler | null = null;
+  private rFB: (Buffer | null)[] | null = null;
+  private rFO: Int32Array | null = null;
+  private rFN: Int32Array | null = null;
+  private lastBuf: Buffer | null = null;
+  private lastOff = 0;
+  private lastLen = 0;
 
   constructor(opts: ConnectionOptions) {
     super();
@@ -156,6 +177,38 @@ export class Connection extends EventEmitter {
     this.schedule();
   }
 
+  /** Turns on frame keeping for {@link trackKept}; `h` receives every `-MOVED` reply of such a command. */
+  keepFrames(h: MovedHandler): void {
+    this.onMoved = h;
+    this.rFB = new Array(this.mask + 1).fill(null);
+    this.rFO = new Int32Array(this.mask + 1);
+    this.rFN = new Int32Array(this.mask + 1);
+  }
+
+  /** Like {@link track}, for the frame just copied in by {@link writeRaw}: remembers where it sits. */
+  trackKept(tf: Tf | null, fl: number): Promise<any> {
+    const p = this.track(tf, fl);
+    if (!this.closed && this.rFB !== null) {
+      const i = (this.head + this.count - 1) & this.mask;
+      this.rFB[i] = this.lastBuf;
+      this.rFO![i] = this.lastOff;
+      this.rFN![i] = this.lastLen;
+    }
+    return p;
+  }
+
+  /** Registers `from..to` reply slots of a batch (their frames already written); slot `k` is `sink.set(k, ...)`. */
+  trackRange(sink: BatchSink, from: number, to: number, fls: Uint8Array | number[]): void {
+    if (this.closed) {
+      this.enc.pos = this.enc.frameStart = this.enc.start;
+      const err = new ConnectionError('ruvio: client is closed');
+      for (let i = from; i < to; i++) sink.set(i, err);
+      return;
+    }
+    for (let i = from; i < to; i++) this.enqueue(sink, i, null, fls[i]!);
+    this.schedule();
+  }
+
   /** Registers `n` reply slots for a batch (frames already encoded). */
   trackBatch(sink: BatchSink, fls: Uint8Array | number[], n: number): void {
     if (this.closed) {
@@ -188,6 +241,22 @@ export class Connection extends EventEmitter {
     e.endFrame();
   }
 
+  /** Copies `src[s..e)` (one or more whole frames) into the outgoing buffer. */
+  writeRaw(src: Uint8Array, s: number, e: number): void {
+    const enc = this.encoder();
+    const n = e - s;
+    enc.ensure(n);
+    const p = enc.pos;
+    if (n <= 64) for (let i = 0; i < n; i++) enc.buf[p + i] = src[s + i]!;
+    else enc.buf.set(src.subarray(s, e), p);
+    enc.pos = p + n;
+    enc.frameStart = enc.pos;
+    enc.partial = false;
+    this.lastBuf = enc.buf;
+    this.lastOff = p;
+    this.lastLen = n;
+  }
+
   enqueue(res: unknown, rej: unknown, tf: Tf | null, fl: number): void {
     if (this.count > this.mask) this.grow();
     const i = (this.head + this.count) & this.mask;
@@ -207,6 +276,18 @@ export class Connection extends EventEmitter {
       rej[k] = this.rRej[i];
       tf[k] = this.rTf[i];
       fl[k] = this.rFl[i]!;
+    }
+    if (this.rFB !== null) {
+      const fb = new Array(n).fill(null), fo = new Int32Array(n), fn = new Int32Array(n);
+      for (let k = 0; k < this.count; k++) {
+        const i = (this.head + k) & this.mask;
+        fb[k] = this.rFB[i];
+        fo[k] = this.rFO![i]!;
+        fn[k] = this.rFN![i]!;
+      }
+      this.rFB = fb;
+      this.rFO = fo;
+      this.rFN = fn;
     }
     this.rRes = res;
     this.rRej = rej;
@@ -351,6 +432,7 @@ export class Connection extends EventEmitter {
       const res = this.rRes[i];
       const rej = this.rRej[i];
       this.rRes[i] = this.rRej[i] = this.rTf[i] = null;
+      if (this.rFB !== null) this.rFB[i] = null;
       this.head = (i + 1) & this.mask;
       this.count--;
       if (typeof res === 'function') (rej as (e: unknown) => void)(err);
@@ -427,9 +509,19 @@ export class Connection extends EventEmitter {
     this.rTf[i] = null;
     this.head = (i + 1) & this.mask;
     this.count--;
+    let fb: Buffer | null = null;
+    if (this.rFB !== null) {
+      fb = this.rFB[i]!;
+      this.rFB[i] = null;
+    }
     if (typeof res === 'function') {
-      if (v instanceof RuvioError) (rej as (e: unknown) => void)(v);
-      else if (tf === null) (res as (x: unknown) => void)(v);
+      if (v instanceof RuvioError) {
+        if (fb !== null && v.code === 'MOVED') {
+          this.onMoved!(v, fb, this.rFO![i]!, this.rFN![i]!, tf, this.rFl[i]!, res as (x: unknown) => void, rej as (e: unknown) => void);
+          return;
+        }
+        (rej as (e: unknown) => void)(v);
+      } else if (tf === null) (res as (x: unknown) => void)(v);
       else {
         let out: unknown;
         try {

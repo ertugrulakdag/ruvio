@@ -234,11 +234,67 @@ def cluster_bench(saddr: str, caddr: str, seconds: float) -> None:
     asyncio.run(run())
 
 
+def cluster_cost(port: int, seconds: float = 4.0, warmup: float = 1.0) -> None:
+    """Plain vs cluster CPU per request, one client, GET/SET at P=1/16/64 (process CPU, not wall time)."""
+    import resource
+
+    tag = "{" + os.environ["BENCH_TAG"] + "}" if os.environ.get("BENCH_TAG") else ""  # one hash tag: routing on one node
+    keys = [f"{tag}key:{i}" for i in range(4096)]
+    val = "x" * 32
+
+    def run(kind: str, op: str, p: int) -> None:
+        r = ruvio.Ruvio("127.0.0.1", port, cluster=(kind == "cluster"))
+        r.connect()
+        pos = 0
+        n_keys = len(keys)
+
+        def step() -> int:
+            nonlocal pos
+            if pos + p > n_keys:
+                pos = 0
+            sl = keys[pos : pos + p]
+            pos += p
+            if p == 1:
+                r.get(sl[0]) if op == "GET" else r.set(sl[0], val)
+            else:
+                pl = r.pipeline()
+                if op == "GET":
+                    for k in sl:
+                        pl.get(k)
+                else:
+                    for k in sl:
+                        pl.set(k, val)
+                pl.execute()
+            return p
+
+        end = time.perf_counter() + warmup
+        while time.perf_counter() < end:
+            step()
+        ru0, t0, ops = resource.getrusage(resource.RUSAGE_SELF), time.perf_counter(), 0
+        end = t0 + seconds
+        while time.perf_counter() < end:
+            for _ in range(20):
+                ops += step()
+        t1, ru1 = time.perf_counter(), resource.getrusage(resource.RUSAGE_SELF)
+        r.close()
+        print(f"{kind} {op} P={p} ops/s={ops / (t1 - t0):.0f} user_ns/op={(ru1.ru_utime - ru0.ru_utime) * 1e9 / ops:.0f} "
+              f"sys_ns/op={(ru1.ru_stime - ru0.ru_stime) * 1e9 / ops:.0f}", flush=True)
+
+    for op in ("GET", "SET"):
+        for p in (1, 16, 64):
+            for kind in ("plain", "cluster"):
+                run(kind, op, p)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seconds", type=float, default=1.0)
     ap.add_argument("--redis-py", action="store_true")
+    ap.add_argument("--cluster-cost", type=int, metavar="PORT", help="plain vs cluster CPU per request against a per-shard server")
     a = ap.parse_args()
+    if a.cluster_cost:
+        cluster_cost(a.cluster_cost)
+        return
     print(f"python {sys.version.split()[0]}, hiredis available: {_resp.hiredis_available()}")
     parse_bench()
     typed_encode_bench()
