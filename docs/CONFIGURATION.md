@@ -600,6 +600,8 @@ keyless commands (`DBSIZE`, `KEYS`, `FLUSHALL`, `SCAN`) across every shard and
 lets `WAIT` cover every shard; in `per-shard` those stay per shard, as in Redis
 Cluster, and cluster clients fan them out themselves; a client that is not cluster-aware and
 talks to one port sees one shard's keys there, and its `FLUSHALL` clears that shard only.
+Its `WAIT` in `per-shard` covers the port's shard plus every shard its commands were
+forwarded to.
 Classic `PUBLISH` reaches subscribers on every shard in both modes.
 `advertised_host` (`RUVIO_ADVERTISE_HOST`, `--advertised-host`, default
 `127.0.0.1`) is the host the cluster replies name. `advertised_port` (`RUVIO_ADVERTISE_PORT`, `--advertised-port`) is the

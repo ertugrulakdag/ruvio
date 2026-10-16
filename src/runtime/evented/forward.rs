@@ -193,6 +193,18 @@ impl Fabric {
             .collect()
     }
 
+    /// The registered shards whose bit is set in `mask`.
+    pub(super) fn durability_of(&self, mask: u64) -> Vec<ShardDurability> {
+        self.durability
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .enumerate()
+            .filter(|(shard, _)| mask & (1 << shard) != 0)
+            .filter_map(|(_, durability)| durability.clone())
+            .collect()
+    }
+
     pub(super) fn shard_count(&self) -> usize {
         self.count
     }
@@ -453,6 +465,8 @@ pub(super) struct Forwarder {
     lanes: Vec<Lane>,
     marks: Vec<Mark>,
     next_token: u64,
+    /// Bit `dst` is set once a request went to shard `dst` (see `TxSession::forwarded_shards`).
+    touched: u64,
 }
 
 impl Forwarder {
@@ -466,7 +480,13 @@ impl Forwarder {
                 .collect(),
             marks: Vec::new(),
             next_token: 1,
+            touched: 0,
         }
+    }
+
+    /// The shards this connection has sent requests to so far.
+    pub(super) fn touched(&self) -> u64 {
+        self.touched
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -505,6 +525,7 @@ impl Forwarder {
             let token = self.next_token;
 
             self.next_token += 1;
+            self.touched |= 1 << dst;
             tokens.push((dst, token));
             forwarding.fabric.send(
                 forwarding.me,
@@ -690,6 +711,7 @@ impl Forwarder {
         let token = self.next_token;
 
         self.next_token += 1;
+        self.touched |= 1 << dst;
         forwarding.fabric.send(
             forwarding.me,
             dst,

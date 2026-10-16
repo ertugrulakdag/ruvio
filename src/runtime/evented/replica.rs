@@ -593,6 +593,7 @@ fn request_replica_resync(state: &ShardState) -> u64 {
 
 pub(super) async fn wait_for_durable_replicas(
     state: &ShardState,
+    forwarded_shards: u64,
     replicas: u64,
     timeout_ms: u64,
     shutdown: &ShutdownToken,
@@ -604,9 +605,19 @@ pub(super) async fn wait_for_durable_replicas(
     // In single-port mode a client's writes may sit on any shard: wait for each shard's
     // replicas to reach that shard's last sequence, and count the replicas all of them reached.
     // In per-shard mode a cluster client sends WAIT to the shard it wrote on, as with Redis
-    // Cluster, so only that shard's replicas count.
+    // Cluster, so that shard's replicas count, plus those of every shard this connection had
+    // commands forwarded to (a client that is not cluster-aware writes through one port).
     let shards = match state.forwarding.as_ref() {
         Some(forwarding) if state.single_port => forwarding.fabric.durability(),
+        Some(forwarding) if forwarded_shards != 0 => {
+            let mut shards = forwarding.fabric.durability_of(forwarded_shards & !(1 << forwarding.me));
+
+            shards.push(ShardDurability {
+                wal: Arc::clone(&state.persistence),
+                acks: Arc::clone(&state.durable_acks),
+            });
+            shards
+        }
         _ => vec![ShardDurability {
             wal: Arc::clone(&state.persistence),
             acks: Arc::clone(&state.durable_acks),

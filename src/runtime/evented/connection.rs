@@ -1052,14 +1052,19 @@ pub(super) async fn handle_client(
                             // shard ran it, so the auth, ACL and rate checks of `gate` and
                             // the pub/sub session rules decided first; its reply (an integer)
                             // says it ran.
+                            // Borrowed from the input, which stays put until the batch ends (a
+                            // message the parser had to own is cloned): `publish_everywhere` copies
+                            // it once, and only if another shard has room for it.
                             let publish = match (&command, state.forwarding.as_ref()) {
                                 (Command::Publish { channel, message }, Some(_)) => {
-                                    Some((channel.to_vec(), message.to_vec()))
+                                    Some((channel.clone(), message.clone()))
                                 }
                                 _ => None,
                             };
                             let reply_at = output.len();
 
+                            // Requests this connection sent to other shards so far (a WAIT settled them first).
+                            session.forwarded_shards |= forwarder.touched();
                             dispatch_command(
                                 &state,
                                 &mut output,
@@ -1664,8 +1669,14 @@ async fn dispatch_inner<'s>(
                     return Ok(());
                 }
 
-                let reached =
-                    wait_for_durable_replicas(state, *replicas, *timeout_ms, shutdown).await;
+                let reached = wait_for_durable_replicas(
+                    state,
+                    session.forwarded_shards,
+                    *replicas,
+                    *timeout_ms,
+                    shutdown,
+                )
+                .await;
 
                 write_response(output, Response::Integer(reached as i64))?;
 
@@ -2630,7 +2641,14 @@ pub(super) async fn finish_parking(
             replicas,
             timeout_ms,
         } => {
-            let reached = wait_for_durable_replicas(state, replicas, timeout_ms, shutdown).await;
+            let reached = wait_for_durable_replicas(
+                state,
+                session.forwarded_shards,
+                replicas,
+                timeout_ms,
+                shutdown,
+            )
+            .await;
 
             write_response(output, Response::Integer(reached as i64))
         }

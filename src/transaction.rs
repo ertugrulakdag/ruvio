@@ -30,6 +30,9 @@ pub struct TxSession {
     /// The last command parked and was then served by another client's write: `Some` with
     /// that write's last WAL record, if it wrote one (see `take_served_after_park`).
     served_after_park: Option<Option<u64>>,
+    /// Bit `n` is set once this connection had a command run on shard `n` of the process
+    /// (forwarded there in per-shard mode), so its `WAIT` also waits for that shard's replicas.
+    pub forwarded_shards: u64,
 }
 
 #[derive(Debug)]
@@ -58,6 +61,7 @@ impl TxSession {
             watch_slot: None,
             watched_count: 0,
             served_after_park: None,
+            forwarded_shards: 0,
         }
     }
 

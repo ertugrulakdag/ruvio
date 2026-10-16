@@ -1674,3 +1674,107 @@ fn evented_hot_keys_serve_database_zero_only() {
     stop.request();
     server.join().unwrap();
 }
+
+/// Per-shard mode: a client that is not cluster-aware writes a key of shard 1 through shard 0's
+/// port. Its WAIT must count shard 1's replicas too, not only those of the shard it is on.
+#[test]
+fn per_shard_wait_counts_the_shards_a_connection_forwarded_to() {
+    let directory = tempfile::tempdir().unwrap();
+    // Two consecutive data ports low enough for their cluster bus ports (data + 10000).
+    let base = (0..2000u16)
+        .map(|step| 20_000 + (std::process::id() as u16 % 997) * 17 + step * 7)
+        .find(|port| {
+            [*port, port + 1, port + 10_000, port + 10_001]
+                .iter()
+                .all(|candidate| std::net::TcpListener::bind(("127.0.0.1", *candidate)).is_ok())
+        })
+        .expect("free ports");
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let replication_port = probe.local_addr().unwrap().port();
+
+    drop(probe);
+    let address: std::net::SocketAddr = format!("127.0.0.1:{base}").parse().unwrap();
+    let mut config = AppConfig {
+        address: address.to_string(),
+        shards: 2,
+        port_mode: crate::config::PortMode::PerShard,
+        shutdown_grace: Duration::from_secs(1),
+        ..AppConfig::default()
+    };
+
+    config.persistence = PersistenceConfig {
+        profile: crate::DurabilityProfile::Everysec,
+        data_dir: directory.path().to_path_buf(),
+        sync_interval: Duration::from_millis(1),
+        ..PersistenceConfig::default()
+    };
+    config.replication.role = crate::config::ReplicationRole::Primary;
+    config.replication.listen = Some(format!("127.0.0.1:{replication_port}").parse().unwrap());
+    let shutdown = ShutdownToken::default();
+    let stop = shutdown.clone();
+    let server = thread::spawn(move || run(&config, shutdown).unwrap());
+
+    for _ in 0..200 {
+        if StdTcpStream::connect(address).is_ok() {
+            break;
+        }
+
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    // A replica of shard 0 only, which acknowledges everything that shard will ever write.
+    let mut replica = None;
+
+    for _ in 0..200 {
+        if let Ok(stream) = StdTcpStream::connect(("127.0.0.1", replication_port)) {
+            replica = Some(stream);
+            break;
+        }
+
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    let mut replica = replica.expect("replication listener");
+    let handshake = crate::replication::encode_handshake(&crate::replication::Handshake {
+        version: crate::replication::VERSION_RESUME,
+        shard_id: 0,
+        after_sequence: 0,
+        password: Vec::new(),
+        history: [0; crate::replication::HISTORY_LEN],
+        shard_count: 2,
+    })
+    .unwrap();
+
+    replica.write_all(&handshake).unwrap();
+    replica
+        .write_all(&crate::replication::encode_ack(1_000_000))
+        .unwrap();
+
+    // A connection on shard 0 that wrote only there: its replica counts.
+    let mut local = connect(address);
+
+    local
+        .write_all(&resp(&[&[b"SET", key_on_shard(0, "wait-local").as_bytes(), b"v"]]))
+        .unwrap();
+    read_exactly(&mut local, b"+OK\r\n");
+    local
+        .write_all(&resp(&[&[b"WAIT", b"1", b"300"]]))
+        .unwrap();
+    read_exactly(&mut local, b":1\r\n");
+
+    // The same port, a write forwarded to shard 1, which has no replica.
+    let mut forwarded = connect(address);
+
+    forwarded
+        .write_all(&resp(&[&[b"SET", key_on_shard(1, "wait-forwarded").as_bytes(), b"v"]]))
+        .unwrap();
+    read_exactly(&mut forwarded, b"+OK\r\n");
+    forwarded
+        .write_all(&resp(&[&[b"WAIT", b"1", b"300"]]))
+        .unwrap();
+    read_exactly(&mut forwarded, b":0\r\n");
+
+    drop(replica);
+    stop.request();
+    server.join().unwrap();
+}
