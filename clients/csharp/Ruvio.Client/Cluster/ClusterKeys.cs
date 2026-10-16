@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using Ruvio.Client.Cluster;
 
 namespace Ruvio.Client;
 
@@ -8,26 +9,6 @@ internal static class ClusterKeys
 {
     public const int SlotCount = 16384;
 
-    private static readonly HashSet<string> Keyless = new(StringComparer.Ordinal)
-    {
-        "ACL", "AUTH", "BGSAVE", "CHANGES", "CLIENT", "CLUSTER", "COMMAND", "CONFIG", "DBSIZE", "DISCARD",
-        "ECHO", "EXEC", "FLUSHALL", "FLUSHDB", "FUNCTION", "HELLO", "INFO", "JSON.FIND", "JSON.INDEX", "KEYS", "LASTSAVE", "LATENCY",
-        "MULTI", "PING", "PSUBSCRIBE", "PUBLISH", "PUNSUBSCRIBE", "QUIT", "RANDOMKEY", "READONLY",
-        "READWRITE", "RESET", "RUVIO", "SAVE", "SCAN", "SCRIPT", "SELECT", "SLOWLOG", "SUBSCRIBE", "SWAPDB",
-        "TIME", "UNSUBSCRIBE", "UNWATCH", "WAIT",
-    };
-
-    private static readonly HashSet<string> EveryArgument = new(StringComparer.Ordinal)
-    {
-        "DEL", "EXISTS", "MGET", "PFCOUNT", "PFMERGE", "SDIFF", "SDIFFSTORE", "SINTER", "SINTERSTORE",
-        "SSUBSCRIBE", "SUNION", "SUNIONSTORE", "SUNSUBSCRIBE", "TOUCH", "UNLINK", "WATCH",
-    };
-
-    private static readonly HashSet<string> TwoKeys = new(StringComparer.Ordinal)
-    {
-        "BLMOVE", "BRPOPLPUSH", "COPY", "LMOVE", "RENAME", "RENAMENX", "RPOPLPUSH", "SMOVE",
-    };
-
     public static string Name(IReadOnlyList<string> arguments)
     {
         return arguments[0].ToUpperInvariant();
@@ -35,69 +16,77 @@ internal static class ClusterKeys
 
     /// <summary>True when the only key is the first argument, the common case for routing.</summary>
     public static bool IsSingleKey(string name) =>
-        !Keyless.Contains(name) && !EveryArgument.Contains(name) && !TwoKeys.Contains(name) && name switch
-        {
-            "MSET" or "MSETNX" or "BLPOP" or "BRPOP" or "BZPOPMIN" or "BZPOPMAX"
-                or "EVAL" or "EVALSHA" or "EVAL_RO" or "EVALSHA_RO" or "FCALL" or "FCALL_RO"
-                or "LMPOP" or "BLMPOP" or "ZUNION" or "ZINTER" or "ZDIFF" or "ZUNIONSTORE" or "ZINTERSTORE" or "ZDIFFSTORE"
-                or "XREAD" or "XREADGROUP" or "OBJECT" or "MEMORY" or "BITOP" or "SINTERCARD" or "JSON.MGET" => false,
-            _ => true,
-        };
+        !CommandKeyRules.Rules.TryGetValue(name, out CommandKeyRules.Rule? rule)
+            || rule is { Kind: CommandKeyRules.Range, A: 1, B: 1 }
+            || name == "SPUBLISH";
 
     /// <summary>The first key of a command without building the key list; null for keyless commands.</summary>
     public static string? First(string name, IReadOnlyList<string> arguments)
     {
-        if (arguments.Count < 2 || Keyless.Contains(name))
+        int count = arguments.Count;
+
+        if (count < 2)
         {
             return null;
         }
 
-        if (IsSingleKey(name) || EveryArgument.Contains(name) || TwoKeys.Contains(name) || name is "MSET" or "MSETNX")
+        if (!CommandKeyRules.Rules.TryGetValue(name, out CommandKeyRules.Rule? rule))
         {
             return arguments[1];
         }
 
-        IReadOnlyList<string> keys = Of(name, arguments);
+        switch (rule.Kind)
+        {
+            case CommandKeyRules.Range:
+                return rule.A <= Last(rule, count) && rule.A < count ? arguments[rule.A] : null;
+            case CommandKeyRules.KeyAndStore:
+                return rule.A < count ? arguments[rule.A] : null;
+            case CommandKeyRules.None:
+                return IsShardChannel(name) ? arguments[1] : null;
+        }
+
+        IReadOnlyList<string> keys = Apply(name, rule, arguments);
 
         return keys.Count > 0 ? keys[0] : null;
     }
 
-    /// <summary>The keys of a command, in argument order. Empty for keyless commands.</summary>
+    /// <summary>
+    /// The keys of a command, in argument order, from the server's command table. Empty for
+    /// keyless commands; a command the table does not know is keyed by its first argument.
+    /// </summary>
     public static IReadOnlyList<string> Of(string name, IReadOnlyList<string> arguments)
     {
-        int count = arguments.Count;
-
-        if (count < 2 || Keyless.Contains(name))
+        if (arguments.Count < 2)
         {
             return [];
         }
 
-        if (EveryArgument.Contains(name))
+        if (!CommandKeyRules.Rules.TryGetValue(name, out CommandKeyRules.Rule? rule))
         {
-            return Slice(arguments, 1, count - 1);
+            return [arguments[1]];
         }
 
-        if (TwoKeys.Contains(name))
-        {
-            return Slice(arguments, 1, Math.Min(2, count - 1));
-        }
+        return Apply(name, rule, arguments);
+    }
 
-        return name switch
+    private static IReadOnlyList<string> Apply(string name, CommandKeyRules.Rule rule, IReadOnlyList<string> arguments)
+    {
+        return rule.Kind switch
         {
-            "MSET" or "MSETNX" => Every(arguments, 1, 2),
-            "BLPOP" or "BRPOP" or "BZPOPMIN" or "BZPOPMAX" => Slice(arguments, 1, count - 2),
-            "EVAL" or "EVALSHA" or "EVAL_RO" or "EVALSHA_RO" or "FCALL" or "FCALL_RO" => Counted(arguments, 2),
-            "ZUNION" or "ZINTER" or "ZDIFF" or "LMPOP" => Counted(arguments, 1),
-            "BLMPOP" => Counted(arguments, 2),
-            "ZUNIONSTORE" or "ZINTERSTORE" or "ZDIFFSTORE" => [arguments[1], .. Counted(arguments, 2)],
-            "XREAD" or "XREADGROUP" => Streams(arguments),
-            "OBJECT" or "MEMORY" => count > 2 ? [arguments[2]] : [],
-            "BITOP" => Slice(arguments, 2, count - 2),
-            "SINTERCARD" => Counted(arguments, 1),
-            "JSON.MGET" => Slice(arguments, 1, count - 2),
-            _ => [arguments[1]],
+            CommandKeyRules.Range => Every(arguments, rule.A, Last(rule, arguments.Count), rule.C),
+            CommandKeyRules.NumKeys => Counted(arguments, rule.A, rule.B),
+            CommandKeyRules.KeywordHalf => AfterKeyword(arguments, rule.Keywords[0]),
+            CommandKeyRules.KeyAndStore => KeyAndStores(arguments, rule.A, rule.Keywords),
+            // Sharded Pub/Sub has no keys but goes to the slot of its channels.
+            _ when name == "SPUBLISH" => [arguments[1]],
+            _ when IsShardChannel(name) => Slice(arguments, 1, arguments.Count - 1),
+            _ => [],
         };
     }
+
+    private static bool IsShardChannel(string name) => name is "SPUBLISH" or "SSUBSCRIBE" or "SUNSUBSCRIBE";
+
+    private static int Last(CommandKeyRules.Rule rule, int count) => rule.B < 0 ? count + rule.B : rule.B;
 
     /// <summary>CRC16-XMODEM of the key, or of the first non-empty <c>{tag}</c> in it.</summary>
     public static int Slot(string key)
@@ -195,34 +184,60 @@ internal static class ClusterKeys
         return keys;
     }
 
-    private static List<string> Every(IReadOnlyList<string> arguments, int start, int step)
+    private static string[] Every(IReadOnlyList<string> arguments, int first, int last, int step)
     {
-        var keys = new List<string>();
+        last = Math.Min(last, arguments.Count - 1);
 
-        for (int index = start; index < arguments.Count; index += step)
+        if (last < first)
         {
-            keys.Add(arguments[index]);
+            return [];
+        }
+
+        var keys = new string[(last - first) / step + 1];
+
+        for (int index = 0; index < keys.Length; index++)
+        {
+            keys[index] = arguments[first + index * step];
         }
 
         return keys;
     }
 
-    private static string[] Counted(IReadOnlyList<string> arguments, int countIndex)
+    private static string[] Counted(IReadOnlyList<string> arguments, int countIndex, int before)
     {
-        if (countIndex >= arguments.Count
-            || !int.TryParse(arguments[countIndex], NumberStyles.None, CultureInfo.InvariantCulture, out int count))
+        int count = arguments.Count;
+        int keys = countIndex < count
+            && ulong.TryParse(arguments[countIndex], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out ulong number)
+                ? (int)Math.Min(number, (ulong)(count - countIndex - 1))
+                : 0;
+
+        int head = before > 0 && before < count ? 1 : 0;
+
+        if (head + keys == 0)
         {
             return [];
         }
 
-        return Slice(arguments, countIndex + 1, Math.Min(count, arguments.Count - countIndex - 1));
+        var all = new string[head + keys];
+
+        if (head == 1)
+        {
+            all[0] = arguments[before];
+        }
+
+        for (int index = 0; index < keys; index++)
+        {
+            all[head + index] = arguments[countIndex + 1 + index];
+        }
+
+        return all;
     }
 
-    private static string[] Streams(IReadOnlyList<string> arguments)
+    private static string[] AfterKeyword(IReadOnlyList<string> arguments, string keyword)
     {
         for (int index = 1; index < arguments.Count; index++)
         {
-            if (arguments[index].Equals("STREAMS", StringComparison.OrdinalIgnoreCase))
+            if (arguments[index].Equals(keyword, StringComparison.OrdinalIgnoreCase))
             {
                 int rest = arguments.Count - index - 1;
 
@@ -231,5 +246,30 @@ internal static class ClusterKeys
         }
 
         return [];
+    }
+
+    private static List<string> KeyAndStores(IReadOnlyList<string> arguments, int first, string[] keywords)
+    {
+        var keys = new List<string>(2);
+
+        if (first < arguments.Count)
+        {
+            keys.Add(arguments[first]);
+        }
+
+        for (int index = first + 1; index + 1 < arguments.Count; index++)
+        {
+            foreach (string keyword in keywords)
+            {
+                if (arguments[index].Equals(keyword, StringComparison.OrdinalIgnoreCase))
+                {
+                    keys.Add(arguments[++index]);
+
+                    break;
+                }
+            }
+        }
+
+        return keys;
     }
 }

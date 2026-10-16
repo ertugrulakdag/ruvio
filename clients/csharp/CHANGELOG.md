@@ -4,6 +4,8 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 
 ## Unreleased
 
+- Cluster mode: each command's key positions now come from the server's command table (`Cluster/CommandKeyRules.g.cs`, generated from `clients/testdata/commands.json`) instead of hand-kept lists, and `KeyVectorTests` checks them against `clients/testdata/key_vectors.json`. This fixes routing for `GEORADIUS` and `GEORADIUSBYMEMBER` with `STORE`/`STOREDIST` (the destination key was missed), `GEOSEARCHSTORE` (only the destination was used, not the source), and `XGROUP` and `XINFO` (the subcommand was taken as the key instead of the stream name).
+
 ## 0.2.8 to 0.3.2
 
 These notes were recorded together and shipped over these versions.
