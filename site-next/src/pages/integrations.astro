@@ -1,0 +1,99 @@
+---
+// Framework integration packages, grouped by ecosystem. Everything comes from src/data/integrations.ts
+// (and the package list in scripts/integrations.mjs), so a new language adds data, not markup.
+import Page from "../layouts/Page.astro";
+import PageIntro from "../components/PageIntro.astro";
+import SideNav from "../components/content/SideNav.astro";
+import CodeBlock from "../components/content/CodeBlock.astro";
+import { ecosystems } from "../data/integrations";
+import { caseName } from "../data/use-cases";
+
+const packageCount = ecosystems.reduce((n, e) => n + e.packages.length, 0);
+const nav = ecosystems.flatMap((e) => [
+  { id: e.id, label: `${e.label} overview` },
+  ...e.packages.map((p) => ({ id: p.anchor, label: p.label })),
+]);
+---
+
+<Page
+  title="Integrations"
+  description="Framework packages that put Ruvio behind the APIs your app already uses: distributed cache, output caching, rate limiting, idempotency, locks and Data Protection."
+>
+  <PageIntro title="Integrations" kicker={`${packageCount} packages`}>
+    Packages that plug Ruvio into a framework's own abstractions, so an app gets distributed caching, rate limits,
+    idempotent endpoints or locks through the APIs it already uses. Each one is a thin layer over the commands on the{" "}
+    <a href="/use-cases/">use cases</a> page and has its own guide in the docs.
+  </PageIntro>
+
+  <div class="reading">
+    <div class="wrap">
+      <SideNav items={nav} label="Integrations">
+        <div class="stack">
+          {ecosystems.map((e) => (
+            <>
+              <section class="panel prose eco" id={e.id} aria-labelledby={`${e.id}-h`}>
+                <h2 id={`${e.id}-h`}>{e.label}<span class="lang">{e.language} · {e.registry}</span></h2>
+                <p>
+                  Start with <a href={e.base.docs}><code>{e.base.package}</code></a>: it {e.base.note} Add only the
+                  packages you need; each one is opt-in per endpoint or per registration.
+                </p>
+                <p class="refs">
+                  <span>Docs</span>
+                  <a href={e.docs}>{e.label} integrations overview</a>
+                </p>
+              </section>
+
+              {e.packages.map((p) => (
+                <article class="panel pkg" id={p.anchor} aria-labelledby={`${p.anchor}-h`}>
+                  <header class="pkg-head">
+                    <div>
+                      <h3 id={`${p.anchor}-h`}>{p.title}</h3>
+                      <p class="pkg-id"><code>{p.package}</code></p>
+                    </div>
+                    <p class="links">
+                      <a href={p.docs}>Guide</a>
+                      <a href={e.packageUrl(p.package)}>{e.registry}</a>
+                    </p>
+                  </header>
+                  <p class="summary">{p.summary}</p>
+                  <p class="refs">
+                    <span>Use cases</span>
+                    {p.useCases.map((id) => <a href={`/use-cases/#${id}`}>{caseName(id)}</a>)}
+                  </p>
+                  <div class="code">
+                    <CodeBlock lang={e.installLang} code={e.install(p.package)} />
+                    <CodeBlock lang={p.example.lang} code={p.example.code} title={e.exampleFile} />
+                  </div>
+                </article>
+              ))}
+            </>
+          ))}
+        </div>
+      </SideNav>
+    </div>
+  </div>
+</Page>
+
+<style>
+  .stack { display: grid; gap: 20px; }
+  .eco, .pkg { scroll-margin-top: 88px; }
+  .eco h2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin: 0; font-size: 28px; }
+  .lang { font-size: 14px; font-weight: 500; color: var(--mute); }
+  .pkg { display: grid; gap: 14px; }
+  .pkg-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: 8px 24px; }
+  .pkg h3 { margin: 0; font-size: 22px; line-height: 1.25; }
+  .pkg-id { margin: 4px 0 0; font-size: 14px; color: var(--mute); }
+  .pkg-id code { color: var(--c2); }
+  .links { display: flex; gap: 16px; margin: 4px 0 0; font-size: 14px; font-weight: 600; }
+  .links a::after { content: " →"; color: var(--mute); }
+  .summary { margin: 0; color: var(--ink-body); font-size: 16.5px; line-height: var(--leading); max-width: 72ch; }
+  .refs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin: 0; font-size: 14px; }
+  .refs span { color: var(--faint); }
+  .code { display: grid; gap: 12px; min-width: 0; }
+  .code :global(pre) { white-space: pre; overflow-x: auto; }
+  @media (max-width: 900px) {
+    .eco, .pkg { scroll-margin-top: 124px; }
+    .eco h2 { font-size: 24px; }
+    .pkg h3 { font-size: 20px; }
+  }
+</style>

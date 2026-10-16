@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { INTEGRATION_ECOSYSTEMS } from "./integrations.mjs";
 
 // Which repository files become docs pages, where they go, and how the sidebar groups them.
 // Read by scripts/sync-docs.mjs (to generate the pages and the landing page) and by
@@ -15,8 +16,8 @@ export function slugFor(src) {
     "docs/evidence/README.md": "evidence",
   };
   if (src in special) return special[src];
-  const client = CLIENT_PAGES.find((c) => c.src === src);
-  if (client) return client.slug;
+  const readme = README_PAGES.find((c) => c.src === src);
+  if (readme) return readme.slug;
   const m = src.match(/^docs\/(?:(evidence)\/)?([^/]+)\.md$/);
   if (!m) throw new Error(`No slug rule for ${src}`);
   const base = m[2].toLowerCase().replace(/_/g, "-");
@@ -41,6 +42,22 @@ export const CLIENT_PAGES = [
   { src: "clients/python/README.md", slug: "clients/python", title: "Python client", label: "Python", client: "python" },
   { src: "clients/node/README.md", slug: "clients/node", title: "Node.js client", label: "Node.js", client: "node" },
 ];
+
+export const INTEGRATION_PAGES = INTEGRATION_ECOSYSTEMS.flatMap((e) => [
+  { src: `${e.dir}/README.md`, slug: `integrations/${e.id}`, title: `${e.label} integrations`, label: "Overview", ecosystem: e.id },
+  ...e.packages.map((p) => ({
+    src: `${e.dir}/${p.package}/README.md`,
+    slug: `integrations/${e.id}/${p.slug}`,
+    title: p.title,
+    label: p.label,
+    package: p.package,
+    registry: e.registry,
+    ecosystem: e.id,
+  })),
+]);
+
+/** Every README that becomes a docs page: client libraries and integration packages. */
+export const README_PAGES = [...CLIENT_PAGES, ...INTEGRATION_PAGES];
 
 // The generated command reference has no single markdown source.
 export const COMMANDS = { generated: "commands", label: "Commands", title: "Commands" };
@@ -86,6 +103,13 @@ export const GROUPS = [
       ...CLIENT_PAGES.map((c) => ({ src: c.src, label: c.label })),
       { src: "docs/CLIENT_BEHAVIOR.md", label: "Client behavior" },
     ],
+  },
+  {
+    label: "Integrations",
+    items: INTEGRATION_ECOSYSTEMS.map((e) => ({
+      label: e.label,
+      items: INTEGRATION_PAGES.filter((p) => p.ecosystem === e.id).map((p) => ({ src: p.src, label: p.label })),
+    })),
   },
   {
     label: "Reference",

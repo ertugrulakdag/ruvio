@@ -18,6 +18,7 @@ export const mainNav: NavItem[] = [
   { label: "Use cases", href: "/use-cases/" },
   { label: "Benchmarks", href: "/benchmarks/" },
   { label: "Clients", href: "/docs/clients/" },
+  { label: "Integrations", href: "/integrations/" },
   { label: "Docs", href: "/docs/" },
 ];
 
@@ -39,6 +40,7 @@ export const footerNav: { title: string; items: NavItem[] }[] = [
       { label: "Configuration", href: "/docs/configuration/" },
       { label: "Commands", href: "/docs/commands/" },
       { label: "Clients", href: "/docs/clients/" },
+      { label: "Integrations", href: "/integrations/" },
     ],
   },
   {

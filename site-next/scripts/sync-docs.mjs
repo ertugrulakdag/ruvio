@@ -7,7 +7,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { COMMANDS, CLIENT_PAGES, EXCLUDED, REPO_ROOT, allGroups, slugFor } from "./docs-nav.mjs";
+import { COMMANDS, EXCLUDED, README_PAGES, REPO_ROOT, allGroups, slugFor } from "./docs-nav.mjs";
 
 const SITE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = path.join(SITE_ROOT, "src/content/docs/docs");
@@ -29,9 +29,9 @@ for (const f of readdirSync(path.join(REPO_ROOT, "docs"))) {
 for (const f of readdirSync(path.join(REPO_ROOT, "docs/evidence"))) {
   if (f.endsWith(".md")) pages.set(`docs/evidence/${f}`, { slug: slugFor(`docs/evidence/${f}`), kind: "doc" });
 }
-for (const c of CLIENT_PAGES) {
-  if (!existsSync(path.join(REPO_ROOT, c.src))) throw new Error(`Client README not found: ${c.src}`);
-  pages.set(c.src, { slug: c.slug, kind: "client", client: c });
+for (const c of README_PAGES) {
+  if (!existsSync(path.join(REPO_ROOT, c.src))) throw new Error(`README not found: ${c.src}`);
+  pages.set(c.src, { slug: c.slug, kind: "readme", readme: c });
 }
 
 const urlFor = (slug) => (slug ? `/docs/${slug}/` : "/docs/");
@@ -84,6 +84,8 @@ function escapeStrayTags(part) {
 /** Rewrites one link target found in `fromSrc`. */
 function rewriteTarget(target, fromSrc) {
   if (/^([a-z][a-z0-9+.-]*:|#|\/\/)/i.test(target)) return target;
+  // Already a docs URL (the title pass in rewriteLinks rewrote it); leave it alone.
+  if (/^\/docs\/(?:[^#]*\/)?(?:#.*)?$/.test(target)) return target;
   const hashAt = target.indexOf("#");
   const filePart = hashAt === -1 ? target : target.slice(0, hashAt);
   const anchor = hashAt === -1 ? "" : target.slice(hashAt);
@@ -207,7 +209,7 @@ function splitTitle(text) {
   return { title: null, body: text };
 }
 
-/** Removes a client README's centered logo, title, badges and link row (everything above the first `---`). */
+/** Removes a client or integration README's centered logo, title, badges and link row (everything above the first `---`). */
 function stripClientChrome(text) {
   if (!text.trimStart().startsWith("<p align=\"center\">")) return { body: text, tagline: "", registryUrl: "" };
   const lines = text.split("\n");
@@ -234,7 +236,9 @@ function frontmatter(fields, source) {
 }
 
 function write(slug, content) {
-  const file = path.join(OUT, slug ? `${slug === "clients" || slug === "evidence" ? `${slug}/index` : slug}.md` : "index.md");
+  // A slug with pages below it becomes that folder's index page.
+  const sectionIndex = [...pages.values()].some((p) => p.slug.startsWith(`${slug}/`));
+  const file = path.join(OUT, slug ? `${sectionIndex ? `${slug}/index` : slug}.md` : "index.md");
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, content);
 }
@@ -247,7 +251,7 @@ mkdirSync(OUT, { recursive: true });
 const meta = new Map(); // src -> { title, description, url }
 
 for (const [src, page] of pages) {
-  const title = page.kind === "client" ? page.client.title : splitTitle(readFileSync(path.join(REPO_ROOT, src), "utf8")).title;
+  const title = page.kind === "readme" ? page.readme.title : splitTitle(readFileSync(path.join(REPO_ROOT, src), "utf8")).title;
   if (title) titleByUrl.set(urlFor(page.slug), title);
 }
 
@@ -257,17 +261,19 @@ for (const [src, page] of pages) {
   let description;
   let lead = "";
 
-  if (page.kind === "client") {
+  if (page.kind === "readme") {
     const { body, tagline, registryUrl } = stripClientChrome(text);
     text = body;
-    title = page.client.title;
+    title = page.readme.title;
     description = tagline;
-    const info = siteClients.find((c) => c.slug === page.client.client);
+    // Integration pages name their package; client pages take it from src/config/site.ts.
+    const info = siteClients.find((c) => c.slug === page.readme.client);
+    const pkg = page.readme.package ?? (src.includes("AspNetCore") ? "Ruvio.Client.AspNetCore" : info?.package);
+    const registry = page.readme.registry ?? info?.registry;
     const dir = path.posix.dirname(src);
-    if (info && registryUrl) {
-      const pkg = src.includes("AspNetCore") ? "Ruvio.Client.AspNetCore" : info.package;
+    if (pkg && registry && registryUrl) {
       lead =
-        `Package: [\`${pkg}\`](${registryUrl}) on ${info.registry} · ` +
+        `Package: [\`${pkg}\`](${registryUrl}) on ${registry} · ` +
         `[Source on GitHub](${GITHUB}/tree/${BRANCH}/${dir})\n\n`;
     }
   } else {
