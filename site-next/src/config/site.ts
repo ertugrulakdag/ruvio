@@ -48,6 +48,7 @@ export const footerNav: { title: string; items: NavItem[] }[] = [
       { label: "Discussions", href: site.discussions },
       { label: "Releases", href: site.releases },
       { label: "Docker Hub", href: site.dockerHub },
+      { label: "Contact", href: "/contact/" },
     ],
   },
 ];
