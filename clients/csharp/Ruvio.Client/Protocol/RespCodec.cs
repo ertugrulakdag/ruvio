@@ -665,6 +665,7 @@ internal sealed class RespReader : IDisposable
             }
         }
 
+        // Accumulated as a negative number: long.MinValue has no positive counterpart.
         long accumulator = 0;
 
         for (; index < text.Length; index++)
@@ -678,7 +679,7 @@ internal sealed class RespReader : IDisposable
 
             try
             {
-                accumulator = checked(accumulator * 10 + digit);
+                accumulator = checked(accumulator * 10 - digit);
             }
 
             catch (OverflowException)
@@ -689,7 +690,7 @@ internal sealed class RespReader : IDisposable
 
         try
         {
-            value = negative ? checked(-accumulator) : accumulator;
+            value = negative ? accumulator : checked(-accumulator);
         }
 
         catch (OverflowException)

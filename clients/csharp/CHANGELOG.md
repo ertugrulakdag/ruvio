@@ -4,6 +4,7 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 
 ## Unreleased
 
+- Fixed: an integer reply of `-9223372036854775808` (`long.MinValue`, for example from `INCRBY` or `DECRBY`) was rejected as "bad RESP integer" and closed the connection; it is now read as `long.MinValue`.
 - Behaviour change: `RENAME` and `RENAMENX` whose keys hash to different slots now fail with a `CROSSSLOT` `RuvioException` before anything is sent, instead of being emulated with `TYPE`, a copy, `PEXPIRE` and `DEL`. Keep both keys in one slot with a hash tag.
 - Behaviour change: any other command whose keys span slots and that is not split (`COPY`, `LMOVE`, `SMOVE`, `SINTERSTORE`, `BITOP`, `EVAL`, ...) now fails with `CROSSSLOT` before it is sent. Before, it went to the first key's shard and the server answered.
 - Behaviour change: in a pipeline (not a transaction), `MGET`, `MSET`, `DEL`, `EXISTS`, `UNLINK` and `TOUCH` with keys in several slots are split per slot like the plain command, and the merged reply sits at that command's index. Before, the whole command went to the first key's shard.
