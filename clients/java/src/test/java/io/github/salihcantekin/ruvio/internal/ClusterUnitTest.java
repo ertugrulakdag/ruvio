@@ -321,19 +321,59 @@ class ClusterUnitTest {
     }
 
     @Test
-    void aSecondMovedIsNotFollowed() throws Exception {
+    void movedOnDifferentCommandsPatchesSlotsWithoutReloading() throws Exception {
+        Pair p = new Pair();
+        RuvioClient<String, String> c = p.client();
+        String k1 = p.key(true, 0);
+        String k2 = p.key(true, 1);
+        // Every slot moved from A to B; each command sees one MOVED for its own slot.
+        p.a.end = -1;
+        p.b.start = 0;
+        p.b.store.put(k1, "one");
+        p.b.store.put(k2, "two");
+        assertEquals("one", c.get(k1));
+        assertEquals("two", c.get(k2));
+        assertEquals(1, p.a.commands("CLUSTER").size(), "known node, first MOVED per command: no reload");
+        assertEquals(0, p.b.commands("CLUSTER").size());
+        assertEquals(2, p.a.commands("GET").size());
+        assertEquals(2, p.b.commands("GET").size());
+    }
+
+    @Test
+    void followsUpToThreeMovedAndReloadsFromTheSecond() throws Exception {
         Pair p = new Pair();
         RuvioClient<String, String> c = p.client();
         String k = p.key(true, 0);
         int slot = HashSlot.of(k.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        // Both nodes claim the other owns the slot: A -> B -> A would loop forever.
+        p.a.store.put(k, "settled");
+        p.b.end = slot - 1; // B sends it back to A
+        p.b.start = 0;
+        // A sends the first two GETs to B, then answers: A -> B -> A -> A.
+        java.util.concurrent.atomic.AtomicInteger gets = new java.util.concurrent.atomic.AtomicInteger();
+        p.a.node.handler = a -> a.get(0).equalsIgnoreCase("GET") && gets.incrementAndGet() <= 2
+                ? FakeNode.error("MOVED " + slot + " " + p.b.node.address()) : p.a.handle(a);
+        assertEquals("settled", c.get(k));
+        assertEquals(3, p.a.commands("GET").size());
+        assertEquals(1, p.b.commands("GET").size());
+        // Initial load, then one reload for the second and one for the third MOVED of this command.
+        assertEquals(3, p.a.commands("CLUSTER").size());
+    }
+
+    @Test
+    void aFourthMovedIsNotFollowed() throws Exception {
+        Pair p = new Pair();
+        RuvioClient<String, String> c = p.client();
+        String k = p.key(true, 0);
+        int slot = HashSlot.of(k.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        // Both nodes claim the other owns the slot: A -> B -> A -> A would loop forever.
         p.a.start = slot + 1;
         p.b.end = slot - 1;
         p.b.start = 0;
         RuvioServerException e = assertThrows(RuvioServerException.class, () -> c.get(k));
         assertEquals("MOVED", e.code());
-        assertEquals(1, p.a.commands("GET").size());
-        assertEquals(1, p.b.commands("GET").size(), "exactly one retry");
+        assertEquals(4, p.a.commands("GET").size() + p.b.commands("GET").size(), "sent once plus three redirects");
+        assertEquals(1, p.b.commands("GET").size(), "the reloaded table points back at A");
+        assertEquals(3, p.a.commands("CLUSTER").size(), "reloads on the second and third MOVED");
     }
 
     @Test

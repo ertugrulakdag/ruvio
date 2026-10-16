@@ -205,21 +205,26 @@ class ClusterLiveTest {
         r.forceSlot(slot, other);
         assertEquals("v0", c.get(k));
         assertEquals(right, r.owner(slot), "table patched by MOVED");
-        // Break every slot: many MOVEDs trigger a CLUSTER SLOTS refresh.
+        // Break every slot: each read follows one MOVED for its own slot, which patches that slot only.
+        ClusterNode[] real = new ClusterNode[ClusterRouter.SLOTS];
         for (int s = 0; s < ClusterRouter.SLOTS; s++) {
+            real[s] = r.owner(s);
             r.forceSlot(s, wrong);
         }
+        Set<Integer> used = new HashSet<>();
         for (int i = 0; i < 100; i++) {
             assertEquals("v" + i, c.get("mv:" + i));
+            int s = RuvioClient.hashSlot("mv:" + i);
+            used.add(s);
+            assertEquals(real[s], r.owner(s), "slot patched by MOVED");
         }
-        for (int i = 0; i < 100; i++) {
-            assertEquals(r.owner(RuvioClient.hashSlot("mv:" + i)), c.router().owner(RuvioClient.hashSlot("mv:" + i)));
+        int untouched = -1;
+        for (int s = 0; s < ClusterRouter.SLOTS && untouched < 0; s++) {
+            if (real[s] != wrong && !used.contains(s)) {
+                untouched = s;
+            }
         }
-        Set<ClusterNode> owners = new HashSet<>();
-        for (int s = 0; s < ClusterRouter.SLOTS; s++) {
-            owners.add(r.owner(s));
-        }
-        assertEquals(3, owners.size(), "table refreshed from CLUSTER SLOTS");
+        assertEquals(wrong, r.owner(untouched), "one MOVED per command does not reload the whole table");
         // Stale split command: MGET over a broken table still returns the right values in order.
         for (int s = 0; s < ClusterRouter.SLOTS; s++) {
             r.forceSlot(s, wrong);

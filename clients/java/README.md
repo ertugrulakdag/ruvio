@@ -147,10 +147,10 @@ The split is per slot, not per node, because this server (like Redis) refuses a 
 keys are in different slots even when one shard owns them all. A big split `MGET` is therefore many small
 pipelined commands; use `{hashtag}` keys to keep related keys in one slot.
 
-* **MOVED**: the slot is patched in the table and the command is retried ONCE on the node named in
-  the reply. When the node is unknown, or a second MOVED arrives before the last refresh, the table is
-  re-read with `CLUSTER SLOTS`. A second MOVED is returned to the caller (no redirect loops). The retry runs
-  on a small background thread, never on a connection reader thread. The router keeps a copy of each
+* **MOVED**: that one slot is pointed at the node named in the reply and the command is sent there; a command
+  follows at most 3 MOVED redirects, and the 4th MOVED is returned to the caller (no redirect loops). The whole
+  table is re-read with `CLUSTER SLOTS` only when the named node is unknown, or on the second MOVED for the same
+  command. The retry runs on a small background thread, never on a connection reader thread. The router keeps a copy of each
   command's frame for this (about 100 bytes allocated per routed command: the request object and the copy).
 * **Connection loss**: only commands in flight on that node fail (`RuvioConnectionException`); nothing is
   replayed, the other nodes keep working, and the node's connection reopens with its next command.
@@ -176,13 +176,13 @@ pipelined commands; use `{hashtag}` keys to keep related keys in one slot.
 
 ```
 mvn -q test                                              # unit tests; live tests are skipped
-RUVIO_TEST_ADDR=127.0.0.1:17104 mvn -q test              # all (59 tests); uses logical DB 9 (and 10, 11, 0 for a few) with FLUSHDB
+RUVIO_TEST_ADDR=127.0.0.1:17104 mvn -q test              # all; uses logical DB 9 (and 10, 11, 0 for a few) with FLUSHDB
 RUVIO_TEST_ADDR=127.0.0.1:17104 mvn -q test -Dtest=BenchTest -DexcludedGroups=none   # few-second benchmark
-RUVIO_CLUSTER_ADDR=127.0.0.1:17320 RUVIO_TEST_ADDR=127.0.0.1:17323 mvn -q test       # + cluster live tests (91 tests)
+RUVIO_CLUSTER_ADDR=127.0.0.1:17320 RUVIO_TEST_ADDR=127.0.0.1:17323 mvn -q test       # + cluster live tests
 RUVIO_CLUSTER_ADDR=127.0.0.1:17320 RUVIO_TEST_ADDR=127.0.0.1:17323 mvn -q test -Dtest=ClusterBenchTest -DexcludedGroups=none
 ```
 
-Cluster tests: `ClusterUnitTest` (slot table, hashtags, key extraction, split/reassembly, MOVED once, no
+Cluster tests: `ClusterUnitTest` (slot table, hashtags, key extraction, split/reassembly, MOVED (up to 3, reloads), no
 replay after a drop, pipelines, transactions, standalone fallback; scripted fake servers, always runs),
 `ClusterLiveTest` (needs `RUVIO_CLUSTER_ADDR` = any shard of a 3-shard `port_mode = "per-shard"` server:
 spread over all shards, `CLUSTER KEYSLOT` agreement, cross-slot MGET/MSET/DEL order, pipeline order, forced
