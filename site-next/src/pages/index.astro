@@ -1,0 +1,59 @@
+---
+import Base from "../layouts/Base.astro";
+import data from "../../../site/data/mac-2026-10-14.json";
+
+const rows = data.rows.filter((r) => r.redis > 0 && r.ruvio > 0).map((r) => ({ label: r.label.replace(/ \(.*\)$/, ""), ratio: r.ruvio / r.redis }));
+const atOrAbove = rows.filter((r) => r.ratio >= 0.97).length;
+const picks = ["SET", "GET", "HSET", "MSET", "SETEX", "ZADD", "LPUSH", "INCR", "GEOSEARCH", "SADD"]
+  .map((p) => rows.find((r) => r.label.toUpperCase().startsWith(p))).filter(Boolean);
+const max = Math.max(...picks.map((p) => p.ratio), 1.2);
+const jobs = [
+  ["LEASE", "A token for one key, fenced against stale holders."],
+  ["SEMAPHORE", "At most N holders; a crashed worker frees its slot by TTL."],
+  ["LIMIT", "Fixed-window rate limit in one command."],
+  ["TAKE · INCRBY MAX", "Stock and capacity counters that never oversell."],
+  ["IDEM · ONCE", "Replay the stored answer of a retried request."],
+  ["XADD DELAY", "Delayed jobs on the streams you already use."],
+];
+---
+<Base title="Ruvio — one RESP process, the shard that owns the key does the work" description="A RESP server where leases, semaphores, limits, idempotency and delayed jobs finish in one call on the shard that owns the key.">
+  <main>
+    <div class="hero"><div class="wrap">
+      <p class="kicker">One process · RESP · shared nothing</p>
+      <h1>The shard that owns the key <em>does the work.</em></h1>
+      <p class="lede">Lease, semaphore, limit, once, idempotent reserve and delayed delivery stay in one process, on one shard. Any Redis client can connect.</p>
+      <div class="btns"><a class="btn" href="#start">Run a node</a><a class="btn quiet" href="#jobs">See the jobs</a></div>
+    </div></div>
+
+    <section id="jobs"><div class="wrap">
+      <h2 class="reveal">Coordination jobs, built in</h2>
+      <p class="sub reveal">No extra service and no script for these. Each runs on the shard that owns the key.</p>
+      <div class="grid">
+        {jobs.map(([t, d]) => (<div class="card reveal"><h3><code>{t}</code></h3><p>{d}</p></div>))}
+      </div>
+    </div></section>
+
+    <section id="speed"><div class="wrap">
+      <h2 class="reveal">Measured against Redis {data.redis_version.match(/v=([\d.]+)/)?.[1]}</h2>
+      <p class="sub reveal">{data.host.cpu}, release build, {data.config.clients} clients, pipeline {data.config.pipeline}, median of {data.config.rounds} rounds, {data.date}. Numbers come straight from the repository's raw sample file.</p>
+      <div class="stats reveal">
+        <div class="stat"><b>{atOrAbove}/{rows.length}</b><span>commands at or above 0.97× Redis</span></div>
+        <div class="stat"><b>{(Math.exp(rows.reduce((a, r) => a + Math.log(r.ratio), 0) / rows.length)).toFixed(2)}×</b><span>geometric mean of Ruvio ÷ Redis</span></div>
+      </div>
+      <div class="chart reveal">
+        {picks.map((p) => (
+          <div class="row"><span class="lab">{p.label}</span>
+            <span class="track"><span class="bar" style={`width:${(p.ratio / max) * 100}%`}></span><span class="mark" style={`left:${(1 / max) * 100}%`}></span></span>
+            <b>{p.ratio.toFixed(2)}×</b></div>
+        ))}
+        <p class="note">Line = Redis (1.00×). Mac results do not predict x86; see the full test pages.</p>
+      </div>
+    </div></section>
+
+    <section id="start"><div class="wrap">
+      <h2 class="reveal">Start in a minute</h2>
+      <pre class="reveal">docker run --rm -p 6379:6379 salihcantekin/ruvio:latest
+redis-cli PING</pre>
+    </div></section>
+  </main>
+</Base>
