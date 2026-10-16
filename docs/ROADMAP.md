@@ -5,22 +5,25 @@ store: memory-first for low latency, with configurable on-disk durability and a
 clear recovery story. Redis protocol compatibility is a means to ecosystem
 compatibility; identical internals are not a goal.
 
-This document is the canonical product backlog. Items are ordered by dependency
-and risk, not by implementation convenience.
+This document lists the open work. Finished work is in the changelogs
+([server](../CHANGELOG.md) and each package's `CHANGELOG.md`) and in
+[COMPATIBILITY](COMPATIBILITY.md); the roadmap as it stood with its finished
+items is in git history (`git show e6eb171:docs/ROADMAP.md`). A finished item
+leaves this file in the change that finishes it, with its acceptance tests and
+a note on whether it changes wire, persistence, or operational compatibility.
 
 Every change follows [Performance and memory](PERFORMANCE.md). A change that
 slows a command or raises RSS for the same data does not land.
 
+## Priorities
+
+- `P0` required before a production preview
+- `P1` required before a stable standalone release
+- `P2` required for a production cluster
+- `P3` later work that does not gate standalone or cluster
+
 ## Opt-in document and search features
 
-- [x] **Native JSON foundation.** `JSON.GET`, `JSON.SET`, `JSON.DEL`, and
-  RFC 7396 `JSON.MERGE` support root/simple paths as a distinct value type.
-  Simple path reads scan without materializing unrelated fields, and existing
-  path writes splice a new compact value without building the whole JSON tree;
-  each write still records one atomic full-document WAL mutation. Missing-field
-  writes and root merges may rebuild the tree. No index work runs for non-JSON
-  keys. Snapshots, TTL, eviction, routing, and ACL use existing key behavior. See
-  [the compatibility contract](COMPATIBILITY.md#native-json-ruvio-extension).
 - [ ] **Hybrid large-document JSON representation, conditional on measured gains.**
   Keep the compact bytes for small documents and non-JSON keys unchanged. An
   isolated October 2026 prototype compared the existing compact path code with
@@ -129,193 +132,10 @@ slows a command or raises RSS for the same data does not land.
   than scanning all documents or automatically indexing every string.
   Specify tokenization and consistency before adding commands.
 
-## Immediate — first-party client APIs
-
-- [x] **P1 — Single-key overloads for multi-key commands.**
-  Redis allows `DEL key` and `BLPOP key timeout` without wrapping the key in a
-  collection. First-party clients must do the same. Multi-key forms stay for
-  `DEL a b` and multi-list blocking pops.
-  - C# `DeleteAsync(string)` (list form remains), `PopListLeftBlockingAsync` /
-    `PopListRightBlockingAsync` one-key overloads. `UnlinkAsync` / `ExistsAsync`
-    / `WatchAsync` / `GetManyAsync` already take `params`.
-  - Rust `del_key`, `unlink_key`, `exists_key`, `watch_key`, `blpop_key`,
-    `brpop_key` next to the existing `&[&str]` methods.
-  Shipped in `Ruvio.Client` / `Ruvio.Client.AspNetCore` 0.2.4 and `ruvio-client`
-  0.2.2.
-- [x] **P1 — Client-owned reconnect.** A dropped command or shard socket fails
-  the in-flight command and is opened again before the next one. Pub/Sub
-  channels are subscribed again. Retry policy and lost/restored events are
-  on both SDKs. ASP.NET Core binds the policy and can attach the events.
-  Shipped in `Ruvio.Client` / `Ruvio.Client.AspNetCore` 0.2.6 and `ruvio-client`
-  0.2.4.
-
-## Status Legend
-
-- `[x]` implemented and covered by the current test surface
-- `[ ]` TODO
-- `P0` required before a production preview
-- `P1` required before a stable standalone release
-- `P2` required for a production cluster
-- `P3` later work that does not gate standalone or cluster
-
-## Current Baseline
-
-- [x] Single-owner, lock-free `KvShard`
-- [x] Evented Tokio runtime on Linux, macOS and Windows with one owner executor per shard; the portable-hop and Glommio adapters were removed
-- [x] Borrowed RESP2 parsing for `PING`, `GET`, `SET`, `INCR`, and `DECR`
-- [x] Redis-compatible hash slots, hash tags, `MOVED`, and `CROSSSLOT`
-- [x] Native bytes, list, set, sorted-set, and Bloom-filter values
-- [x] Bounded RESP argument, bulk-value, and connection-buffer sizes
-- [x] Cross-platform CI and Linux cluster smoke tests
-- [x] Development benchmarks against Redis
-
-## Product Decisions to Lock First
-
-- [x] **P0 — Define supported deployment modes.**
-  - Standalone, single process with one or more local shards.
-  - Clustered, multiple processes with explicit membership.
-  - Document which mode is supported at every release stage.
-- [x] **P0 — Define durability modes and guarantees.**
-  - `memory`: no recovery guarantee.
-  - `snapshot`: recover the latest completed periodic checkpoint.
-  - `everysec`: acknowledge after append; synchronize dirty logs at least once
-    per second during normal operation.
-  - `always`: acknowledge only after the relevant record is durable.
-  - Define exactly what can be lost after process, OS, or power failure.
-- [x] **P0 — Write down the format and versioning rules.**
-  - Persistence format and compatibility policy.
-  - Snapshot algorithm and consistency boundary.
-  - Per-shard log ordering and global checkpoint semantics.
-  - Clock and expiration semantics across restart.
-- [x] **P0 — Establish a compatibility contract.**
-  - Publish the supported Redis protocol version and command subset.
-  - Separate intentional incompatibilities from bugs.
-  - Do not claim Redis Cluster compatibility until its required semantics exist.
-
-Contract:
-
-- [Redis Compatibility Contract](COMPATIBILITY.md)
-
-## Milestone 0 — Performance-Safe Foundations
-
-This milestone prevents persistence and command growth from hardening prototype
-ownership and allocation patterns. macOS/Docker measurements are acceptable for
-functional tests and same-machine regression comparisons. Bare-metal Linux
-profiling remains a release gate and is not replaced by Docker numbers.
-
-- [x] **P0 — Add a canonical mutation boundary with
-  validate-record-apply ordering.**
-  - Sink failure must leave shard state unchanged.
-  - WAL and replication consume validated mutations, not RESP frames.
-  - Increment records the resulting integer state, not arithmetic to rerun.
-- [x] **P0 — Move every command to a borrow-first command representation.**
-  - Linux fallback parsing borrows payloads and allocates only argument
-    descriptors.
-  - Portable commands use the same representation with owned payloads because
-    they cross the shard channel.
-  - Copy only data that becomes shard-owned.
-- [x] **P0 — Encode reads directly from shard storage into reusable response
-  buffers.**
-  - Remove owned `GET` and collection-response copies from fallback execution.
-  - Preserve batched pipeline writes.
-- [x] **P0 — Replace runtime-only expiration metadata with a persistable time
-  model and injectable clock.**
-- [x] **P0 — Add per-mutation memory deltas and shard-local memory accounting.**
-- [x] **P0 — Keep the storage layout replaceable without dynamic dispatch in
-  the hot path.**
-- [x] **P0 — Add repeatable Mac/Docker regression workloads with stored
-  environment metadata and no cross-machine performance claims.**
-
-## Milestone 1 — Safe Standalone Core
-
-### Protocol and Command Safety
-
-- [x] **P0 — Add configurable maximum key, value, command, pipeline, and
-  connection-buffer sizes.**
-- [x] **P0 — Enforce limits consistently in the hot and fallback parsers.**
-- [x] **P0 — Add per-connection idle, read, and write timeouts.**
-- [x] **P0 — Add global and per-IP connection limits.**
-- [x] **P0 — Add request admission control and explicit overload responses.**
-- [x] **P0 — Add output-buffer limits for slow clients.**
-- [x] **P0 — Add graceful shutdown: stop accepting, drain within a deadline,
-  flush durable state, and close listeners.**
-- [x] **P0 — Make malformed-frame errors deterministic without panics or
-  unbounded allocations.**
-- [x] **P1 — Add RESP3 negotiation and responses where they materially improve
-  client compatibility.** `HELLO 2`/`HELLO 3` negotiate per connection. RESP3
-  uses null, bool, double, map, and set replies. `HELLO AUTH`/`SETNAME` and
-  `CLIENT GETNAME`/`SETNAME`/`TRACKING ON|OFF` are in. Tracking is shard-local
-  `GET`/`MGET` and one `invalidate` push. Attributes stay unsupported. RESP2
-  bytes are unchanged.
-
-### Configuration and Operations
-
-- [x] **P0 — Replace environment-only configuration with a typed configuration
-  layer supporting file, environment, and CLI overrides.**
-- [x] **P0 — Validate incompatible settings before opening sockets or files.**
-- [x] **P0 — Add structured logging with levels and connection/shard context.**
-- [x] **P0 — Expose health, readiness, build version, backend, and durability
-  state.**
-- [x] **P0 — Expose shard-local metrics on the evented runtime.**
-- [x] **P1 — Export metrics in a standard scrape format without adding
-  cross-core contention to the hot path.**
-  `INFO prometheus` and optional per-shard `/metrics` use shard-local
-  counters. Scrapes are not aggregated in-process.
-- [x] **P1 — Add configuration introspection with secret redaction.**
-  `CONFIG GET` returns the effective settings, supports `*`/`?` globs, and
-  never emits `requirepass` in the clear.
-
-### Testing Foundation
-
-- [x] **P0 — Fuzz RESP hot and fallback parsers, including arbitrary frame
-  truncation and oversized declarations.**
-- [x] **P0 — Add property tests for every data type and wrong-type transition.**
-- [x] **P0 — Add differential command tests against Redis for the supported
-  command subset.**
-- [x] **P0 — Run protocol and storage conformance tests on the evented
-  runtime.** The earlier portable/Glommio comparison is historical; both
-  adapters were removed.
-- [x] **P0 — Add loom or equivalent concurrency-model tests around queues,
-  shutdown, and durability handoff boundaries.**
-- [x] **P1 — Add long-running soak tests with churn, pipelines, reconnects, and
-  slow clients.**
-  `scripts/soak.py --seconds N` repeats that mix against a running server.
-  The 24-hour hardware gate stays open.
-- [x] **P1 — Add sanitizer and Miri jobs where supported.**
-  Linux nightly `asan` and `miri` CI jobs. Miri covers the unsafe-backed tables and the protocol units
-  (`--no-default-features` drops mimalloc); persistence, sockets, and Lua FFI
-  stay out of scope. Local: `scripts/run_sanitizers.sh`.
-
 ## Milestone 2 — Persistence and Recovery
-
-Persistence must preserve the shared-nothing model. Each shard owns its mutation
-order and durability stream; background workers may perform I/O, but they must
-not mutate shard state or reorder acknowledged writes.
 
 ### Durable Log
 
-- [x] **P0 — Define a versioned binary write-ahead log (WAL) record format.**
-  - Magic/version, shard ID, monotonic sequence number, operation, payload
-    lengths, and checksum.
-  - Binary-safe encoding for every value type and mutation.
-  - Forward-compatible record framing and explicit unsupported-version errors.
-- [x] **P0 — Implement per-shard WAL append in mutation order.**
-- [x] **P0 — Implement `memory`, `everysec`, and `always` durability policies.**
-- [x] **P0 — Ensure replies obey the selected acknowledgement boundary.**
-- [x] **P0 — Detect and safely truncate a torn or partial final WAL record.**
-- [x] **P0 — Reject checksum corruption before applying the affected record.**
-- [x] **P0 — Recover all supported data types and metadata by replaying WAL.**
-- [x] **P0 — Restore expiration using absolute wall-clock deadlines while
-  guarding against clock anomalies.**
-- [x] **P0 — Make WAL directory, segment size, sync policy, and disk-full
-  behavior configurable.**
-- [x] **P0 — Enter a safe, visible state on write, sync, or disk-space failure;
-  never acknowledge a write that violates the selected durability contract.**
-- [x] **P1 — Rotate WAL segments and delete only segments covered by a durable
-  checkpoint.**
-- [x] **P1 — Add a read-only recovery/inspection CLI for WAL files.**
-  `ruvio-ctl check` and `inspect` replay snapshot plus WAL without truncating
-  torn tails.
 - [ ] **P1 — Prototype bounded, sequence-based group commit without blocking
   the shard executor on disk synchronization.**
   - Motivation: standalone native LIMIT/IDEM now share the hot-write durability
@@ -369,96 +189,19 @@ not mutate shard state or reorder acknowledged writes.
     keep the default and do not promote the prototype. Set numeric regression
     budgets from baseline measurements before implementation.
 
-### Snapshots and Checkpoints
-
-- [x] **P0 — Define a versioned snapshot format for all value types, TTL
-  metadata, shard identity, and last included WAL sequence.**
-- [x] **P0 — Implement startup from the latest valid snapshot plus subsequent
-  WAL replay.**
-- [x] **P0 — Create point-in-time-consistent snapshots without a long shard
-  pause.**
-- [x] **P0 — Bound copy-on-write or snapshot buffering memory under sustained
-  writes.**
-- [x] **P0 — Write snapshots atomically: temporary file, checksum, sync, rename,
-  and parent-directory sync where required.**
-- [x] **P0 — Keep the previous valid checkpoint until the replacement is fully
-  durable.**
-- [x] **P1 — Add manual `SAVE`-style and asynchronous checkpoint commands.**
-- [x] **P1 — Add scheduled checkpoints based on time and mutation volume.**
-- [x] **P1 — Compact WAL after a successful checkpoint without blocking the hot
-  path.**
-- [x] **P1 — Add snapshot/WAL compatibility fixtures for every released format
-  version.**
-  Frozen hex files in `tests/fixtures/persistence/v1/` cover the WAL header,
-  every mutation type, `CURRENT`/`CLOCK`/`MANIFEST`, and empty plus
-  all-types snapshots. Encode must match; decode must apply. Major `2` is
-  rejected.
-
-### Crash and Data-Integrity Validation
-
-- [x] **P0 — Build a crash harness that kills the process at randomized points
-  during append, sync, rotation, snapshot, and rename.**
-  `killed_process_recovers_at_crash_sites` aborts at a randomized hit of each
-  site and reopens the directory. A truncated header on the final WAL segment
-  is discarded. This is process death, not power loss.
-- [x] **P0 — Verify acknowledged-write recovery for each durability mode.**
-- [x] **P0 — Test full disk, permission changes, short writes, corrupted
-  records, missing segments, and truncated snapshots.**
-  Corrupted records, missing WAL segments, truncated CURRENT, missing
-  manifests, and oversize snapshots are tested. A thread-local fault writes
-  half a record and then returns `ENOSPC`; the sink stays failed and recovery
-  keeps the acked prefix. A read-only WAL directory blocks segment rotation.
-  This is an injected full disk, not a filled volume.
-- [x] **P0 — Test restart with expired and near-expiry keys.**
-- [x] **P1 — Add backup, restore, and integrity-check tooling.**
-  `ruvio-ctl backup` and `restore` copy `CURRENT`/`CLOCK`/checkpoints/WAL,
-  refuse a live lock, and re-check the copy.
-- [x] **P1 — Document recovery-point and recovery-time expectations.**
-  See `docs/RECOVERY.md`. Numerical RTO remains a hardware soak gate.
-
 ## Milestone 3 — Memory Lifecycle and Cache Semantics
-
-### Expiration
-
-- [x] **P0 — Implement `EXPIRE`, `PEXPIRE`, `EXPIREAT`, `PEXPIREAT`, `TTL`,
-  `PTTL`, and `PERSIST`.**
-- [x] **P0 — Treat expired keys as absent in every command path.**
-- [x] **P0 — Add passive expiration on lookup.**
-- [x] **P0 — Add bounded active expiration per shard without latency spikes.**
-- [x] **P0 — Persist and recover expiration deadlines.**
-- [x] **P1 — Add `SET` expiry options (`EX`, `PX`, `EXAT`, `PXAT`, `KEEPTTL`).**
-- [x] **P1 — Add expiration metrics and deterministic tests with an injectable
-  clock.**
 
 ### Memory Limits and Eviction
 
-- [x] **P0 — Track owned, pooled, index, collection, connection, and persistence
-  buffer memory per shard.**
-- [x] **P0 — Add process and per-shard memory limits with reserved headroom.**
-- [x] **P0 — Implement `noeviction` with deterministic out-of-memory errors.**
-- [x] **P1 — Implement and benchmark `allkeys-lru`, `allkeys-lfu`,
-  `volatile-lru`, and `volatile-ttl` policies.**
-  Shard-local sampled eviction (16 candidates, 16 deletes per command).
-  Recency/frequency are not persisted; recovery treats all keys as cold.
-  Policy selection is unit-tested. Hardware eviction throughput is not a
-  software gate.
-- [x] **P1 — Ensure eviction is shard-local, bounded per event loop turn, and
-  reflected in WAL/snapshots.**
-  Evictions persist as `Delete` records. Snapshots omit evicted keys.
-- [x] **P1 — Add fragmentation, allocation-rate, pool-retention, and eviction
-  metrics.**
-  `ruvio_evicted_keys_total`, `ruvio_allocation_events_total`,
-  `ruvio_allocation_bytes_total`. Pool retention remains
-  `ruvio_pooled_value_bytes`.
-- [x] **P1 — Define behavior for a single value larger than the shard budget.**
-  A write whose admission charge exceeds the shard budget is rejected with
-  `OOM` and does not evict.
 - [ ] **P0 — Bring steady-state string RSS into the same band as Redis for the
   same keyspace.**
-  The Cherry soak of 2026-09-28 has not been repeated. The local Docker probe
-  since then is inside the band; the soak is not. Both sets of numbers and the
-  analysis are in `docs/evidence/2026-09-28-string-memory-density.md`. The long-running cache claim stays
-  blocked until the soak key mix is measured again.
+  Short runs since the 2026-09-28 Cherry soak are below Redis (total RSS
+  0.77× for 16-byte and 0.84× for 128-byte strings in
+  [the 2026-10-11 comparison](evidence/2026-10-11-azure-command-comparison.md#memory)).
+  The 15-minute four-core soak that found the gap
+  ([record](evidence/2026-09-28-string-memory-density.md)) has not been
+  repeated, so the long-running cache claim stays blocked until that key mix
+  is measured again.
 - [ ] **P1 — Next cycle is throughput, then only the memory still outside the
   band.**
   Do not start another RSS rewrite before a `SET`/`GET`/`INCR` pass on this
@@ -479,51 +222,6 @@ not mutate shard state or reorder acknowledged writes.
 
 ## Milestone 4 — Redis Compatibility for Real Workloads
 
-Implement commands by workload need and semantic test coverage, not raw command
-count.
-
-- [x] **P1 — Complete string semantics:** `MGET`, `MSET`,
-  `GETSET`, `APPEND`, `STRLEN`, `INCRBY`, and `DECRBY`.
-  `SET NX`/`XX`, `GET`, and expiry options are implemented. `SET GET` returns the previous string.
-- [x] **P1 — Complete keyspace semantics:** `EXISTS`, `TYPE`, `UNLINK`,
-  `RENAME`, `SCAN`, and database-size introspection.
-  `UNLINK` is synchronous. `SCAN`/`DBSIZE` inspect the receiving shard.
-- [x] **P1 — Complete lists:** `RPUSH`, `RPOP`, lengths, indexing, trimming,
-  and blocking operations with bounded waiter management.
-  `BLPOP`/`BRPOP` waiters are shard-local and capped at 1,024.
-- [x] **P1 — Complete sets:** cardinality, enumeration, and same-slot set
-  operations.
-  `SCARD`, `SMEMBERS`, `SINTER`/`SUNION`/`SDIFF` plus `STORE` variants,
-  `SMOVE`, and `SPOP`. Members are returned in sorted order. Algebra is same-slot.
-  `SPOP` records the removed members so recovery does not draw again.
-- [x] **P1 — Add native hashes with compact small-value representation.**
-  `HSET`/`HGET`/`HDEL`/`HLEN`/`HGETALL`/`HMGET`/`HEXISTS`/`HKEYS`/`HVALS`/`HINCRBY`.
-  Small hashes stay compact; larger field counts or values promote to a table.
-  Enumeration order is unspecified, as in Redis.
-- [x] **P1 — Complete sorted sets:** multiple pairs, `WITHSCORES`, rank, score
-  ranges, removal, increments, and cardinality.
-  `ZADD` multi-pair, `ZRANGE`/`ZREVRANGE` `WITHSCORES`, `ZRANGEBYSCORE`,
-  `ZREM`, `ZINCRBY`, `ZCARD`, `ZSCORE`, `ZRANK`, and `ZREVRANK`.
-  `ZINCRBY` records the resulting score. `ZADD` accepts `NX`, `XX`, `GT`, `LT`, `CH`, and `INCR`.
-  `ZRANGE` accepts `BYSCORE`, `BYLEX`, `REV`, and `LIMIT`.
-- [x] **P1 — Define and test Redis transaction semantics (`MULTI`, `EXEC`,
-  `DISCARD`, and `WATCH`) within one shard.**
-  Same-slot only. `EXEC` is one atomic WAL `Transaction` record (type 23).
-  Dirty `WATCH` returns a null array. Persist failure rolls back in-memory
-  keys. Nested `MULTI`, `WATCH` inside `MULTI`, and blocking/control commands
-  inside `MULTI` are errors. Scripts and cross-shard 2PC are not.
-- [x] **P1 — Implement script/function support only after resource limits,
-  determinism, and durability semantics are designed.**
-  `EVAL`/`EVALSHA`/`SCRIPT LOAD`/`EXISTS`/`FLUSH`/`KILL`, plus memory-only
-  `FUNCTION LOAD`/`LIST`/`DELETE` and `FCALL`. Lua 5.1 sandbox with
-  call and instruction quotas. Writes persist as one `Transaction` WAL batch;
-  recovery never runs Lua. Function bodies are not durable. Same-slot declared keys only. Not queueable inside
-  `MULTI`. Redis library shebangs are not.
-- [x] **P1 — Maintain a machine-readable compatibility matrix and run
-  first-party Rust and C# client tests.**
-  `docs/compatibility-matrix.json` is checked against the parser,
-  `COMPATIBILITY.md`, and coverage surfaces. `ruvio-client` and
-  `Ruvio.Client` tests run in CI.
 - [ ] **P3 — Evaluate Pub/Sub and Streams as separate product milestones.**
   Sharded Pub/Sub is in: `SPUBLISH`, `SSUBSCRIBE`, and `SUNSUBSCRIBE` stay on
   the channel's slot owner and are not durable. Exact keyspace notices for
@@ -551,17 +249,7 @@ count.
   in-memory note ring on that shard; nothing is recorded before it, and
   the ring is empty after restart.
 
-## Socket I/O stays on the shard thread
-
-Moving `recv`/`send` of client sockets to separate threads (Redis-style `io-threads`) measured slower everywhere: on Linux
-(4 cores, EPYC 7763) 0.57-0.85x at 50/200 clients and pipeline 16, and +8-16 us per request for a single client; on macOS the
-same. The two cross-thread hand-offs per request (queue wake-up, buffer allocation and copy) cost about what the saved system
-calls cost, so there is no `io_threads` setting. A new attempt would have to beat 1.3x on a `perf`-profiled shard thread.
-
 ## Milestone 5 — Storage Engine Performance
-
-Correctness, persistence, and reproducible profiles must precede structural
-optimization.
 
 - [ ] **P0 — Establish repeatable bare-metal Linux baselines with isolated
   server and load-generator CPUs.**
@@ -571,12 +259,6 @@ optimization.
   misses, context switches, and saturation behavior.**
   Blocked on the same bare-metal host. The regression harness records
   throughput and selected percentiles on whatever machine it runs.
-- [x] **P1 — Evented shared-nothing runtime (Redis shard ownership +
-  Garnet-style no-hop I/O).**
-  The process is Tokio `current_thread` on the shard owner. Portable and
-  `io_uring` were removed.
-  The Docker Desktop Linux-VM sample (2026-09-22) is in
-  `docs/evidence/2026-10-07-benchmark-results.md`. That is not Redis parity and not a bare-metal baseline.
 - [ ] **P1 — Profile realistic key/value distributions, churn, TTL, and mixed
   commands, not only fixed-size GET/SET.**
 - [ ] **P1 — Evaluate shard-local open-addressing indexes against `AHashMap`.**
@@ -597,56 +279,12 @@ optimization.
 - [ ] **P3 — Evaluate a custom binary protocol separately from Redis
   compatibility; do not complicate RESP paths without a concrete use case.**
 
-### Windows
-
-Windows, macOS, and Linux run this same process. Windows I/O is IOCP through Tokio. There is no second adapter to design.
-
 ## Milestone 6 — Security and Multi-Tenancy Basics
-
-- [x] **P0 — Add secure default binding and explicit warnings for public
-  unauthenticated listeners.**
-- [x] **P0 — Add authentication with constant-time secret verification and
-  redacted logs/configuration.**
-- [x] **P1 — Add TLS with certificate reload and documented client behavior.**
-- [x] **P1 — Add Redis-compatible ACL concepts with command and key-pattern
-  restrictions.**
-- [x] **P1 — Add per-user/client quotas and rate limits.**
-- [x] **P1 — Threat-model parser, persistence files, administrative commands,
-  cluster messages, and denial-of-service paths.**
-  See `docs/THREAT_MODEL.md`.
-- [x] **P1 — Add dependency auditing, supply-chain policy, SBOM generation, and
-  a private vulnerability-reporting process.**
-  `deny.toml` plus `cargo deny check` in CI, CycloneDX from
-  `scripts/generate_sbom.py`, and `SECURITY.md` private GitHub advisories.
 
 ### Exposure hardening
 
-Garnet separates client auth (`--auth` Password, ACL, or Aad) from node-to-node
-credentials (`--cluster-password`) and can require TLS client certificates.
-Ruvio keeps the same split without taking an identity-provider dependency yet.
-
-- [x] **P1 — Refuse a public listener with protected mode off and no
-  authentication.** `RUVIO_ALLOW_UNAUTHENTICATED=true` is the explicit
-  exception for a private network. Container images need `RUVIO_REQUIREPASS`.
-- [x] **P1 — Require a bearer token on a public metrics listener.**
-  `RUVIO_METRICS_TOKEN`. Loopback scrape stays open when the token is empty.
-- [x] **P1 — Use a replication handshake password distinct from `requirepass`.**
-  `RUVIO_REPLICATION_PASSWORD`. Empty falls back to `requirepass`. A public
-  replication listen needs one of them.
-- [x] **P1 — Load and save ACL users from a file.** `security.acl_file` /
-  `RUVIO_ACL_FILE`. `ACL SAVE` writes the live directory. `ACL LOAD` replaces
-  it from that file. `GET` and `SET` do not open the file. `ACL LIST` still
-  redacts passwords. An open connection keeps the rules from its last `AUTH`.
-- [x] **P1 — Optional TLS client certificates.** `tls_client_ca` /
-  `RUVIO_TLS_CLIENT_CA` / `--tls-client-ca` is the issuer. `tls_client_auth` /
-  `RUVIO_TLS_CLIENT_AUTH` / `--tls-client-auth` requires a certificate at
-  handshake. Plaintext `GET` and `SET` do not read it.
 - [ ] **P3 — Identity-provider authentication.** Garnet `Aad` and `AclWithAad`.
   After stable standalone. Do not block the RESP password and ACL path on it.
-- [x] **P1 — Sign backup directories.** `ruvio-ctl backup` writes `SIGNATURE`
-  with the signer and a blake3 digest of every copied file. `--sign-key` or
-  `RUVIO_BACKUP_KEY` adds a keyed digest so a rewritten checksum cannot replace
-  the tree. `check` and `restore` verify it. The server never reads the file.
 - [ ] **P3 — Encrypt the data directory at rest.** This is a data-directory format change.
   Host permissions remain the control until then.
 - [ ] **P2 — Authenticate a future cluster bus before it exists.** Garnet
@@ -654,8 +292,6 @@ Ruvio keeps the same split without taking an identity-provider dependency yet.
   bus, not after it.
 
 ## Milestone 7 — Production Cluster
-
-Do not build automatic failover before standalone durability is proven.
 
 ### Membership and Routing
 
@@ -673,12 +309,6 @@ Do not build automatic failover before standalone durability is proven.
 
 ### Replication and Failover
 
-- [x] **P2 — Stream ordered per-shard WAL to replicas with offsets and
-  checksums.** Asynchronous primary/replica roles; no automatic failover.
-- [x] **P2 — Recover a covered WAL gap from a checkpoint plus WAL catch-up.**
-  This is bounded snapshot resynchronization, not cluster membership or
-  automatic replacement of a failed primary. A gap without a usable checkpoint
-  remains a gap.
 - [ ] **P2 — Establish full cluster synchronization and node replacement.**
   Covered-gap checkpoint transfer is not an unconditional full-sync guarantee
   for any replica state or a way to join/migrate cluster members online.
@@ -695,32 +325,9 @@ Do not build automatic failover before standalone durability is proven.
 
 ## Milestone 8 — Packaging and Release Readiness
 
-- [x] **P0 — Run containers as non-root with read-only root filesystem support,
-  explicit data directories, and signal-correct shutdown.**
-- [x] **P0 — Publish reproducible binaries and container images with checksums
-  and provenance.**
-- [x] **P0 — Document supported OS, architecture, kernel, and filesystem
-  combinations.**
-- [x] **P0 — Add startup checks for writable storage, free disk space, file
-  descriptor limits, and CPU placement.**
-- [x] **P1 — Add systemd/Kubernetes examples, health probes, resource sizing,
-  backup, restore, and upgrade runbooks.**
-  `deploy/ruvio.service`, `deploy/ruvio.toml`, and `deploy/kubernetes.yaml`.
-  Backup, restore, and upgrade steps are in `docs/RECOVERY.md`. The RESP port
-  opens after recovery, so a TCP probe is readiness. `GET /metrics` is scrape
-  only.
-- [x] **P1 — Define semantic versioning and persisted-format compatibility
-  guarantees.**
-  Package rules are in `docs/COMPATIBILITY.md`. Format major/minor rules are
-  in `docs/COMPATIBILITY.md` (Package Versions).
 - [ ] **P1 — Publish benchmark methodology and repeated bare-metal results.**
 - [ ] **P1 — Define beta/stable release gates, incident policy, and support
   boundaries.**
-- [ ] **P1 — Publish a GitHub Pages site for Ruvio.**
-  A public site that explains the store in detail: features, configuration
-  parameters, durability and replication, and worked examples. The site
-  follows `docs/CONFIGURATION.md`, `docs/COMPATIBILITY.md`, and the command
-  tables. It is not a second source of truth.
 
 ## Milestone 9 — AI Prefix Cache
 
@@ -743,34 +350,9 @@ tier consulted at the start of a request, not the GPU-resident cache.
 
 ## Milestone 10 — Ruvio UI
 
-This waits until the stable standalone gates are met. RedisInsight is an
-Electron shell around a private client. Ruvio UI is one static binary that
-speaks RESP with `ruvio-client` and serves a browser UI. The same binary is
-the container entrypoint and the downloadable executable. The browser, or the
-operating-system web view, draws the window. The process does not ship a
-second Chromium.
-
-The C# client stays for application code. It is not the UI process. A
-self-contained .NET publish is larger than a static Rust binary and would
-split the UI from the server repository.
-
-The working tree has this in `clients/ruvio-ui`. The browser talks to that
-process over HTTP. The process uses `ruvio-client`, including `execute`, so
-the screen can send every command the caller's ACL allows. Sign-in is that
-ACL user, not a separate portal account. All shards walks `SCAN` across the
-slot map; one selected shard pins every screen to that node.
-
-- [x] **P3 — Ship `ruvio-ui` as one binary.** It links `ruvio-client`, binds a
-  local HTTP port, and serves the static UI. The local Docker image and the
-  host executable are that binary. No Electron, no second runtime.
-- [x] **P3 — Build the screens in Svelte.** Key browser, command forms for the
-  supported types, shard selection, Users (`ACL`), and Pub/Sub. The compiled
-  assets are embedded in the binary.
-- [x] **P3 — Publish the UI image.** `salihcantekin/ruvio-ui` tags `linux`,
-  `latest`, and `0.1.0` are the same Linux image for amd64 and arm64.
 - [ ] **P3 — Publish host executables.** Build the same binary locally for
-  Linux, macOS, and Windows. No shell and no Redis CLI. Do not publish it
-  from GitHub Actions while the repository is private.
+  Linux, macOS, and Windows. No shell and no Redis CLI. The server's own
+  binaries are already attached to GitHub Releases; the UI is not yet.
 
 ## Release Gates
 
@@ -779,28 +361,20 @@ slot map; one selected shard pins every screen to that node.
 - [ ] All `P0` standalone, persistence, integrity, expiration, memory, security,
   and packaging items are complete.
   Remaining hardware-only P0s: full-disk and permission fault injection, and a
-  24-hour soak. The string-RSS gap (`docs/evidence/2026-09-28-string-memory-density.md`) is
-  an open product P0 in Milestone 3. The Cherry EPYC `kill -9` SET harness and
-  the single-host performance record are in `docs/evidence/2026-09-28-bare-metal.md`. See
-  `docs/RELEASE_EVIDENCE.md`.
+  24-hour soak, and the repeated string soak in Milestone 3. The Cherry EPYC
+  `kill -9` SET harness and the single-host performance record are in
+  [the bare-metal record](evidence/2026-09-28-bare-metal.md). See
+  [RELEASE_EVIDENCE](RELEASE_EVIDENCE.md).
 - [ ] No known acknowledged-write loss in crash testing under the documented
   durability contract.
 - [ ] Twenty-four-hour mixed-workload soak passes with bounded memory.
   Blocked on a 24-hour dedicated soak host.
-- [x] Supported Redis commands pass differential and client-library tests.
-- [x] Recovery, backup, restore, and upgrade procedures have automated tests.
-  `backup_restore_round_trip_is_the_upgrade_directory` writes through the
-  server, copies the directory, and opens the copy as a new process.
 - [ ] Performance is measured on bare-metal Linux and published without
   cherry-picked runs.
 
 ### Stable Standalone
 
 - [ ] All `P1` items selected for the release are complete.
-- [x] Persistence format compatibility is tested against all supported prior
-  releases.
-  Format major 1 is the only supported generation. `frozen_v1_directory_opens_as_a_prior_release`
-  loads the frozen `CURRENT`, `CLOCK`, manifest, and snapshot as a data directory.
 - [ ] Security review and operational failure drills are complete.
   Unknown names, wrong arity, `CONFIG SET`, `SHUTDOWN`, `DEBUG`, and
   `CLUSTER MEET` reply with an error and keep the socket on the evented
@@ -816,27 +390,3 @@ slot map; one selected shard pins every screen to that node.
   model.
 - [ ] Rolling upgrades, node replacement, resharding, and disaster recovery
   pass automated fault-injection suites.
-
-## Recommended Execution Order
-
-1. Lock durability and compatibility decisions.
-2. Complete the performance-safe execution, time, and memory foundations.
-3. Build safety limits, shutdown, configuration, and the testing foundation.
-4. Implement per-shard WAL and crash-safe replay.
-5. Implement snapshots, checkpoint/WAL compaction, and recovery tooling.
-6. Complete TTL and memory limits so the process has a bounded lifecycle.
-7. Expand Redis command compatibility based on target workloads.
-8. Optimize the storage layout from bare-metal profiles.
-9. Add authentication, TLS, packaging, and production runbooks.
-10. Harden standalone durability and the existing asynchronous WAL replication;
-    do not claim automated failover before election and partition behavior exist.
-11. Validate the single evented runtime on supported operating systems and
-    production-like hardware; Windows uses Tokio's IOCP path.
-12. Add the AI prefix-block cache only after stable standalone. Do not build a
-    vector database.
-13. Build Ruvio UI after stable standalone: one `ruvio-client` binary, Svelte
-    screens, container and executable from the same bits. Do not embed
-    Chromium.
-
-Every implementation change should update this file, add its acceptance tests,
-and state whether it changes wire, persistence, or operational compatibility.
