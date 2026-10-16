@@ -8,6 +8,7 @@
 use super::*;
 
 use crate::{engine::RespVersion, routing::hash_slot, routing::shard_for_slot};
+use std::sync::atomic::AtomicUsize;
 
 /// Data directories whose next commit before a forwarded command fails, once each.
 #[cfg(test)]
@@ -111,17 +112,31 @@ pub(super) enum Message {
     },
     /// A classic `PUBLISH` another shard received: deliver it to this shard's subscribers.
     /// Nothing is sent back; the publisher's reply counts its own shard's receivers, as a
-    /// Redis Cluster node answers for the node that took the command.
-    Publish {
-        channel: Vec<u8>,
-        message: Vec<u8>,
-    },
+    /// Redis Cluster node answers for the node that took the command. One copy is shared by
+    /// every destination; the receiver returns its reservation (see `Fabric::reserve_publish`).
+    Publish(Arc<PublishDelivery>),
+}
+
+/// One classic `PUBLISH` handed to the other shards.
+pub(super) struct PublishDelivery {
+    pub(super) channel: Vec<u8>,
+    pub(super) message: Vec<u8>,
+}
+
+impl PublishDelivery {
+    /// What one queued delivery is charged against a shard's publish budget.
+    fn cost(&self) -> usize {
+        self.channel.len() + self.message.len()
+    }
 }
 
 struct Port {
     notify: tokio::sync::Notify,
     /// Bit `src` is set while mailbox `src -> this shard` holds messages.
     mask: AtomicU64,
+    /// Publish deliveries queued for this shard, from every shard, and their bytes.
+    publish_queued: AtomicUsize,
+    publish_bytes: AtomicUsize,
     accept: Mutex<VecDeque<Handoff>>,
     accept_notify: tokio::sync::Notify,
 }
@@ -150,6 +165,8 @@ impl Fabric {
                 .map(|_| Port {
                     notify: tokio::sync::Notify::new(),
                     mask: AtomicU64::new(0),
+                    publish_queued: AtomicUsize::new(0),
+                    publish_bytes: AtomicUsize::new(0),
                     accept: Mutex::new(VecDeque::new()),
                     accept_notify: tokio::sync::Notify::new(),
                 })
@@ -194,27 +211,11 @@ impl Fabric {
     }
 
     pub(super) fn send(&self, src: usize, dst: usize, message: Message) {
-        self.send_bounded(src, dst, message, usize::MAX);
-    }
-
-    /// `send` that drops `message` when the mailbox already holds `limit` messages: for
-    /// deliveries nobody waits for, so a stalled shard cannot make its mailbox grow without
-    /// bound. Returns whether the message was queued.
-    pub(super) fn send_bounded(
-        &self,
-        src: usize,
-        dst: usize,
-        message: Message,
-        limit: usize,
-    ) -> bool {
         {
             let mut mailbox = self.boxes[src * self.count + dst]
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
 
-            if mailbox.len() >= limit {
-                return false;
-            }
             mailbox.push(message);
         }
 
@@ -224,7 +225,37 @@ impl Fabric {
         if previous == 0 {
             self.ports[dst].notify.notify_one();
         }
+    }
+
+    /// Charges one publish delivery of `cost` bytes to shard `dst`'s budget. False, with nothing
+    /// charged, when the shard already holds `PUBLISH_QUEUE_MESSAGES` deliveries or
+    /// `PUBLISH_QUEUE_BYTES` bytes: a shard stuck in a long command then drops new publishes
+    /// instead of letting large messages pile up in memory.
+    fn reserve_publish(&self, dst: usize, cost: usize) -> bool {
+        let port = &self.ports[dst];
+
+        if port.publish_queued.fetch_add(1, Ordering::AcqRel) >= PUBLISH_QUEUE_MESSAGES {
+            port.publish_queued.fetch_sub(1, Ordering::AcqRel);
+
+            return false;
+        }
+
+        if port.publish_bytes.fetch_add(cost, Ordering::AcqRel) + cost > PUBLISH_QUEUE_BYTES {
+            port.publish_bytes.fetch_sub(cost, Ordering::AcqRel);
+            port.publish_queued.fetch_sub(1, Ordering::AcqRel);
+
+            return false;
+        }
+
         true
+    }
+
+    /// Returns what `reserve_publish` charged, once shard `me` has delivered the publish.
+    pub(super) fn release_publish(&self, me: usize, delivery: &PublishDelivery) {
+        let port = &self.ports[me];
+
+        port.publish_bytes.fetch_sub(delivery.cost(), Ordering::AcqRel);
+        port.publish_queued.fetch_sub(1, Ordering::AcqRel);
     }
 
     fn drain(&self, me: usize, into: &mut Vec<Message>) {
@@ -750,8 +781,9 @@ pub(super) async fn remote_loop(state: Rc<ShardState>, shutdown: ShutdownToken) 
                     state.tracker.borrow_mut().forget(remote_id(src, conn));
                 }
 
-                Message::Publish { channel, message } => {
-                    super::pubsub::publish_classic(&state, &channel, &message);
+                Message::Publish(delivery) => {
+                    super::pubsub::publish_classic(&state, &delivery.channel, &delivery.message);
+                    forwarding.fabric.release_publish(forwarding.me, &delivery);
                 }
 
                 Message::Cancel { src, conn } => {
@@ -1277,25 +1309,46 @@ pub(super) fn fan_for(state: &ShardState, command: &Command<'_>) -> Option<Fan> 
     fan_kind(command).filter(|_| state.single_port && !matches!(command, Command::Publish { .. }))
 }
 
-/// Deliveries a shard may hold from one other shard before new ones are dropped: pub/sub is
-/// best effort (Redis drops to a slow subscriber too), and a shard stuck in a long command must
-/// not let its mailbox grow with every publish in the process.
-const PUBLISH_MAILBOX_LIMIT: usize = 4096;
+/// Publish deliveries a shard may hold, from all other shards together, before new ones are
+/// dropped: pub/sub is best effort (Redis drops a slow subscriber too), and a shard stuck in a
+/// long command must not let its queue grow with every publish in the process.
+const PUBLISH_QUEUE_MESSAGES: usize = 16_384;
+
+/// The same budget in bytes (channel plus message, per destination), so a few huge messages are
+/// bounded too.
+const PUBLISH_QUEUE_BYTES: usize = 64 << 20;
+
+/// Publish deliveries dropped by a full budget since the process started (`INFO`
+/// `pubsub_cluster_dropped`).
+static PUBLISH_DROPPED: AtomicU64 = AtomicU64::new(0);
+
+pub(super) fn publish_dropped() -> u64 {
+    PUBLISH_DROPPED.load(Ordering::Relaxed)
+}
 
 /// Sends a classic `PUBLISH` the caller has already run (and that passed its auth, ACL and
 /// rate checks there) to every other shard, without waiting for them: a subscriber may sit on
 /// any shard. The caller's reply counts its own shard's receivers.
 pub(super) fn publish_everywhere(forwarding: &Forwarding, channel: &[u8], message: &[u8]) {
-    for dst in (0..forwarding.fabric.shard_count()).filter(|dst| *dst != forwarding.me) {
-        forwarding.fabric.send_bounded(
-            forwarding.me,
-            dst,
-            Message::Publish {
+    let fabric = &forwarding.fabric;
+    let cost = channel.len() + message.len();
+    let mut delivery: Option<Arc<PublishDelivery>> = None;
+
+    for dst in (0..fabric.shard_count()).filter(|dst| *dst != forwarding.me) {
+        if !fabric.reserve_publish(dst, cost) {
+            PUBLISH_DROPPED.fetch_add(1, Ordering::Relaxed);
+            continue;
+        }
+
+        // One copy for every destination, made only once one of them has room.
+        let shared = delivery.get_or_insert_with(|| {
+            Arc::new(PublishDelivery {
                 channel: channel.to_vec(),
                 message: message.to_vec(),
-            },
-            PUBLISH_MAILBOX_LIMIT,
-        );
+            })
+        });
+
+        fabric.send(forwarding.me, dst, Message::Publish(Arc::clone(shared)));
     }
 }
 
@@ -1866,6 +1919,35 @@ async fn scan_all(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn publish_budget_bounds_messages_and_bytes_per_shard_and_is_returned_on_delivery() {
+        let fabric = Fabric::new(2);
+        let small = PublishDelivery {
+            channel: b"c".to_vec(),
+            message: b"m".to_vec(),
+        };
+
+        for _ in 0..PUBLISH_QUEUE_MESSAGES {
+            assert!(fabric.reserve_publish(1, small.cost()));
+        }
+        assert!(!fabric.reserve_publish(1, small.cost()));
+        // The other shard has its own budget.
+        assert!(fabric.reserve_publish(0, small.cost()));
+
+        fabric.release_publish(1, &small);
+        assert!(fabric.reserve_publish(1, small.cost()));
+
+        for _ in 0..PUBLISH_QUEUE_MESSAGES {
+            fabric.release_publish(1, &small);
+        }
+
+        // Bytes: one message larger than the whole budget never fits; up to the budget does.
+        assert!(!fabric.reserve_publish(1, PUBLISH_QUEUE_BYTES + 1));
+        assert!(fabric.reserve_publish(1, PUBLISH_QUEUE_BYTES));
+        assert!(!fabric.reserve_publish(1, 1));
+        assert_eq!(fabric.ports[1].publish_queued.load(Ordering::Acquire), 1);
+    }
+
     use super::*;
 
     /// Keyless commands that run on every shard in single-port mode (`Publish` is delivered

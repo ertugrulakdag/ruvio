@@ -39,7 +39,7 @@ pub(super) fn evented_info(state: &ShardState, section: Option<&[u8]>) -> io::Re
     write!(
         info,
         "# Server\r\nruvio_version:{}\r\nruvio_backend:evented\r\nruvio_health:ok\r\nruvio_readiness:ready\r\nruvio_durability:{}\r\nruvio_persistence_state:{}\r\nrecovered_wal_records:{}\r\nwal_last_sequence:{}\r\nwal_unsynced_bytes:{}\r\nruvio_shard_id:{shard_id}\r\nruvio_shard_count:{shard_count}\r\n\
-         # Stats\r\nconnected_clients:{}\r\ntotal_connections_received:{}\r\nrejected_connections:{}\r\ntotal_net_input_bytes:{}\r\ntotal_net_output_bytes:{}\r\n# Buffers\r\ninput_buffer_peak_bytes:{}\r\noutput_buffer_peak_bytes:{}\r\npubsub_queue_peak_frames:{}\r\npubsub_queue_peak_bytes:{}\r\n# Memory\r\ncharged_memory_bytes:{}\r\n# Keyspace\r\nkeys:{}\r\nexpired_keys:{}\r\nexpired_keys_passive:{}\r\nexpired_keys_active:{}\r\nevicted_keys:{}\r\nexpires:{}\r\n",
+         # Stats\r\nconnected_clients:{}\r\ntotal_connections_received:{}\r\nrejected_connections:{}\r\ntotal_net_input_bytes:{}\r\ntotal_net_output_bytes:{}\r\n# Buffers\r\ninput_buffer_peak_bytes:{}\r\noutput_buffer_peak_bytes:{}\r\npubsub_queue_peak_frames:{}\r\npubsub_queue_peak_bytes:{}\r\npubsub_cluster_dropped:{}\r\n# Memory\r\ncharged_memory_bytes:{}\r\n# Keyspace\r\nkeys:{}\r\nexpired_keys:{}\r\nexpired_keys_passive:{}\r\nexpired_keys_active:{}\r\nevicted_keys:{}\r\nexpires:{}\r\n",
         env!("CARGO_PKG_VERSION"),
         persistence.profile(),
         persistence_state,
@@ -55,6 +55,7 @@ pub(super) fn evented_info(state: &ShardState, section: Option<&[u8]>) -> io::Re
         state.peak_output_buffer_bytes.get(),
         state.peak_pubsub_queue_frames.get(),
         state.peak_pubsub_queue_bytes.get(),
+        super::forward::publish_dropped(),
         memory.charged_bytes(),
         store.len(),
         store.expiration_stats().expired_keys,

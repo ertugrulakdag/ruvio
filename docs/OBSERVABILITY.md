@@ -36,6 +36,7 @@ fails when one is added without a row:
 | Buffers | `output_buffer_peak_bytes` | Largest connection output buffer seen |
 | Buffers | `pubsub_queue_peak_frames` | Longest subscriber queue seen, in frames |
 | Buffers | `pubsub_queue_peak_bytes` | Longest subscriber queue seen, in bytes |
+| Buffers | `pubsub_cluster_dropped` | Classic `PUBLISH` deliveries to another shard dropped because that shard's publish queue was full (16,384 deliveries or 64 MiB), since the process started |
 | Memory | `charged_memory_bytes` | Memory charged against `maxmemory` |
 | Keyspace | `keys` | Keys in every database |
 | Keyspace | `expired_keys` | Keys removed at their deadline |
