@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Use cases — Ruvio</title>
+  <meta name="description" content="What Ruvio is used for and how: rate limits, locks, inventory, idempotent APIs, sessions, caches with stampede protection, delayed jobs, change feeds, and leaderboards.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/site.css?v=20261015a">
+  <link rel="stylesheet" href="vendor/highlightjs/github-dark.min.css">
+  <link rel="icon" href="images/ruvio-icon.png" type="image/png">
+  <meta property="og:image" content="https://salihcantekin.github.io/ruvio/images/ruvio-social.png">
+</head>
+<body data-page="use-cases.html">
+  <header class="top">
+    <div class="top-inner">
+      <a class="mark" href="index.html">Ruvio</a>
+      <nav aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="start.html">Start</a>
+        <a href="use-cases.html">Use cases</a>
+        <details>
+          <summary>Build</summary>
+          <div class="nav-menu">
+            <a href="compare.html">How it runs</a>
+            <a href="commands.html">Commands</a>
+            <a href="packages.html">Packages</a>
+            <a href="ui.html">Operator UI</a>
+          </div>
+        </details>
+        <details>
+          <summary>Clients</summary>
+          <div class="nav-menu">
+            <a href="clients.html">Overview</a>
+            <a href="client-rust.html">Rust</a>
+            <a href="client-csharp.html">C#</a>
+            <a href="client-go.html">Go</a>
+            <a href="client-java.html">Java</a>
+            <a href="client-python.html">Python</a>
+            <a href="client-node.html">Node.js</a>
+            <a href="examples.html">Examples</a>
+          </div>
+        </details>
+        <details>
+          <summary>Operate</summary>
+          <div class="nav-menu">
+            <a href="configuration.html">Configuration</a>
+            <a href="durability.html">Durability</a>
+            <a href="replication.html">Replication</a>
+            <a href="operations.html">Operations</a>
+          </div>
+        </details>
+        <a href="testing.html">Testing</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap layout">
+    <nav class="side">
+      <a href="#ratelimit">Rate limits and quotas</a>
+      <a href="#locks">Locks, leader election, and fencing</a>
+      <a href="#workers">Concurrency limits for workers</a>
+      <a href="#inventory">Inventory, tickets, and seat counts</a>
+      <a href="#idempotency">Idempotent APIs and payments</a>
+      <a href="#versions">Lost-update protection</a>
+      <a href="#sessions">Sessions and sliding expiry</a>
+      <a href="#cache">Cache fills without stampedes</a>
+      <a href="#delayed">Delayed jobs and queues</a>
+      <a href="#changes">Change feeds</a>
+      <a href="#data">Leaderboards, geo, and documents</a>
+      <a href="#redis">Moving from Redis</a>
+    </nav>
+    <article>
+      <h1>Use cases</h1>
+      <p>Ruvio speaks RESP, so any Redis client can talk to it. What sets it apart is a set of commands that finish a coordination job on the shard that owns the key, in one call. This page shows the jobs people reach for, with the commands as you would type them in <code>redis-cli</code>. Each section links to the exact reference.</p>
+
+<section class="panel">
+<h2 id="ratelimit">Rate limits and quotas</h2>
+      <p>A fixed window per API key, per user, or per tenant, in one command on the shard that owns the key.</p>
+<pre>LIMIT api:key-7 100 60000
+# 99   -&gt; 99 calls left in this 60 s window
+# (nil) -&gt; window is full, nothing was counted</pre>
+      <p><code>LIMIT key max window_ms</code> returns the remaining allowance, or a null bulk when the window is full. A rejected call is not counted. The window is the key's deadline, so a quiet key disappears by itself. In WAL-backed modes the accepted call is a log record.</p>
+      <p class="note">Fixed window, not sliding. If you need per-second smoothing on top, keep a short second window next to the long one. <a href="commands.html#limit">LIMIT</a></p>
+</section>
+
+<section class="panel">
+<h2 id="locks">Locks, leader election, and fencing</h2>
+      <p>One worker at a time holds a named resource; others get a null reply until it frees or expires.</p>
+<pre>LEASE job:nightly-report 30000
+# 17      -&gt; you hold it, token 17
+# (nil)   -&gt; someone else holds it
+RELEASE job:nightly-report 17
+# 1       -&gt; released (0 if the token no longer matches)</pre>
+      <p>Each grant returns a token that grows. Send it with writes to the thing you protect and have that side reject older tokens. Expiry and <code>RELEASE</code> keep the sequence while the key exists.</p>
+      <p class="note">Deleting the key restarts the token at 1, and data loss can do the same. A token alone does not fence an external system after that. <a href="commands.html#lease">LEASE</a></p>
+</section>
+
+<section class="panel">
+<h2 id="workers">Concurrency limits for workers</h2>
+      <p>At most N holders at once: image resizers, export jobs, calls to a slow upstream.</p>
+<pre>SEMAPHORE upstream:billing 8 15000
+# 1700000000123 -&gt; a slot, this is your token
+# (nil)         -&gt; all 8 slots are taken
+RELEASE upstream:billing 1700000000123</pre>
+      <p>Every holder has its own TTL, so a crashed worker frees its slot when the TTL ends. The key is removed when the last holder leaves.</p>
+      <p class="note">Pick a TTL longer than the longest normal job, and release as soon as you finish. <a href="commands.html#semaphore">SEMAPHORE</a></p>
+</section>
+
+<section class="panel">
+<h2 id="inventory">Inventory, tickets, and seat counts</h2>
+      <p>Sell from a counter without overselling, with no script and no read-then-write race.</p>
+<pre>SET stock:ticket-42 500
+TAKE stock:ticket-42 2
+# 498   -&gt; took 2, 498 left
+# (nil) -&gt; not enough, the key is unchanged
+
+INCRBY seats:room-9 1 MAX 120
+# 57    -&gt; joined
+# (nil) -&gt; room is full, nothing was written</pre>
+      <p><code>TAKE</code> subtracts only when the key holds enough. <code>INCRBY … MAX</code> adds only while the result stays at or below the cap. Both answer with a null bulk and write nothing when they refuse.</p>
+      <p class="note">A refused call writes nothing, neither to the key nor to the WAL. <a href="commands.html#take">TAKE</a> · <a href="commands.html#capped">INCRBY MAX</a></p>
+</section>
+
+<section class="panel">
+<h2 id="idempotency">Idempotent APIs and payments</h2>
+      <p>A retry of the same request replays the stored answer instead of running the handler again.</p>
+<pre>IDEM order:42 BEGIN request-digest attempt-1 60000
+# ["acquired"]            -&gt; run the handler once
+IDEM order:42 COMPLETE request-digest attempt-1 saved-result
+# 1
+IDEM order:42 BEGIN request-digest attempt-2 60000
+# ["completed","saved-result"]</pre>
+      <p><code>BEGIN</code> answers <code>acquired</code>, <code>pending</code>, <code>conflict</code> (same key, different fingerprint), or <code>completed</code> with the saved result. For plain once-only work such as a webhook delivery id, <code>ONCE key ttl_ms</code> is the lighter tool: 1 the first time, 0 until the deadline.</p>
+      <p class="note">This does not make an outside effect exactly-once. A handler can crash before <code>COMPLETE</code>, so the payment provider still needs its own idempotency key. <a href="commands.html#idempotency">IDEM</a> · <a href="commands.html#once">ONCE</a></p>
+</section>
+
+<section class="panel">
+<h2 id="versions">Lost-update protection</h2>
+      <p>Two editors open the same record; only the one holding the current version may save.</p>
+<pre>SETV profile:ada "{...}"
+# 1     -&gt; version 1 created
+SETV profile:ada "{...}" 1
+# 2     -&gt; accepted, now version 2
+SETV profile:ada "{...}" 1
+# error -&gt; stale version, value unchanged</pre>
+      <p>Optimistic concurrency without <code>WATCH</code> or a script. Only keys written with <code>SETV</code> carry a version.</p>
+      <p class="note">A plain <code>SET</code> replaces a versioned string. <a href="commands.html#setv">SETV</a></p>
+</section>
+
+<section class="panel">
+<h2 id="sessions">Sessions and sliding expiry</h2>
+      <p>Reading a session keeps it alive; an idle one expires on its own.</p>
+<pre>SET session:9f3 "{...}" PX 1800000
+GETEX session:9f3 1800000
+# "{...}" and the deadline is now 30 min from now</pre>
+      <p><code>GETEX</code> returns the string and moves its deadline in one step, so there is no separate <code>EXPIRE</code> call. <code>GET</code> does not move a deadline.</p>
+      <p class="note"><a href="commands.html#getex">GETEX</a></p>
+</section>
+
+<section class="panel">
+<h2 id="cache">Cache fills without stampedes</h2>
+      <p>When a hot key expires, one caller refills it and the others wait or serve the stale copy.</p>
+<pre>FILLGET product:42 5000 WAIT 200
+# [HIT, value]            -&gt; served from memory
+# [FILL, token]           -&gt; you refill it
+# [BUSY, nil]             -&gt; someone else is filling
+# [STALE, value, token]   -&gt; inside a stale-while-revalidate window
+FILLSET product:42 "{...}" 60000 &lt;token&gt; SWR 30000
+# 1 -&gt; stored (0 if the token is no longer live)</pre>
+      <p>One round trip decides who loads from the database. <code>WAIT</code> holds a caller that would get <code>BUSY</code> until the filler writes, so there is no retry loop in the client.</p>
+      <p class="note">Fill markers live in memory only and lapse after <code>fill_ms</code>. <code>WAIT</code> is refused inside <code>MULTI</code> and scripts. <a href="commands.html">Commands</a></p>
+</section>
+
+<section class="panel">
+<h2 id="delayed">Delayed jobs and queues</h2>
+      <p>Schedule work for later with a stream and a consumer group, without a separate scheduler.</p>
+<pre>XGROUP CREATE jobs workers $ MKSTREAM
+XADD jobs DELAY 30000 * kind send-reminder user 42
+XREADGROUP GROUP workers w1 COUNT 10 BLOCK 5000 STREAMS jobs &gt;
+# the entry appears here after 30 s
+XACK jobs workers &lt;id&gt;</pre>
+      <p>The entry is stored right away. <code>XREADGROUP</code> skips it until the delay passes, and <code>XREAD</code> can still see it. Pending entries, <code>XCLAIM</code>, and <code>XAUTOCLAIM</code> work as in Redis streams.</p>
+      <p class="note">The hold is a WAL record and is written only when a delay is set. <a href="commands.html#delay">XADD DELAY</a></p>
+</section>
+
+<section class="panel">
+<h2 id="changes">Change feeds</h2>
+      <p>React to writes (cache invalidation, search indexing, audit) by reading a feed instead of polling.</p>
+<pre>CHANGES SUBSCRIBE FROM NOW MATCH user:* TYPES put,del
+# a durable stream of changes, resumable with FROM &lt;shard&gt;:&lt;seq&gt;</pre>
+      <p>The durable feed is built from the WAL and can resume from a saved position, with optional key patterns, types, and values. <code>CHANGES START</code> is the lighter in-memory feed of up to 1024 notes per shard.</p>
+      <p class="note">See <em>Change stream</em> in <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/CONFIGURATION.md">CONFIGURATION.md</a> for limits and retention. <a href="commands.html#changes">CHANGES</a></p>
+</section>
+
+<section class="panel">
+<h2 id="data">Leaderboards, geo, and documents</h2>
+      <p>The data types you already use, plus JSON documents with an exact-match index.</p>
+<pre>ZADD leaderboard 1200 ada 980 grace
+ZRANGE leaderboard 0 9 REV WITHSCORES
+GEOSEARCH cities FROMLONLAT 13.36 38.11 BYRADIUS 50 km COUNT 10
+JSON.SET user:7 $ '{"plan":"pro","country":"TR"}'
+JSON.INDEX CREATE by_plan PREFIX user: PATH $.plan TYPE string
+JSON.FIND by_plan VALUE pro COUNT 20</pre>
+      <p>Strings, lists, sets, hashes, sorted sets, streams, geo, Bloom filters, and JSON are covered. <code>JSON.INDEX</code> is an exact-equality index on one scalar field; it works on database 0 and keeps its postings in memory.</p>
+      <p class="note"><a href="commands.html#collections">Collections</a> · <a href="commands.html">JSON</a></p>
+</section>
+
+<section class="panel">
+<h2 id="redis">Moving from Redis</h2>
+      <p>Ruvio is not a full Redis clone. It speaks RESP2 and covers the commands listed in the <a href="commands.html">command reference</a>. Check that the commands you use are there before you switch. <code>ruvio-ctl import</code> copies keys with their TTLs from a running Redis and can verify the copy. It does not move consumer groups, Lua scripts, ACL users, or module types.</p>
+      <p>Start with <a href="start.html">Start</a>, then pick a <a href="clients.html">client</a>. For durability modes and what each one promises, see <a href="durability.html">Durability</a>.</p>
+</section>
+    </article>
+  </main>
+  <footer class="foot">
+    <div class="foot-inner">Package pages: <a href="https://www.nuget.org/packages/Ruvio.Client">Ruvio.Client</a>, <a href="https://crates.io/crates/ruvio-client">ruvio-client</a>.</div>
+  </footer>
+  <script src="js/versions.js?v=20261013j"></script>
+  <script src="vendor/highlightjs/highlight.min.js"></script>
+  <footer class="site-foot">
+    <div class="site-foot-inner">
+      <div class="site-foot-brand">
+        <img src="images/ruvio-mark.png?v=20261015b" alt="" width="36" height="36">
+        <div>
+          <strong>Ruvio</strong>
+          <span>One RESP process. The shard that owns the key does the work.</span>
+          <small>Server AGPL-3.0 · Clients MIT</small>
+        </div>
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/salihcantekin/ruvio/tree/main/docs">Docs</a>
+        <a href="https://github.com/salihcantekin/ruvio">GitHub</a>
+        <a href="https://github.com/salihcantekin/ruvio/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="js/chrome.js?v=20261015a"></script>
+</body>
+</html>
