@@ -54,11 +54,12 @@ export const footerNav: { title: string; items: NavItem[] }[] = [
 ];
 
 // First-party clients: each has a typed method for every listed command.
+// `lang` is the highlighting language of their snippets (see src/lib/highlight.ts).
 export const clients = [
-  { language: "Rust", package: "ruvio-client", registry: "crates.io", slug: "rust" },
-  { language: "C#", package: "Ruvio.Client", registry: "NuGet", slug: "csharp" },
-  { language: "Go", package: "github.com/salihcantekin/ruvio/clients/go", registry: "Go modules", slug: "go" },
-  { language: "Java", package: "io.github.salihcantekin:ruvio-client", registry: "Maven Central", slug: "java" },
-  { language: "Python", package: "ruvio-client", registry: "PyPI", slug: "python" },
-  { language: "Node.js", package: "ruvio-client", registry: "npm", slug: "node" },
+  { language: "Rust", package: "ruvio-client", registry: "crates.io", slug: "rust", lang: "rust" },
+  { language: "C#", package: "Ruvio.Client", registry: "NuGet", slug: "csharp", lang: "csharp" },
+  { language: "Go", package: "github.com/salihcantekin/ruvio/clients/go", registry: "Go modules", slug: "go", lang: "go" },
+  { language: "Java", package: "io.github.salihcantekin:ruvio-client", registry: "Maven Central", slug: "java", lang: "java" },
+  { language: "Python", package: "ruvio-client", registry: "PyPI", slug: "python", lang: "python" },
+  { language: "Node.js", package: "ruvio-client", registry: "npm", slug: "node", lang: "typescript" },
 ] as const;

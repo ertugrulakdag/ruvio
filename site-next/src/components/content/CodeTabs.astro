@@ -2,12 +2,14 @@
 // One code example in several languages, as tabs inside a single terminal frame.
 // Every CodeTabs on a page follows the same choice, and the choice is remembered for the next visit,
 // so a reader who picks "Go" once sees Go everywhere. Without JavaScript only the first tab shows.
-import { codeToHtml } from "../../lib/code";
+// Each tab is highlighted at build time like CodeBlock; the tab name doubles as the language label.
+import { highlight, type Lang } from "../../lib/highlight";
 
-export type CodeTab = { key: string; label: string; code: string };
+export type CodeTab = { key: string; label: string; lang: Lang; code: string };
 interface Props { tabs: CodeTab[]; label: string; id: string }
 const { tabs, label, id } = Astro.props;
 const uid = `${id}-code`;
+const html = await Promise.all(tabs.map((t) => highlight(t.code, t.lang)));
 ---
 
 <figure class="term code-tabs" data-code-tabs>
@@ -21,7 +23,7 @@ const uid = `${id}-code`;
     <button type="button" class="copy" data-copy hidden>Copy</button>
   </figcaption>
   {tabs.map((t, i) => (
-    <pre role="tabpanel" id={`${uid}-p-${t.key}`} aria-labelledby={`${uid}-t-${t.key}`} data-key={t.key} tabindex="0" hidden={i !== 0}><code set:html={codeToHtml(t.code)} /></pre>
+    <pre role="tabpanel" id={`${uid}-p-${t.key}`} aria-labelledby={`${uid}-t-${t.key}`} data-key={t.key} data-lang={t.lang} tabindex="0" hidden={i !== 0}><code set:html={html[i]} /></pre>
   ))}
 </figure>
 

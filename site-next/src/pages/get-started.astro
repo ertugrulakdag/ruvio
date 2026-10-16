@@ -1,6 +1,7 @@
 ---
 import Page from "../layouts/Page.astro";
 import CodeBlock from "../components/content/CodeBlock.astro";
+import type { Lang } from "../lib/highlight";
 import SideNav from "../components/content/SideNav.astro";
 import Tabs from "../components/content/Tabs.astro";
 import PageIntro from "../components/PageIntro.astro";
@@ -9,18 +10,18 @@ import { serverVersion } from "../data/bench";
 
 const v = serverVersion;
 
-const install: Record<string, { code: string; title: string; registryUrl: string }> = {
-  rust: { code: "cargo add ruvio-client", title: "Cargo", registryUrl: "https://crates.io/crates/ruvio-client" },
-  csharp: { code: "dotnet add package Ruvio.Client", title: ".NET CLI", registryUrl: "https://www.nuget.org/packages/Ruvio.Client" },
-  go: { code: "go get github.com/salihcantekin/ruvio/clients/go", title: "Go", registryUrl: "https://pkg.go.dev/github.com/salihcantekin/ruvio/clients/go" },
+const install: Record<string, { code: string; lang: Lang; title?: string; registryUrl: string }> = {
+  rust: { code: "cargo add ruvio-client", lang: "shell", registryUrl: "https://crates.io/crates/ruvio-client" },
+  csharp: { code: "dotnet add package Ruvio.Client", lang: "shell", registryUrl: "https://www.nuget.org/packages/Ruvio.Client" },
+  go: { code: "go get github.com/salihcantekin/ruvio/clients/go", lang: "shell", registryUrl: "https://pkg.go.dev/github.com/salihcantekin/ruvio/clients/go" },
   java: {
-    code: `// Gradle: build.gradle.kts
-implementation("io.github.salihcantekin:ruvio-client:0.1.0")`,
-    title: "Gradle",
+    code: `implementation("io.github.salihcantekin:ruvio-client:0.1.0")`,
+    lang: "kotlin",
+    title: "build.gradle.kts",
     registryUrl: "https://central.sonatype.com/artifact/io.github.salihcantekin/ruvio-client",
   },
-  python: { code: "pip install ruvio-client", title: "pip", registryUrl: "https://pypi.org/project/ruvio-client/" },
-  node: { code: "npm install ruvio-client", title: "npm", registryUrl: "https://www.npmjs.com/package/ruvio-client" },
+  python: { code: "pip install ruvio-client", lang: "shell", registryUrl: "https://pypi.org/project/ruvio-client/" },
+  node: { code: "npm install ruvio-client", lang: "shell", registryUrl: "https://www.npmjs.com/package/ruvio-client" },
 };
 
 const nav = [
@@ -67,7 +68,7 @@ const next = [
               version tag, built for linux/amd64. On an arm64 host such as Apple Silicon, Docker runs it under emulation;
               use a prebuilt binary for a native arm64 server.
             </p>
-            <CodeBlock title="Shell" code={`docker run --rm -p 6379:6379 \\
+            <CodeBlock lang="shell" code={`docker run --rm -p 6379:6379 \\
   -e RUVIO_REQUIREPASS=change-me \\
   -v ruvio-data:/data \\
   salihcantekin/ruvio:linux`} />
@@ -83,7 +84,7 @@ const next = [
                 Two shards publish consecutive ports. Advertise the host clients can reach; without that,{" "}
                 <code>CLUSTER SLOTS</code> hands out <code>127.0.0.1</code> and a remote app cannot follow <code>MOVED</code>.
               </p>
-              <CodeBlock title="Shell" code={`docker run --rm -p 6379-6380:6379-6380 \\
+              <CodeBlock lang="shell" code={`docker run --rm -p 6379-6380:6379-6380 \\
   -e RUVIO_SHARDS=2 \\
   -e RUVIO_ADDR=0.0.0.0:6379 \\
   -e RUVIO_ADVERTISE_HOST=YOUR_SERVER_IP \\
@@ -99,7 +100,7 @@ const next = [
               Windows x64. Each archive holds <code>ruvio</code> (the server), <code>ruvio-ctl</code> (backup, restore and
               checks), <code>ruvio.example.toml</code>, the README and the license; <code>SHA256SUMS</code> lists the checksums.
             </p>
-            <CodeBlock title="Shell" code={`# Linux x64; swap the platform for linux-arm64 or macos-arm64
+            <CodeBlock lang="shell" code={`# Linux x64; swap the platform for linux-arm64 or macos-arm64
 v=${v}
 curl -LO https://github.com/salihcantekin/ruvio/releases/download/ruvio-$v/ruvio-$v-linux-x64.tar.gz
 tar xzf ruvio-$v-linux-x64.tar.gz
@@ -113,7 +114,7 @@ cd ruvio-$v-linux-x64
           </div>
           <div>
             <p>From a checkout of the repository, with the Rust toolchain installed:</p>
-            <CodeBlock title="Shell" code={`cargo run --release --bin ruvio`} />
+            <CodeBlock lang="shell" code={`cargo run --release --bin ruvio`} />
             <p>
               The server is installed from the Docker image, a release binary, or built from a checkout; it is not
               published as a crate.
@@ -125,7 +126,7 @@ cd ruvio-$v-linux-x64
       <section class="step panel prose" id="connect" aria-labelledby="connect-h">
         <h2 id="connect-h"><span class="step-no" aria-hidden="true">2</span>Connect with redis-cli</h2>
         <p>Ruvio speaks RESP2, so <code>redis-cli</code> and existing RESP clients connect as they would to Redis.</p>
-        <CodeBlock title="Shell" code={`redis-cli -h 127.0.0.1 -p 6379 -a change-me PING
+        <CodeBlock lang="shell" code={`redis-cli -h 127.0.0.1 -p 6379 -a change-me PING
 # PONG`} />
         <p>
           Settings merge in this order: built-in defaults, <code>ruvio.toml</code> (or <code>--config</code> /{" "}
@@ -154,7 +155,7 @@ cd ruvio-$v-linux-x64
           Set it with <code>--durability</code>, <code>RUVIO_DURABILITY</code> or <code>persistence.profile</code> in{" "}
           <code>ruvio.toml</code>. Shard count, bind address and durability cannot change under a live process.
         </p>
-        <CodeBlock title="Shell" code={`docker run --rm -p 6379:6379 \\
+        <CodeBlock lang="shell" code={`docker run --rm -p 6379:6379 \\
   -e RUVIO_REQUIREPASS=change-me \\
   -e RUVIO_DURABILITY=everysec \\
   -v ruvio-data:/data \\
@@ -177,7 +178,7 @@ cd ruvio-$v-linux-x64
                   <h3>{c.language}</h3>
                   <a class="registry" href={i.registryUrl}>{c.registry}</a>
                 </div>
-                <CodeBlock code={i.code} title={i.title} />
+                <CodeBlock code={i.code} lang={i.lang} title={i.title} />
                 <a class="guide" href={`/docs/clients/${c.slug}/`}>{c.language} guide</a>
               </li>
             );
@@ -196,7 +197,7 @@ cd ruvio-$v-linux-x64
           browser and connects to the Ruvio server named by <code>RUVIO_UI_TARGET_HOST</code> and{" "}
           <code>RUVIO_UI_TARGET_PORT</code>. Sign-in is the server ACL user.
         </p>
-        <CodeBlock title="Shell" code={`docker pull salihcantekin/ruvio-ui:linux
+        <CodeBlock lang="shell" code={`docker pull salihcantekin/ruvio-ui:linux
 docker run --rm -p 8080:8080 \\
   -e RUVIO_UI_TARGET_HOST=127.0.0.1 \\
   -e RUVIO_UI_TARGET_PORT=6379 \\

@@ -1,26 +1,28 @@
 ---
-// A code block in the page's terminal style; src/lib/code.ts dims comments and tints strings.
-import { codeToHtml } from "../../lib/code";
+// The one code box of the marketing pages: highlighted at build time (src/lib/highlight.ts), with
+// the language in its frame, an optional file or tool name next to it, and a copy button.
+import { highlight, languages, type Lang } from "../../lib/highlight";
 
-interface Props { code: string; title?: string; copy?: boolean }
-const { code, title, copy = true } = Astro.props;
+interface Props { code: string; lang: Lang; title?: string; copy?: boolean }
+const { code, lang, title, copy = true } = Astro.props;
 
-const html = codeToHtml(code);
+const html = await highlight(code, lang);
 ---
 
-<figure class="term code-block">
-  {(title || copy) && (
-    <figcaption class="term-bar">
-      <span>{title}</span>
-      {copy && <button type="button" class="copy" data-copy hidden>Copy</button>}
-    </figcaption>
-  )}
+<figure class="term code-block" data-lang={lang}>
+  <figcaption class="term-bar">
+    <span class="label"><b>{languages[lang]}</b>{title && <span>{title}</span>}</span>
+    {copy && <button type="button" class="copy" data-copy hidden>Copy</button>}
+  </figcaption>
   <pre tabindex="0"><code set:html={html} /></pre>
 </figure>
 
 <style>
   .code-block { margin: 0; }
   .code-block .term-bar { align-items: center; min-height: 40px; padding-block: 6px; }
+  .label { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+  .label b { font-weight: 500; color: var(--code-ink); }
+  .label span::before { content: "·"; margin-right: 8px; color: var(--code-dim); }
   .code-block pre { font-size: 13.5px; line-height: 1.7; }
   .code-block pre:focus-visible { outline: 2px solid var(--c2); outline-offset: -2px; }
   @media (max-width: 600px) {

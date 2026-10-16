@@ -7,6 +7,7 @@ import CommandMosaic from "../components/charts/CommandMosaic.astro";
 import RecoveryScale from "../components/charts/RecoveryScale.astro";
 import { platforms, commands, families, fmtOps, fmtX, pct, serverVersion } from "../data/bench";
 import { clients, site } from "../config/site";
+import CodeBlock from "../components/content/CodeBlock.astro";
 
 const jobs = [
   { title: "Caches without stampedes", cmds: ["FILLGET", "FILLSET"], text: "When a hot key expires, one caller refills it while the others wait or get the stale copy.", href: "/use-cases/#cache" },
@@ -23,6 +24,16 @@ const steps = [
   { name: "Apply", text: "The shard changes its own keys. No lock is taken." },
   { name: "Reply", text: "The answer goes back on the same thread." },
 ];
+
+// The hero terminal: a container start, then two coordination commands and their replies.
+const hero = `$ docker run -d -p 6379:6379 \\
+    -e RUVIO_REQUIREPASS=change-me \\
+    salihcantekin/ruvio:linux
+$ redis-cli -a change-me
+6379> LEASE job:nightly 30000
+(integer) 1
+6379> LIMIT api:key:42 100 60000
+(integer) 99`;
 ---
 
 <Page>
@@ -42,18 +53,7 @@ const steps = [
           <li>Linux, macOS and Windows builds</li>
         </ul>
       </div>
-      <div class="term" aria-label="Example terminal session">
-        <div class="term-bar"><span>Terminal</span><span>zsh</span></div>
-<pre><span class="p">$ </span>docker run -d -p 6379:6379 \
-    -e RUVIO_REQUIREPASS=change-me \
-    salihcantekin/ruvio:linux
-<span class="p">$ </span>redis-cli -a change-me
-<span class="p">6379&gt; </span>LEASE job:nightly 30000
-<span class="o">(integer) 1</span>
-<span class="p">6379&gt; </span>LIMIT api:key:42 100 60000
-<span class="o">(integer) 99</span>
-<span class="p">6379&gt; </span><span class="cur">▍</span></pre>
-      </div>
+      <CodeBlock lang="redis-session" copy={false} code={hero} />
     </div>
   </section>
 

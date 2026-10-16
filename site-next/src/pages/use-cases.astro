@@ -1,6 +1,6 @@
 ---
 import Page from "../layouts/Page.astro";
-import CodeTabs from "../components/content/CodeTabs.astro";
+import CodeTabs, { type CodeTab } from "../components/content/CodeTabs.astro";
 import { clientExamples } from "../data/client-examples";
 import { clients } from "../config/site";
 import SideNav from "../components/content/SideNav.astro";
@@ -12,11 +12,11 @@ type UseCase = { id: string; nav: string; title: string; problem: string; code: 
 const commands = "/docs/commands/";
 
 // The redis-cli lines first, then the same steps in every client that has an example for this case.
-const tabsFor = (c: UseCase) => [
-  { key: "cli", label: "redis-cli", code: c.code },
+const tabsFor = (c: UseCase): CodeTab[] => [
+  { key: "cli", label: "redis-cli", lang: "redis", code: c.code },
   ...clients.flatMap((k) => {
     const code = clientExamples[c.id]?.[k.slug];
-    return code ? [{ key: k.slug, label: k.language, code }] : [];
+    return code ? [{ key: k.slug, label: k.language, lang: k.lang, code }] : [];
   }),
 ];
 
