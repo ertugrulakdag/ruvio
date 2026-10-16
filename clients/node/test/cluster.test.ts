@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClusterClient, ConnectionError, RuvioError, hashSlot, createClusterClient } from '../src/index.js';
 import { ROUTED_COMMANDS, keysOfFrame } from '../src/cluster.js';
+import { COMMAND_KEY_RULES } from '../src/command-keys.js';
 import { Encoder, cmd } from '../src/encoder.js';
 import { arr, bulk, err, fakeServer, int, ok, slotsReply, type FakeServer } from './fake-server.js';
 
@@ -94,28 +95,19 @@ test('key extraction follows the Redis key positions', () => {
   assert.deepEqual(keys('ZUNION', 5, 'a', 'b'), ['a', 'b']);
 });
 
-test('every command in the compatibility matrix has a routing rule', () => {
+test('every command in the compatibility matrix has a key rule', () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const repoRoot = join(here, '..', '..', '..', '..');
   const matrix = JSON.parse(readFileSync(join(repoRoot, 'docs', 'compatibility-matrix.json'), 'utf8')) as {
     commands: { name: string; same_slot: boolean }[];
   };
   const names = new Set(matrix.commands.map((c) => c.name.split(' ')[0]!));
-  // Every command with an explicit rule is a real command (typo guard) ...
-  const extra = new Set(['BRPOPLPUSH', 'EVAL_RO', 'EVALSHA_RO', 'FCALL_RO', 'LASTSAVE', 'QUIT', 'RESET', 'TIME']);
-  for (const n of ROUTED_COMMANDS.keys()) assert.ok(names.has(n) || extra.has(n), 'unknown command in routing table: ' + n);
-  // ... and every same-slot command of the matrix is routed by its real key list, not by the default rule.
-  const sameSlot = matrix.commands.filter((c) => c.same_slot).map((c) => c.name);
-  const defaultRule = new Set(['EXEC', 'MULTI', 'GEORADIUS', 'GEORADIUSBYMEMBER']);
-  for (const n of sameSlot) {
-    if (defaultRule.has(n)) continue;
-    const r = ROUTED_COMMANDS.get(n);
-    assert.ok(r !== undefined && r.kind !== 'FIRST', n + ' needs a multi-key routing rule');
-  }
-  // Commands that are keyless or sub-command based must not be routed by their first word.
-  const keyless = ['ACL', 'CLIENT', 'CLUSTER', 'COMMAND', 'CONFIG', 'FUNCTION', 'SCRIPT', 'SLOWLOG', 'LATENCY', 'INFO', 'HELLO', 'AUTH', 'PING', 'CHANGES', 'RUVIO'];
-  for (const n of keyless) if (names.has(n)) assert.equal(ROUTED_COMMANDS.get(n)?.kind, 'ANY', n);
-  console.log(`routing: ${names.size} command names in the matrix, ${ROUTED_COMMANDS.size} with an explicit rule (the rest route by their first argument)`);
+  // Every command with a split / fan-out / blocking flag is a real command (typo guard) ...
+  const extra = new Set(['BRPOPLPUSH']);
+  for (const n of ROUTED_COMMANDS.keys()) assert.ok(COMMAND_KEY_RULES.has(n) || extra.has(n), 'unknown command in routing flags: ' + n);
+  // ... and every command of the matrix takes its key positions from the generated table.
+  for (const n of names) assert.ok(COMMAND_KEY_RULES.has(n), n + ' has no key rule');
+  console.log(`routing: ${names.size} command names in the matrix, ${COMMAND_KEY_RULES.size} with a key rule, ${ROUTED_COMMANDS.size} with a routing flag`);
 });
 
 // ---- fake-server behaviour ------------------------------------------------------------------

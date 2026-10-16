@@ -11,6 +11,7 @@
 
 import { Helpers, RuvioClient, type BinaryCommands, type ClientOptions } from './client.js';
 import type { Connection, BatchSink } from './connection.js';
+import { COMMAND_KEY_RULES, KeyRule, type CommandKeyRule } from './command-keys.js';
 import { Encoder } from './encoder.js';
 import { ConnectionError, RuvioError } from './errors.js';
 import { Batch, PipelineSink, TransactionImpl, type Pipeline, type Transaction } from './pipeline.js';
@@ -95,60 +96,37 @@ function scanFrame(b: Uint8Array, p: number): void {
   A_END = i;
 }
 
-enum K {
-  ANY, // no key: any node
-  FIRST, // key is argument 1
-  ALL, // every argument after the name is a key
-  TWO, // arguments 1 and 2
-  PAIRS, // MSET key value key value
-  BLOCKING_POP, // BLPOP key... timeout
-  COUNTED, // name ... numkeys key... (numkeys at argument 2)
-  COUNTED1, // name numkeys key... (numkeys at argument 1)
-  ZSTORE, // name dest numkeys key...
-  STREAMS, // XREAD ... STREAMS key... id...
-  SUB2, // name SUBCOMMAND key ...
-  BITOP, // BITOP op dest key...
-  JSON_MGET, // JSON.MGET key... path
-}
-
 const F_SPLIT = 1; // may be split per node when its keys span slots
 const F_FANOUT = 2; // keyless, answered by every node and merged
 const F_BLOCK = 4; // always blocks the connection
 const F_BLOCKOPT = 8; // blocks when a BLOCK / WAIT word is present
 
+/** A command's key rule from the generated table, with the client's own routing flags. */
 interface Spec {
   readonly name: string;
   readonly up: Buffer;
-  readonly kind: K;
+  readonly kind: KeyRule;
+  readonly a: number;
+  readonly b: number;
+  readonly c: number;
+  readonly words: readonly string[];
   readonly flags: number;
 }
 
-const SPEC_LISTS: [K, number, string][] = [
-  [
-    K.ANY,
-    0,
-    'ACL AUTH BGSAVE CHANGES CLIENT CLUSTER COMMAND CONFIG DISCARD ECHO EXEC FUNCTION HELLO INFO JSON.FIND JSON.INDEX ' +
-      'LASTSAVE LATENCY MULTI PING PSUBSCRIBE PUBLISH PUNSUBSCRIBE QUIT RANDOMKEY READONLY READWRITE RESET RUVIO SAVE ' +
-      'SCAN SCRIPT SELECT SLOWLOG SUBSCRIBE SWAPDB TIME UNSUBSCRIBE UNWATCH',
-  ],
-  [K.ANY, F_FANOUT, 'DBSIZE FLUSHALL FLUSHDB KEYS'],
-  [K.ANY, F_BLOCK, 'WAIT'],
-  [K.ALL, 0, 'PFCOUNT PFMERGE SDIFF SDIFFSTORE SINTER SINTERSTORE SSUBSCRIBE SUNION SUNIONSTORE SUNSUBSCRIBE WATCH'],
-  [K.ALL, F_SPLIT, 'DEL EXISTS MGET TOUCH UNLINK'],
-  [K.TWO, 0, 'COPY LMOVE RENAME RENAMENX RPOPLPUSH SMOVE GEOSEARCHSTORE'],
-  [K.TWO, F_BLOCK, 'BLMOVE BRPOPLPUSH'],
-  [K.PAIRS, F_SPLIT, 'MSET'],
-  [K.PAIRS, 0, 'MSETNX'],
-  [K.BLOCKING_POP, F_BLOCK, 'BLPOP BRPOP BZPOPMIN BZPOPMAX'],
-  [K.COUNTED, 0, 'EVAL EVALSHA EVAL_RO EVALSHA_RO FCALL FCALL_RO'],
-  [K.COUNTED, F_BLOCK, 'BLMPOP'],
-  [K.COUNTED1, 0, 'ZUNION ZINTER ZDIFF LMPOP SINTERCARD'],
-  [K.ZSTORE, 0, 'ZUNIONSTORE ZINTERSTORE ZDIFFSTORE'],
-  [K.STREAMS, F_BLOCKOPT, 'XREAD XREADGROUP'],
-  [K.SUB2, 0, 'XGROUP XINFO OBJECT MEMORY'],
-  [K.BITOP, 0, 'BITOP'],
-  [K.JSON_MGET, 0, 'JSON.MGET'],
-  [K.FIRST, F_BLOCKOPT, 'FILLGET'],
+// Key positions come from COMMAND_KEY_RULES; these lists only say how a command is sent.
+const FLAG_LISTS: [number, string][] = [
+  [F_FANOUT, 'DBSIZE FLUSHALL FLUSHDB KEYS'],
+  [F_BLOCK, 'WAIT BLMOVE BRPOPLPUSH BLPOP BRPOP BZPOPMIN BZPOPMAX BLMPOP'],
+  [F_SPLIT, 'DEL EXISTS MGET MSET TOUCH UNLINK'],
+  [F_BLOCKOPT, 'XREAD XREADGROUP FILLGET'],
+];
+
+// Sharded Pub/Sub goes to the node that owns the channel's slot: the channel stands where a
+// key would. The server lists no keys for these.
+const CHANNEL_RULES: [string, CommandKeyRule][] = [
+  ['SPUBLISH', [KeyRule.Range, 1, 1, 1, [], 0]],
+  ['SSUBSCRIBE', [KeyRule.Range, 1, -1, 1, [], 0]],
+  ['SUNSUBSCRIBE', [KeyRule.Range, 1, -1, 1, [], 0]],
 ];
 
 function nameHash(b: Uint8Array, o: number, len: number): number {
@@ -161,22 +139,26 @@ function nameHash(b: Uint8Array, o: number, len: number): number {
   return h;
 }
 
+/** Commands the table does not know route by their first argument. */
+const DEFAULT_RULE: CommandKeyRule = [KeyRule.Range, 1, 1, 1, [], 0];
+
 const SPECS = new Map<number, Spec>();
-/** Command names with an explicit (non-default) routing rule, for tests. */
-export const ROUTED_COMMANDS: ReadonlyMap<string, { kind: string; flags: number }> = (() => {
-  const out = new Map<string, { kind: string; flags: number }>();
-  for (const [kind, flags, names] of SPEC_LISTS) {
-    for (const name of names.split(' ')) {
-      const up = Buffer.from(name, 'latin1');
-      const h = nameHash(up, 0, up.length);
-      if (SPECS.has(h)) throw new Error('ruvio: command name hash collision: ' + name);
-      SPECS.set(h, { name, up, kind, flags });
-      out.set(name, { kind: K[kind]!, flags });
-    }
+/** Command names with a split / fan-out / blocking flag, for tests. */
+export const ROUTED_COMMANDS: ReadonlyMap<string, number> = (() => {
+  const flags = new Map<string, number>();
+  for (const [f, names] of FLAG_LISTS) for (const name of names.split(' ')) flags.set(name, (flags.get(name) ?? 0) | f);
+  const rules = new Map<string, CommandKeyRule>(COMMAND_KEY_RULES);
+  for (const [name, rule] of CHANNEL_RULES) rules.set(name, rule);
+  for (const name of flags.keys()) if (!rules.has(name)) rules.set(name, DEFAULT_RULE);
+  for (const [name, [kind, a, b, c, words]] of rules) {
+    const up = Buffer.from(name, 'latin1');
+    const h = nameHash(up, 0, up.length);
+    if (SPECS.has(h)) throw new Error('ruvio: command name hash collision: ' + name);
+    SPECS.set(h, { name, up, kind, a, b, c, words, flags: flags.get(name) ?? 0 });
   }
-  return out;
+  return flags;
 })();
-const DEFAULT_SPEC: Spec = { name: '', up: Buffer.alloc(0), kind: K.FIRST, flags: 0 };
+const DEFAULT_SPEC: Spec = { name: '', up: Buffer.alloc(0), kind: KeyRule.Range, a: 1, b: 1, c: 1, words: [], flags: 0 };
 
 /** The routing rule of the command in the frame just scanned. */
 function specOfFrame(b: Uint8Array): Spec {
@@ -206,6 +188,7 @@ function uint(b: Uint8Array, idx: number): number {
   return n;
 }
 
+/** Argument `idx` equals the upper-case word `w`, ignoring case (letters only). */
 function wordIs(b: Uint8Array, idx: number, w: string): boolean {
   if (A_LEN[idx] !== w.length) return false;
   const o = A_OFF[idx]!;
@@ -214,45 +197,29 @@ function wordIs(b: Uint8Array, idx: number, w: string): boolean {
 }
 
 /** Fills KI with the key argument indexes of the scanned frame; returns how many. */
-function keyIndexes(kind: K, b: Uint8Array): number {
+function keyIndexes(s: Spec, b: Uint8Array): number {
   const n = A_N;
   let c = 0;
-  switch (kind) {
-    case K.ANY:
+  switch (s.kind) {
+    case KeyRule.None:
       return 0;
-    case K.FIRST:
-      if (n < 2) return 0;
-      KI[0] = 1;
-      return 1;
-    case K.ALL:
-      for (let i = 1; i < n; i++) KI[c++] = i;
-      return c;
-    case K.TWO:
-      for (let i = 1; i < n && i <= 2; i++) KI[c++] = i;
-      return c;
-    case K.PAIRS:
-      for (let i = 1; i < n; i += 2) KI[c++] = i;
-      return c;
-    case K.BLOCKING_POP:
-      for (let i = 1; i < n - 1; i++) KI[c++] = i;
-      return c;
-    case K.COUNTED:
-    case K.COUNTED1: {
-      const at = kind === K.COUNTED ? 2 : 1;
-      const cnt = uint(b, at);
-      for (let i = at + 1; i < n && c < cnt; i++) KI[c++] = i;
+    case KeyRule.Range: {
+      // a..=b every c; a negative b counts from the end.
+      const last = s.b < 0 ? n + s.b : s.b;
+      for (let i = s.a; i <= last && i < n; i += s.c) KI[c++] = i;
       return c;
     }
-    case K.ZSTORE: {
-      if (n < 2) return 0;
-      KI[c++] = 1;
-      const cnt = uint(b, 2);
-      for (let i = 3; i < n && c - 1 < cnt; i++) KI[c++] = i;
+    case KeyRule.NumKeys: {
+      // The count at a, that many keys after it, and one key at b ahead of the count.
+      if (s.b > 0 && s.b < n) KI[c++] = s.b;
+      const end = s.a + 1 + uint(b, s.a);
+      for (let i = s.a + 1; i < end && i < n; i++) KI[c++] = i;
       return c;
     }
-    case K.STREAMS: {
+    case KeyRule.KeywordHalf: {
+      // The first half of the arguments after the keyword.
       for (let i = 1; i < n; i++) {
-        if (wordIs(b, i, 'STREAMS')) {
+        if (wordIs(b, i, s.words[0]!)) {
           const half = ((n - i - 1) / 2) | 0;
           for (let k = 0; k < half; k++) KI[c++] = i + 1 + k;
           return c;
@@ -260,16 +227,19 @@ function keyIndexes(kind: K, b: Uint8Array): number {
       }
       return 0;
     }
-    case K.SUB2:
-      if (n < 3) return 0;
-      KI[0] = 2;
-      return 1;
-    case K.BITOP:
-      for (let i = 2; i < n; i++) KI[c++] = i;
+    case KeyRule.KeyAndStore: {
+      // The key at a, and the argument after each keyword.
+      if (s.a < n) KI[c++] = s.a;
+      for (let i = s.a + 1; i + 1 < n; i++) {
+        for (const w of s.words) {
+          if (wordIs(b, i, w)) {
+            KI[c++] = ++i;
+            break;
+          }
+        }
+      }
       return c;
-    case K.JSON_MGET:
-      for (let i = 1; i < n - 1; i++) KI[c++] = i;
-      return c;
+    }
   }
 }
 
@@ -277,7 +247,7 @@ function keyIndexes(kind: K, b: Uint8Array): number {
 export function keysOfFrame(frame: Uint8Array): string[] {
   scanFrame(frame, 0);
   const spec = specOfFrame(frame);
-  const n = keyIndexes(spec.kind, frame);
+  const n = keyIndexes(spec, frame);
   const out: string[] = [];
   for (let i = 0; i < n; i++) {
     const a = KI[i]!;
@@ -499,8 +469,8 @@ class Router {
     scanFrame(b, p);
     const spec = (LAST_SPEC = specOfFrame(b));
     LAST_SLOT = -1;
-    if (spec.kind === K.ANY) return (spec.flags & F_FANOUT) !== 0 ? T_FANOUT : this.home;
-    const n = keyIndexes(spec.kind, b);
+    if (spec.kind === KeyRule.None) return (spec.flags & F_FANOUT) !== 0 ? T_FANOUT : this.home;
+    const n = keyIndexes(spec, b);
     if (n === 0) return this.home;
     let slot = -1;
     for (let i = 0; i < n; i++) {
@@ -610,7 +580,7 @@ class Router {
   /** MGET / MSET / DEL / UNLINK / EXISTS / TOUCH across slots: one sub-command per node, merged in caller order. */
   private split(b: Buffer, tf: Tf | null, fl: number): Promise<any> {
     const spec = LAST_SPEC;
-    const step = spec.kind === K.PAIRS ? 2 : 1;
+    const step = spec.c; // MSET: key value pairs
     // The server demands one slot per command (CROSSSLOT even inside one shard): group by slot.
     const groups = new Map<number, number[]>();
     for (let i = 1; i < A_N; i += step) {
