@@ -1,0 +1,63 @@
+// One place for the site's name, links and menus. Header, footer and the docs header read from here.
+
+export const site = {
+  name: "Ruvio",
+  url: "https://ruviodb.com",
+  description:
+    "Ruvio is a Rust key-value server that speaks the Redis protocol: one process for caching, locks, conditional writes, change feeds and delayed work.",
+  github: "https://github.com/salihcantekin/ruvio",
+  releases: "https://github.com/salihcantekin/ruvio/releases/latest",
+  discussions: "https://github.com/salihcantekin/ruvio/discussions",
+  dockerHub: "https://hub.docker.com/r/salihcantekin/ruvio",
+  version: "0.3.2",
+};
+
+export type NavItem = { label: string; href: string };
+
+export const mainNav: NavItem[] = [
+  { label: "Product", href: "/#product" },
+  { label: "Use cases", href: "/use-cases/" },
+  { label: "Benchmarks", href: "/benchmarks/" },
+  { label: "Clients", href: "/docs/clients/" },
+  { label: "Docs", href: "/docs/" },
+];
+
+export const footerNav: { title: string; items: NavItem[] }[] = [
+  {
+    title: "Product",
+    items: [
+      { label: "Overview", href: "/" },
+      { label: "Use cases", href: "/use-cases/" },
+      { label: "Benchmarks", href: "/benchmarks/" },
+      { label: "Get started", href: "/get-started/" },
+    ],
+  },
+  {
+    title: "Docs",
+    items: [
+      { label: "Documentation", href: "/docs/" },
+      { label: "Configuration", href: "/docs/configuration/" },
+      { label: "Commands", href: "/docs/commands/" },
+      { label: "Clients", href: "/docs/clients/" },
+    ],
+  },
+  {
+    title: "Community",
+    items: [
+      { label: "GitHub", href: site.github },
+      { label: "Discussions", href: site.discussions },
+      { label: "Releases", href: site.releases },
+      { label: "Docker Hub", href: site.dockerHub },
+    ],
+  },
+];
+
+// First-party clients: each has a typed method for every listed command.
+export const clients = [
+  { language: "Rust", package: "ruvio-client", registry: "crates.io", slug: "rust" },
+  { language: "C#", package: "Ruvio.Client", registry: "NuGet", slug: "csharp" },
+  { language: "Go", package: "github.com/salihcantekin/ruvio/clients/go", registry: "Go modules", slug: "go" },
+  { language: "Java", package: "io.github.salihcantekin:ruvio-client", registry: "Maven Central", slug: "java" },
+  { language: "Python", package: "ruvio-client", registry: "PyPI", slug: "python" },
+  { language: "Node.js", package: "ruvio-client", registry: "npm", slug: "node" },
+];

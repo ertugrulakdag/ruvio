@@ -1,0 +1,55 @@
+/*
+ * Ruvio site theme ("Dusk Rust").
+ * Every color, font and radius on the marketing pages and in the docs comes from here.
+ * To change the look, edit this file only; components never use literal colors.
+ */
+:root {
+  /* Surfaces */
+  --bg: #0a0c14;
+  --bg-band: #0d1019;
+  --surface: #10131f;
+  --surface-2: #151a2a;
+  --line: #242b3e;
+  --line-soft: rgba(160, 175, 215, 0.18);
+
+  /* Text */
+  --ink: #e9ecf3;
+  --mute: #959db0;
+  --faint: #6b7489;
+
+  /* Brand: the rust tone of the logo's beak, kept calm on dark ground */
+  --accent: #b4512a;
+  --accent-hover: #c35d34;
+  --accent-ink: #ffffff;
+
+  /* Data colors: Ruvio, a cool counterpart, a quiet third, and Redis */
+  --c1: #b9603b;
+  --c2: #8da2c0;
+  --c3: #4d5875;
+  --redis: #3a4258;
+
+  /* Code */
+  --code-bg: #080a12;
+  --code-ink: #dfe4ee;
+  --code-dim: rgba(220, 228, 240, 0.5);
+
+  /* Hero sky: night to dusk; --dusk is the horizon glow as an RGB triple */
+  --sky-0: #0a0c14;
+  --sky-1: #11162e;
+  --sky-2: #20152a;
+  --sky-3: #35160f;
+  --dusk: 176, 76, 36;
+
+  /* Type */
+  --f-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* Shape and rhythm */
+  --radius: 8px;
+  --radius-s: 6px;
+  --max: 1160px;
+  --gutter: max(16px, env(safe-area-inset-left, 0px));
+  --section-y: clamp(56px, 8vw, 96px);
+
+  color-scheme: dark;
+}
