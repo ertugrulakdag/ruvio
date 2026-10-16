@@ -713,6 +713,7 @@ pub(super) async fn handle_client(
                             owner,
                             &input[consumed - frame_length..consumed],
                             output.len(),
+                            hot_command_mutates_store(&command),
                         );
                         continue;
                     }
@@ -864,6 +865,7 @@ pub(super) async fn handle_client(
                                                 owner,
                                                 &input[consumed..consumed + frame_length],
                                                 output.len(),
+                                                command_may_write(&command),
                                             );
                                             consumed += frame_length;
                                             batch_commands += 1;
@@ -1063,8 +1065,8 @@ pub(super) async fn handle_client(
                             };
                             let reply_at = output.len();
 
-                            // Requests this connection sent to other shards so far (a WAIT settled them first).
-                            session.forwarded_shards |= forwarder.touched();
+                            // Shards this connection sent writes to so far (a WAIT settled them first).
+                            session.forwarded_shards |= forwarder.wrote();
                             dispatch_command(
                                 &state,
                                 &mut output,
@@ -2771,4 +2773,10 @@ async fn finish_retry(
     }
 
     Ok(())
+}
+
+/// Whether the command table marks `command` as one that writes (unknown names count as writes).
+fn command_may_write(command: &Command<'_>) -> bool {
+    crate::protocol::command_spec(crate::acl::command_acl_name(command).as_bytes())
+        .is_none_or(|spec| spec.flags & crate::protocol::flags::WRITE != 0)
 }

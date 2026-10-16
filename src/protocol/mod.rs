@@ -7,7 +7,6 @@ mod inline;
 mod parse;
 mod resp;
 mod table;
-#[cfg(test)]
 pub(crate) use table::flags;
 pub(crate) use table::{
     CommandSpec, acl_canonical, acl_commands, command_index, commands as all_commands,

@@ -466,8 +466,9 @@ pub(super) struct Forwarder {
     lanes: Vec<Lane>,
     marks: Vec<Mark>,
     next_token: u64,
-    /// Bit `dst` is set once a request went to shard `dst` (see `TxSession::forwarded_shards`).
-    touched: u64,
+    /// Bit `dst` is set once a command that may write went to shard `dst` (see
+    /// `TxSession::forwarded_shards`). Reads do not count: a WAIT waits for writes.
+    wrote: u64,
 }
 
 impl Forwarder {
@@ -481,13 +482,13 @@ impl Forwarder {
                 .collect(),
             marks: Vec::new(),
             next_token: 1,
-            touched: 0,
+            wrote: 0,
         }
     }
 
-    /// The shards this connection has sent requests to so far.
-    pub(super) fn touched(&self) -> u64 {
-        self.touched
+    /// The shards this connection has sent commands that may write to so far.
+    pub(super) fn wrote(&self) -> u64 {
+        self.wrote
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -498,9 +499,14 @@ impl Forwarder {
         self.marks.len()
     }
 
-    /// Queues `frame` for `dst`; its reply belongs at `offset` in the output.
-    pub(super) fn push(&mut self, dst: usize, frame: &[u8], offset: usize) {
+    /// Queues `frame` for `dst`; its reply belongs at `offset` in the output. `writes` when the
+    /// command may change data there.
+    pub(super) fn push(&mut self, dst: usize, frame: &[u8], offset: usize, writes: bool) {
         let lane = &mut self.lanes[dst];
+
+        if writes {
+            self.wrote |= 1 << dst;
+        }
 
         lane.frames.extend_from_slice(frame);
         lane.count += 1;
@@ -526,7 +532,6 @@ impl Forwarder {
             let token = self.next_token;
 
             self.next_token += 1;
-            self.touched |= 1 << dst;
             tokens.push((dst, token));
             forwarding.fabric.send(
                 forwarding.me,
@@ -632,7 +637,7 @@ impl Forwarder {
     ) -> io::Result<Vec<Vec<u8>>> {
         for dst in 0..self.lanes.len() {
             if dst != forwarding.me {
-                self.push(dst, frame, 0);
+                self.push(dst, frame, 0, false);
             }
         }
 
@@ -712,7 +717,8 @@ impl Forwarder {
         let token = self.next_token;
 
         self.next_token += 1;
-        self.touched |= 1 << dst;
+        // EXEC, blocking pops and the other commands sent alone: counted as writes.
+        self.wrote |= 1 << dst;
         forwarding.fabric.send(
             forwarding.me,
             dst,

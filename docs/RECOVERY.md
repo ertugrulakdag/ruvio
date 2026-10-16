@@ -279,7 +279,7 @@ closes the link). Upgrade the primary and its replicas together.
 
 `REPLICAOF` does not exist. Changing role is a restart with a new config.
 A client can block with `WAIT replicas milliseconds` until that many replicas
-have synced this shard's `wal_last_sequence`. The integer reply is the number
+have synced this shard's `wal_last_sequence` (in `port_mode = "single"` every shard's; in per-shard mode also the shards this connection's writes were forwarded to). The integer reply is the number
 that reached it. Timeout `0` waits until the process shuts down.
 
 ## Operator Checklist
