@@ -19,6 +19,7 @@
       <nav aria-label="Main navigation">
         <a href="index.html">Home</a>
         <a href="start.html">Start</a>
+        <a href="use-cases.html">Use cases</a>
         <details>
           <summary>Build</summary>
           <div class="nav-menu">
@@ -136,8 +137,8 @@ db.set("somekey", "other-shard")?;</pre>
 
 <section class="panel">
 <h2 id="reconnect">Reconnect</h2>
-      <p>Default on, for a single server and for each shard socket. The command that discovers the drop fails. The next command opens the socket, then runs. The C# client sends one <code>GET</code>, <code>MGET</code>, <code>EXISTS</code>, <code>HGET</code>, <code>TTL</code>, or <code>PTTL</code> again when the socket closes before any reply byte.</p>
-      <p>A pipeline is not retried. The Rust client does not retry that command. Channels subscribed on the Pub/Sub socket are sent again. Eight attempts, from 100 ms up to 2 seconds. <code>ReconnectDelay</code> / <code>set_reconnect_delay</code> replaces that wait; null or <code>None</code> stops it. With a custom delay, the attempt cap is not applied.</p>
+      <p>Default on, for a single server and for each shard socket. The command that discovers the drop fails. The next command opens the socket, then runs. No client sends that command again, reads included.</p>
+      <p>A pipeline is not retried either. Channels subscribed on the Pub/Sub socket are sent again. Eight attempts, from 100 ms up to 2 seconds. <code>ReconnectDelay</code> / <code>set_reconnect_delay</code> replaces that wait; null or <code>None</code> stops it. With a custom delay, the attempt cap is not applied.</p>
 <pre>await using var connection = await RuvioConnection.ConnectAsync(new RuvioClientOptions
 {
     Host = "127.0.0.1",

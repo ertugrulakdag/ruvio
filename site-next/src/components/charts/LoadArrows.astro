@@ -1,0 +1,81 @@
+---
+// Each load scenario as two tracks: throughput (right is better) and p99 latency (left is better).
+// A line joins Redis (hollow) to Ruvio (filled); the value sits next to Ruvio, away from Redis.
+import { loadRun, fmtOps } from "../../data/bench";
+
+const groups = [
+  { title: "No pipelining", test: (l: string) => /no pipeline/.test(l) },
+  { title: "Pipeline 16", test: (l: string) => /pipeline 16/.test(l) && !/always/.test(l) },
+  { title: "fsync on every write (always)", test: (l: string) => /always/.test(l) },
+].map((g) => ({ ...g, rows: loadRun.rows.filter((r) => g.test(r.label)) }));
+
+const all = loadRun.rows;
+const range = (vals: number[]) => {
+  const lo = Math.min(...vals) / 1.25, hi = Math.max(...vals) * 1.25;
+  return (v: number) => (Math.log(v / lo) / Math.log(hi / lo)) * 100;
+};
+const rpsAt = range(all.flatMap((r) => [r.ruvio.rps, r.redis.rps]));
+const p99At = range(all.flatMap((r) => [r.ruvio.p99, r.redis.p99]));
+const short = (l: string) => l.replace(/^(\w+), /, "$1 · ").replace(/durability always \(fsync\), |durability always, /, "").replace(", Ruvio", " · Ruvio");
+const ms = (v: number) => `${v < 1 ? v.toFixed(2) : v.toFixed(1)} ms`;
+---
+
+<div class="load" data-chart>
+  <div class="hdr">
+    <span>Scenario</span><span>Requests per second <em>→ better</em></span><span>p99 latency <em>← better</em></span>
+  </div>
+  {groups.map((g) => (
+    <section>
+      <h3>{g.title}</h3>
+      {g.rows.map((r) => {
+        const rpsUp = r.ruvio.rps >= r.redis.rps * 0.995, p99Down = r.ruvio.p99 <= r.redis.p99;
+        const a = rpsAt(r.redis.rps), b = rpsAt(r.ruvio.rps), c = p99At(r.redis.p99), d = p99At(r.ruvio.p99);
+        return (
+          <div class="row" tabindex="0" data-tip={r.label}
+            data-tip-sub={`Ruvio ${fmtOps(r.ruvio.rps)} req/s, p99 ${ms(r.ruvio.p99)}`}
+            data-tip-sub2={`Redis ${fmtOps(r.redis.rps)} req/s, p99 ${ms(r.redis.p99)}`}>
+            <span class="lab">{short(r.label)}</span>
+            <div class={`trk ${rpsUp ? "good" : ""}`}>
+              <i class="arr" style={`left:${Math.min(a, b)}%;width:${Math.abs(b - a)}%`}></i>
+              <i class="pt redis" style={`left:${a}%`}></i><i class="pt ruvio" style={`left:${b}%`}></i>
+              <b class={b >= a ? "r" : "l"} style={`left:${b}%`}>{(r.ruvio.rps / r.redis.rps).toFixed(2)}×</b>
+            </div>
+            <div class={`trk ${p99Down ? "good" : ""}`}>
+              <i class="arr" style={`left:${Math.min(c, d)}%;width:${Math.abs(d - c)}%`}></i>
+              <i class="pt redis" style={`left:${c}%`}></i><i class="pt ruvio" style={`left:${d}%`}></i>
+              <b class={d > c ? "r" : "l"} style={`left:${d}%`}>{ms(r.ruvio.p99)}</b>
+            </div>
+          </div>
+        );
+      })}
+    </section>
+  ))}
+</div>
+
+<style>
+  .load { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px 26px 12px; }
+  .hdr, .row { display: grid; grid-template-columns: minmax(0, 15rem) minmax(0, 1fr) minmax(0, 1fr); gap: 26px; align-items: center; }
+  .hdr { font-family: var(--f-mono); font-size: 11.5px; color: var(--faint); padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+  .hdr em { font-style: normal; color: var(--mute); }
+  h3 { margin: 18px 0 4px; font-size: 13px; font-weight: 600; color: var(--mute); }
+  .row { padding: 8px 0; outline: none; border-radius: 4px; }
+  .row.is-on .lab { color: var(--ink); }
+  .lab { font-size: 14px; color: var(--mute); }
+  .trk { position: relative; height: 24px; margin-inline: 70px; }
+  .arr { position: absolute; top: 50%; height: 2px; margin-top: -1px; background: var(--faint); }
+  .good .arr { background: color-mix(in srgb, var(--c1) 70%, transparent); }
+  .pt { position: absolute; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; }
+  .pt.redis { background: var(--surface); border: 2px solid var(--c2); }
+  .pt.ruvio { background: var(--c1); box-shadow: 0 0 0 2px var(--surface); }
+  .trk b.l { transform: translate(calc(-100% - 12px), -50%); }
+  .trk b { position: absolute; top: 50%; transform: translate(12px, -50%); font-family: var(--f-mono); font-size: 12.5px; font-weight: 500; color: var(--ink); white-space: nowrap; }
+  @media (max-width: 760px) {
+    .load { padding: 16px 16px 8px; }
+    .hdr { display: none; }
+    .row { grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); }
+    .trk::before { position: absolute; left: 0; top: -14px; font-family: var(--f-mono); font-size: 10.5px; color: var(--faint); }
+    .trk:nth-child(2)::before { content: "req/s →"; }
+    .trk:nth-child(3)::before { content: "p99 ←"; }
+    .trk { margin-top: 12px; }
+  }
+</style>

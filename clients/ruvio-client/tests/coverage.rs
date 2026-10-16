@@ -1,380 +1,63 @@
 //! Fails when a command in `docs/compatibility-matrix.json` has no typed method.
 //!
-//! `TABLE` maps every matrix name to the typed method(s) that send it. The test checks that
-//! the table and the matrix list the same commands and that each method is a real `pub fn`
-//! of the crate; `methods_exist` makes the compiler check the same names.
+//! `clients/testdata/command_methods.json` maps every matrix name to the typed method(s) that
+//! send it (the `"rust"` field: one name or a list of names). The test checks that the file and
+//! the matrix list the same commands and that each method is a real `pub fn` of the crate;
+//! `methods_exist` makes the compiler check the same names.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use ruvio_client::Client;
 
-const TABLE: &[(&str, &[&str])] = &[
-    ("RUVIO", &["ruvio"]),
-    ("PING", &["ping", "ping_message"]),
-    ("HELLO", &["hello"]),
-    ("AUTH", &["auth", "auth_user"]),
-    ("ACL WHOAMI", &["acl_whoami"]),
-    ("ACL USERS", &["acl_users"]),
-    ("ACL LIST", &["acl_list"]),
-    ("ACL GETUSER", &["acl_getuser"]),
-    ("ACL CAT", &["acl_cat"]),
-    ("ACL SETUSER", &["acl_setuser"]),
-    ("ACL LOAD", &["acl_load"]),
-    ("ACL SAVE", &["acl_save"]),
-    ("GET", &["get", "get_string"]),
-    ("SETV", &["setv"]),
-    ("TAKE", &["take"]),
-    ("DELEX", &["delex", "release_lock"]),
-    ("GETEX", &["getex"]),
-    ("LIMIT", &["limit", "rate_limit"]),
-    (
-        "IDEM",
-        &[
-            "idempotency_begin",
-            "idempotency_complete",
-            "idem_begin",
-            "idem_complete",
-        ],
-    ),
-    ("ONCE", &["once"]),
-    ("LEASE", &["lease", "lease_guard"]),
-    ("SEMAPHORE", &["semaphore", "semaphore_permit"]),
-    ("RELEASE", &["release"]),
-    ("CHANGES", &["changes_start", "changes"]),
-    (
-        "SET",
-        &[
-            "set",
-            "set_with",
-            "set_expires_at",
-            "set_keep_ttl",
-            "set_and_get",
-            "set_if_eq",
-            "set_if_eq_keep_ttl",
-            "set_ex",
-            "set_exat",
-            "set_bytes",
-        ],
-    ),
-    ("MGET", &["mget"]),
-    ("MSET", &["mset"]),
-    ("GETSET", &["getset"]),
-    ("APPEND", &["append"]),
-    ("STRLEN", &["strlen"]),
-    ("INCR", &["incr"]),
-    ("DECR", &["decr"]),
-    ("INCRBY", &["incr_by", "incr_by_max"]),
-    ("DECRBY", &["decr_by"]),
-    ("DEL", &["del", "del_key"]),
-    ("UNLINK", &["unlink", "unlink_key"]),
-    ("EXISTS", &["exists", "exists_key"]),
-    ("TYPE", &["key_type"]),
-    ("RENAME", &["rename"]),
-    ("SCAN", &["scan", "scan_iter"]),
-    ("DBSIZE", &["dbsize"]),
-    ("SELECT", &["select"]),
-    ("FLUSHDB", &["flushdb"]),
-    ("FLUSHALL", &["flushall"]),
-    ("SWAPDB", &["swapdb"]),
-    ("MOVE", &["move_key"]),
-    ("EXPIRE", &["expire"]),
-    ("PEXPIRE", &["expire", "pexpire"]),
-    ("EXPIREAT", &["expire_at"]),
-    ("PEXPIREAT", &["expire_at"]),
-    ("TTL", &["ttl"]),
-    ("PTTL", &["pttl"]),
-    ("PERSIST", &["persist"]),
-    ("LPUSH", &["lpush"]),
-    ("LPUSHCAP", &["lpushcap", "push_recent"]),
-    ("RPUSHCAP", &["rpushcap"]),
-    ("RPUSH", &["rpush"]),
-    ("LPOP", &["lpop", "lpop_count"]),
-    ("RPOP", &["rpop", "rpop_count"]),
-    ("LLEN", &["llen"]),
-    ("LINDEX", &["lindex"]),
-    ("LRANGE", &["lrange"]),
-    ("LTRIM", &["ltrim"]),
-    ("BLPOP", &["blpop", "blpop_key"]),
-    ("BRPOP", &["brpop", "brpop_key"]),
-    ("SADD", &["sadd"]),
-    ("SREM", &["srem"]),
-    ("SISMEMBER", &["sismember"]),
-    ("SCARD", &["scard"]),
-    ("SMEMBERS", &["smembers"]),
-    ("SINTER", &["sinter"]),
-    ("SUNION", &["sunion"]),
-    ("SDIFF", &["sdiff"]),
-    ("SINTERSTORE", &["sinterstore"]),
-    ("SUNIONSTORE", &["sunionstore"]),
-    ("SDIFFSTORE", &["sdiffstore"]),
-    ("SMOVE", &["smove"]),
-    ("SPOP", &["spop", "spop_count"]),
-    ("SRANDMEMBER", &["srandmember", "srandmember_count"]),
-    ("HSET", &["hset"]),
-    ("HGET", &["hget"]),
-    ("HDEL", &["hdel"]),
-    ("HLEN", &["hlen"]),
-    ("HGETALL", &["hgetall"]),
-    ("HMGET", &["hmget"]),
-    ("HEXISTS", &["hexists"]),
-    ("HKEYS", &["hkeys"]),
-    ("HVALS", &["hvals"]),
-    ("HINCRBY", &["hincr_by"]),
-    ("HSETNX", &["hsetnx"]),
-    ("HSTRLEN", &["hstrlen"]),
-    ("HSCAN", &["hscan", "hscan_iter"]),
-    ("HEXPIRE", &["hexpire_with"]),
-    ("HPEXPIRE", &["hexpire_with", "hpexpire"]),
-    ("HEXPIREAT", &["hexpire_at"]),
-    ("HPEXPIREAT", &["hexpire_at"]),
-    ("HTTL", &["httl"]),
-    ("HPTTL", &["hpttl"]),
-    ("HEXPIRETIME", &["hexpiretime"]),
-    ("HPEXPIRETIME", &["hpexpiretime"]),
-    ("HPERSIST", &["hpersist"]),
-    ("ZADD", &["zadd", "zadd_with", "zadd_incr"]),
-    (
-        "ZRANGE",
-        &[
-            "zrange",
-            "zrange_with_scores",
-            "zrange_by_lex",
-            "zrange_query",
-            "zrange_query_with_scores",
-        ],
-    ),
-    ("ZREVRANGE", &["zrevrange", "zrevrange_with_scores"]),
-    (
-        "ZRANGEBYSCORE",
-        &["zrange_by_score_with_scores", "zrange_by_score"],
-    ),
-    ("ZRANGEBYLEX", &["zrangebylex"]),
-    ("ZREVRANGEBYLEX", &["zrevrangebylex"]),
-    ("ZREM", &["zrem"]),
-    ("ZINCRBY", &["zincr_by"]),
-    ("ZCARD", &["zcard"]),
-    ("ZSCORE", &["zscore"]),
-    ("ZRANK", &["zrank"]),
-    ("ZREVRANK", &["zrevrank"]),
-    ("ZPOPMIN", &["zpopmin"]),
-    ("ZPOPMAX", &["zpopmax"]),
-    ("BZPOPMIN", &["bzpopmin"]),
-    ("BZPOPMAX", &["bzpopmax"]),
-    ("ZREMRANGEBYRANK", &["zremrangebyrank"]),
-    ("ZREMRANGEBYSCORE", &["zremrangebyscore"]),
-    ("ZREMRANGEBYLEX", &["zremrangebylex"]),
-    ("GEOADD", &["geo_add", "geo_add_with"]),
-    ("GEODIST", &["geo_dist"]),
-    ("GEOHASH", &["geo_hash"]),
-    ("GEOPOS", &["geo_pos"]),
-    ("GEOSEARCH", &["geo_search", "geo_search_with"]),
-    ("GEOSEARCHSTORE", &["geo_search_store"]),
-    ("GEORADIUS", &["geo_radius"]),
-    ("GEORADIUSBYMEMBER", &["geo_radius_by_member"]),
-    ("BF.RESERVE", &["bf_reserve", "bf_reserve_with"]),
-    ("BF.ADD", &["bf_add"]),
-    ("BF.MADD", &["bf_madd", "seen_before"]),
-    ("BF.INSERT", &["bf_insert"]),
-    ("BF.INFO", &["bf_info", "bf_info_field"]),
-    ("BF.CARD", &["bf_card"]),
-    ("BF.EXISTS", &["bf_exists"]),
-    ("BF.MEXISTS", &["bf_mexists", "maybe_seen"]),
-    ("JSON.GET", &["json_get"]),
-    (
-        "JSON.INDEX",
-        &["json_index_create", "json_index_drop", "json_index_list"],
-    ),
-    ("JSON.FIND", &["json_find"]),
-    ("JSON.MGET", &["json_mget"]),
-    ("JSON.SET", &["json_set", "json_set_with"]),
-    ("JSON.DEL", &["json_del"]),
-    (
-        "XADD",
-        &["xadd_nomkstream", "xadd_delay", "xadd", "xadd_maxlen"],
-    ),
-    ("XLEN", &["xlen"]),
-    ("XRANGE", &["xrange"]),
-    ("XREVRANGE", &["xrevrange"]),
-    ("XREAD", &["xread"]),
-    ("XDEL", &["xdel"]),
-    ("XSETID", &["xsetid"]),
-    ("XTRIM", &["xtrim_minid", "xtrim_maxlen"]),
-    ("XGROUP CREATE", &["xgroup_create"]),
-    ("XGROUP CREATECONSUMER", &["xgroup_create_consumer"]),
-    ("XREADGROUP", &["xreadgroup"]),
-    ("XGROUP DESTROY", &["xgroup_destroy"]),
-    ("XGROUP SETID", &["xgroup_setid"]),
-    ("XGROUP DELCONSUMER", &["xgroup_delconsumer"]),
-    ("XACK", &["xack"]),
-    ("XPENDING", &["xpending_summary", "xpending"]),
-    ("XAUTOCLAIM", &["xautoclaim"]),
-    ("XCLAIM", &["xclaim", "xclaim_ids"]),
-    ("XINFO STREAM", &["xinfo_stream"]),
-    ("XINFO GROUPS", &["xinfo_groups"]),
-    ("XINFO CONSUMERS", &["xinfo_consumers"]),
-    ("INFO", &["info"]),
-    ("WAIT", &["wait"]),
-    ("CONFIG GET", &["config_get"]),
-    ("SAVE", &["save"]),
-    ("BGSAVE", &["bgsave"]),
-    ("MULTI", &["multi"]),
-    ("EXEC", &["exec"]),
-    ("DISCARD", &["discard"]),
-    ("WATCH", &["watch", "watch_key"]),
-    ("UNWATCH", &["unwatch"]),
-    ("EVAL", &["eval"]),
-    ("EVALSHA", &["evalsha"]),
-    ("SCRIPT LOAD", &["script_load"]),
-    ("SCRIPT EXISTS", &["script_exists"]),
-    ("SCRIPT FLUSH", &["script_flush"]),
-    ("SCRIPT KILL", &["script_kill"]),
-    ("FCALL", &["fcall"]),
-    ("FUNCTION LOAD", &["function_load"]),
-    ("FUNCTION LIST", &["function_list"]),
-    ("FUNCTION DELETE", &["function_delete"]),
-    ("CLUSTER SLOTS", &["cluster_slots"]),
-    ("CLUSTER NODES", &["cluster_nodes"]),
-    ("CLUSTER SHARDS", &["cluster_shards"]),
-    ("CLUSTER INFO", &["cluster_info"]),
-    ("CLUSTER MYID", &["cluster_myid"]),
-    ("CLUSTER KEYSLOT", &["cluster_keyslot"]),
-    ("READONLY", &["readonly"]),
-    ("READWRITE", &["readwrite"]),
-    ("SPUBLISH", &["spublish"]),
-    ("SSUBSCRIBE", &["ssubscribe"]),
-    ("SUNSUBSCRIBE", &["sunsubscribe"]),
-    ("PUBLISH", &["publish"]),
-    ("SUBSCRIBE", &["subscribe", "subscriber"]),
-    ("UNSUBSCRIBE", &["unsubscribe"]),
-    ("PSUBSCRIBE", &["psubscribe"]),
-    ("PUNSUBSCRIBE", &["punsubscribe"]),
-    ("CLIENT GETNAME", &["client_getname"]),
-    ("CLIENT SETNAME", &["client_setname"]),
-    ("CLIENT TRACKING", &["client_tracking"]),
-    ("SSCAN", &["sscan", "sscan_iter"]),
-    ("ZSCAN", &["zscan", "zscan_iter"]),
-    ("JSON.MERGE", &["json_merge"]),
-    ("JSON.TYPE", &["json_type"]),
-    ("JSON.STRLEN", &["json_strlen"]),
-    ("JSON.ARRLEN", &["json_arrlen"]),
-    ("JSON.OBJKEYS", &["json_objkeys"]),
-    ("JSON.NUMINCRBY", &["json_numincrby"]),
-    ("JSON.TOGGLE", &["json_toggle"]),
-    ("JSON.ARRAPPEND", &["json_arrappend", "json_arrappend_many"]),
-    ("JSON.CLEAR", &["json_clear"]),
-    ("JSON.OBJLEN", &["json_objlen"]),
-    ("JSON.STRAPPEND", &["json_strappend"]),
-    ("JSON.NUMMULTBY", &["json_nummultby"]),
-    ("JSON.ARRINSERT", &["json_arrinsert"]),
-    ("JSON.ARRPOP", &["json_arrpop"]),
-    ("JSON.ARRTRIM", &["json_arrtrim"]),
-    ("JSON.ARRINDEX", &["json_arrindex"]),
-    ("JSON.FORGET", &["json_forget"]),
-    ("JMERGE", &["jmerge"]),
-    (
-        "COMMAND",
-        &[
-            "command_list",
-            "command_count",
-            "command_info",
-            "command_docs",
-        ],
-    ),
-    ("SETBIT", &["setbit"]),
-    ("BITFIELD", &["bitfield"]),
-    ("BITFIELD_RO", &["bitfield_ro"]),
-    ("GETBIT", &["getbit"]),
-    ("BITCOUNT", &["bitcount", "bitcount_range"]),
-    ("BITPOS", &["bitpos", "bitpos_range"]),
-    ("BITOP", &["bitop"]),
-    ("PFADD", &["pfadd"]),
-    ("PFCOUNT", &["pfcount"]),
-    ("PFMERGE", &["pfmerge"]),
-    ("FILLGET", &["fill_get", "fill_get_wait"]),
-    ("FILLSET", &["fill_set"]),
-    ("SETEX", &["setex"]),
-    ("PSETEX", &["psetex"]),
-    ("SETNX", &["setnx"]),
-    ("GETDEL", &["getdel"]),
-    ("MSETNX", &["msetnx"]),
-    ("INCRBYFLOAT", &["incr_by_float"]),
-    ("GETRANGE", &["getrange"]),
-    ("SUBSTR", &["substr"]),
-    ("SETRANGE", &["setrange"]),
-    ("SMISMEMBER", &["smismember"]),
-    ("SINTERCARD", &["sintercard"]),
-    ("ZCOUNT", &["zcount"]),
-    ("ZLEXCOUNT", &["zlexcount"]),
-    ("ZMSCORE", &["zmscore"]),
-    ("ZUNIONSTORE", &["zunionstore"]),
-    ("ZINTERSTORE", &["zinterstore"]),
-    ("ZDIFFSTORE", &["zdiffstore"]),
-    ("ZUNION", &["zunion", "zunion_with_scores"]),
-    ("ZINTER", &["zinter", "zinter_with_scores"]),
-    ("ZDIFF", &["zdiff", "zdiff_with_scores"]),
-    (
-        "ZRANDMEMBER",
-        &[
-            "zrandmember",
-            "zrandmember_count",
-            "zrandmember_with_scores",
-        ],
-    ),
-    (
-        "HRANDFIELD",
-        &["hrandfield", "hrandfield_count", "hrandfield_with_values"],
-    ),
-    ("HINCRBYFLOAT", &["hincr_by_float"]),
-    ("LINSERT", &["linsert"]),
-    ("LSET", &["lset"]),
-    ("LREM", &["lrem"]),
-    ("LPOS", &["lpos", "lpos_with", "lpos_count"]),
-    ("LMOVE", &["lmove"]),
-    ("RPOPLPUSH", &["rpoplpush"]),
-    ("BLMOVE", &["blmove"]),
-    ("LPUSHX", &["lpushx"]),
-    ("RPUSHX", &["rpushx"]),
-    ("LMPOP", &["lmpop"]),
-    ("BLMPOP", &["blmpop"]),
-    ("KEYS", &["keys"]),
-    ("RANDOMKEY", &["random_key"]),
-    ("TOUCH", &["touch"]),
-    ("RENAMENX", &["rename_nx"]),
-    ("EXPIRETIME", &["expire_time"]),
-    ("PEXPIRETIME", &["pexpire_time"]),
-    ("COPY", &["copy"]),
-    ("ECHO", &["echo"]),
-    (
-        "OBJECT",
-        &["object_encoding", "object_idletime", "object_freq"],
-    ),
-    ("MEMORY", &["memory_usage", "memory_usage_samples"]),
-    ("CLIENT ID", &["client_id"]),
-    ("CLIENT LIST", &["client_list"]),
-    ("CLIENT INFO", &["client_info"]),
-    ("CLIENT KILL", &["client_kill_id", "client_kill_addr"]),
-    ("SLOWLOG", &["slowlog_len", "slowlog_reset", "slowlog_get"]),
-    ("LATENCY", &["latency_latest"]),
-    ("DUMP", &["dump"]),
-    ("RESTORE", &["restore"]),
-];
-
-fn matrix_names() -> Vec<String> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/compatibility-matrix.json");
+/// Reads a JSON file relative to the crate, or `None` outside the repository (for example a
+/// published crate), where there is nothing to check.
+fn read_json(relative: &str) -> Option<serde_json::Value> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
     let Ok(text) = std::fs::read_to_string(&path) else {
-        // Outside the repository (for example a published crate) there is no matrix to check.
         eprintln!("skipping: {} not found", path.display());
 
+        return None;
+    };
+
+    Some(serde_json::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display())))
+}
+
+fn matrix_names() -> Vec<String> {
+    let Some(matrix) = read_json("../../docs/compatibility-matrix.json") else {
         return Vec::new();
     };
-    let matrix: serde_json::Value = serde_json::from_str(&text).expect("matrix is JSON");
 
     matrix["commands"]
         .as_array()
         .expect("commands array")
         .iter()
         .map(|command| command["name"].as_str().expect("name").to_owned())
+        .collect()
+}
+
+/// Command name to the Rust method(s) that send it.
+fn command_methods() -> BTreeMap<String, Vec<String>> {
+    let Some(file) = read_json("../testdata/command_methods.json") else {
+        return BTreeMap::new();
+    };
+
+    file["commands"]
+        .as_object()
+        .expect("commands object")
+        .iter()
+        .map(|(name, entry)| {
+            let methods = match &entry["rust"] {
+                serde_json::Value::String(method) => vec![method.clone()],
+                serde_json::Value::Array(list) => list
+                    .iter()
+                    .map(|method| method.as_str().expect("method name").to_owned())
+                    .collect(),
+                _ => Vec::new(),
+            };
+
+            (name.clone(), methods)
+        })
         .collect()
 }
 
@@ -401,29 +84,29 @@ fn every_matrix_command_has_a_typed_method() {
         return;
     }
 
-    let table: BTreeSet<&str> = TABLE.iter().map(|(name, _)| *name).collect();
+    let table = command_methods();
     let missing: Vec<&String> = names
         .iter()
-        .filter(|name| !table.contains(name.as_str()))
+        .filter(|name| !table.contains_key(name.as_str()))
         .collect();
-    let stale: Vec<&&str> = table
-        .iter()
-        .filter(|name| !names.iter().any(|known| known == *name))
-        .collect();
+    let stale: Vec<&String> = table.keys().filter(|name| !names.contains(name)).collect();
 
     assert!(
         missing.is_empty(),
         "matrix commands without a typed method: {missing:?}"
     );
-    assert!(stale.is_empty(), "table rows not in the matrix: {stale:?}");
-    assert_eq!(TABLE.len(), names.len(), "duplicate table rows");
+    assert!(
+        stale.is_empty(),
+        "command_methods.json rows not in the matrix: {stale:?}"
+    );
+    assert_eq!(table.len(), names.len(), "duplicate matrix commands");
 
     let source = crate_source();
 
-    for (name, methods) in TABLE {
-        assert!(!methods.is_empty(), "{name} maps to no method");
+    for (name, methods) in &table {
+        assert!(!methods.is_empty(), "{name} maps to no Rust method");
 
-        for method in *methods {
+        for method in methods {
             assert!(
                 source.contains(&format!("pub fn {method}("))
                     || source.contains(&format!("pub fn {method}<")),
@@ -434,7 +117,7 @@ fn every_matrix_command_has_a_typed_method() {
 
     println!(
         "typed coverage: {}/{} matrix commands",
-        TABLE.len(),
+        table.len(),
         names.len()
     );
 }

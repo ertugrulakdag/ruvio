@@ -30,13 +30,14 @@ The shard that owns a key parses, records, applies, and replies. A feature costs
 
 ## Checks
 
-From the repository root:
+[docs/DEVELOPING.md](docs/DEVELOPING.md) maps the code and lists every place a new command, setting or client method has to reach. From the repository root:
 
 ```bash
 cargo fmt --all --check
+scripts/check.sh          # standards tests, matrix drift, zero-cost guards; add --install-hook to run it before every push
 cargo test --lib
 ```
 
-A behavior change needs a test that fails without the change. Docs that state a number come from a measurement in `docs/BENCHMARK_RESULTS.md`. Do not write an unmeasured "N times faster" claim.
+A behavior change needs a test that fails without the change. Docs that state a number come from a dated measurement record in `docs/evidence/`. Do not write an unmeasured "N times faster" claim.
 
 Security defects go through [SECURITY.md](SECURITY.md), not a public issue or pull request.

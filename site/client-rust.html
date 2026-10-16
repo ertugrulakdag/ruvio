@@ -19,6 +19,7 @@
       <nav aria-label="Main navigation">
         <a href="index.html">Home</a>
         <a href="start.html">Start</a>
+        <a href="use-cases.html">Use cases</a>
         <details>
           <summary>Build</summary>
           <div class="nav-menu">
@@ -428,12 +429,12 @@ db.blpop_key("empty", Duration::from_millis(200))?; // =&gt; None</pre>
       <p>Pass one seed address. The client sends <code>CLUSTER SLOTS</code> to it. A standalone server answers <code>ERR cluster mode is disabled</code> and the client stays on one connection. On a sharded server it keeps a slot table (CRC16 of the key or of the <code>{hash tag}</code>, modulo 16384) and one socket per shard, opened as needed. Set <code>ClientOptions::discover_cluster = false</code> to stay on the seed socket.</p>
       <ul>
         <li><strong>Single key:</strong> sent to the owner shard. Keyless commands (<code>PING</code>, <code>INFO</code>, ...) go to the seed. <code>PUBLISH</code> goes to one node.</li>
-        <li><strong>Split and gathered:</strong> <code>MGET</code>, <code>MSET</code>, <code>DEL</code>, <code>EXISTS</code>, <code>TOUCH</code>, <code>UNLINK</code> run per shard and the replies come back in your order. <code>RENAME</code> across slots is done client-side (read, write, delete). These are not atomic.</li>
+        <li><strong>Split and gathered:</strong> <code>MGET</code>, <code>MSET</code>, <code>DEL</code>, <code>EXISTS</code>, <code>TOUCH</code>, <code>UNLINK</code> run per shard and the replies come back in your order. These are not atomic.</li>
         <li><strong>Every shard:</strong> <code>DBSIZE</code>, <code>FLUSHDB</code>, <code>FLUSHALL</code>. <code>SCAN</code> walks the shards one after another with a cursor that encodes the shard, so <code>scan_iter</code> sees all keys.</li>
-        <li><strong>Other multi-key commands</strong> (<code>SUNION</code>, <code>SINTER</code>, ...) need one slot, otherwise the client returns <code>CROSSSLOT</code> without sending.</li>
-        <li><strong>Pipelines:</strong> grouped per shard, one write each, replies returned in your order.</li>
+        <li><strong>Other multi-key commands</strong> (<code>RENAME</code>, <code>COPY</code>, <code>LMOVE</code>, <code>SUNION</code>, <code>SINTER</code>, ...) need one slot, otherwise the client returns <code>CROSSSLOT</code> without sending. There is no copy-and-delete emulation.</li>
+        <li><strong>Pipelines:</strong> grouped per shard, one write each, replies returned in your order. The split commands above are split inside a pipeline too, with the merged reply at their index; another cross-slot command gets <code>CROSSSLOT</code> at its index and the rest still runs.</li>
         <li><strong>Transactions:</strong> <code>WATCH</code>/<code>MULTI</code> pin to the first key's shard. A key from another shard fails with the server's <code>MOVED</code>.</li>
-        <li><strong>MOVED:</strong> refreshes the table and retries, at most 3 redirects. A command that was in flight when a socket dropped is not replayed.</li>
+        <li><strong>MOVED:</strong> the slot is pointed at the named node and the command sent there, at most 3 redirects. The table is reloaded only when the node is unknown or the same command is moved a second time. A command that was in flight when a socket dropped is not replayed.</li>
         <li>Only database 0 exists in cluster mode.</li>
       </ul>
       <p>Run against three shards (ports 17360 to 17362, seed 17360):</p>
@@ -466,7 +467,7 @@ db.scan_iter(None, None).count();                             // all 13 keys, db
 db.try_lock("lock:x", Duration::from_secs(5))?;               // works on the cluster client
 db.rate_limit("rl:ada", 2, Duration::from_secs(60))?;         // allowed=true remaining=1</pre>
       <p>With <code>discover_cluster</code> off, <code>get_string("somekey")</code> on the seed returned <code>Err("MOVED 11058 127.0.0.1:17362")</code>, as expected. Inside a transaction, a second key on another shard (<code>SET bravo</code> after <code>SET alpha</code>) also came back as <code>MOVED 8623 127.0.0.1:17361</code>, so the "single slot" rule is enforced by the server's reply, not by a client check before sending.</p>
-      <p><strong>Live test result.</strong> The repository's <code>tests/cluster_live.rs</code> was run against a real three-shard server (<code>RUVIO_CLUSTER_ADDR</code> pointing at the first shard) and both tests pass. The two tests share the one database a cluster has, so they now take turns. Not covered by that test file: forced <code>MOVED</code> recovery with a stale table, shard loss, and the keyless fan-out commands.</p>
+      <p><strong>Live test result.</strong> The repository's <code>tests/cluster_live.rs</code> was run against a real three-shard server (<code>RUVIO_CLUSTER_ADDR</code> pointing at the first shard) and they pass. The tests share the one database a cluster has, so they now take turns. Not covered by that test file: forced <code>MOVED</code> recovery with a stale table, shard loss, and the keyless fan-out commands.</p>
 </section>
 
 <section class="panel">
@@ -505,7 +506,7 @@ Client::connect("127.0.0.1", 17399);           // =&gt; Err(Io(ConnectionRefused
 cargo test                                          # unit tests + coverage test, no server needed
 RUVIO_TEST_ADDR=127.0.0.1:17350 cargo test          # also the live suites
 RUVIO_CLUSTER_ADDR=127.0.0.1:17360 cargo test --test cluster_live -- --test-threads=1</pre>
-      <p>Counts from my run (with a live standalone server, debug build): 27 unit tests, 1 coverage test, 12 tests in <code>tests/live.rs</code> (databases 0 to 7), 9 in <code>tests/live_ext.rs</code> (databases 0 and 8 to 15), 2 in <code>tests/cluster_live.rs</code>, and 5 doc tests.</p>
+      <p>The suites: unit tests, a coverage test, <code>tests/live.rs</code> (databases 0 to 7), <code>tests/live_ext.rs</code> (databases 0 and 8 to 15), <code>tests/cluster_live.rs</code>, and doc tests.</p>
       <p>All passed; the same counts passed with <code>--features serde</code>. The live suites flush those databases, so point them at a throwaway server. Without the environment variables the live tests return early and report as passed. <code>tests/coverage.rs</code> reads <code>docs/compatibility-matrix.json</code> and fails if a command has no typed method.</p>
       <p>Start a server for the tests as on <a href="start.html">Start</a>. For three shards, set <code>shards = 3</code> and <code>port_mode = "per-shard"</code> in the config; shard <em>i</em> listens on base port + <em>i</em>.</p>
 

@@ -16,6 +16,8 @@ from pathlib import Path
 
 from resp_conformance import encode, read_response
 
+from _ruvio import free_port
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_IMAGE = "ruvio:resilience-test"
@@ -36,10 +38,6 @@ def run(command, *, timeout=30, check=True):
     return result
 
 
-def free_port():
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return listener.getsockname()[1]
 
 
 def connect(port, timeout=2):

@@ -40,7 +40,7 @@ impl Server {
     /// `env` entries are passed as `RUVIO_*` settings (for example `("RUVIO_DURABILITY", "always")`).
     pub fn start_with(env: &[(&str, &str)]) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        // The template is copied: a server started with --address rewrites its config file.
+        // The template is copied, so a test that writes the config file leaves the original alone.
         let config = dir.path().join("ruvio.toml");
 
         std::fs::copy(
@@ -61,8 +61,18 @@ impl Server {
             _dir: dir,
         };
 
-        server.spawn();
-        server
+        // `free_port` releases the port before the server binds it, so another test can take
+        // it in between; then this server exits or a stranger answers, and a new port is tried.
+        for _ in 0..5 {
+            server.spawn();
+            if server.wait_ready() {
+                return server;
+            }
+            server.stop();
+            server.address = format!("127.0.0.1:{}", free_port());
+        }
+
+        panic!("server did not start on any of five ports");
     }
 
     fn spawn(&mut self) {
@@ -81,13 +91,39 @@ impl Server {
         }
 
         self.child = Some(command.spawn().unwrap());
+    }
 
+    /// Waits until this server answers on its address. False when the process exited first,
+    /// or when another process answers there (the port was taken after `free_port`).
+    fn wait_ready(&mut self) -> bool {
         let deadline = Instant::now() + Duration::from_secs(20);
 
-        while TcpStream::connect(&self.address).is_err() {
+        loop {
+            let child = self.child.as_mut().expect("spawned");
+
+            if child.try_wait().unwrap().is_some() {
+                return false;
+            }
+            if TcpStream::connect(&self.address).is_ok() {
+                return self.answers_as_this_server();
+            }
             assert!(Instant::now() < deadline, "server did not start");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// `CONFIG GET dir` names this server's data directory; a server that refuses the
+    /// command (for example behind a password) is taken as this one.
+    fn answers_as_this_server(&self) -> bool {
+        let mut client = Client::connect(&self.address);
+
+        if let Some((_, password)) = self.env.iter().find(|(key, _)| key == "RUVIO_REQUIREPASS") {
+            client.call(&["AUTH", password]);
+        }
+
+        let reply = client.call(&["CONFIG", "GET", "dir"]);
+
+        reply.starts_with("ERR:") || reply.contains(&*self.data_dir.to_string_lossy())
     }
 
     /// Kills the process without a clean shutdown (like a crash).
@@ -102,6 +138,11 @@ impl Server {
     pub fn restart(&mut self) {
         self.stop();
         self.spawn();
+        assert!(
+            self.wait_ready(),
+            "server did not restart on {}",
+            self.address
+        );
     }
 }
 

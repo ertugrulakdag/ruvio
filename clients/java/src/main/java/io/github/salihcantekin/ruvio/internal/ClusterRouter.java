@@ -26,11 +26,15 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <p>The slot table (16384 entries) is built from {@code CLUSTER SLOTS}. Each node has its own lazily
  * opened multiplexed {@link Link}; a lost node connection only affects commands for that node and is
- * reopened by the next command. A {@code -MOVED} reply patches the table (and refreshes it from the
- * server when the node is unknown or a second slot moved) and follows the redirect once.
+ * reopened by the next command. A {@code -MOVED} reply points that one slot at the named node and the
+ * command is sent there, at most {@link #MAX_REDIRECTS} times per command; the whole table is re-read from
+ * the server only when the named node is unknown or from the command's second MOVED on, and the retry still
+ * goes to the named node.
  */
 public final class ClusterRouter implements AutoCloseable {
     public static final int SLOTS = 16384;
+    /** MOVED redirects followed per command (each to the node the reply names) before the error is returned. */
+    public static final int MAX_REDIRECTS = 3;
 
     /** Where a routed frame goes: straight onto a connection, or into a pipeline group. */
     public interface Sink {
@@ -65,7 +69,6 @@ public final class ClusterRouter implements AutoCloseable {
     private final ConcurrentHashMap<String, ClusterNode> nodes = new ConcurrentHashMap<>();
     private volatile ClusterNode[] table = new ClusterNode[SLOTS];
     private final Object refreshLock = new Object();
-    private final AtomicInteger moved = new AtomicInteger();
     private volatile boolean closed;
 
     private ClusterRouter(RuvioOptions options, ClusterNode seed) {
@@ -220,7 +223,7 @@ public final class ClusterRouter implements AutoCloseable {
         byte[] b = f.out.buf;
         ClusterKeys.Spec spec = ClusterKeys.spec(b, f.off[0], f.len[0]);
         int slot = -1;
-        if (spec.kind == ClusterKeys.FIRST) {
+        if (spec.first) {
             if (f.argc >= 2) {
                 slot = HashSlot.of(b, f.off[1], f.len[1]);
             }
@@ -281,7 +284,7 @@ public final class ClusterRouter implements AutoCloseable {
      * run concurrently and the replies are re-assembled in the caller's order.
      */
     private void split(ClusterKeys.Spec spec, Frame f, int n, RoutedRequest<?> r, Sink sink) {
-        boolean pairs = spec.kind == ClusterKeys.EVERY2;
+        boolean pairs = spec.pairs;
         if (pairs && (f.argc & 1) == 0) {
             r.failFinal(new RuvioServerException("ERR wrong number of arguments for '" + spec.name.toLowerCase() + "' command"));
             return;
@@ -439,7 +442,7 @@ public final class ClusterRouter implements AutoCloseable {
         return m != null && m.startsWith("MOVED ");
     }
 
-    /** Follows a MOVED reply once: patch/refresh the table, then send the saved frame to the new owner. */
+    /** Follows a MOVED reply: patch/refresh the table, then send the saved frame to the new owner. */
     public void redirect(RoutedRequest<?> r, Throwable moved) {
         try {
             BACKGROUND.execute(() -> followMoved(r, moved));
@@ -460,14 +463,18 @@ public final class ClusterRouter implements AutoCloseable {
             int colon = addr.lastIndexOf(':');
             String host = colon > 0 ? addr.substring(0, colon) : seed.host;
             int port = Integer.parseInt(addr.substring(colon + 1));
-            ClusterNode target = onMoved(slot, host, port);
+            ClusterNode target = onMoved(slot, host, port, r.redirects > 1);
             DIRECT.send(target, r.frame, 0, r.frame.length, r);
         } catch (RuntimeException e) {
             r.failFinal(e instanceof NumberFormatException ? error : e);
         }
     }
 
-    private ClusterNode onMoved(int slot, String host, int port) {
+    /**
+     * Points the slot at the named node and returns that node, which the retry always goes to. Re-reads the
+     * whole table first when that node is unknown or {@code again} (the command's second MOVED or later).
+     */
+    private ClusterNode onMoved(int slot, String host, int port, boolean again) {
         ClusterNode n = nodes.get(ClusterNode.address(host, port));
         boolean unknown = n == null;
         if (unknown) {
@@ -476,16 +483,11 @@ public final class ClusterRouter implements AutoCloseable {
         if (slot >= 0 && slot < SLOTS) {
             table[slot] = n;
         }
-        if (unknown || moved.incrementAndGet() > 1) {
-            moved.set(0);
+        if (unknown || again) {
             try {
                 refresh();
             } catch (RuntimeException ignored) {
                 // keep the patched slot; the next MOVED tries again
-            }
-            ClusterNode fresh = slot >= 0 && slot < SLOTS ? table[slot] : null;
-            if (fresh != null) {
-                n = fresh;
             }
         }
         return n;

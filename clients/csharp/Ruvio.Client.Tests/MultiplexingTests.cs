@@ -296,7 +296,7 @@ public class MultiplexingTests
     }
 
     [Fact(Timeout = 15000)]
-    public async Task RetryStateIsPerRequestNotSharedWithAPartialPreviousReply()
+    public async Task ClosedBeforeReplyIsPerRequestNotSharedWithAPartialPreviousReply()
     {
         await using var session = await ScriptedSession.Open();
         ValueTask<string?> partial = session.Client.GetStringAsync("a");
@@ -307,10 +307,16 @@ public class MultiplexingTests
         session.CloseCommandSocket();
         RuvioException error = await Assert.ThrowsAsync<RuvioException>(async () => await partial);
         Assert.False(error.ClosedBeforeReply);
+
+        // The read whose reply never started fails too; it is not sent again.
+        RuvioException closed = await Assert.ThrowsAsync<RuvioException>(async () => await unread);
+        Assert.True(closed.ClosedBeforeReply);
+
+        ValueTask<string?> next = session.Client.GetStringAsync("c");
         SubscriberPipe replacement = await session.AcceptDatabaseAsync();
-        await replacement.Expect("GET", "b");
+        await replacement.Expect("GET", "c");
         await replacement.Reply("$-1\r\n");
-        Assert.Null(await unread);
+        Assert.Null(await next);
     }
 
     [Fact(Timeout = 15000)]

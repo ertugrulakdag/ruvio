@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A connected replica that stops reading must not pin the primary's WAL without limit (J6).
+"""A connected replica that stops reading must not pin the primary's WAL without limit.
 
 Starts a primary (replica_retain_max_bytes = 1 MiB) and a replica, freezes the replica with
 SIGSTOP, writes ~25 MiB of JSON path writes, checkpoints, and checks that the primary dropped the

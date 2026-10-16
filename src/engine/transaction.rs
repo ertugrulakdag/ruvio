@@ -141,9 +141,9 @@ pub(super) enum Undo<I> {
     /// A `JSON.INDEX CREATE` or `DROP`: the index named as it was before the command.
     JsonIndex {
         name: String,
-        before: Option<crate::json_index::Definition>,
+        before: Option<crate::json::index::Definition>,
         /// The whole index a `DROP` removes, so undoing it needs no rebuild.
-        kept: Option<Box<crate::json_index::Index>>,
+        kept: Option<Box<crate::json::index::Index>>,
     },
 }
 

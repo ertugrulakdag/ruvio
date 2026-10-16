@@ -7,8 +7,9 @@ use std::net::{TcpStream, ToSocketAddrs};
 
 use std::time::Duration;
 
-use crate::client::ClientOptions;
+use crate::client::{ClientOptions, NoticeHook};
 use crate::codec::read_value;
+use crate::command_keys::{COMMAND_KEY_RULES, KeyRule};
 
 use crate::error::Error;
 use crate::value::RespValue;
@@ -17,86 +18,9 @@ pub const SLOT_COUNT: u16 = 16_384;
 
 const MAX_REDIRECTS: usize = 3;
 
-const KEYLESS: &[&str] = &[
-    "ACL",
-    "AUTH",
-    "BGSAVE",
-    "CHANGES",
-    "CLIENT",
-    "CLUSTER",
-    "COMMAND",
-    "CONFIG",
-    "DBSIZE",
-    "DISCARD",
-    "ECHO",
-    "EXEC",
-    "FLUSHALL",
-    "FLUSHDB",
-    "FUNCTION",
-    "HELLO",
-    "INFO",
-    // JSON.INDEX and JSON.FIND name an index, not a key; the server fans them out to every shard.
-    "JSON.FIND",
-    "JSON.INDEX",
-    "KEYS",
-    "LASTSAVE",
-    // LATENCY subcommands (e.g. LATENCY LATEST) have no key; without this entry the
-    // fallback arm would take the subcommand name as the routing key.
-    "LATENCY",
-    "MULTI",
-    "PING",
-    "PSUBSCRIBE",
-    "PUBLISH",
-    "PUNSUBSCRIBE",
-    "QUIT",
-    "RANDOMKEY",
-    "READONLY",
-    "READWRITE",
-    "RESET",
-    // RUVIO's optional argument is a word (OWNER, HOTKEYS), not a key.
-    "RUVIO",
-    "SAVE",
-    "SCAN",
-    "SCRIPT",
-    "SELECT",
-    "SLOWLOG",
-    "SUBSCRIBE",
-    "SWAPDB",
-    "TIME",
-    "UNSUBSCRIBE",
-    "UNWATCH",
-    "WAIT",
-];
-
-const EVERY_ARGUMENT: &[&str] = &[
-    "DEL",
-    "EXISTS",
-    "MGET",
-    "PFCOUNT",
-    "PFMERGE",
-    "SDIFF",
-    "SDIFFSTORE",
-    "SINTER",
-    "SINTERSTORE",
-    "SSUBSCRIBE",
-    "SUNION",
-    "SUNIONSTORE",
-    "SUNSUBSCRIBE",
-    "TOUCH",
-    "UNLINK",
-    "WATCH",
-];
-
-const TWO_KEYS: &[&str] = &[
-    "BLMOVE",
-    "BRPOPLPUSH",
-    "COPY",
-    "LMOVE",
-    "RENAME",
-    "RENAMENX",
-    "RPOPLPUSH",
-    "SMOVE",
-];
+/// What the server answers for a command whose keys span slots; the client answers it the same
+/// way without sending the command.
+const CROSSSLOT: &str = "CROSSSLOT Keys in request do not hash to the same slot";
 
 const SPLIT: &[&str] = &["DEL", "EXISTS", "MGET", "MSET", "TOUCH", "UNLINK"];
 
@@ -166,21 +90,19 @@ fn crc16(bytes: &[u8]) -> u16 {
     crc
 }
 
+#[cfg(target_arch = "x86_64")]
 fn find_byte(haystack: &[u8], needle: u8) -> Option<usize> {
-    #[cfg(target_arch = "x86_64")]
-    {
-        return find_byte_sse2(haystack, needle);
-    }
+    find_byte_sse2(haystack, needle)
+}
 
-    #[cfg(target_arch = "aarch64")]
-    {
-        return find_byte_neon(haystack, needle);
-    }
+#[cfg(target_arch = "aarch64")]
+fn find_byte(haystack: &[u8], needle: u8) -> Option<usize> {
+    find_byte_neon(haystack, needle)
+}
 
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    {
-        haystack.iter().position(|byte| *byte == needle)
-    }
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn find_byte(haystack: &[u8], needle: u8) -> Option<usize> {
+    haystack.iter().position(|byte| *byte == needle)
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -254,77 +176,105 @@ fn listed(list: &[&str], name: &str) -> bool {
 
 /// The keys of a command, in argument order. Empty for keyless commands.
 pub(crate) fn command_keys<'a>(name: &str, arguments: &[&'a str]) -> Vec<&'a str> {
-    if arguments.len() < 2 || listed(KEYLESS, name) {
+    if arguments.len() < 2 {
         return Vec::new();
-    }
-
-    if listed(EVERY_ARGUMENT, name) {
-        return arguments[1..].to_vec();
-    }
-
-    if listed(TWO_KEYS, name) {
-        return arguments[1..].iter().take(2).copied().collect();
     }
 
     match name {
-        "MSET" | "MSETNX" => arguments[1..].iter().step_by(2).copied().collect(),
-        "BLPOP" | "BRPOP" | "BZPOPMIN" | "BZPOPMAX" => {
-            arguments[1..arguments.len().saturating_sub(1)].to_vec()
-        }
-        "EVAL" | "EVALSHA" | "EVAL_RO" | "EVALSHA_RO" | "FCALL" | "FCALL_RO" => {
-            counted(arguments, 2)
-        }
-        // LMPOP has numkeys at index 1; BLMPOP puts its timeout first, so numkeys is at index 2.
-        "ZUNION" | "ZINTER" | "ZDIFF" | "LMPOP" => counted(arguments, 1),
-        "BLMPOP" => counted(arguments, 2),
-        "ZUNIONSTORE" | "ZINTERSTORE" | "ZDIFFSTORE" => {
-            let mut keys = vec![arguments[1]];
-
-            keys.extend(counted(arguments, 2));
-
-            keys
-        }
-        "XREAD" | "XREADGROUP" => streams(arguments),
-        // BITOP op destination source...: the operation word is not a key.
-        "BITOP" => arguments.get(2..).unwrap_or(&[]).to_vec(),
-        "SINTERCARD" => counted(arguments, 1),
-        // JSON.MGET key... path: every argument but the trailing path.
-        "JSON.MGET" => arguments[1..arguments.len() - 1].to_vec(),
-        // XGROUP / XINFO put the subcommand first and the key second.
-        "XGROUP" | "XINFO" if arguments.len() > 2 => vec![arguments[2]],
-        "OBJECT" | "MEMORY" if arguments.len() > 2 => vec![arguments[2]],
-        _ => vec![arguments[1]],
+        // Sharded Pub/Sub has no keys in the command table, but routes by channel.
+        "SPUBLISH" => vec![arguments[1]],
+        "SSUBSCRIBE" | "SUNSUBSCRIBE" => arguments[1..].to_vec(),
+        _ => match key_rule(name) {
+            Some(rule) => rule_keys(rule, arguments),
+            // A command the table does not know is routed by its first argument.
+            None => vec![arguments[1]],
+        },
     }
 }
 
-fn counted<'a>(arguments: &[&'a str], count_index: usize) -> Vec<&'a str> {
-    let Some(count) = arguments
-        .get(count_index)
-        .and_then(|value| value.parse().ok())
-    else {
-        return Vec::new();
-    };
-
-    arguments
-        .get(count_index + 1..)
-        .unwrap_or(&[])
-        .iter()
-        .take(count)
-        .copied()
-        .collect()
+/// The command table's key rule for an upper-case command name.
+fn key_rule(name: &str) -> Option<KeyRule> {
+    COMMAND_KEY_RULES
+        .binary_search_by(|(entry, ..)| (*entry).cmp(name))
+        .ok()
+        .map(|index| COMMAND_KEY_RULES[index].1)
 }
 
-fn streams<'a>(arguments: &[&'a str]) -> Vec<&'a str> {
-    let Some(index) = arguments
-        .iter()
-        .position(|argument| argument.eq_ignore_ascii_case("STREAMS"))
-    else {
-        return Vec::new();
-    };
+fn keyless(name: &str) -> bool {
+    key_rule(name) == Some(KeyRule::None)
+}
 
-    let rest = arguments.len().saturating_sub(index + 1);
+fn rule_keys<'a>(rule: KeyRule, arguments: &[&'a str]) -> Vec<&'a str> {
+    let len = arguments.len();
 
-    arguments[index + 1..index + 1 + rest / 2].to_vec()
+    match rule {
+        KeyRule::None => Vec::new(),
+        KeyRule::Range { first, last, step } => {
+            // A negative last counts from the end: -1 is the last argument.
+            let last = if last < 0 {
+                len as isize + isize::from(last)
+            } else {
+                isize::from(last)
+            };
+            let end = (last + 1).clamp(0, len as isize) as usize;
+
+            arguments
+                .get(first as usize..end)
+                .unwrap_or(&[])
+                .iter()
+                .step_by(step as usize)
+                .copied()
+                .collect()
+        }
+        // The count promises more keys than there are: take what is there. A count that is not
+        // a number means no counted keys.
+        KeyRule::NumKeys { count_at, before } => {
+            let count_at = usize::from(count_at);
+            let count = arguments
+                .get(count_at)
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0);
+            let mut keys = Vec::new();
+
+            if before > 0 {
+                keys.extend(arguments.get(usize::from(before)).copied());
+            }
+
+            keys.extend(arguments.iter().skip(count_at + 1).take(count).copied());
+
+            keys
+        }
+        KeyRule::KeywordHalf { keyword } => {
+            let Some(index) = arguments[1..]
+                .iter()
+                .position(|argument| argument.eq_ignore_ascii_case(keyword))
+            else {
+                return Vec::new();
+            };
+            let rest = &arguments[index + 2..];
+
+            rest[..rest.len() / 2].to_vec()
+        }
+        KeyRule::KeyAndStore { first, keywords } => {
+            let first = usize::from(first);
+            let mut keys: Vec<&str> = arguments.get(first).copied().into_iter().collect();
+            let mut index = first + 1;
+
+            while index + 1 < len {
+                if keywords
+                    .iter()
+                    .any(|keyword| arguments[index].eq_ignore_ascii_case(keyword))
+                {
+                    keys.push(arguments[index + 1]);
+                    index += 1;
+                }
+
+                index += 1;
+            }
+
+            keys
+        }
+    }
 }
 
 pub(crate) struct Connection {
@@ -632,6 +582,12 @@ impl Topology {
         (next == SLOT_COUNT as usize).then_some(Self { owners, nodes })
     }
 
+    fn node_index(&self, host: &str, port: u16) -> Option<usize> {
+        self.nodes
+            .iter()
+            .position(|(known_host, known_port)| known_host == host && *known_port == port)
+    }
+
     fn owner(&self, slot: u16) -> Option<&(String, u16)> {
         self.owners
             .get(usize::from(slot))
@@ -646,8 +602,8 @@ pub(crate) struct ClusterRouter {
     topology: Topology,
     queued: Vec<Vec<String>>,
     reconnect_delay: Option<Arc<dyn Fn(u32) -> Option<Duration> + Send + Sync>>,
-    on_lost: Arc<Mutex<Option<Arc<dyn Fn(crate::client::ConnectionNotice) + Send + Sync>>>>,
-    on_restored: Arc<Mutex<Option<Arc<dyn Fn(crate::client::ConnectionNotice) + Send + Sync>>>>,
+    on_lost: NoticeHook,
+    on_restored: NoticeHook,
     pinned: Option<String>,
     multi_pending: bool,
     in_multi: bool,
@@ -696,11 +652,7 @@ impl ClusterRouter {
         self.reconnect_delay = Some(delay);
     }
 
-    pub(crate) fn share_hooks(
-        &mut self,
-        on_lost: Arc<Mutex<Option<Arc<dyn Fn(crate::client::ConnectionNotice) + Send + Sync>>>>,
-        on_restored: Arc<Mutex<Option<Arc<dyn Fn(crate::client::ConnectionNotice) + Send + Sync>>>>,
-    ) {
+    pub(crate) fn share_hooks(&mut self, on_lost: NoticeHook, on_restored: NoticeHook) {
         self.on_lost = on_lost;
         self.on_restored = on_restored;
     }
@@ -762,16 +714,12 @@ impl ClusterRouter {
         }
 
         let keys = command_keys(&name, arguments);
-
-        if matches!(name.as_str(), "RENAME" | "RENAMENX") && keys.len() == 2 && spans_slots(&keys) {
-            return self.rename_across(name == "RENAMENX", keys[0], keys[1]);
-        }
-
-        if listed(SPLIT, &name) && spans_slots(&keys) {
-            return self.split(&name, arguments, &keys);
-        }
-
-        let target = self.target(&keys)?;
+        let target = match slots_of(&keys) {
+            Slots::None => self.seed_target()?,
+            Slots::One(slot) => self.for_slot(slot)?,
+            Slots::Many if listed(SPLIT, &name) => return self.split(&name, arguments, &keys),
+            Slots::Many => return Ok(cross_slot()),
+        };
 
         self.send_routed(&target, arguments)
     }
@@ -783,27 +731,14 @@ impl ClusterRouter {
             .first()
             .map(|name| String::from_utf8_lossy(name).to_ascii_uppercase())
             .unwrap_or_default();
-        let mut current = match arguments.get(1) {
-            Some(key) if !listed(KEYLESS, &name) => self.for_slot(hash_slot_bytes(key))?,
+        let current = match arguments.get(1) {
+            Some(key) if !keyless(&name) => self.for_slot(hash_slot_bytes(key))?,
             _ => self.seed_target()?,
         };
 
-        for redirect in 0..=MAX_REDIRECTS {
-            let reply = self.connection(&current)?.send_bytes(arguments)?;
+        let reply = self.connection(&current)?.send_bytes(arguments)?;
 
-            if redirect == MAX_REDIRECTS {
-                return Ok(reply);
-            }
-
-            let Some((host, port)) = moved(&reply) else {
-                return Ok(reply);
-            };
-
-            self.refresh()?;
-            current = self.ensure(&host, port)?;
-        }
-
-        unreachable!("redirect loop ends")
+        self.follow_moved(reply, |connection| connection.send_bytes(arguments))
     }
 
     pub(crate) fn execute_many(&mut self, commands: &[&[&str]]) -> Result<Vec<RespValue>, Error> {
@@ -822,42 +757,79 @@ impl ClusterRouter {
             return self.connection(&key)?.send_many_owned(&owned);
         }
 
-        let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+        // Per node: where each reply goes, and the commands in pipeline order.
+        let mut groups: HashMap<String, (Vec<Destination>, Vec<Vec<String>>)> = HashMap::new();
+        let mut splits: Vec<PendingSplit> = Vec::new();
+        let mut replies = vec![RespValue::Null; commands.len()];
 
         for (index, command) in commands.iter().enumerate() {
             let name = command_name(command);
             let keys = command_keys(&name, command);
-            let target = self.target(&keys)?;
+            let target = match slots_of(&keys) {
+                Slots::None => self.seed_target()?,
+                Slots::One(slot) => self.for_slot(slot)?,
+                Slots::Many if listed(SPLIT, &name) => {
+                    match split_parts(&name, command, &keys) {
+                        Ok(Split { parts, positions }) => {
+                            for (part, (slot, part_command)) in parts.into_iter().enumerate() {
+                                let group = groups.entry(self.for_slot(slot)?).or_default();
 
-            groups.entry(target).or_default().push(index);
+                                group.0.push(Destination::Part {
+                                    split: splits.len(),
+                                    part,
+                                });
+                                group.1.push(part_command);
+                            }
+
+                            splits.push(PendingSplit {
+                                index,
+                                name,
+                                key_count: keys.len(),
+                                replies: vec![RespValue::Null; positions.len()],
+                                positions,
+                            });
+                        }
+                        Err(reply) => replies[index] = reply,
+                    }
+
+                    continue;
+                }
+                Slots::Many => {
+                    replies[index] = cross_slot();
+
+                    continue;
+                }
+            };
+            let group = groups.entry(target).or_default();
+
+            group.0.push(Destination::Whole(index));
+            group
+                .1
+                .push(command.iter().map(|item| (*item).to_owned()).collect());
         }
 
-        let mut replies = vec![RespValue::Null; commands.len()];
-
-        for (target, positions) in groups {
-            let batch: Vec<Vec<String>> = positions
-                .iter()
-                .map(|index| {
-                    commands[*index]
-                        .iter()
-                        .map(|item| (*item).to_owned())
-                        .collect()
-                })
-                .collect();
+        for (target, (destinations, batch)) in groups {
             let values = self.connection(&target)?.send_many_owned(&batch)?;
 
-            for (offset, value) in values.into_iter().enumerate() {
-                replies[positions[offset]] = value;
+            for ((destination, command), value) in destinations.into_iter().zip(&batch).zip(values)
+            {
+                let value =
+                    self.follow_moved(value, |connection| connection.send_owned(command))?;
+
+                match destination {
+                    Destination::Whole(index) => replies[index] = value,
+                    Destination::Part { split, part } => splits[split].replies[part] = value,
+                }
             }
         }
 
-        for (index, reply) in replies.iter_mut().enumerate() {
-            if let Some((host, port)) = moved(reply) {
-                self.refresh()?;
-                let key = self.ensure(&host, port)?;
-
-                *reply = self.send_routed(&key, commands[index])?;
-            }
+        for split in splits {
+            replies[split.index] = merge(
+                &split.name,
+                split.key_count,
+                &split.positions,
+                split.replies,
+            );
         }
 
         Ok(replies)
@@ -1067,374 +1039,80 @@ impl ClusterRouter {
     }
 
     fn split(&mut self, name: &str, arguments: &[&str], keys: &[&str]) -> Result<RespValue, Error> {
-        let pairs = name == "MSET";
+        let Split { parts, positions } = match split_parts(name, arguments, keys) {
+            Ok(split) => split,
+            Err(reply) => return Ok(reply),
+        };
+        let mut replies = Vec::with_capacity(parts.len());
 
-        // key value pairs after the name: an odd count is the caller's mistake, answered like the server would.
-        if pairs && arguments.len() % 2 == 0 {
-            return Ok(RespValue::Error(
-                "ERR wrong number of arguments for 'mset' command".to_owned(),
-            ));
-        }
-
-        let mut by_slot: HashMap<u16, Vec<usize>> = HashMap::new();
-
-        for (index, key) in keys.iter().enumerate() {
-            by_slot.entry(hash_slot(key)).or_default().push(index);
-        }
-
-        let mut parts = Vec::new();
-
-        for (slot, positions) in &by_slot {
-            let mut command = vec![arguments[0].to_owned()];
-
-            for position in positions {
-                if pairs {
-                    command.push(arguments[1 + position * 2].to_owned());
-                    command.push(arguments[2 + position * 2].to_owned());
-                } else {
-                    command.push(keys[*position].to_owned());
-                }
-            }
-
-            parts.push((*slot, positions.clone(), command));
-        }
-
-        let mut replies = Vec::new();
-
-        for (slot, _, command) in &parts {
+        for (slot, command) in &parts {
             let key = self.for_slot(*slot)?;
-            let reply = self.connection(&key)?.send_owned(command)?;
+            let reply = self.send_routed(&key, &borrowed(command))?;
 
-            if let Some((host, port)) = moved(&reply) {
-                self.refresh()?;
-                let redirected = self.ensure(&host, port)?;
-
-                replies.push(self.send_routed(&redirected, &borrowed(command))?);
-            } else if matches!(reply, RespValue::Error(_)) {
+            // The first error stops the remaining parts, as one command would have failed.
+            if matches!(reply, RespValue::Error(_)) {
                 return Ok(reply);
-            } else {
-                replies.push(reply);
             }
+
+            replies.push(reply);
         }
 
-        match name {
-            "MSET" => Ok(RespValue::Simple("OK".to_owned())),
-            "MGET" => {
-                let mut values = vec![RespValue::Null; keys.len()];
-
-                for (index, (_, positions, _)) in parts.iter().enumerate() {
-                    let Some(items) = replies[index].as_array() else {
-                        continue;
-                    };
-
-                    for (offset, item) in items.iter().enumerate() {
-                        values[positions[offset]] = item.clone();
-                    }
-                }
-
-                Ok(RespValue::Array(values))
-            }
-
-            _ => Ok(RespValue::Integer(
-                replies.iter().filter_map(RespValue::as_integer).sum(),
-            )),
-        }
-    }
-
-    /// Moves a key whose destination lives on another shard. One shard cannot
-    /// rename into a slot it does not own, so the client copies the value and
-    /// then deletes the source.
-    fn rename_across(
-        &mut self,
-        exclusive: bool,
-        source: &str,
-        destination: &str,
-    ) -> Result<RespValue, Error> {
-        if exclusive {
-            let exists = self.call(&["EXISTS", destination])?;
-
-            if exists.as_integer() == Some(1) {
-                return Ok(RespValue::Integer(0));
-            }
-        }
-
-        let kind = self
-            .call(&["TYPE", source])?
-            .as_string()?
-            .unwrap_or_default();
-
-        if kind == "none" {
-            return Ok(RespValue::Error("ERR no such key".to_owned()));
-        }
-
-        let ttl = self.call(&["PTTL", source])?.as_integer().unwrap_or(-1);
-        let moved = self.read_for_rename(&kind, source)?;
-
-        self.call(&["DEL", destination])?;
-        self.write_renamed(&kind, destination, &moved)?;
-
-        if ttl > 0 {
-            let millis = ttl.to_string();
-
-            self.call(&["PEXPIRE", destination, &millis])?;
-        }
-
-        self.call(&["DEL", source])?;
-
-        Ok(if exclusive {
-            RespValue::Integer(1)
-        } else {
-            RespValue::Simple("OK".to_owned())
-        })
-    }
-
-    fn read_for_rename(&mut self, kind: &str, source: &str) -> Result<MovedKey, Error> {
-        match kind {
-            "string" => Ok(MovedKey::String(required_text(
-                &self.call(&["GET", source])?,
-            )?)),
-            "list" => Ok(MovedKey::List(self.read_range("LRANGE", source, &[])?)),
-            "set" => Ok(MovedKey::Set(texts(&self.call(&["SMEMBERS", source])?)?)),
-            "hash" => Ok(MovedKey::Pairs(self.read_hash(source)?)),
-            "zset" => Ok(MovedKey::Pairs(self.read_zset(source)?)),
-            "stream" => Ok(MovedKey::Stream(self.read_stream(source)?)),
-            other => Err(Error::Protocol(format!(
-                "cross-slot rename does not move a {other} value"
-            ))),
-        }
-    }
-
-    fn write_renamed(
-        &mut self,
-        kind: &str,
-        destination: &str,
-        moved: &MovedKey,
-    ) -> Result<(), Error> {
-        match (kind, moved) {
-            ("string", MovedKey::String(value)) => {
-                self.call(&["SET", destination, value])?;
-            }
-
-            ("list", MovedKey::List(values)) => self.push_many("RPUSH", destination, values)?,
-            ("set", MovedKey::Set(values)) => self.push_many("SADD", destination, values)?,
-            ("hash", MovedKey::Pairs(pairs)) => {
-                self.push_pairs("HSET", destination, pairs, false)?
-            }
-            ("zset", MovedKey::Pairs(pairs)) => {
-                self.push_pairs("ZADD", destination, pairs, true)?
-            }
-            ("stream", MovedKey::Stream(entries)) => {
-                for (id, fields) in entries {
-                    let mut arguments = vec!["XADD".to_owned(), destination.to_owned(), id.clone()];
-
-                    for (field, value) in fields {
-                        arguments.push(field.clone());
-                        arguments.push(value.clone());
-                    }
-
-                    if arguments.len() > 3 {
-                        self.call_owned(&arguments)?;
-                    }
-                }
-            }
-
-            _ => {
-                return Err(Error::Protocol(
-                    "cross-slot rename lost the value shape".to_owned(),
-                ));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn read_range(
-        &mut self,
-        command: &str,
-        source: &str,
-        extra: &[&str],
-    ) -> Result<Vec<String>, Error> {
-        let mut start = 0_i64;
-        let mut values = Vec::new();
-
-        loop {
-            let from = start.to_string();
-            let to = (start + 199).to_string();
-            let mut arguments = vec![command, source, &from, &to];
-
-            arguments.extend(extra);
-
-            let page = texts(&self.call(&arguments)?)?;
-            let count = page.len() as i64;
-
-            values.extend(page);
-
-            if count < 200 {
-                break;
-            }
-
-            start += 200;
-        }
-
-        Ok(values)
-    }
-
-    fn read_hash(&mut self, source: &str) -> Result<Vec<(String, String)>, Error> {
-        let mut cursor = "0".to_owned();
-        let mut pairs = Vec::new();
-
-        loop {
-            let reply = self.call(&["HSCAN", source, &cursor, "COUNT", "64"])?;
-            let items = reply
-                .as_array()
-                .ok_or_else(|| Error::Protocol("HSCAN did not return a page".to_owned()))?;
-            let next = items
-                .first()
-                .and_then(|item| item.as_string().ok().flatten())
-                .unwrap_or_else(|| "0".to_owned());
-            let flat = items.get(1).map(texts).transpose()?.unwrap_or_default();
-
-            pairs.extend(pair_up(flat));
-
-            if next == "0" {
-                break;
-            }
-
-            cursor = next;
-        }
-
-        Ok(pairs)
-    }
-
-    fn read_zset(&mut self, source: &str) -> Result<Vec<(String, String)>, Error> {
-        let flat = self.read_range("ZRANGE", source, &["WITHSCORES"])?;
-
-        Ok(pair_up(flat))
-    }
-
-    fn read_stream(&mut self, source: &str) -> Result<Vec<(String, Vec<(String, String)>)>, Error> {
-        let mut start = "-".to_owned();
-        let mut entries = Vec::new();
-
-        loop {
-            let reply = self.call(&["XRANGE", source, &start, "+", "COUNT", "64"])?;
-            let page = reply
-                .as_array()
-                .map(|items| items.to_vec())
-                .unwrap_or_default();
-            let mut fresh = Vec::new();
-
-            for entry in page {
-                let Some(parts) = entry.as_array() else {
-                    continue;
-                };
-
-                let id = parts
-                    .first()
-                    .and_then(|item| item.as_string().ok().flatten())
-                    .unwrap_or_default();
-
-                if id.is_empty() || id == start {
-                    continue;
-                }
-
-                let fields = parts.get(1).map(texts).transpose()?.unwrap_or_default();
-
-                fresh.push((id, pair_up(fields)));
-            }
-
-            if fresh.is_empty() {
-                break;
-            }
-
-            start = fresh.last().expect("fresh entry").0.clone();
-            let done = fresh.len() < 63;
-
-            entries.extend(fresh);
-
-            if done {
-                break;
-            }
-        }
-
-        Ok(entries)
-    }
-
-    fn push_many(&mut self, command: &str, key: &str, values: &[String]) -> Result<(), Error> {
-        for chunk in values.chunks(32) {
-            let mut arguments = vec![command.to_owned(), key.to_owned()];
-
-            arguments.extend(chunk.iter().cloned());
-            self.call_owned(&arguments)?;
-        }
-
-        Ok(())
-    }
-
-    fn push_pairs(
-        &mut self,
-        command: &str,
-        key: &str,
-        pairs: &[(String, String)],
-        score_first: bool,
-    ) -> Result<(), Error> {
-        for chunk in pairs.chunks(32) {
-            let mut arguments = vec![command.to_owned(), key.to_owned()];
-
-            for (left, right) in chunk {
-                if score_first {
-                    arguments.push(right.clone());
-                    arguments.push(left.clone());
-                } else {
-                    arguments.push(left.clone());
-                    arguments.push(right.clone());
-                }
-            }
-
-            self.call_owned(&arguments)?;
-        }
-
-        Ok(())
-    }
-
-    fn call(&mut self, arguments: &[&str]) -> Result<RespValue, Error> {
-        let name = command_name(arguments);
-        let keys = command_keys(&name, arguments);
-        let target = self.target(&keys)?;
-        let reply = self.send_routed(&target, arguments)?;
-
-        match reply {
-            RespValue::Error(message) => Err(Error::Server(message)),
-            value => Ok(value),
-        }
-    }
-
-    fn call_owned(&mut self, arguments: &[String]) -> Result<RespValue, Error> {
-        let borrowed: Vec<&str> = arguments.iter().map(String::as_str).collect();
-
-        self.call(&borrowed)
+        Ok(merge(name, keys.len(), &positions, replies))
     }
 
     fn send_routed(&mut self, key: &str, arguments: &[&str]) -> Result<RespValue, Error> {
-        let mut current = key.to_owned();
+        let reply = self.connection(key)?.send(arguments)?;
 
-        // The redirect count is capped so a slot map that keeps changing cannot loop forever.
-        for redirect in 0..=MAX_REDIRECTS {
-            let reply = self.connection(&current)?.send(arguments)?;
+        self.follow_moved(reply, |connection| connection.send(arguments))
+    }
 
-            if redirect == MAX_REDIRECTS {
-                return Ok(reply);
-            }
-
-            let Some((host, port)) = moved(&reply) else {
+    /// Follows the `MOVED` redirects of a reply already read for one command, sending it again
+    /// with `send`. The count is capped so a slot map that keeps changing cannot loop forever:
+    /// after `MAX_REDIRECTS` redirects the last `MOVED` is returned.
+    fn follow_moved(
+        &mut self,
+        mut reply: RespValue,
+        mut send: impl FnMut(&mut Connection) -> Result<RespValue, Error>,
+    ) -> Result<RespValue, Error> {
+        for redirect in 1..=MAX_REDIRECTS {
+            let Some((slot, host, port)) = moved(&reply) else {
                 return Ok(reply);
             };
 
-            self.refresh()?;
-            current = self.ensure(&host, port)?;
+            let target = self.redirect(slot, &host, port, redirect)?;
+
+            reply = send(self.connection(&target)?)?;
         }
 
-        unreachable!("redirect loop ends")
+        Ok(reply)
+    }
+
+    /// Applies one `MOVED` before the command is sent again to the named node. The whole slot map
+    /// is reloaded first when that node is unknown to the client, and on the command's second and
+    /// later redirects. Either way the slot then points at the named node, even when the reloaded
+    /// map names another owner.
+    fn redirect(
+        &mut self,
+        slot: u16,
+        host: &str,
+        port: u16,
+        redirect: usize,
+    ) -> Result<String, Error> {
+        let mut node = self.topology.node_index(host, port);
+
+        if node.is_none() || redirect > 1 {
+            self.refresh()?;
+            node = self.topology.node_index(host, port);
+        }
+
+        let node = node.unwrap_or_else(|| {
+            self.topology.nodes.push((host.to_owned(), port));
+            self.topology.nodes.len() - 1
+        });
+
+        self.topology.owners[usize::from(slot)] = Some(node);
+
+        self.ensure(host, port)
     }
 
     fn refresh(&mut self) -> Result<(), Error> {
@@ -1582,60 +1260,147 @@ fn spreads_to_every_node(arguments: &[&str]) -> bool {
     })
 }
 
-enum MovedKey {
-    String(String),
-    List(Vec<String>),
-    Set(Vec<String>),
-    Pairs(Vec<(String, String)>),
-    Stream(Vec<(String, Vec<(String, String)>)>),
+/// Where the keys of one command hash to.
+enum Slots {
+    None,
+    One(u16),
+    Many,
 }
 
-fn required_text(value: &RespValue) -> Result<String, Error> {
-    value
-        .as_string()?
-        .ok_or_else(|| Error::Protocol("expected a bulk string".to_owned()))
-}
-
-fn texts(value: &RespValue) -> Result<Vec<String>, Error> {
-    let Some(items) = value.as_array() else {
-        return Ok(Vec::new());
+/// The slot of the first key, checked against the rest; a single key is hashed once.
+fn slots_of(keys: &[&str]) -> Slots {
+    let Some((first, rest)) = keys.split_first() else {
+        return Slots::None;
     };
-
-    items.iter().map(required_text).collect()
-}
-
-fn pair_up(flat: Vec<String>) -> Vec<(String, String)> {
-    let mut pairs = Vec::new();
-    let mut items = flat.into_iter();
-
-    while let Some(left) = items.next() {
-        pairs.push((left, items.next().unwrap_or_default()));
-    }
-
-    pairs
-}
-
-fn spans_slots(keys: &[&str]) -> bool {
-    let Some(first) = keys.first() else {
-        return false;
-    };
-
     let slot = hash_slot(first);
 
-    keys.iter().any(|key| hash_slot(key) != slot)
+    if rest.iter().any(|key| hash_slot(key) != slot) {
+        Slots::Many
+    } else {
+        Slots::One(slot)
+    }
 }
 
-// MOVED means the slot map is stale: callers refresh the topology before following the redirect.
-fn moved(reply: &RespValue) -> Option<(String, u16)> {
+fn cross_slot() -> RespValue {
+    RespValue::Error(CROSSSLOT.to_owned())
+}
+
+/// Where a pipeline reply goes: the command's own index, or one part of a split command.
+#[derive(Clone, Copy)]
+enum Destination {
+    Whole(usize),
+    Part { split: usize, part: usize },
+}
+
+/// A split command inside a pipeline, waiting for the replies of its parts.
+struct PendingSplit {
+    index: usize,
+    name: String,
+    key_count: usize,
+    positions: Vec<Vec<usize>>,
+    replies: Vec<RespValue>,
+}
+
+/// A split command cut per slot: each part's slot and command, and the key positions it carries.
+#[derive(Debug, PartialEq)]
+struct Split {
+    parts: Vec<(u16, Vec<String>)>,
+    positions: Vec<Vec<usize>>,
+}
+
+/// The per-slot parts of a split command (`MGET`, `MSET`, `DEL`, ...): each part's slot and
+/// command, and the key positions each part carries. An `MSET` with a key but no value gets
+/// the server's arity error instead.
+fn split_parts(name: &str, arguments: &[&str], keys: &[&str]) -> Result<Split, RespValue> {
+    let pairs = name == "MSET";
+
+    // key value pairs after the name: an odd count is the caller's mistake, answered like the server would.
+    if pairs && arguments.len().is_multiple_of(2) {
+        return Err(RespValue::Error(
+            "ERR wrong number of arguments for 'mset' command".to_owned(),
+        ));
+    }
+
+    let mut by_slot: HashMap<u16, Vec<usize>> = HashMap::new();
+
+    for (index, key) in keys.iter().enumerate() {
+        by_slot.entry(hash_slot(key)).or_default().push(index);
+    }
+
+    let mut parts = Vec::with_capacity(by_slot.len());
+    let mut positions = Vec::with_capacity(by_slot.len());
+
+    for (slot, held) in by_slot {
+        let mut command = vec![arguments[0].to_owned()];
+
+        for position in &held {
+            if pairs {
+                command.push(arguments[1 + position * 2].to_owned());
+                command.push(arguments[2 + position * 2].to_owned());
+            } else {
+                command.push(keys[*position].to_owned());
+            }
+        }
+
+        parts.push((slot, command));
+        positions.push(held);
+    }
+
+    Ok(Split { parts, positions })
+}
+
+/// One reply for a split command from its parts' replies: the first error, `OK` for `MSET`,
+/// the values in key order for `MGET`, and the summed count for the rest.
+fn merge(
+    name: &str,
+    key_count: usize,
+    positions: &[Vec<usize>],
+    replies: Vec<RespValue>,
+) -> RespValue {
+    if let Some(error) = replies
+        .iter()
+        .find(|reply| matches!(reply, RespValue::Error(_)))
+    {
+        return error.clone();
+    }
+
+    match name {
+        "MSET" => RespValue::Simple("OK".to_owned()),
+        "MGET" => {
+            let mut values = vec![RespValue::Null; key_count];
+
+            for (held, reply) in positions.iter().zip(replies) {
+                let RespValue::Array(items) = reply else {
+                    continue;
+                };
+
+                for (position, item) in held.iter().zip(items) {
+                    values[*position] = item;
+                }
+            }
+
+            RespValue::Array(values)
+        }
+
+        _ => RespValue::Integer(replies.iter().filter_map(RespValue::as_integer).sum()),
+    }
+}
+
+/// The slot and node of a `MOVED` reply. A slot outside the slot range makes it malformed.
+fn moved(reply: &RespValue) -> Option<(u16, String, u16)> {
     let RespValue::Error(text) = reply else {
         return None;
     };
 
-    let rest = text.strip_prefix("MOVED ")?;
-    let address = rest.split_whitespace().nth(1)?;
-    let (host, port) = address.rsplit_once(':')?;
+    let mut fields = text.strip_prefix("MOVED ")?.split_whitespace();
+    let slot = fields
+        .next()?
+        .parse()
+        .ok()
+        .filter(|slot| *slot < SLOT_COUNT)?;
+    let (host, port) = fields.next()?.rsplit_once(':')?;
 
-    Some((host.to_owned(), port.parse().ok()?))
+    Some((slot, host.to_owned(), port.parse().ok()?))
 }
 
 fn closed_socket() -> Error {
@@ -1871,6 +1636,64 @@ mod tests {
             ["chan"]
         );
     }
+
+    /// The keys in `clients/testdata/key_vectors.json` are the ones the server routes by.
+    /// SPUBLISH, SSUBSCRIBE and SUNSUBSCRIBE are skipped: they have no keys there, but this
+    /// client routes them by channel through the same function.
+    #[test]
+    fn command_keys_match_the_shared_vectors() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../testdata/key_vectors.json");
+        let text = std::fs::read_to_string(&path).expect("key_vectors.json");
+        let vectors: serde_json::Value =
+            serde_json::from_str(&text).expect("key_vectors.json is JSON");
+        let mut failures = std::collections::BTreeMap::new();
+        let mut checked = 0;
+
+        for entry in vectors["vectors"].as_array().expect("vectors") {
+            let arguments: Vec<&str> = entry["args"]
+                .as_array()
+                .expect("args")
+                .iter()
+                .map(|argument| argument.as_str().expect("argument"))
+                .collect();
+            let name = super::command_name(&arguments);
+
+            if matches!(name.as_str(), "SPUBLISH" | "SSUBSCRIBE" | "SUNSUBSCRIBE") {
+                continue;
+            }
+
+            let mut expected: Vec<&str> = entry["keys"]
+                .as_array()
+                .expect("keys")
+                .iter()
+                .map(|key| key.as_str().expect("key"))
+                .collect();
+            let mut actual = command_keys(&name, &arguments);
+
+            expected.sort_unstable();
+            actual.sort_unstable();
+            checked += 1;
+
+            if actual != expected {
+                failures
+                    .entry(name)
+                    .or_insert(format!("{arguments:?}: got {actual:?}, want {expected:?}"));
+            }
+        }
+
+        assert!(checked > 1_000, "only {checked} vectors");
+        assert!(
+            failures.is_empty(),
+            "{} commands route by the wrong keys:\n{}",
+            failures.len(),
+            failures
+                .iter()
+                .map(|(name, example)| format!("{name}: {example}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2024,7 +1847,7 @@ mod more_tests {
             ["k"]
         );
         assert_eq!(
-            command_keys("FCALL_RO", &["FCALL_RO", "fn", "2", "a", "b", "x"]),
+            command_keys("FCALL", &["FCALL", "fn", "2", "a", "b", "x"]),
             ["a", "b"]
         );
         // The count promises more keys than there are: take what is there.
@@ -2076,27 +1899,44 @@ mod more_tests {
         assert!(command_keys("XREAD", &["XREAD", "STREAMS"]).is_empty());
         assert_eq!(command_keys("OBJECT", &["OBJECT", "ENCODING", "k"]), ["k"]);
         assert_eq!(command_keys("MEMORY", &["MEMORY", "USAGE", "k"]), ["k"]);
-        assert_eq!(command_keys("OBJECT", &["OBJECT", "HELP"]), ["HELP"]);
-        assert_eq!(command_keys("XGROUP", &["XGROUP", "HELP"]), ["HELP"]);
+        // The key is the third argument; without one there is no key.
+        assert!(command_keys("OBJECT", &["OBJECT", "HELP"]).is_empty());
+        assert!(command_keys("XGROUP", &["XGROUP", "HELP"]).is_empty());
         assert!(command_keys("BITOP", &["BITOP", "NOT"]).is_empty());
         assert_eq!(command_keys("BITOP", &["BITOP", "AND", "d"]), ["d"]);
+    }
+
+    #[test]
+    fn command_key_rules_are_sorted_for_binary_search() {
+        assert!(
+            COMMAND_KEY_RULES
+                .windows(2)
+                .all(|pair| pair[0].0 < pair[1].0)
+        );
+        // Not in the table: routed by the first argument.
+        assert_eq!(
+            command_keys("NOT-A-COMMAND", &["NOT-A-COMMAND", "k"]),
+            ["k"]
+        );
     }
 
     #[test]
     fn small_helpers() {
         assert_eq!(command_name(&[]), "");
         assert_eq!(command_name(&["get", "k"]), "GET");
-        assert!(listed(KEYLESS, "PING"));
-        assert!(!listed(KEYLESS, "GET"));
+        assert!(keyless("PING"));
+        assert!(!keyless("GET"));
+        assert!(!keyless("NOT-A-COMMAND"));
         assert!(spreads_to_every_node(&["SCRIPT", "flush"]));
         assert!(spreads_to_every_node(&["FUNCTION", "Delete"]));
         assert!(spreads_to_every_node(&["SCRIPT", "load"]));
         assert!(!spreads_to_every_node(&["SCRIPT", "EXISTS"]));
         assert!(!spreads_to_every_node(&["SCRIPT"]));
-        assert!(!spans_slots(&[]));
-        assert!(!spans_slots(&["{a}1", "{a}2"]));
-        assert!(spans_slots(&["a", "b"]) || hash_slot("a") == hash_slot("b"));
-        assert!(spans_slots(&["{a}", "{b}"]));
+        assert!(matches!(slots_of(&[]), Slots::None));
+        assert!(matches!(slots_of(&["{a}1", "{a}2"]), Slots::One(slot) if slot == hash_slot("a")));
+        assert!(matches!(slots_of(&["{a}", "{b}"]), Slots::Many));
+        assert!(matches!(slots_of(&["{a}", "{a}x", "{b}"]), Slots::Many));
+        assert_eq!(cross_slot(), RespValue::Error(CROSSSLOT.to_owned()));
         assert_eq!(endpoint("h", 5), "h:5");
         assert_eq!(parse_endpoint("host:123"), ("host".to_owned(), 123));
         assert_eq!(parse_endpoint("::1:7"), ("::1".to_owned(), 7));
@@ -2105,33 +1945,94 @@ mod more_tests {
             ("nohostport".to_owned(), 6379)
         );
         assert_eq!(parse_endpoint("host:bad"), ("host:bad".to_owned(), 6379));
-        assert_eq!(
-            pair_up(strs(&["a", "1", "b"])),
-            vec![("a".into(), "1".into()), ("b".into(), String::new())]
-        );
-        assert!(pair_up(Vec::new()).is_empty());
         assert_eq!(borrowed(&strs(&["a", "b"])), ["a", "b"]);
     }
 
     #[test]
-    fn text_conversions() {
-        let bulk = |text: &str| RespValue::Bulk(text.as_bytes().to_vec());
+    fn split_parts_group_keys_by_slot_and_merge_restores_key_order() {
+        let Split { parts, positions } = split_parts(
+            "MGET",
+            &["MGET", "{a}1", "{b}1", "{a}2"],
+            &["{a}1", "{b}1", "{a}2"],
+        )
+        .unwrap();
+        let mut pairs: Vec<_> = parts.into_iter().zip(positions.clone()).collect();
 
-        assert_eq!(required_text(&bulk("x")).unwrap(), "x");
-        assert!(matches!(
-            required_text(&RespValue::Null),
-            Err(Error::Protocol(_))
-        ));
-        assert!(matches!(
-            required_text(&RespValue::Bulk(vec![0xff])),
-            Err(Error::Protocol(_))
-        ));
-        assert!(texts(&RespValue::Null).unwrap().is_empty());
+        pairs.sort_by_key(|((_, command), _)| command[1].clone());
         assert_eq!(
-            texts(&RespValue::Array(vec![bulk("a"), RespValue::Integer(2)])).unwrap(),
-            ["a", "2"]
+            pairs[0].0,
+            (hash_slot("a"), strs(&["MGET", "{a}1", "{a}2"]))
         );
-        assert!(texts(&RespValue::Array(vec![RespValue::Null])).is_err());
+        assert_eq!(pairs[0].1, [0, 2]);
+        assert_eq!(pairs[1].0, (hash_slot("b"), strs(&["MGET", "{b}1"])));
+
+        let bulk = |text: &str| RespValue::Bulk(text.as_bytes().to_vec());
+        let replies = positions
+            .iter()
+            .map(|held| {
+                RespValue::Array(
+                    held.iter()
+                        .map(|position| bulk(&position.to_string()))
+                        .collect(),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            merge("MGET", 3, &positions, replies),
+            RespValue::Array(vec![bulk("0"), bulk("1"), bulk("2")])
+        );
+
+        let Split { parts, .. } =
+            split_parts("MSET", &["MSET", "{a}", "1", "{b}", "2"], &["{a}", "{b}"]).unwrap();
+        let mut commands: Vec<_> = parts.into_iter().map(|(_, command)| command).collect();
+
+        commands.sort();
+        assert_eq!(
+            commands,
+            [strs(&["MSET", "{a}", "1"]), strs(&["MSET", "{b}", "2"])]
+        );
+        assert_eq!(
+            split_parts("MSET", &["MSET", "{a}", "1", "{b}"], &["{a}", "{b}"]),
+            Err(RespValue::Error(
+                "ERR wrong number of arguments for 'mset' command".to_owned()
+            ))
+        );
+
+        let two = vec![vec![0], vec![1]];
+
+        assert_eq!(
+            merge("MSET", 2, &two, vec![RespValue::Simple("OK".into()); 2]),
+            RespValue::Simple("OK".into())
+        );
+        assert_eq!(
+            merge(
+                "DEL",
+                2,
+                &two,
+                vec![RespValue::Integer(2), RespValue::Integer(3)]
+            ),
+            RespValue::Integer(5)
+        );
+        assert_eq!(
+            merge(
+                "DEL",
+                2,
+                &two,
+                vec![RespValue::Integer(1), RespValue::Error("ERR boom".into())]
+            ),
+            RespValue::Error("ERR boom".into())
+        );
+        // A part whose reply is not an array leaves its keys null.
+        assert_eq!(
+            merge(
+                "MGET",
+                2,
+                &two,
+                vec![RespValue::Integer(5), RespValue::Array(vec![bulk("x")])]
+            ),
+            RespValue::Array(vec![RespValue::Null, bulk("x")])
+        );
     }
 
     #[test]
@@ -2140,14 +2041,19 @@ mod more_tests {
 
         assert_eq!(
             moved(&error("MOVED 3999 127.0.0.1:6381")),
-            Some(("127.0.0.1".into(), 6381))
+            Some((3999, "127.0.0.1".into(), 6381))
         );
         assert_eq!(
             moved(&error("MOVED 1 [::1]:7000")),
-            Some(("[::1]".into(), 7000))
+            Some((1, "[::1]".into(), 7000))
         );
-        assert_eq!(moved(&error("MOVED  1   h:5 extra")), Some(("h".into(), 5)));
+        assert_eq!(
+            moved(&error("MOVED  16383   h:5 extra")),
+            Some((16383, "h".into(), 5))
+        );
         assert_eq!(moved(&error("MOVED 1")), None);
+        assert_eq!(moved(&error("MOVED 16384 h:5")), None);
+        assert_eq!(moved(&error("MOVED x h:5")), None);
         assert_eq!(moved(&error("MOVED 1 hostonly")), None);
         assert_eq!(moved(&error("MOVED 1 h:99999")), None);
         assert_eq!(moved(&error("MOVED 1 h:-1")), None);
@@ -2415,9 +2321,7 @@ mod more_tests {
 
             handle.join().unwrap();
 
-            let taken = requests.lock().unwrap().clone();
-
-            taken
+            requests.lock().unwrap().clone()
         }
     }
 
@@ -2701,16 +2605,16 @@ mod more_tests {
             let (mut socket, _) = listener.accept().unwrap();
             let mut buffer = [0_u8; 4096];
 
-            socket.read(&mut buffer).unwrap();
+            let _ = socket.read(&mut buffer).unwrap();
             socket.write_all(&slots_to(port)).unwrap();
-            socket.read(&mut buffer).unwrap();
+            let _ = socket.read(&mut buffer).unwrap();
             socket
                 .write_all(b"*3\r\n$9\r\nsubscribe\r\n$1\r\na\r\n:1\r\n*3\r\n$9\r\nsubscribe\r\n$1\r\nb\r\n:2\r\n")
                 .unwrap();
             socket
                 .write_all(b"*3\r\n$7\r\nmessage\r\n$1\r\na\r\n$2\r\nhi\r\n")
                 .unwrap();
-            socket.read(&mut buffer).unwrap();
+            let _ = socket.read(&mut buffer).unwrap();
             socket
                 .write_all(b"*3\r\n$10\r\nssubscribe\r\n$1\r\nc\r\n:1\r\n")
                 .unwrap();
@@ -2852,10 +2756,7 @@ mod more_tests {
             router.for_slot(5),
             Err(Error::Protocol(message)) if message == "no cluster owner for slot 5"
         ));
-        assert_eq!(
-            router.subscription_endpoint(&["SSUBSCRIBE", "x"]).1 > 0,
-            true
-        );
+        assert!(router.subscription_endpoint(&["SSUBSCRIBE", "x"]).1 > 0);
         drop(router);
         script.finish();
     }
@@ -2909,7 +2810,7 @@ mod more_tests {
             let (mut socket, _) = listener.accept().unwrap();
             let mut buffer = [0_u8; 256];
 
-            socket.read(&mut buffer).unwrap();
+            let _ = socket.read(&mut buffer).unwrap();
             socket.write_all(&slots_to(port)).unwrap();
             let _ = socket.read(&mut buffer);
         });

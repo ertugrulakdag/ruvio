@@ -19,6 +19,7 @@
       <nav aria-label="Main navigation">
         <a href="index.html">Home</a>
         <a href="start.html">Start</a>
+        <a href="use-cases.html">Use cases</a>
         <details>
           <summary>Build</summary>
           <div class="nav-menu">
@@ -76,14 +77,14 @@
 <h2 id="overview">The six clients</h2>
       <div class="table-wrap">
       <table>
-        <thead><tr><th>Client</th><th>Model</th><th>Cluster</th><th>Registry today</th><th>Tests (live server)</th></tr></thead>
+        <thead><tr><th>Client</th><th>Model</th><th>Cluster</th><th>Registry today</th><th>Tests</th></tr></thead>
         <tbody>
-          <tr><td><a href="client-rust.html">Rust</a></td><td>Blocking, std only, no dependencies</td><td>Yes</td><td>crates.io <code>ruvio-client</code> <span data-pkg="crates:ruvio-client">latest</span></td><td>unit + coverage + live suites</td></tr>
-          <tr><td><a href="client-csharp.html">C#</a></td><td>Async, one multiplexed connection</td><td>Yes</td><td>NuGet <code>Ruvio.Client</code> <span data-pkg="nuget:Ruvio.Client">latest</span></td><td>198 client tests; 6 integration packages</td></tr>
-          <tr><td><a href="client-go.html">Go</a></td><td><code>context.Context</code> on every call, one multiplexed connection, standard library only</td><td>Yes</td><td>Go module proxy, tag <code>clients/go/v0.1.0</code></td><td>74 tests, race detector run</td></tr>
-          <tr><td><a href="client-java.html">Java</a></td><td>Blocking facade and <code>CompletableFuture</code>, one multiplexed connection</td><td>Yes</td><td><span data-pkg="maven:io.github.salihcantekin:ruvio-client" data-found="Maven Central {v}" data-missing="Not yet (Maven Central)">Not yet (Maven Central)</span></td><td>91 tests</td></tr>
-          <tr><td><a href="client-python.html">Python</a></td><td>Sync and <code>asyncio</code>, optional <code>hiredis</code> parser</td><td>Yes</td><td><span data-pkg="pypi:ruvio-client" data-found="PyPI {v}" data-missing="Not yet (PyPI)">Not yet (PyPI)</span></td><td>217 tests</td></tr>
-          <tr><td><a href="client-node.html">Node.js</a></td><td>Promises, TypeScript types, ESM, no dependencies</td><td>Yes</td><td><span data-pkg="npm:ruvio-client" data-found="npm {v}" data-missing="Not yet (npm)">Not yet (npm)</span></td><td>63 tests</td></tr>
+          <tr><td><a href="client-rust.html">Rust</a></td><td>Blocking, std only, no dependencies</td><td>Yes</td><td>crates.io <code>ruvio-client</code> <span data-pkg="crates:ruvio-client">latest</span></td><td>Unit, coverage and live suites</td></tr>
+          <tr><td><a href="client-csharp.html">C#</a></td><td>Async, one multiplexed connection</td><td>Yes</td><td>NuGet <code>Ruvio.Client</code> <span data-pkg="nuget:Ruvio.Client">latest</span></td><td>Unit, coverage and live suites; 6 integration packages</td></tr>
+          <tr><td><a href="client-go.html">Go</a></td><td><code>context.Context</code> on every call, one multiplexed connection, standard library only</td><td>Yes</td><td>Go module proxy, tag <code>clients/go/v0.1.0</code></td><td>Unit, coverage and live suites, race detector</td></tr>
+          <tr><td><a href="client-java.html">Java</a></td><td>Blocking facade and <code>CompletableFuture</code>, one multiplexed connection</td><td>Yes</td><td><span data-pkg="maven:io.github.salihcantekin:ruvio-client" data-found="Maven Central {v}" data-missing="Not yet (Maven Central)">Not yet (Maven Central)</span></td><td>Unit, coverage and live suites</td></tr>
+          <tr><td><a href="client-python.html">Python</a></td><td>Sync and <code>asyncio</code>, optional <code>hiredis</code> parser</td><td>Yes</td><td><span data-pkg="pypi:ruvio-client" data-found="PyPI {v}" data-missing="Not yet (PyPI)">Not yet (PyPI)</span></td><td>Unit, coverage and live suites, sync and asyncio</td></tr>
+          <tr><td><a href="client-node.html">Node.js</a></td><td>Promises, TypeScript types, ESM, no dependencies</td><td>Yes</td><td><span data-pkg="npm:ruvio-client" data-found="npm {v}" data-missing="Not yet (npm)">Not yet (npm)</span></td><td>Unit, coverage and live suites</td></tr>
         </tbody>
       </table>
       </div>
@@ -94,8 +95,8 @@
       <p>The same behaviors, in the idiom of each language:</p>
       <ul>
         <li>One seed address. The client asks <code>CLUSTER SLOTS</code>, opens one connection per shard and routes by slot. A standalone server answers "cluster mode is disabled" and the client then works as a plain client.</li>
-        <li><code>MGET</code>, <code>MSET</code>, <code>DEL</code>, <code>UNLINK</code>, <code>EXISTS</code> and <code>TOUCH</code> across slots are split per slot, sent in parallel, and the replies come back in your order. Other cross-slot calls fail before anything is sent.</li>
-        <li><code>MOVED</code> repairs the slot table and the command is retried once. A command is never replayed after a transport failure.</li>
+        <li><code>MGET</code>, <code>MSET</code>, <code>DEL</code>, <code>UNLINK</code>, <code>EXISTS</code> and <code>TOUCH</code> across slots are split per slot, sent in parallel, and the replies come back in your order, inside a pipeline too. Other cross-slot calls, <code>RENAME</code> included, fail before anything is sent.</li>
+        <li><code>MOVED</code> repairs that slot and the command is sent to the named node, up to three times; the whole table is reloaded only for an unknown node or the command's second <code>MOVED</code>. A command is never replayed after a transport failure.</li>
         <li>Pipelines, <code>MULTI</code>/<code>EXEC</code> with <code>WATCH</code>, Pub/Sub on its own connection, blocking commands that do not stall the shared connection, and a generic <code>execute</code> for anything else.</li>
         <li>Binary-safe values, server errors as typed errors, and nil replies as null, <code>None</code>, <code>Optional</code> or a second return value.</li>
       </ul>

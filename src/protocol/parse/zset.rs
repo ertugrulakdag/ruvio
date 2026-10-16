@@ -1,19 +1,17 @@
 use super::*;
 
-pub(in crate::protocol) fn parse_sorted_set_range(
-    mut arguments: Vec<Bytes<'_>>,
+pub(in crate::protocol) fn parse_sorted_set_range<'a>(
+    args: &Args<'a, '_>,
     legacy_reverse: bool,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() < 3 {
+) -> Parsed<'a> {
+    if args.len() < 3 {
         return Err(ProtocolError::Invalid(
             "ZRANGE expects start, stop, and optional WITHSCORES",
         ));
     }
 
-    let key = arguments.remove(0);
-    let min_arg = arguments.remove(0);
-    let max_arg = arguments.remove(0);
-    let options = parse_range_options(&arguments, legacy_reverse)?;
+    let key = args.arg(0);
+    let options = parse_range_options(args, 3, legacy_reverse)?;
 
     if legacy_reverse && (options.by_score || options.by_lex || options.limit.is_some()) {
         return Err(ProtocolError::Invalid("syntax error"));
@@ -26,17 +24,17 @@ pub(in crate::protocol) fn parse_sorted_set_range(
     }
 
     // With REV, Redis takes the high bound first for BYSCORE and BYLEX.
-    let (min_arg, max_arg) = if options.reverse && (options.by_score || options.by_lex) {
-        (max_arg, min_arg)
+    let (min_at, max_at) = if options.reverse && (options.by_score || options.by_lex) {
+        (2, 1)
     } else {
-        (min_arg, max_arg)
+        (1, 2)
     };
 
     if options.by_lex {
         return Ok(Command::SortedSetRangeByLex {
             key,
-            min: parse_lex_bound(min_arg)?,
-            max: parse_lex_bound(max_arg)?,
+            min: parse_lex_bound(args.arg(min_at))?,
+            max: parse_lex_bound(args.arg(max_at))?,
             with_scores: options.with_scores,
             reverse: options.reverse,
             limit: options.limit,
@@ -47,8 +45,8 @@ pub(in crate::protocol) fn parse_sorted_set_range(
     if options.by_score {
         return Ok(Command::SortedSetRangeByScore {
             key,
-            min: parse_score_bound(&min_arg)?,
-            max: parse_score_bound(&max_arg)?,
+            min: parse_score_bound(args.bytes(min_at))?,
+            max: parse_score_bound(args.bytes(max_at))?,
             with_scores: options.with_scores,
             reverse: options.reverse,
             limit: options.limit,
@@ -58,33 +56,30 @@ pub(in crate::protocol) fn parse_sorted_set_range(
 
     Ok(Command::SortedSetRange {
         key,
-        start: parse_isize(&min_arg)?,
-        stop: parse_isize(&max_arg)?,
+        start: parse_isize(args.bytes(min_at))?,
+        stop: parse_isize(args.bytes(max_at))?,
         with_scores: options.with_scores,
         reverse: options.reverse,
     })
 }
 
-pub(in crate::protocol) fn parse_sorted_set_range_by_score(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() < 3 {
+pub(in crate::protocol) fn parse_sorted_set_range_by_score<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() < 3 {
         return Err(ProtocolError::Invalid(
             "ZRANGEBYSCORE expects min, max, and optional WITHSCORES",
         ));
     }
 
-    let key = arguments.remove(0);
-    let min = parse_score_bound(&arguments.remove(0))?;
-    let max = parse_score_bound(&arguments.remove(0))?;
-    let options = parse_range_options(&arguments, false)?;
+    let min = parse_score_bound(args.bytes(1))?;
+    let max = parse_score_bound(args.bytes(2))?;
+    let options = parse_range_options(args, 3, false)?;
 
     if options.by_score || options.by_lex || options.reverse {
         return Err(ProtocolError::Invalid("syntax error"));
     }
 
     Ok(Command::SortedSetRangeByScore {
-        key,
+        key: args.arg(0),
         min,
         max,
         with_scores: options.with_scores,
@@ -94,20 +89,19 @@ pub(in crate::protocol) fn parse_sorted_set_range_by_score(
     })
 }
 
-pub(in crate::protocol) fn parse_sorted_set_range_by_lex(
-    mut arguments: Vec<Bytes<'_>>,
+pub(in crate::protocol) fn parse_sorted_set_range_by_lex<'a>(
+    args: &Args<'a, '_>,
     reverse: bool,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() < 3 {
+) -> Parsed<'a> {
+    if args.len() < 3 {
         return Err(ProtocolError::Invalid(
             "ZRANGEBYLEX expects min, max, and optional LIMIT",
         ));
     }
 
-    let key = arguments.remove(0);
-    let first = parse_lex_bound(arguments.remove(0))?;
-    let second = parse_lex_bound(arguments.remove(0))?;
-    let options = parse_range_options(&arguments, false)?;
+    let first = parse_lex_bound(args.arg(1))?;
+    let second = parse_lex_bound(args.arg(2))?;
+    let options = parse_range_options(args, 3, false)?;
 
     if options.by_score || options.by_lex || options.reverse || options.with_scores {
         return Err(ProtocolError::Invalid("syntax error"));
@@ -120,7 +114,7 @@ pub(in crate::protocol) fn parse_sorted_set_range_by_lex(
     };
 
     Ok(Command::SortedSetRangeByLex {
-        key,
+        key: args.arg(0),
         min,
         max,
         with_scores: false,
@@ -142,8 +136,10 @@ pub(in crate::protocol) struct RangeOptions {
     pub(in crate::protocol) limit: Option<RangeLimit>,
 }
 
+/// Range options (`WITHSCORES`, `BYSCORE`, `BYLEX`, `REV`, `LIMIT`) from argument `from` on.
 pub(in crate::protocol) fn parse_range_options(
-    arguments: &[Bytes<'_>],
+    args: &Args<'_, '_>,
+    from: usize,
     legacy_reverse: bool,
 ) -> Result<RangeOptions, ProtocolError> {
     let mut options = RangeOptions {
@@ -154,10 +150,10 @@ pub(in crate::protocol) fn parse_range_options(
         limit: None,
     };
 
-    let mut index = 0;
+    let mut index = from;
 
-    while index < arguments.len() {
-        let token = arguments[index].as_ref();
+    while index < args.len() {
+        let token = args.bytes(index);
 
         if token.eq_ignore_ascii_case(b"WITHSCORES") {
             if options.with_scores {
@@ -200,12 +196,12 @@ pub(in crate::protocol) fn parse_range_options(
         }
 
         if token.eq_ignore_ascii_case(b"LIMIT") {
-            if options.limit.is_some() || index + 2 >= arguments.len() {
+            if options.limit.is_some() || index + 2 >= args.len() {
                 return Err(ProtocolError::Invalid("syntax error"));
             }
 
-            let offset = parse_limit_int(arguments[index + 1].as_ref())?;
-            let count = parse_limit_int(arguments[index + 2].as_ref())?;
+            let offset = parse_limit_int(args.bytes(index + 1))?;
+            let count = parse_limit_int(args.bytes(index + 2))?;
 
             if offset < 0 {
                 return Err(ProtocolError::Invalid("LIMIT offset must be >= 0"));
@@ -273,49 +269,44 @@ pub(in crate::protocol) fn parse_score_bound(bytes: &[u8]) -> Result<ScoreBound,
     Ok(ScoreBound::Inclusive(parse_f64(bytes)?))
 }
 
-pub(in crate::protocol) fn parse_set_algebra(
-    mut arguments: Vec<Bytes<'_>>,
+pub(in crate::protocol) fn parse_set_algebra<'a>(
+    args: &Args<'a, '_>,
     op: SetOp,
     store: bool,
-) -> Result<Command<'_>, ProtocolError> {
+) -> Parsed<'a> {
     if store {
-        if arguments.len() < 2 {
+        if args.len() < 2 {
             return Err(ProtocolError::Invalid(
                 "set STORE commands expect a destination and at least one key",
             ));
         }
 
-        let destination = Some(arguments.remove(0));
-
         return Ok(Command::SetAlgebra {
-            keys: arguments,
+            keys: args.rest(1),
             op,
-            destination,
+            destination: Some(args.arg(0)),
         });
     }
 
-    if arguments.is_empty() {
+    if args.len() == 0 {
         return Err(ProtocolError::Invalid(
             "set algebra commands expect at least one key",
         ));
     }
 
     Ok(Command::SetAlgebra {
-        keys: arguments,
+        keys: args.rest(0),
         op,
         destination: None,
     })
 }
 
-pub(in crate::protocol) fn parse_sorted_set_pop(
-    mut arguments: Vec<Bytes<'_>>,
-    max: bool,
-) -> Result<Command<'_>, ProtocolError> {
+pub(in crate::protocol) fn parse_sorted_set_pop<'a>(args: &Args<'a, '_>, max: bool) -> Parsed<'a> {
     let count =
-        match arguments.len() {
+        match args.len() {
             1 => None,
             2 => {
-                let parsed = parse_i64(&arguments.pop().expect("length checked"))?;
+                let parsed = parse_i64(args.bytes(1))?;
 
                 Some(usize::try_from(parsed).map_err(|_| {
                     ProtocolError::Invalid("value is out of range, must be positive")
@@ -334,17 +325,17 @@ pub(in crate::protocol) fn parse_sorted_set_pop(
         };
 
     Ok(Command::SortedSetPop {
-        key: arguments.pop().expect("length checked"),
+        key: args.arg(0),
         count,
         max,
     })
 }
 
 pub(in crate::protocol) fn parse_sorted_set_remove_range<'a>(
-    mut arguments: Vec<Bytes<'a>>,
+    args: &Args<'a, '_>,
     name: &[u8],
-) -> Result<Command<'a>, ProtocolError> {
-    if arguments.len() != 3 {
+) -> Parsed<'a> {
+    if args.len() != 3 {
         return Err(ProtocolError::Invalid(
             if name.eq_ignore_ascii_case(b"ZREMRANGEBYRANK") {
                 "wrong number of arguments for 'zremrangebyrank' command"
@@ -356,26 +347,26 @@ pub(in crate::protocol) fn parse_sorted_set_remove_range<'a>(
         ));
     }
 
-    let max = arguments.pop().expect("length checked");
-    let min = arguments.pop().expect("length checked");
-    let key = arguments.pop().expect("length checked");
     let range = if name.eq_ignore_ascii_case(b"ZREMRANGEBYRANK") {
         let not_integer = |_| ProtocolError::Invalid("value is not an integer or out of range");
 
         SortedRemoveRange::Rank(
-            parse_isize(&min).map_err(not_integer)?,
-            parse_isize(&max).map_err(not_integer)?,
+            parse_isize(args.bytes(1)).map_err(not_integer)?,
+            parse_isize(args.bytes(2)).map_err(not_integer)?,
         )
     } else if name.eq_ignore_ascii_case(b"ZREMRANGEBYSCORE") {
         let not_float = |_| ProtocolError::Invalid("min or max is not a float");
 
         SortedRemoveRange::Score(
-            parse_score_bound(&min).map_err(not_float)?,
-            parse_score_bound(&max).map_err(not_float)?,
+            parse_score_bound(args.bytes(1)).map_err(not_float)?,
+            parse_score_bound(args.bytes(2)).map_err(not_float)?,
         )
     } else {
-        SortedRemoveRange::Lex(parse_lex_bound(min)?, parse_lex_bound(max)?)
+        SortedRemoveRange::Lex(parse_lex_bound(args.arg(1))?, parse_lex_bound(args.arg(2))?)
     };
 
-    Ok(Command::SortedSetRemoveRange { key, range })
+    Ok(Command::SortedSetRemoveRange {
+        key: args.arg(0),
+        range,
+    })
 }

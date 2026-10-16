@@ -55,7 +55,6 @@ enum Val {
     Hash(Vec<(String, String)>),
     Zset(Vec<(String, String)>),
     Stream(Vec<(String, Vec<(String, String)>)>),
-    Other(&'static str),
 }
 
 #[derive(Clone, Debug)]
@@ -282,7 +281,6 @@ impl State {
                 Some(Val::Hash(_)) => simple("hash"),
                 Some(Val::Zset(_)) => simple("zset"),
                 Some(Val::Stream(_)) => simple("stream"),
-                Some(Val::Other(kind)) => simple(kind),
             },
             "PTTL" => match self.stores[node].get(&arg(1)) {
                 None => int(-2),
@@ -637,12 +635,6 @@ impl Cluster {
         self.state.lock().unwrap().stores[node]
             .get(key)
             .map(|e| e.val.clone())
-    }
-
-    fn ttl(&self, node: usize, key: &str) -> Option<i64> {
-        self.state.lock().unwrap().stores[node]
-            .get(key)
-            .map(|e| e.ttl)
     }
 
     fn move_slots(&self, from: u16, to: u16, node: usize) {
@@ -1127,11 +1119,15 @@ fn scan_survives_odd_server_cursors_and_reports_overflow() {
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn a_stale_slot_map_is_refreshed_on_moved() {
+fn a_moved_to_a_known_node_points_that_slot_without_reloading_the_map() {
     let cluster = Cluster::start(3);
     let mut client = cluster.client();
     let key = cluster.key_on(1, "mv");
     let slot = hash_slot(&key);
+    let neighbour = (0..)
+        .map(|i| format!("nb{i}"))
+        .find(|k| cluster.owner(hash_slot(k)) == 1 && hash_slot(k) != slot)
+        .unwrap();
 
     cluster.put(2, &key, Val::Str("new-home".into()), -1);
     cluster.move_slots(slot, slot, 2);
@@ -1142,14 +1138,138 @@ fn a_stale_slot_map_is_refreshed_on_moved() {
         Some("new-home")
     );
     assert_eq!(cluster.seen("GET").len(), 2);
-    assert_eq!(cluster.seen("CLUSTER").len(), 1);
+    assert!(cluster.seen("CLUSTER").is_empty());
 
-    // The refreshed map sends the next read straight to the new owner.
+    // That slot now goes straight to the new owner; the rest of the map is unchanged.
     cluster.clear_log();
     assert_eq!(
         client.get_string(&key).unwrap().as_deref(),
         Some("new-home")
     );
+    client.get(&neighbour).unwrap();
+    assert_eq!(
+        cluster.seen("GET"),
+        vec![
+            (2, vec!["GET".into(), key]),
+            (1, vec!["GET".into(), neighbour])
+        ]
+    );
+}
+
+#[test]
+fn a_moved_to_an_unknown_node_reloads_the_whole_map() {
+    let cluster = Cluster::start(3);
+
+    // The client starts with a map in which node 2 owns nothing.
+    cluster.move_slots(10_923, 16_383, 1);
+
+    let mut client = cluster.client();
+
+    assert_eq!(client.shard_count(), 2);
+
+    let key = cluster.key_on(1, "far");
+    let other = (0..)
+        .map(|i| format!("other{i}"))
+        .find(|k| cluster.owner(hash_slot(k)) == 1 && hash_slot(k) != hash_slot(&key))
+        .unwrap();
+
+    for name in [&key, &other] {
+        let slot = hash_slot(name);
+
+        cluster.put(2, name, Val::Str("v".into()), -1);
+        cluster.move_slots(slot, slot, 2);
+    }
+
+    cluster.clear_log();
+    assert_eq!(client.get_string(&key).unwrap().as_deref(), Some("v"));
+    assert_eq!(cluster.seen("CLUSTER").len(), 1);
+    assert_eq!(client.shard_count(), 3);
+
+    // The reloaded map already knows the other moved slot.
+    cluster.clear_log();
+    assert_eq!(client.get_string(&other).unwrap().as_deref(), Some("v"));
+    assert_eq!(cluster.seen("GET"), vec![(2, vec!["GET".into(), other])]);
+}
+
+#[test]
+fn a_second_moved_for_the_same_command_reloads_the_whole_map() {
+    let cluster = Cluster::start(3);
+    let mut client = cluster.client();
+    let key = cluster.key_on(2, "twice");
+    let moved = format!(
+        "-MOVED {} 127.0.0.1:{}\r\n",
+        hash_slot(&key),
+        cluster.port(2)
+    );
+
+    cluster.put(2, &key, Val::Str("v".into()), -1);
+    cluster.script("GET", moved.as_bytes(), 1);
+    cluster.clear_log();
+    // One MOVED: that slot only.
+    assert_eq!(client.get_string(&key).unwrap().as_deref(), Some("v"));
+    assert!(cluster.seen("CLUSTER").is_empty());
+
+    cluster.script("GET", moved.as_bytes(), 2);
+    cluster.clear_log();
+    // The second MOVED of one command reloads the map once.
+    assert_eq!(client.get_string(&key).unwrap().as_deref(), Some("v"));
+    assert_eq!(cluster.seen("GET").len(), 3);
+    assert_eq!(cluster.seen("CLUSTER").len(), 1);
+}
+
+#[test]
+fn after_a_reload_the_slot_still_points_at_the_node_the_moved_named() {
+    let cluster = Cluster::start(3);
+    let mut client = cluster.client();
+    let key = cluster.key_on(2, "named");
+    let slot = hash_slot(&key);
+    // The map keeps saying node 2; the redirects name node 1.
+    let moved = format!("-MOVED {slot} 127.0.0.1:{}\r\n", cluster.port(1));
+
+    // Node 1 answers the key as if it owned it, while CLUSTER SLOTS keeps naming node 2.
+    cluster.script("2:GET", moved.as_bytes(), 1);
+    cluster.script("1:GET", moved.as_bytes(), 1);
+    cluster.script("1:GET", &bulk("on-one"), 2);
+    cluster.clear_log();
+
+    assert_eq!(client.get_string(&key).unwrap().as_deref(), Some("on-one"));
+    assert_eq!(cluster.seen("CLUSTER").len(), 1);
+    // Node 2 first, then node 1 twice: the retry after the reload still went to node 1.
+    let nodes: Vec<usize> = cluster.seen("GET").into_iter().map(|(n, _)| n).collect();
+
+    assert_eq!(nodes, [2, 1, 1]);
+
+    // The slot keeps pointing at node 1 for the next command.
+    cluster.clear_log();
+    assert_eq!(client.get_string(&key).unwrap().as_deref(), Some("on-one"));
+    assert_eq!(cluster.seen("GET"), vec![(1, vec!["GET".into(), key])]);
+}
+
+#[test]
+fn a_moved_to_a_node_missing_from_the_reloaded_map_is_still_followed() {
+    let cluster = Cluster::start(3);
+
+    // Node 2 owns nothing, before and after the reload.
+    cluster.move_slots(10_923, 16_383, 1);
+
+    let mut client = cluster.client();
+    let key = cluster.key_on(1, "ghost");
+    let moved = format!(
+        "-MOVED {} 127.0.0.1:{}\r\n",
+        hash_slot(&key),
+        cluster.port(2)
+    );
+
+    // Node 2 answers the key although CLUSTER SLOTS never lists it.
+    cluster.script("1:GET", moved.as_bytes(), 1);
+    cluster.script("2:GET", &bulk("v"), 2);
+    cluster.clear_log();
+
+    assert_eq!(client.get_string(&key).unwrap().as_deref(), Some("v"));
+    assert_eq!(cluster.seen("CLUSTER").len(), 1);
+
+    cluster.clear_log();
+    assert_eq!(client.get_string(&key).unwrap().as_deref(), Some("v"));
     assert_eq!(cluster.seen("GET"), vec![(2, vec!["GET".into(), key])]);
 }
 
@@ -1175,6 +1295,8 @@ fn up_to_three_redirects_are_followed_and_the_fourth_is_returned() {
 
     assert!(message.starts_with("MOVED 1 127.0.0.1:"), "{message}");
     assert_eq!(cluster.seen("GET").len(), 4);
+    // The first redirect points the slot; the second and third reload the map.
+    assert_eq!(cluster.seen("CLUSTER").len(), 2);
 }
 
 #[test]
@@ -1341,6 +1463,126 @@ fn a_pipeline_follows_moved_for_a_single_command() {
         )
         .unwrap(),
         vec![text("1"), text("2")]
+    );
+}
+
+#[test]
+fn a_pipeline_splits_cross_slot_split_commands_like_the_plain_command() {
+    let cluster = Cluster::start(3);
+    let mut client = cluster.client();
+    let (a, b, c) = (
+        cluster.key_on(0, "a"),
+        cluster.key_on(1, "b"),
+        cluster.key_on(2, "c"),
+    );
+    let missing = cluster.key_on(2, "missing");
+
+    cluster.clear_log();
+    let replies = many(
+        &mut client,
+        vec![
+            vec!["SET", a.as_str(), "1"],
+            vec!["MSET", b.as_str(), "2", c.as_str(), "3"],
+            vec!["MGET", c.as_str(), a.as_str(), missing.as_str(), b.as_str()],
+            vec!["DEL", a.as_str(), b.as_str()],
+            vec!["EXISTS", a.as_str(), c.as_str(), c.as_str()],
+            vec!["TOUCH", c.as_str(), missing.as_str()],
+            vec!["UNLINK", c.as_str(), a.as_str()],
+            vec!["GET", c.as_str()],
+            vec!["MSET", a.as_str(), "1", b.as_str()],
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        replies,
+        vec![
+            RespValue::Simple("OK".into()),
+            RespValue::Simple("OK".into()),
+            RespValue::Array(vec![text("3"), text("1"), RespValue::Null, text("2")]),
+            RespValue::Integer(2),
+            // Each node runs its commands in pipeline order: the DEL came first.
+            RespValue::Integer(2),
+            RespValue::Integer(1),
+            RespValue::Integer(1),
+            RespValue::Null,
+            RespValue::Error("ERR wrong number of arguments for 'mset' command".into()),
+        ]
+    );
+
+    // Every command that reached a node carries keys of one slot only.
+    assert!(!cluster.log().is_empty());
+    for (_, command) in cluster.log() {
+        let keys: Vec<&String> = match command[0].as_str() {
+            "MSET" => command[1..].iter().step_by(2).collect(),
+            "SET" | "GET" => command[1..2].iter().collect(),
+            _ => command[1..].iter().collect(),
+        };
+
+        assert!(
+            keys.iter().all(|key| hash_slot(key) == hash_slot(keys[0])),
+            "{command:?}"
+        );
+    }
+
+    assert!(cluster.seen("MGET").len() >= 3);
+}
+
+#[test]
+fn a_pipeline_refuses_other_cross_slot_commands_at_their_index_only() {
+    let cluster = Cluster::start(3);
+    let mut client = cluster.client();
+    let (a, c) = (cluster.key_on(0, "a"), cluster.key_on(2, "c"));
+
+    cluster.clear_log();
+    let replies = many(
+        &mut client,
+        vec![
+            vec!["SET", a.as_str(), "1"],
+            vec!["COPY", a.as_str(), c.as_str()],
+            vec!["RENAME", a.as_str(), c.as_str()],
+            vec!["GET", a.as_str()],
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        replies,
+        vec![
+            RespValue::Simple("OK".into()),
+            RespValue::Error(CROSSSLOT.into()),
+            RespValue::Error(CROSSSLOT.into()),
+            text("1"),
+        ]
+    );
+    assert!(cluster.seen("COPY").is_empty());
+    assert!(cluster.seen("RENAME").is_empty());
+}
+
+#[test]
+fn a_moved_part_of_a_split_command_in_a_pipeline_is_followed() {
+    let cluster = Cluster::start(3);
+    let mut client = cluster.client();
+    let (a, b) = (cluster.key_on(0, "a"), cluster.key_on(1, "b"));
+    let slot = hash_slot(&b);
+
+    cluster.put(0, &a, Val::Str("1".into()), -1);
+    cluster.put(2, &b, Val::Str("2".into()), -1);
+    cluster.move_slots(slot, slot, 2);
+
+    assert_eq!(
+        many(
+            &mut client,
+            vec![
+                vec!["MGET", a.as_str(), b.as_str()],
+                vec!["EXISTS", b.as_str(), a.as_str()]
+            ]
+        )
+        .unwrap(),
+        vec![
+            RespValue::Array(vec![text("1"), text("2")]),
+            RespValue::Integer(2)
+        ]
     );
 }
 
@@ -1595,12 +1837,10 @@ fn a_failed_watch_or_multi_does_not_pin_or_enter_multi() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Cross-slot RENAME
+// Cross-slot commands that are not split
 // ---------------------------------------------------------------------------------------------
 
-fn rename_pair(cluster: &Cluster) -> (String, String) {
-    (cluster.key_on(0, "src"), cluster.key_on(2, "dst"))
-}
+const CROSSSLOT: &str = "CROSSSLOT Keys in request do not hash to the same slot";
 
 #[test]
 fn rename_to_the_same_slot_is_a_plain_rename() {
@@ -1615,229 +1855,74 @@ fn rename_to_the_same_slot_is_a_plain_rename() {
     );
     cluster.clear_log();
     client.rename("{s}a", "{s}b").unwrap();
+    assert_eq!(cluster.log().len(), 1);
     assert_eq!(cluster.seen("RENAME").len(), 1);
-    assert_eq!(cluster.seen("TYPE").len(), 0);
 }
 
 #[test]
-fn rename_moves_a_string_and_its_ttl_across_shards() {
+fn rename_and_renamenx_across_slots_are_refused_before_sending() {
     let cluster = Cluster::start(3);
     let mut client = cluster.client();
-    let (src, dst) = rename_pair(&cluster);
+    let (src, dst) = (cluster.key_on(0, "src"), cluster.key_on(2, "dst"));
 
-    cluster.put(0, &src, Val::Str("payload".into()), 5_000);
-    cluster.put(2, &dst, Val::Str("old".into()), -1);
-    client.rename(&src, &dst).unwrap();
+    cluster.put(0, &src, Val::Str("v".into()), -1);
+    cluster.clear_log();
 
-    assert_eq!(cluster.peek(0, &src), None);
-    assert_eq!(cluster.peek(2, &dst), Some(Val::Str("payload".into())));
-    assert_eq!(cluster.ttl(2, &dst), Some(5_000));
+    assert!(matches!(client.rename(&src, &dst), Err(Error::Server(m)) if m == CROSSSLOT));
+    assert!(matches!(client.rename_nx(&src, &dst), Err(Error::Server(m)) if m == CROSSSLOT));
+    assert_eq!(
+        server_error(client.execute(&["renamenx", &src, &dst])),
+        CROSSSLOT
+    );
+    // Nothing reached any node and the source is untouched.
+    assert!(cluster.log().is_empty(), "{:?}", cluster.log());
+    assert_eq!(cluster.peek(0, &src), Some(Val::Str("v".into())));
+    assert_eq!(cluster.peek(2, &dst), None);
 }
 
 #[test]
-fn rename_without_ttl_or_with_a_garbled_ttl_sets_no_expiry() {
+fn other_multi_key_commands_across_slots_are_refused_before_sending() {
     let cluster = Cluster::start(3);
     let mut client = cluster.client();
-    let (src, dst) = rename_pair(&cluster);
+    let (a, b) = (cluster.key_on(0, "a"), cluster.key_on(2, "b"));
+    // Two slots on the same node are still two slots.
+    let (x, y) = (cluster.key_on(1, "x"), cluster.key_on(1, "y"));
 
-    cluster.put(0, &src, Val::Str("a".into()), -1);
-    client.rename(&src, &dst).unwrap();
-    assert_eq!(cluster.ttl(2, &dst), Some(-1));
-    assert!(cluster.seen("PEXPIRE").is_empty());
+    assert_ne!(hash_slot(&x), hash_slot(&y));
+    cluster.clear_log();
 
-    cluster.put(0, &src, Val::Str("b".into()), 9_000);
-    cluster.script("PTTL", b"+soon\r\n", 1);
-    client.rename(&src, &dst).unwrap();
-    assert_eq!(cluster.peek(2, &dst), Some(Val::Str("b".into())));
-    assert!(cluster.seen("PEXPIRE").is_empty());
-}
-
-#[test]
-fn rename_moves_lists_sets_hashes_and_sorted_sets_in_pages() {
-    let cluster = Cluster::start(3);
-    let mut client = cluster.client();
-    let (src, dst) = rename_pair(&cluster);
-
-    // 400 elements is an exact multiple of the 200-element read page.
-    let list: Vec<String> = (0..400).map(|i| format!("l{i}")).collect();
-
-    cluster.put(0, &src, Val::List(list.clone()), -1);
-    client.rename(&src, &dst).unwrap();
-    assert_eq!(cluster.peek(2, &dst), Some(Val::List(list)));
-    // 400 elements are written 32 at a time.
-    assert_eq!(cluster.seen("RPUSH").len(), 13);
-
-    let set: Vec<String> = (0..70).map(|i| format!("m{i}")).collect();
-
-    cluster.put(0, &src, Val::Set(set.clone()), -1);
-    client.rename(&src, &dst).unwrap();
-    assert_eq!(cluster.peek(2, &dst), Some(Val::Set(set)));
-
-    let hash: Vec<(String, String)> = (0..150)
-        .map(|i| (format!("f{i}"), format!("v{i}")))
-        .collect();
-
-    cluster.put(0, &src, Val::Hash(hash.clone()), -1);
-    client.rename(&src, &dst).unwrap();
-    assert_eq!(cluster.peek(2, &dst), Some(Val::Hash(hash)));
-
-    let zset: Vec<(String, String)> = (0..120)
-        .map(|i| (format!("z{i}"), format!("{i}")))
-        .collect();
-
-    cluster.put(0, &src, Val::Zset(zset.clone()), -1);
-    client.rename(&src, &dst).unwrap();
-    assert_eq!(cluster.peek(2, &dst), Some(Val::Zset(zset)));
-}
-
-#[test]
-fn rename_moves_streams_across_the_page_boundaries() {
-    for count in [1_usize, 62, 63, 64, 70] {
-        let cluster = Cluster::start(3);
-        let mut client = cluster.client();
-        let (src, dst) = rename_pair(&cluster);
-        let entries: Vec<(String, Vec<(String, String)>)> = (1..=count)
-            .map(|i| (format!("{i}-0"), vec![("f".to_owned(), format!("v{i}"))]))
-            .collect();
-
-        cluster.put(0, &src, Val::Stream(entries.clone()), -1);
-        client.rename(&src, &dst).unwrap();
-
+    for command in [
+        vec!["COPY", &a, &b],
+        vec!["LMOVE", &a, &b, "LEFT", "RIGHT"],
+        vec!["SMOVE", &a, &b, "m"],
+        vec!["SINTERSTORE", &a, &x],
+        vec!["BITOP", "AND", &a, &a, &b],
+        vec!["EVAL", "return 1", "2", &x, &y],
+        vec!["SUNION", &x, &y],
+    ] {
         assert_eq!(
-            cluster.peek(2, &dst),
-            Some(Val::Stream(entries)),
-            "{count} entries"
+            server_error(client.execute(&command)),
+            CROSSSLOT,
+            "{command:?}"
         );
     }
-}
 
-#[test]
-fn rename_skips_stream_entries_without_fields_and_odd_stream_pages() {
-    let cluster = Cluster::start(3);
-    let mut client = cluster.client();
-    let (src, dst) = rename_pair(&cluster);
+    assert!(cluster.log().is_empty(), "{:?}", cluster.log());
 
-    cluster.put(
-        0,
-        &src,
-        Val::Stream(vec![("1-0".into(), vec![("f".into(), "v".into())])]),
-        -1,
-    );
-    // An integer, an entry with an empty id, then a good entry with an unpaired field name.
-    cluster.script(
-        "XRANGE",
-        b"*3\r\n:5\r\n*1\r\n$0\r\n\r\n*2\r\n$3\r\n9-0\r\n*3\r\n$1\r\nf\r\n$1\r\nv\r\n$1\r\ng\r\n",
-        1,
-    );
-    client.rename(&src, &dst).unwrap();
-    assert_eq!(
-        cluster.peek(2, &dst),
-        Some(Val::Stream(vec![(
-            "9-0".into(),
-            vec![("f".into(), "v".into()), ("g".into(), String::new())]
-        )]))
-    );
+    // The same commands in one slot are sent, to the owner of that slot.
+    let tagged = cluster.key_on(2, "{t}");
+    let tag = &tagged[..3];
+    let other = format!("{tag}other");
 
-    // A reply that is not an array ends the read; nothing is written.
-    cluster.put(
-        0,
-        &src,
-        Val::Stream(vec![("1-0".into(), vec![("f".into(), "v".into())])]),
-        -1,
-    );
-    cluster.script("XRANGE", b":1\r\n", 1);
-    let dst2 = cluster.key_on(1, "dst2");
-    cluster.script("XRANGE", b":1\r\n", 1);
-    client.rename(&src, &dst2).unwrap();
-    assert_eq!(cluster.peek(1, &dst2), None);
-}
-
-#[test]
-fn rename_with_an_empty_stream_entry_field_list_writes_nothing_for_it() {
-    let cluster = Cluster::start(3);
-    let mut client = cluster.client();
-    let (src, dst) = rename_pair(&cluster);
-
-    cluster.put(0, &src, Val::Stream(vec![("1-0".into(), vec![])]), -1);
-    client.rename(&src, &dst).unwrap();
-
-    assert!(cluster.seen("XADD").is_empty());
-}
-
-#[test]
-fn rename_nx_across_shards_respects_an_existing_destination() {
-    let cluster = Cluster::start(3);
-    let mut client = cluster.client();
-    let (src, dst) = rename_pair(&cluster);
-
-    cluster.put(0, &src, Val::Str("new".into()), -1);
-    cluster.put(2, &dst, Val::Str("keep".into()), -1);
-    assert!(!client.rename_nx(&src, &dst).unwrap());
-    assert_eq!(cluster.peek(2, &dst), Some(Val::Str("keep".into())));
-    assert_eq!(cluster.peek(0, &src), Some(Val::Str("new".into())));
-
-    cluster.state.lock().unwrap().stores[2].remove(&dst);
-    assert!(client.rename_nx(&src, &dst).unwrap());
-    assert_eq!(cluster.peek(2, &dst), Some(Val::Str("new".into())));
-    assert_eq!(cluster.peek(0, &src), None);
-}
-
-#[test]
-fn rename_of_a_missing_key_or_unsupported_type_fails() {
-    let cluster = Cluster::start(3);
-    let mut client = cluster.client();
-    let (src, dst) = rename_pair(&cluster);
-
-    assert_eq!(
-        server_error(client.execute(&["RENAME", &src, &dst])),
-        "ERR no such key"
-    );
-
-    cluster.put(0, &src, Val::Other("ReJSON-RL"), -1);
-    assert!(
-        protocol_error(client.execute(&["RENAME", &src, &dst]))
-            .contains("does not move a ReJSON-RL value")
-    );
-    // The source is untouched after the refusal.
-    assert_eq!(cluster.peek(0, &src), Some(Val::Other("ReJSON-RL")));
-}
-
-#[test]
-fn rename_reports_replies_it_cannot_copy() {
-    let cluster = Cluster::start(3);
-    let mut client = cluster.client();
-    let (src, dst) = rename_pair(&cluster);
-
-    cluster.put(0, &src, Val::Str("v".into()), -1);
-    cluster.script("GET", b"$-1\r\n", 1);
-    assert_eq!(
-        protocol_error(client.execute(&["RENAME", &src, &dst])),
-        "expected a bulk string"
-    );
-
-    cluster.put(0, &src, Val::Hash(vec![("f".into(), "v".into())]), -1);
-    cluster.script("HSCAN", b":1\r\n", 1);
-    assert_eq!(
-        protocol_error(client.execute(&["RENAME", &src, &dst])),
-        "HSCAN did not return a page"
-    );
-
-    // A one-element HSCAN reply carries no fields and ends the scan.
-    cluster.script("HSCAN", b"*1\r\n$1\r\n0\r\n", 1);
-    client.execute(&["RENAME", &src, &dst]).unwrap();
-    assert_eq!(cluster.peek(2, &dst), None);
-
-    // A server error on any step surfaces as a server error.
-    cluster.put(0, &src, Val::Str("v".into()), -1);
-    cluster.script("TYPE", b"-ERR type failed\r\n", 1);
-    assert_eq!(
-        server_error(client.execute(&["RENAME", &src, &dst])),
-        "ERR type failed"
-    );
-
-    // A null TYPE reply is an unknown (empty) type.
-    cluster.script("TYPE", b"$-1\r\n", 1);
-    assert!(protocol_error(client.execute(&["RENAME", &src, &dst])).contains("does not move a"));
+    client.execute(&["COPY", &tagged, &other]).unwrap();
+    client
+        .execute(&["EVAL", "return 1", "2", &tagged, &other])
+        .unwrap();
+    assert_eq!(cluster.seen("COPY")[0].0, cluster.owner(hash_slot(tag)));
+    assert_eq!(cluster.seen("EVAL").len(), 1);
+    // A command with no keys still goes to the seed.
+    client.execute(&["EVAL", "return 1", "0"]).unwrap();
+    assert_eq!(cluster.seen("EVAL").len(), 2);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2023,9 +2108,14 @@ fn a_moved_redirect_with_a_broken_topology_source_fails() {
     let cluster = Cluster::start(2);
     let mut client = cluster.client();
     let key = cluster.key_on(0, "k");
-    let slot = hash_slot(&key);
+    let moved = format!(
+        "-MOVED {} 127.0.0.1:{}\r\n",
+        hash_slot(&key),
+        cluster.port(1)
+    );
 
-    cluster.move_slots(slot, slot, 1);
+    // The second MOVED of the command reloads the map, from sources that send nonsense.
+    cluster.script("GET", moved.as_bytes(), 2);
     cluster.script("CLUSTER", b"*0\r\n", 5);
 
     assert_eq!(
@@ -2039,10 +2129,15 @@ fn refresh_fails_when_the_seed_connection_has_dropped_mid_redirect() {
     let cluster = Cluster::start(2);
     let mut client = cluster.client();
     let key = cluster.key_on(1, "k");
-    let slot = hash_slot(&key);
+    let moved = format!(
+        "-MOVED {} 127.0.0.1:{}\r\n",
+        hash_slot(&key),
+        cluster.port(0)
+    );
 
     client.get(&key).unwrap();
-    cluster.move_slots(slot, slot, 0);
+    // The second MOVED reloads the map, and every node hangs up on CLUSTER SLOTS.
+    cluster.script("GET", moved.as_bytes(), 2);
     cluster.hang_up("CLUSTER", 2);
 
     assert!(matches!(client.get(&key), Err(Error::Io(_))));

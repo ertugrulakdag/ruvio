@@ -1980,8 +1980,8 @@ pub(crate) struct DetachedSide {
 
 pub(super) enum DetachedJson {
     /// Database 0 holds the definitions: the whole registry goes with it.
-    Registry(Option<Box<crate::json_index::JsonIndexes>>),
-    Postings(Option<crate::json_index::DetachedPostings>),
+    Registry(Option<Box<crate::json::index::JsonIndexes>>),
+    Postings(Option<crate::json::index::DetachedPostings>),
 }
 
 /// A heap string's buffer, allocated as the allocator's whole block: the capacity is what

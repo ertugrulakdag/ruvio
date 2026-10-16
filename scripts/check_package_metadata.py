@@ -45,7 +45,8 @@ def tag(text, name):
 
 
 def nuget(path):
-    text = (ROOT / path).read_text()
+    # A project's own value wins; shared metadata comes from Directory.Build.props.
+    text = (ROOT / path).read_text() + (ROOT / "Directory.Build.props").read_text()
     if tag(text, "IsPackable") == "false":
         return
     for name in ("PackageId", "Description", "Authors", "PackageTags", "PackageReadmeFile", "PackageIcon", "RepositoryUrl", "PackageProjectUrl", "PackageLicenseExpression"):

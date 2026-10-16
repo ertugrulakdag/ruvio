@@ -282,7 +282,7 @@ test('a topology that moves the seed away picks another home node and closes the
   }
 });
 
-test('a stale table pointing at one node is corrected by the MOVED reply, then by a refresh', async () => {
+test('a stale table pointing at one node is corrected slot by slot by the MOVED replies, without a refresh', async () => {
   const r = await rig(2, (i, a) => (i === 0 && a[0] === 'GET' && hashSlot(a[1]!) > 8191 ? err(`MOVED ${hashSlot(a[1]!)} 127.0.0.1:${r.nodes[1]!.port}`) : undefined));
   const c = new ClusterClient(r.seed());
   try {
@@ -290,11 +290,50 @@ test('a stale table pointing at one node is corrected by the MOVED reply, then b
     _forceStaleTable(c, c.nodes[0]!);
     assert.equal(await c.get(HI()), 'n1:' + HI());
     assert.equal(await c.get(HI('z')), 'n1:' + HI('z'));
-    assert.equal(c.refreshCount, 1);
+    assert.equal(c.redirectCount, 2);
+    assert.equal(c.refreshCount, 0, 'every MOVED named a known node');
+    assert.equal(await c.get(HI()), 'n1:' + HI());
+    assert.equal(c.redirectCount, 2, 'the patched slot goes straight to its owner');
   } finally {
     c.disconnect();
     await r.close();
   }
+});
+
+// ---- split commands inside a pipeline ------------------------------------------------------
+
+test('a pipeline splits cross-slot MGET / MSET / DEL / EXISTS / UNLINK / TOUCH like the plain commands', async () => {
+  const r = await rig(2, (i, a) => {
+    if (a[0] === 'MGET') return arr(...a.slice(1).map((k) => bulk('n' + i + ':' + k)));
+    if (a[0] === 'DEL' || a[0] === 'EXISTS' || a[0] === 'UNLINK' || a[0] === 'TOUCH') return int(a.length - 1);
+    return undefined;
+  });
+  await withCluster(r, async (c) => {
+    const [lo, lo2, hi, hi2] = [LO(), LO('m'), HI(), HI('m')];
+    await c.connect();
+    const sent = (cmd: string) => r.nodes[0]!.count(cmd) + r.nodes[1]!.count(cmd);
+    const res = await c
+      .pipeline()
+      .get(lo)
+      .mget(hi, lo, hi2, lo2)
+      .mset({ [lo]: '1', [hi]: '2' })
+      .del(lo, hi, lo2)
+      .exists(hi, lo)
+      .unlink(lo, hi)
+      .touch(hi2, lo2)
+      .get(hi)
+      .rename(lo, hi)
+      .exec();
+    assert.deepEqual(res.slice(0, 8), ['n0:' + lo, ['n1:' + hi, 'n0:' + lo, 'n1:' + hi2, 'n0:' + lo2], 'OK', 3, 2, 2, 2, 'n1:' + hi]);
+    assert.ok(res[8] instanceof RuvioError && res[8].code === 'CROSSSLOT', 'other cross-slot commands still fail at their index');
+    // one sub-command per slot, as for the plain commands
+    assert.equal(sent('MGET'), 4);
+    assert.equal(sent('MSET'), 2);
+    assert.equal(sent('DEL'), 3);
+    assert.equal(sent('RENAME'), 0);
+    // a transaction must still stay in one slot
+    assert.equal((await rejects(c.multi().mget(lo, hi).exec())).code, 'CROSSSLOT');
+  });
 });
 
 // ---- pipelines and transactions before the topology is known -------------------------------

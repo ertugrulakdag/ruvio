@@ -2,6 +2,8 @@ use std::ops::Range;
 
 use serde_json::{Value, value::RawValue};
 
+pub(crate) mod index;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JsonError {
     Syntax,

@@ -643,6 +643,26 @@ mod tests {
         assert_eq!(hash_slot(b"user:{42}:name"), hash_slot(b"cart:{42}"));
     }
 
+    /// Every client checks its own slot function against the same file.
+    #[test]
+    fn shared_client_slot_vectors_match_the_server() {
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../clients/testdata/slots.json")).unwrap();
+        let keys = vectors["keys"].as_array().unwrap();
+
+        assert!(keys.len() > 10);
+
+        for entry in keys {
+            let key = entry["key"].as_str().unwrap();
+
+            assert_eq!(
+                u64::from(hash_slot(key.as_bytes())),
+                entry["slot"].as_u64().unwrap(),
+                "{key:?}"
+            );
+        }
+    }
+
     #[test]
     fn rejects_multi_key_commands_across_slots() {
         let command =

@@ -1,0 +1,81 @@
+{
+  "description": "Key to hash slot (CRC16-XMODEM mod 16384 over the UTF-8 bytes, Redis hash tags). Checked by the server tests and by every client.",
+  "keys": [
+    {
+      "key": "",
+      "slot": 0
+    },
+    {
+      "key": "123456789",
+      "slot": 12739
+    },
+    {
+      "key": "foo",
+      "slot": 12182
+    },
+    {
+      "key": "bar",
+      "slot": 5061
+    },
+    {
+      "key": "user:1000",
+      "slot": 1649
+    },
+    {
+      "key": "{user1000}.following",
+      "slot": 3443
+    },
+    {
+      "key": "{user1000}.followers",
+      "slot": 3443
+    },
+    {
+      "key": "foo{}{bar}",
+      "slot": 8363
+    },
+    {
+      "key": "foo{{bar}}zap",
+      "slot": 4015
+    },
+    {
+      "key": "foo{bar}{zap}",
+      "slot": 5061
+    },
+    {
+      "key": "{}foo",
+      "slot": 9500
+    },
+    {
+      "key": "{foo",
+      "slot": 13308
+    },
+    {
+      "key": "foo}",
+      "slot": 15679
+    },
+    {
+      "key": "a{b}c",
+      "slot": 3300
+    },
+    {
+      "key": "{a}",
+      "slot": 15495
+    },
+    {
+      "key": "session:{42}:token",
+      "slot": 8000
+    },
+    {
+      "key": "ключ",
+      "slot": 10303
+    },
+    {
+      "key": "é{é}",
+      "slot": 10180
+    },
+    {
+      "key": "日本語",
+      "slot": 12788
+    }
+  ]
+}

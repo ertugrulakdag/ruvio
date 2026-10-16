@@ -20,6 +20,7 @@
       <nav aria-label="Main navigation">
         <a href="index.html">Home</a>
         <a href="start.html">Start</a>
+        <a href="use-cases.html">Use cases</a>
         <details>
           <summary>Build</summary>
           <div class="nav-menu">
@@ -67,7 +68,7 @@
   <p><strong>Goal:</strong> exercise cache, idempotency and rate limiting together over a .NET client. <strong>Environment:</strong> two-vCPU Ubuntu 24.04 API host; k6 0.54.0, two 120-second stages at an offered 200 iterations/s, 30-second gap, 40/30/30 random operation mix.</p>
       <p>Ruvio <code>always</code> and Redis AOF <code>appendfsync always</code>; native IDEM/LIMIT on Ruvio versus semantic Lua equivalents on Redis. <strong>Result:</strong> 24,001 iterations per backend; 48,002 functional checks passed, no dropped iterations or failed HTTP requests. Ruvio mean HTTP latency 3.221 ms and p95 6.206 ms; Redis 2.608 ms and 5.180 ms. Redis was faster in this bounded run.</p>
   <p><strong>Limit:</strong> adapter-level scenario, <em>not</em> production middleware parity or peak capacity. Client, transport and server time are combined; exported storage histogram counts do not fully reconcile with k6 request counts. A different memory-mode run completed the same offered rate, but does not isolate the effect of persistence. Earlier runs used older client/server variants; do not combine their latency numbers as one benchmark.</p>
-  <p class="links"><a href="https://github.com/salihcantekin/ruvio/blob/main/docs/SCENARIO_LAB_RESULTS.md#central-grouping-policy-fresh-paired-linux-api-comparison">Durable result and interpretation</a> <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/SCENARIO_LAB_RESULTS.md#fresh-paired-memory-mode-api-comparison">Memory-mode result</a> <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/results/scenario-lab/20261003T232805Z-central-group-compare.json">Committed k6 summary</a> <a href="https://github.com/salihcantekin/ruvio/blob/main/tests/scenario-lab/README.md">Scenario setup</a></p>
+  <p class="links"><a href="https://github.com/salihcantekin/ruvio/blob/main/docs/evidence/2026-10-03-dotnet-scenario-lab.md#central-grouping-policy-fresh-paired-linux-api-comparison">Durable result and interpretation</a> <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/evidence/2026-10-03-dotnet-scenario-lab.md#fresh-paired-memory-mode-api-comparison">Memory-mode result</a> <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/results/scenario-lab/20261003T232805Z-central-group-compare.json">Committed k6 summary</a> <a href="https://github.com/salihcantekin/ruvio/blob/main/tests/scenario-lab/README.md">Scenario setup</a></p>
 </section>
 
 <section class="panel">

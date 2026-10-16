@@ -1,0 +1,74 @@
+---
+// One dot per command: its ratio to Redis on one machine (x) against the other (y), both on log2 axes.
+// The dashed lines are Redis = 1×, so the top-right quadrant holds the commands faster on both.
+import type { Platform } from "../../data/bench";
+import { fmtX, fmtOps } from "../../data/bench";
+import { clamp } from "../../lib/geom";
+
+interface Props { x: Platform; y: Platform }
+const { x, y } = Astro.props;
+
+const W = 560, H = 520, L = 52, R = 18, T = 18, B = 52;
+const LO = 0.6, HI = 2.6;
+const sx = (v: number) => L + (Math.log2(clamp(v, LO, HI) / LO) / Math.log2(HI / LO)) * (W - L - R);
+const sy = (v: number) => H - B - (Math.log2(clamp(v, LO, HI) / LO) / Math.log2(HI / LO)) * (H - T - B);
+const TICKS = [0.7, 1, 1.5, 2, 2.5];
+
+const byLabel = new Map(y.rows.map((r) => [r.label, r]));
+const pts = x.rows.flatMap((a) => {
+  const b = byLabel.get(a.label);
+  if (!b) return [];
+  const both = a.ratio >= 1 && b.ratio >= 1, none = a.ratio < 0.97 && b.ratio < 0.97;
+  return [{ a, b, kind: both ? "up" : none ? "down" : "mixed" }];
+});
+const count = (f: (p: (typeof pts)[number]) => boolean) => pts.filter(f).length;
+const q = {
+  both: count((p) => p.a.ratio >= 1 && p.b.ratio >= 1),
+  xOnly: count((p) => p.a.ratio >= 1 && p.b.ratio < 1),
+  yOnly: count((p) => p.a.ratio < 1 && p.b.ratio >= 1),
+  none: count((p) => p.a.ratio < 1 && p.b.ratio < 1),
+};
+const x1 = sx(1), y1 = sy(1);
+---
+
+<svg class="quad" viewBox={`0 0 ${W} ${H}`} role="img"
+  aria-label={`${pts.length} commands: ${q.both} faster than Redis on both ${x.short} and ${y.short}, ${q.none} behind on both`}>
+  <rect class="win" x={x1} y={T} width={W - R - x1} height={y1 - T} />
+  {TICKS.map((v) => <line class="grid" x1={sx(v)} x2={sx(v)} y1={T} y2={H - B} />)}
+  {TICKS.map((v) => <line class="grid" x1={L} x2={W - R} y1={sy(v)} y2={sy(v)} />)}
+  <line class="diag" x1={sx(LO)} y1={sy(LO)} x2={sx(HI)} y2={sy(HI)} />
+  <line class="one" x1={x1} x2={x1} y1={T} y2={H - B} />
+  <line class="one" x1={L} x2={W - R} y1={y1} y2={y1} />
+  {TICKS.map((v) => <text class="tick" x={sx(v)} y={H - B + 18} text-anchor="middle">{v}×</text>)}
+  {TICKS.map((v) => <text class="tick" x={L - 8} y={sy(v) + 4} text-anchor="end">{v}×</text>)}
+  <text class="axis" x={(L + W - R) / 2} y={H - 8} text-anchor="middle">{x.name}: Ruvio ÷ Redis</text>
+  <text class="axis" transform={`translate(13 ${(T + H - B) / 2}) rotate(-90)`} text-anchor="middle">{y.name}: Ruvio ÷ Redis</text>
+  <text class="qn" x={W - R - 10} y={T + 22} text-anchor="end">{q.both} faster on both</text>
+  <text class="ql" x={W - R - 10} y={H - B - 12} text-anchor="end">{q.xOnly} on {x.short} only</text>
+  <text class="ql" x={L + 10} y={T + 22}>{q.yOnly} on {y.short} only</text>
+  <text class="ql" x={L + 10} y={H - B - 12}>{q.none} behind on both</text>
+  {pts.map((p) => (
+    <circle class={`pt ${p.kind}`} cx={sx(p.a.ratio).toFixed(1)} cy={sy(p.b.ratio).toFixed(1)} r="6" tabindex="0"
+      data-tip={p.a.label}
+      data-tip-sub={`${x.short} ${fmtX(p.a.ratio)} · ${y.short} ${fmtX(p.b.ratio)}`}
+      data-tip-sub2={`${fmtOps(p.a.ruvio)} / ${fmtOps(p.b.ruvio)} ops/s`} />
+  ))}
+</svg>
+
+<style>
+  .quad { display: block; width: 100%; height: auto; overflow: visible; }
+  .win { fill: color-mix(in srgb, var(--c1) 7%, transparent); }
+  .grid { stroke: var(--line); stroke-width: 1; }
+  .diag { stroke: var(--line-soft); stroke-width: 1; stroke-dasharray: 2 5; }
+  .one { stroke: var(--ink); stroke-opacity: 0.6; stroke-width: 1.25; stroke-dasharray: 4 4; }
+  .tick { font-family: var(--f-mono); font-size: 12px; fill: var(--faint); }
+  .axis { font-size: 13px; fill: var(--mute); }
+  .qn { font-size: 15px; font-weight: 600; fill: var(--ink); }
+  .ql { font-size: 13px; fill: var(--mute); }
+  .pt { stroke: var(--bg); stroke-width: 2; outline: none; transition: opacity 0.15s ease; }
+  .pt.up { fill: var(--c1); }
+  .pt.mixed { fill: var(--c2); }
+  .pt.down { fill: var(--redis); stroke: var(--c2); stroke-width: 1; }
+  .pt.is-on { stroke: var(--ink); stroke-width: 2; }
+  :global([data-chart].has-focus) .pt:not(.is-on) { opacity: 0.3; }
+</style>

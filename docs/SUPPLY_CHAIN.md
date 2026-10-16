@@ -42,7 +42,8 @@ through `[licenses.private]`.
 
 `scripts/generate_sbom.py` emits CycloneDX 1.5 JSON from `cargo metadata`.
 `scripts/release_artifacts.sh` always writes `sbom.cdx.json` next to the
-release binaries and checksums. If `cyclonedx-cargo` is installed it also
+release binaries and checksums. The `release` workflow does not call it yet, so
+a published GitHub Release carries checksums but no SBOM. If `cyclonedx-cargo` is installed it also
 writes `sbom.cyclonedx-cargo.json` from that tool.
 
 ```bash

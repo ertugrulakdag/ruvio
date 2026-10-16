@@ -1,0 +1,265 @@
+---
+import Page from "../layouts/Page.astro";
+import CodeBlock from "../components/content/CodeBlock.astro";
+import type { Lang } from "../lib/highlight";
+import SideNav from "../components/content/SideNav.astro";
+import Tabs from "../components/content/Tabs.astro";
+import PageIntro from "../components/PageIntro.astro";
+import { site, clients } from "../config/site";
+import { serverVersion } from "../data/bench";
+
+const v = serverVersion;
+
+const install: Record<string, { code: string; lang: Lang; title?: string; registryUrl: string }> = {
+  rust: { code: "cargo add ruvio-client", lang: "shell", registryUrl: "https://crates.io/crates/ruvio-client" },
+  csharp: { code: "dotnet add package Ruvio.Client", lang: "shell", registryUrl: "https://www.nuget.org/packages/Ruvio.Client" },
+  go: { code: "go get github.com/salihcantekin/ruvio/clients/go", lang: "shell", registryUrl: "https://pkg.go.dev/github.com/salihcantekin/ruvio/clients/go" },
+  java: {
+    code: `implementation("io.github.salihcantekin:ruvio-client:0.1.0")`,
+    lang: "kotlin",
+    title: "build.gradle.kts",
+    registryUrl: "https://central.sonatype.com/artifact/io.github.salihcantekin/ruvio-client",
+  },
+  python: { code: "pip install ruvio-client", lang: "shell", registryUrl: "https://pypi.org/project/ruvio-client/" },
+  node: { code: "npm install ruvio-client", lang: "shell", registryUrl: "https://www.npmjs.com/package/ruvio-client" },
+};
+
+const nav = [
+  { id: "run", label: "Run the server" },
+  { id: "connect", label: "Connect with redis-cli" },
+  { id: "durability", label: "Choose durability" },
+  { id: "clients", label: "Add a client" },
+  { id: "ui", label: "Operator UI" },
+  { id: "next", label: "Next steps" },
+];
+
+const profiles = [
+  { name: "memory", loses: "The whole dataset. This is the default. No WAL." },
+  { name: "snapshot", loses: "Writes since the last completed checkpoint." },
+  { name: "everysec", loses: "About one sync interval. The client is acknowledged after the append, and the file is synced on <code>sync_interval_ms</code> (default 1000)." },
+  { name: "always", loses: "The record is synced before it is applied and before the reply." },
+];
+
+const next = [
+  { title: "Configuration", text: "Every setting with its TOML field, environment variable and flag.", href: "/docs/configuration/" },
+  { title: "Commands", text: "The command reference, including the coordination commands.", href: "/docs/commands/" },
+  { title: "Use cases", text: "Rate limits, locks, idempotency, cache fills and delayed jobs.", href: "/use-cases/" },
+  { title: "Clients", text: "Guides for the Rust, C#, Go, Java, Python and Node.js clients.", href: "/docs/clients/" },
+  { title: "Connection model", text: "Who chooses servers, shards and logical databases: the server, the client or the app.", href: "/docs/connection-model/" },
+  { title: "Recovery", text: "What happens on restart, and how to back up and restore.", href: "/docs/recovery/" },
+];
+---
+
+<Page title="Get started" description="Run Ruvio with Docker or a prebuilt binary, connect with redis-cli, choose a durability profile and add a client.">
+  <PageIntro title="Get started" kicker="Four steps">
+    Run the server, connect with <code>redis-cli</code>, then add a client. A default process listens on{" "}
+    <code>127.0.0.1:6379</code>, and <code>PING</code> answers <code>PONG</code>.
+  </PageIntro>
+
+  <div class="reading">
+   <div class="wrap">
+    <SideNav items={nav} label="Steps">
+      <section class="step panel prose" id="run" aria-labelledby="run-h">
+        <h2 id="run-h"><span class="step-no" aria-hidden="true">1</span>Run the server</h2>
+        <Tabs id="run-tabs" label="How to run Ruvio" labels={["Docker", "Prebuilt binary", "From source"]}>
+          <div>
+            <p>
+              Docker Hub has one Linux image. <code>linux</code> and <code>latest</code> are the same image, as is each
+              version tag, built for linux/amd64. On an arm64 host such as Apple Silicon, Docker runs it under emulation;
+              use a prebuilt binary for a native arm64 server.
+            </p>
+            <CodeBlock lang="shell" code={`docker run --rm -p 6379:6379 \\
+  -e RUVIO_REQUIREPASS=change-me \\
+  -v ruvio-data:/data \\
+  salihcantekin/ruvio:linux`} />
+            <p>
+              The container sets <code>RUVIO_PROTECTED_MODE=false</code> because a published port is not loopback inside
+              the namespace, so put a password on any bind that is not loopback. The image default durability is{" "}
+              <code>memory</code>; a persistent deploy sets <code>RUVIO_DURABILITY</code> and keeps the volume.
+              The process runs as UID 10001.
+            </p>
+            <details class="expand">
+              <summary>Two shards in one container</summary>
+              <p>
+                Two shards publish consecutive ports. Advertise the host clients can reach; without that,{" "}
+                <code>CLUSTER SLOTS</code> hands out <code>127.0.0.1</code> and a remote app cannot follow <code>MOVED</code>.
+              </p>
+              <CodeBlock lang="shell" code={`docker run --rm -p 6379-6380:6379-6380 \\
+  -e RUVIO_SHARDS=2 \\
+  -e RUVIO_ADDR=0.0.0.0:6379 \\
+  -e RUVIO_ADVERTISE_HOST=YOUR_SERVER_IP \\
+  -e RUVIO_PROTECTED_MODE=false \\
+  -v ruvio-data:/data \\
+  salihcantekin/ruvio:linux`} />
+              <p>First-party clients take only <code>YOUR_SERVER_IP:6379</code>. They read the slot map and open 6380 themselves.</p>
+            </details>
+          </div>
+          <div>
+            <p>
+              <a href={site.releases}>GitHub Releases</a> has prebuilt binaries for Linux x64 and arm64, macOS arm64 and
+              Windows x64. Each archive holds <code>ruvio</code> (the server), <code>ruvio-ctl</code> (backup, restore and
+              checks), <code>ruvio.example.toml</code>, the README and the license; <code>SHA256SUMS</code> lists the checksums.
+            </p>
+            <CodeBlock lang="shell" code={`# Linux x64; swap the platform for linux-arm64 or macos-arm64
+v=${v}
+curl -LO https://github.com/salihcantekin/ruvio/releases/download/ruvio-$v/ruvio-$v-linux-x64.tar.gz
+tar xzf ruvio-$v-linux-x64.tar.gz
+cd ruvio-$v-linux-x64
+./ruvio --requirepass change-me --data-dir ./data`} />
+            <p>
+              On Windows, unzip <code>ruvio-&lt;version&gt;-windows-x64.zip</code> and run <code>ruvio.exe</code>. On macOS,
+              a binary downloaded by a browser is quarantined; <code>xattr -d com.apple.quarantine ruvio ruvio-ctl</code>{" "}
+              clears it (downloads with <code>curl</code> are not quarantined). <code>ruvio --help</code> lists every flag.
+            </p>
+          </div>
+          <div>
+            <p>From a checkout of the repository, with the Rust toolchain installed:</p>
+            <CodeBlock lang="shell" code={`cargo run --release --bin ruvio`} />
+            <p>
+              The server is installed from the Docker image, a release binary, or built from a checkout; it is not
+              published as a crate.
+            </p>
+          </div>
+        </Tabs>
+      </section>
+
+      <section class="step panel prose" id="connect" aria-labelledby="connect-h">
+        <h2 id="connect-h"><span class="step-no" aria-hidden="true">2</span>Connect with redis-cli</h2>
+        <p>Ruvio speaks RESP2, so <code>redis-cli</code> and existing RESP clients connect as they would to Redis.</p>
+        <CodeBlock lang="shell" code={`redis-cli -h 127.0.0.1 -p 6379 -a change-me PING
+# PONG`} />
+        <p>
+          Settings merge in this order: built-in defaults, <code>ruvio.toml</code> (or <code>--config</code> /{" "}
+          <code>RUVIO_CONFIG</code>), <code>RUVIO_*</code> environment variables, then command-line flags. The file is
+          read once, at process start, and unknown TOML fields are rejected.
+        </p>
+      </section>
+
+      <section class="step panel prose" id="durability" aria-labelledby="durability-h">
+        <h2 id="durability-h"><span class="step-no" aria-hidden="true">3</span>Choose a durability profile</h2>
+        <p>
+          You choose how much a crash can lose, at startup. A write is checked, appended, then applied. If the log
+          cannot take the record, the key stays as it was and later writes return <code>MISCONF</code>.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">Profile</th><th scope="col">What a crash can lose</th></tr></thead>
+            <tbody>
+              {profiles.map((p) => (
+                <tr><td><code>{p.name}</code></td><td set:html={p.loses} /></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p>
+          Set it with <code>--durability</code>, <code>RUVIO_DURABILITY</code> or <code>persistence.profile</code> in{" "}
+          <code>ruvio.toml</code>. Shard count, bind address and durability cannot change under a live process.
+        </p>
+        <CodeBlock lang="shell" code={`docker run --rm -p 6379:6379 \\
+  -e RUVIO_REQUIREPASS=change-me \\
+  -e RUVIO_DURABILITY=everysec \\
+  -v ruvio-data:/data \\
+  salihcantekin/ruvio:linux`} />
+      </section>
+
+      <section class="step panel prose" id="clients" aria-labelledby="clients-h">
+        <h2 id="clients-h"><span class="step-no" aria-hidden="true">4</span>Add a client</h2>
+        <p>
+          First-party clients speak RESP2, do not send <code>CLIENT SETINFO</code>, and learn <code>CLUSTER SLOTS</code>{" "}
+          from one seed address. The Go module is released by git tag and served by the Go module proxy; the others are
+          published to their registries.
+        </p>
+        <ul class="client-list">
+          {clients.map((c) => {
+            const i = install[c.slug];
+            return (
+              <li class="client">
+                <div class="client-head">
+                  <h3>{c.language}</h3>
+                  <a class="registry" href={i.registryUrl}>{c.registry}</a>
+                </div>
+                <CodeBlock code={i.code} lang={i.lang} title={i.title} />
+                <a class="guide" href={`/docs/clients/${c.slug}/`}>{c.language} guide</a>
+              </li>
+            );
+          })}
+        </ul>
+        <p>
+          For ASP.NET Core, <code>Ruvio.Client.AspNetCore</code> registers the connection with dependency injection:{" "}
+          <code>dotnet add package Ruvio.Client.AspNetCore</code>.
+        </p>
+      </section>
+
+      <section class="step panel prose" id="ui" aria-labelledby="ui-h">
+        <h2 id="ui-h">Operator UI</h2>
+        <p>
+          A browser view of one running server: data, command forms, Pub/Sub and ACL users. The container serves the
+          browser and connects to the Ruvio server named by <code>RUVIO_UI_TARGET_HOST</code> and{" "}
+          <code>RUVIO_UI_TARGET_PORT</code>. Sign-in is the server ACL user.
+        </p>
+        <CodeBlock lang="shell" code={`docker pull salihcantekin/ruvio-ui:linux
+docker run --rm -p 8080:8080 \\
+  -e RUVIO_UI_TARGET_HOST=127.0.0.1 \\
+  -e RUVIO_UI_TARGET_PORT=6379 \\
+  salihcantekin/ruvio-ui:linux`} />
+        <p>Then open <code>http://127.0.0.1:8080</code>. Port 8080 is only the UI.</p>
+      </section>
+
+      <section class="step panel prose" id="next" aria-labelledby="next-h">
+        <h2 id="next-h">Next steps</h2>
+        <div class="grid grid-2 next-grid">
+          {next.map((n) => (
+            <a class="card" href={n.href}>
+              <h3>{n.title}</h3>
+              <p>{n.text}</p>
+              <span class="more">Read</span>
+            </a>
+          ))}
+        </div>
+      </section>
+    </SideNav>
+   </div>
+  </div>
+</Page>
+
+<style>
+  .step { scroll-margin-top: 88px; display: grid; gap: 16px; }
+  .step + .step { margin-top: 20px; }
+  .step > * + * { margin-top: 0; }
+  .step h2 { display: flex; align-items: center; gap: 14px; margin: 0 0 4px; font-size: 24px; line-height: 1.25; color: var(--ink); }
+  .step-no {
+    display: inline-grid; place-items: center; width: 30px; height: 30px; flex: none;
+    font-family: var(--f-mono); font-size: 13px; font-weight: 500; color: var(--c1);
+    border: 1px solid color-mix(in srgb, var(--c1) 45%, var(--paper-line)); border-radius: 4px;
+  }
+  .table-wrap { border-color: var(--paper-line); }
+  .table-wrap td:first-child { white-space: nowrap; }
+  .table-wrap td { color: var(--ink-body); }
+
+  .expand { border: 1px solid var(--paper-line); border-radius: var(--radius-s); background: var(--surface); }
+  .expand summary { cursor: pointer; padding: 12px 16px; font-weight: 600; font-size: 15px; color: var(--ink); }
+  .expand[open] { display: grid; gap: 14px; padding-bottom: 16px; }
+  .expand[open] > :not(summary) { margin-inline: 16px; }
+  .expand[open] summary { border-bottom: 1px solid var(--line); }
+
+  .client-list { list-style: none; margin: 4px 0; padding: 0; display: grid; gap: 14px; container-type: inline-size; }
+  .client { display: grid; gap: 12px; align-content: start; padding: 18px; border: 1px solid var(--paper-line); border-radius: var(--radius); background: var(--surface); min-width: 0; }
+  .client-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .client h3 { margin: 0; font-size: 17px; color: var(--ink); }
+  .client .registry { font-size: 13px; color: var(--mute); text-decoration: none; }
+  .client .guide { font-size: 14px; font-weight: 600; text-decoration: none; }
+  .client .guide::after { content: " →"; color: var(--mute); }
+  .client :global(pre) { font-size: 13px; padding: 12px 14px 14px; }
+  @supports (container-type: inline-size) {
+    .step { container-type: inline-size; }
+  }
+  @container (min-width: 640px) { .client-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+  .next-grid { gap: 16px; }
+  .next-grid .card { padding: 20px 22px; background: var(--surface); border-color: var(--paper-line); }
+  .next-grid .card h3 { font-size: 17px; color: var(--ink); }
+  @media (max-width: 900px) {
+    .step { scroll-margin-top: 124px; }
+    .step h2 { font-size: 21px; }
+  }
+</style>

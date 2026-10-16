@@ -18,6 +18,8 @@ from pathlib import Path
 
 from resp_conformance import encode, read_response
 
+from _ruvio import free_port
+
 
 ROOT = Path(__file__).resolve().parents[1]
 VALUE = b"native-crash-resilience" * 4
@@ -36,10 +38,6 @@ def run(command, *, timeout=180):
     return result.stdout.strip()
 
 
-def free_port():
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return listener.getsockname()[1]
 
 
 def wait_ready(port, process, timeout=20):

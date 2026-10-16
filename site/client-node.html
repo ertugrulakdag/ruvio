@@ -19,6 +19,7 @@
       <nav aria-label="Main navigation">
         <a href="index.html">Home</a>
         <a href="start.html">Start</a>
+        <a href="use-cases.html">Use cases</a>
         <details>
           <summary>Build</summary>
           <div class="nav-menu">
@@ -409,8 +410,8 @@ await blk.quit();</pre>
         <li><strong>Split and gathered:</strong> <code>MGET</code>, <code>MSET</code>, <code>DEL</code>, <code>UNLINK</code>, <code>EXISTS</code>, <code>TOUCH</code> over several slots run as one sub-command per slot, concurrently. Replies come back in your order and counts are summed. They are not atomic: if one part fails the call rejects, and other parts may have run.</li>
         <li><strong>Every node:</strong> <code>DBSIZE</code>, <code>KEYS</code>, <code>FLUSHDB</code>, <code>FLUSHALL</code>. Other keyless commands (<code>PING</code>, <code>INFO</code>, <code>CONFIG</code>, ...) go to the seed.</li>
         <li><strong>Other multi-key commands</strong> (<code>RENAME</code>, <code>COPY</code>, <code>SUNION</code>, <code>SINTER</code>, <code>BITOP</code>, <code>ZUNION*</code>, <code>LMPOP</code>, <code>XREAD</code>, ...) need all keys in one slot, otherwise a <code>RuvioError</code> with code <code>CROSSSLOT</code> is thrown before anything is sent.</li>
-        <li><strong>Pipelines</strong> are grouped per node, one write each, replies in your order. <strong>Transactions</strong> need one slot (else <code>CROSSSLOT</code>, nothing sent). <code>WATCH</code> uses <code>c.isolated(key, fn)</code>.</li>
-        <li><strong>MOVED:</strong> the slot is repointed and the command retried once; a second MOVED is returned as the error. The table is re-read when the node is unknown or more than one slot moved. A command in flight when a socket drops is never replayed: it rejects with <code>ConnectionError</code>, only that node reconnects, other nodes are unaffected.</li>
+        <li><strong>Pipelines</strong> are grouped per node, one write each, replies in your order. A split command inside a pipeline is split the same way, and its merged reply sits at its index. <strong>Transactions</strong> need one slot (else <code>CROSSSLOT</code>, nothing sent). <code>WATCH</code> uses <code>c.isolated(key, fn)</code>.</li>
+        <li><strong>MOVED:</strong> the slot is repointed and the command sent to the named node, up to three times; a fourth MOVED is returned as the error. The table is re-read only when the node is unknown or the same command is moved a second time. A command in flight when a socket drops is never replayed: it rejects with <code>ConnectionError</code>, only that node reconnects, other nodes are unaffected.</li>
         <li><strong>Blocking commands</strong> use a pooled dedicated connection to the owning node. <strong>Pub/Sub:</strong> <code>c.subscriber()</code> connects to the seed; <code>await c.subscriberFor(channel)</code> connects to the node owning the channel (for <code>SSUBSCRIBE</code>/<code>SPUBLISH</code>).</li>
         <li><strong>Scan:</strong> <code>c.scanIterator()</code> walks every node one after the other. A plain <code>c.scan(cursor)</code> reaches only the seed node.</li>
       </ul>
@@ -494,7 +495,7 @@ npm test                                                     # codec unit tests 
 RUVIO_TEST_ADDR=127.0.0.1:17391 npm test                     # + live tests per command family, cluster client standalone fallback
 RUVIO_TEST_ADDR=127.0.0.1:17391 RUVIO_CLUSTER_ADDR=127.0.0.1:17420 npm test   # + live cluster tests
 RUVIO_TEST_ADDR=127.0.0.1:17391 npm run bench                # codec ns, live GET/SET ops/s, ioredis comparison (not run for this page)</pre>
-      <p>Counts from my run with a live standalone server and a live three-shard server: 63 tests, 63 passed, 0 failed, 0 skipped (Node 22.22, <code>node --test</code>). The tests are in <code>test/</code>: <code>codec.test.ts</code> (encoder and parser), <code>cluster.test.ts</code> (slot table, hash tags, key extraction, MOVED handling against a scripted fake server), <code>coverage.test.ts</code> (reads <code>docs/compatibility-matrix.json</code> and fails if a command has no typed method), and the live files for strings and keys, collections, Bloom/JSON/streams, server commands and cluster.</p>
+      <p>The tests run with <code>node --test</code>; the live ones need a standalone server and a three-shard server. They are in <code>test/</code>: <code>codec.test.ts</code> (encoder and parser), <code>cluster.test.ts</code> (slot table, hash tags, key extraction, MOVED handling against a scripted fake server), <code>coverage.test.ts</code> (reads <code>docs/compatibility-matrix.json</code> and fails if a command has no typed method), and the live files for strings and keys, collections, Bloom/JSON/streams, server commands and cluster.</p>
       <p>The live cluster tests include cross-slot <code>MGET</code>/<code>MSET</code>/<code>DEL</code> order, pipeline order, forced stale-table MOVED recovery, transactions and helpers on the cluster. Without the environment variables the live tests skip.</p>
       <p>The live tests use their own logical databases and run <code>FLUSHDB</code>; one test runs <code>FLUSHALL</code>, so point them at a throwaway server. Start servers as on <a href="start.html">Start</a>. For three shards set <code>shards = 3</code> and <code>port_mode = "per-shard"</code> in the config; shard <em>i</em> listens on base port + <em>i</em>.</p>
 

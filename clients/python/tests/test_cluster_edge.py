@@ -496,7 +496,7 @@ async def test_transaction_without_keys_runs_on_the_seed(make, fc):
     await c.aclose()
 
 
-async def test_transaction_is_redirected_once_when_the_slot_moved(make, fc):
+async def test_transaction_is_redirected_when_the_slot_moved(make, fc):
     cluster = fc()
     cluster.advertised = [(0, 12000), (12001, 16383)]
     c = make(cluster.nodes[0].addr)
@@ -509,7 +509,7 @@ async def test_transaction_is_redirected_once_when_the_slot_moved(make, fc):
     await c.aclose()
 
 
-async def test_transaction_redirect_gives_up_after_one_retry(make, fc):
+async def test_transaction_redirect_gives_up_after_three_redirects(make, fc):
     k = key_in(0, 8191)
 
     def set_(cl_, node, args):
@@ -523,7 +523,7 @@ async def test_transaction_redirect_gives_up_after_one_retry(make, fc):
     with pytest.raises(ruvio.MovedError):
         await maybe(t.execute())
     total = len(cluster.nodes[0].commands("MULTI")) + len(cluster.nodes[1].commands("MULTI"))
-    assert total == 2  # the original attempt and exactly one redirect
+    assert total == 1 + cl.MAX_REDIRECTS  # the original attempt and three redirects
     await c.aclose()
 
 
@@ -557,19 +557,49 @@ async def test_watch_unwatch_and_transaction_node_check(make, fc):
     await c.aclose()
 
 
-async def test_pipeline_of_split_or_fan_commands_is_refused_before_sending(make, fc):
+async def test_pipeline_of_fan_or_cross_slot_commands_is_refused_before_sending(make, fc):
     cluster = fc()
     c = make(cluster.nodes[0].addr)
     await c.ping()
     before = [len(n.log) for n in cluster.nodes]
     a, b = key_in(0, 8191), key_in(8192, 16383)
-    for build in (lambda q: q.dbsize(), lambda q: q.flushdb(), lambda q: q.keys("*"), lambda q: q.mget(a, b)):
+    for build in (lambda q: q.dbsize(), lambda q: q.flushdb(), lambda q: q.keys("*"), lambda q: q.sunion(a, b),
+                  lambda q: q.rename(a, b)):
         q = pipe(c)
         q.ping()
         build(q)
         with pytest.raises(ruvio.RuvioError):
             await maybe(q.execute())
     assert [len(n.log) for n in cluster.nodes] == before
+    await c.aclose()
+
+
+async def test_pipeline_split_command_error_stays_at_its_index(make, fc):
+    a, b = key_in(0, 8191), key_in(8192, 16383)
+    cluster = fc(extra={"MGET": lambda c_, n, args: err("ERR mget broke") if n is c_.nodes[1] else None})
+    c = make(cluster.nodes[0].addr)
+    p = pipe(c)
+    p.set(a, "1").mget(a, b).get(a).delete(a, b)
+    res = await maybe(p.execute(raise_on_error=False))
+    assert res[0] is True and res[2] == "1" and res[3] == 1
+    assert isinstance(res[1], ruvio.ResponseError) and "mget broke" in str(res[1])
+    p = pipe(c)
+    p.mget(a, b)
+    with pytest.raises(ruvio.ResponseError, match="mget broke"):
+        await maybe(p.execute())
+    await c.aclose()
+
+
+async def test_pipeline_split_command_with_a_dead_node_raises(make, fc):
+    a, b = key_in(0, 8191), key_in(8192, 16383)
+    cluster = fc(extra={"EXISTS": lambda c_, n, args: DROP if n is c_.nodes[1] else None})
+    c = make(cluster.nodes[0].addr)
+    p = pipe(c)
+    p.set(a, "1").exists(a, b)
+    with pytest.raises(ruvio.ConnectionError):
+        await maybe(p.execute())
+    assert len(cluster.nodes[1].commands("EXISTS")) == 1  # not re-sent
+    assert await c.get(a) == "1"
     await c.aclose()
 
 

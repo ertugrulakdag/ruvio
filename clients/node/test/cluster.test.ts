@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClusterClient, ConnectionError, RuvioError, hashSlot, createClusterClient } from '../src/index.js';
 import { ROUTED_COMMANDS, keysOfFrame } from '../src/cluster.js';
+import { COMMAND_KEY_RULES } from '../src/command-keys.js';
 import { Encoder, cmd } from '../src/encoder.js';
 import { arr, bulk, err, fakeServer, int, ok, slotsReply, type FakeServer } from './fake-server.js';
 
@@ -94,28 +95,19 @@ test('key extraction follows the Redis key positions', () => {
   assert.deepEqual(keys('ZUNION', 5, 'a', 'b'), ['a', 'b']);
 });
 
-test('every command in the compatibility matrix has a routing rule', () => {
+test('every command in the compatibility matrix has a key rule', () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const repoRoot = join(here, '..', '..', '..', '..');
   const matrix = JSON.parse(readFileSync(join(repoRoot, 'docs', 'compatibility-matrix.json'), 'utf8')) as {
     commands: { name: string; same_slot: boolean }[];
   };
   const names = new Set(matrix.commands.map((c) => c.name.split(' ')[0]!));
-  // Every command with an explicit rule is a real command (typo guard) ...
-  const extra = new Set(['BRPOPLPUSH', 'EVAL_RO', 'EVALSHA_RO', 'FCALL_RO', 'LASTSAVE', 'QUIT', 'RESET', 'TIME']);
-  for (const n of ROUTED_COMMANDS.keys()) assert.ok(names.has(n) || extra.has(n), 'unknown command in routing table: ' + n);
-  // ... and every same-slot command of the matrix is routed by its real key list, not by the default rule.
-  const sameSlot = matrix.commands.filter((c) => c.same_slot).map((c) => c.name);
-  const defaultRule = new Set(['EXEC', 'MULTI', 'GEORADIUS', 'GEORADIUSBYMEMBER']);
-  for (const n of sameSlot) {
-    if (defaultRule.has(n)) continue;
-    const r = ROUTED_COMMANDS.get(n);
-    assert.ok(r !== undefined && r.kind !== 'FIRST', n + ' needs a multi-key routing rule');
-  }
-  // Commands that are keyless or sub-command based must not be routed by their first word.
-  const keyless = ['ACL', 'CLIENT', 'CLUSTER', 'COMMAND', 'CONFIG', 'FUNCTION', 'SCRIPT', 'SLOWLOG', 'LATENCY', 'INFO', 'HELLO', 'AUTH', 'PING', 'CHANGES', 'RUVIO'];
-  for (const n of keyless) if (names.has(n)) assert.equal(ROUTED_COMMANDS.get(n)?.kind, 'ANY', n);
-  console.log(`routing: ${names.size} command names in the matrix, ${ROUTED_COMMANDS.size} with an explicit rule (the rest route by their first argument)`);
+  // Every command with a split / fan-out / blocking flag is a real command (typo guard) ...
+  const extra = new Set(['BRPOPLPUSH']);
+  for (const n of ROUTED_COMMANDS.keys()) assert.ok(COMMAND_KEY_RULES.has(n) || extra.has(n), 'unknown command in routing flags: ' + n);
+  // ... and every command of the matrix takes its key positions from the generated table.
+  for (const n of names) assert.ok(COMMAND_KEY_RULES.has(n), n + ' has no key rule');
+  console.log(`routing: ${names.size} command names in the matrix, ${COMMAND_KEY_RULES.size} with a key rule, ${ROUTED_COMMANDS.size} with a routing flag`);
 });
 
 // ---- fake-server behaviour ------------------------------------------------------------------
@@ -175,7 +167,7 @@ test('routes by slot over a fake two-node cluster; no extra traffic after the ta
   }
 });
 
-test('MOVED: patch the slot, retry once on the new node, later calls go straight there', async () => {
+test('MOVED: patch the slot, retry on the new node, later calls go straight there', async () => {
   const { a, b } = await twoNodes({ aTable: 'stale' });
   const c = new ClusterClient({ host: '127.0.0.1', port: a.port });
   try {
@@ -188,12 +180,14 @@ test('MOVED: patch the slot, retry once on the new node, later calls go straight
     assert.equal(c.refreshCount, 0, 'one moved slot to a known node: no full refresh');
     assert.equal(await c.get(hi), 'B:' + hi);
     assert.equal(a.count('GET'), 1, 'the patched table sends it straight to B');
-    // A second moved slot triggers a CLUSTER SLOTS refresh.
+    // Another command moved to a known node patches its own slot too, still without a refresh.
     const hi2 = keyIn(8192, 16383, 'z');
     assert.equal(await c.get(hi2), 'B:' + hi2);
-    assert.equal(c.refreshCount, 1);
-    assert.equal(a.count('CLUSTER'), 2);
-    // After the refresh the whole table is right: no more redirects.
+    assert.equal(c.redirectCount, 2);
+    assert.equal(c.refreshCount, 0);
+    assert.equal(a.count('CLUSTER'), 1);
+    // After an explicit refresh the whole table is right: no more redirects.
+    await c.refreshSlots();
     const before = c.redirectCount;
     for (let i = 0; i < 20; i++) await c.get('q' + i);
     assert.equal(c.redirectCount, before);
@@ -204,23 +198,58 @@ test('MOVED: patch the slot, retry once on the new node, later calls go straight
   }
 });
 
-test('MOVED is followed once only; a second MOVED comes back as the error', async () => {
-  const b = await fakeServer((args) => (args[0] === 'GET' ? err('MOVED 5 127.0.0.1:1') : ok));
-  // A owns everything and always redirects to B; B redirects to a dead port.
-  const a = await fakeServer((args) => {
-    if (args[0] === 'CLUSTER') return slotsReply([[0, 16383, a.port]]);
-    if (args[0] === 'GET') return err(`MOVED ${hashSlot(args[1]!)} 127.0.0.1:${b.port}`);
-    return ok;
-  });
-  const c = new ClusterClient({ host: '127.0.0.1', port: a.port });
+/** Three fake nodes; GET on node `i` answers with `get(i, key, ports)`, CLUSTER SLOTS with `table`. */
+async function threeNodes(get: (i: number, key: string, ports: number[]) => string) {
+  const nodes: FakeServer[] = [];
+  const ports: number[] = [];
+  // Node 0 owns almost everything, 1 and 2 own one slot each: all three are known to the client.
+  const table = (): [number, number, number][] => [[0, 16381, ports[0]!], [16382, 16382, ports[1]!], [16383, 16383, ports[2]!]];
+  for (let i = 0; i < 3; i++) {
+    const n = await fakeServer((args) => {
+      if (args[0] === 'CLUSTER') return slotsReply(table());
+      if (args[0] === 'GET') return get(i, args[1]!, ports);
+      return ok;
+    });
+    nodes.push(n);
+    ports.push(n.port);
+  }
+  return { nodes, close: () => Promise.all(nodes.map((n) => n.close())) };
+}
+
+test('MOVED: the first redirect to a known node patches the slot; a second one for the same command reloads the table', async () => {
+  // 0 -> 1 -> 2: the key's slot is reported moved twice before node 2 answers.
+  const { nodes, close } = await threeNodes((i, k, ports) => (i < 2 ? err(`MOVED ${hashSlot(k)} 127.0.0.1:${ports[i + 1]}`) : bulk('C:' + k)));
+  const c = new ClusterClient({ host: '127.0.0.1', port: nodes[0]!.port });
   try {
-    await assert.rejects(c.get('k'), (e: unknown) => e instanceof RuvioError && e.code === 'MOVED');
-    assert.equal(a.count('GET'), 1);
-    assert.equal(b.count('GET'), 1, 'exactly one retry');
+    await c.connect();
+    const k = keyIn(0, 16381);
+    assert.equal(await c.get(k), 'C:' + k);
+    assert.equal(c.redirectCount, 2);
+    assert.equal(c.refreshCount, 1, 'only the second MOVED reloads the table');
+    assert.equal(nodes[0]!.count('CLUSTER'), 2);
+    assert.deepEqual(nodes.map((n) => n.count('GET')), [1, 1, 1]);
+    assert.equal(c.nodeFor(k).port, nodes[2]!.port, 'the slot points at the last named node');
   } finally {
     c.disconnect();
-    await a.close();
-    await b.close();
+    await close();
+  }
+});
+
+test('MOVED is followed at most three times per command; the fourth comes back as the error', async () => {
+  // 0 -> 1 -> 2 -> 0 -> ...: the redirects never settle.
+  const { nodes, close } = await threeNodes((i, k, ports) => err(`MOVED ${hashSlot(k)} 127.0.0.1:${ports[(i + 1) % 3]}`));
+  const c = new ClusterClient({ host: '127.0.0.1', port: nodes[0]!.port });
+  try {
+    const k = keyIn(0, 16381);
+    await assert.rejects(c.get(k), (e: unknown) => e instanceof RuvioError && e.code === 'MOVED');
+    assert.deepEqual(nodes.map((n) => n.count('GET')), [2, 1, 1], 'the first send and three retries');
+    assert.equal(c.redirectCount, 3);
+    // the count is per command: the next command gets its own three redirects
+    await assert.rejects(c.get(k), (e: unknown) => e instanceof RuvioError && e.code === 'MOVED');
+    assert.equal(c.redirectCount, 6);
+  } finally {
+    c.disconnect();
+    await close();
   }
 });
 

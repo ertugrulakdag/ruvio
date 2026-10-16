@@ -59,26 +59,6 @@ func indexByte(s string, c byte) int {
 	return -1
 }
 
-// keyKind says where a command carries its keys.
-type keyKind uint8
-
-const (
-	kFirst   keyKind = iota // the key is argument 1 (the common case)
-	kNone                   // no key: any node
-	kAll                    // every argument after the name is a key
-	kTwo                    // arguments 1 and 2
-	kPairs                  // key value key value ... (MSET)
-	kBlock                  // BLPOP key... timeout
-	kCount1                 // numkeys at argument 1, keys follow (ZUNION, LMPOP, SINTERCARD)
-	kCount2                 // numkeys at argument 2, keys follow (EVAL, FCALL, BLMPOP)
-	kZStore                 // destination at 1, numkeys at 2, keys follow
-	kStreams                // XREAD / XREADGROUP: keys between STREAMS and the ids
-	kSub2                   // subcommand first, key at argument 2 (OBJECT, XGROUP, ...)
-	kBitop                  // BITOP op dest src...: keys from argument 2
-	kJMGet                  // JSON.MGET key... path
-	kGeoRad                 // GEORADIUS: key at 1 plus the STORE/STOREDIST target
-)
-
 // fanKind marks commands that act on a whole cluster rather than one node.
 type fanKind uint8
 
@@ -92,87 +72,56 @@ const (
 
 // cmdSpec describes how the router treats one command.
 type cmdSpec struct {
-	kind  keyKind
-	split bool // keyed multi-key command that is split per slot when its keys differ
+	keys  *commandKeyRule // where the keys are, from the server's command table
+	split bool            // keyed multi-key command that is split per slot when its keys differ
 	fan   fanKind
 	scan  bool // SCAN: walks every node
 }
 
-// cmdSpecs lists every command of docs/compatibility-matrix.json (first word of the
-// name). A command that is not listed is routed by its first argument.
+var (
+	// firstKey routes a command missing from the table by its first argument.
+	firstKey = commandKeyRule{kind: ruleRange, a: 1, b: 1, c: 1}
+	// allKeys routes SSUBSCRIBE and SUNSUBSCRIBE by every channel.
+	allKeys = commandKeyRule{kind: ruleRange, a: 1, b: -1, c: 1}
+)
+
+// cmdSpecs is the server's command table (command_keys_gen.go) with the router's own
+// choices on top: fan-out, split, SCAN and channel routing for sharded Pub/Sub.
 var cmdSpecs = func() map[string]cmdSpec {
-	m := map[string]cmdSpec{}
-	set := func(k keyKind, names ...string) {
-		for _, n := range names {
-			m[n] = cmdSpec{kind: k}
-		}
+	m := make(map[string]cmdSpec, len(commandKeyRules))
+	rules := make([]commandKeyRule, 0, len(commandKeyRules)) // never grows: the pointers stay valid
+	for n, r := range commandKeyRules {
+		rules = append(rules, r)
+		m[n] = cmdSpec{keys: &rules[len(rules)-1]}
 	}
-	set(kNone, "RUVIO", "PING", "HELLO", "AUTH", "ACL", "CHANGES", "SELECT", "RANDOMKEY", "SWAPDB", "INFO", "WAIT",
-		"CONFIG", "SAVE", "BGSAVE", "MULTI", "EXEC", "DISCARD", "UNWATCH", "CLUSTER", "READONLY", "READWRITE",
-		"PUBLISH", "SUBSCRIBE", "UNSUBSCRIBE", "PSUBSCRIBE", "PUNSUBSCRIBE", "CLIENT", "COMMAND", "ECHO",
-		"SLOWLOG", "LATENCY", "JSON.INDEX", "JSON.FIND", "LASTSAVE", "TIME", "QUIT", "RESET")
-	set(kAll, "PFCOUNT", "PFMERGE", "SDIFF", "SDIFFSTORE", "SINTER", "SINTERSTORE", "SUNION", "SUNIONSTORE",
-		"SSUBSCRIBE", "SUNSUBSCRIBE", "WATCH")
-	set(kTwo, "BLMOVE", "BRPOPLPUSH", "COPY", "LMOVE", "RENAME", "RENAMENX", "RPOPLPUSH", "SMOVE", "GEOSEARCHSTORE")
-	set(kPairs, "MSETNX")
-	set(kBlock, "BLPOP", "BRPOP", "BZPOPMIN", "BZPOPMAX")
-	set(kCount1, "ZUNION", "ZINTER", "ZDIFF", "LMPOP", "SINTERCARD")
-	set(kCount2, "EVAL", "EVALSHA", "EVAL_RO", "EVALSHA_RO", "FCALL", "FCALL_RO", "BLMPOP")
-	set(kZStore, "ZUNIONSTORE", "ZINTERSTORE", "ZDIFFSTORE")
-	set(kStreams, "XREAD", "XREADGROUP")
-	set(kSub2, "OBJECT", "MEMORY", "XGROUP", "XINFO")
-	set(kBitop, "BITOP")
-	set(kJMGet, "JSON.MGET")
-	set(kGeoRad, "GEORADIUS", "GEORADIUSBYMEMBER")
+	set := func(n string, s cmdSpec) {
+		s.keys = m[n].keys
+		m[n] = s
+	}
 	// scripts and functions: LOAD/FLUSH/DELETE must reach every node.
-	m["SCRIPT"] = cmdSpec{kind: kNone, fan: fanSub}
-	m["FUNCTION"] = cmdSpec{kind: kNone, fan: fanSub}
-	m["DBSIZE"] = cmdSpec{kind: kNone, fan: fanSum}
-	m["FLUSHDB"] = cmdSpec{kind: kNone, fan: fanFirst}
-	m["FLUSHALL"] = cmdSpec{kind: kNone, fan: fanFirst}
-	m["KEYS"] = cmdSpec{kind: kNone, fan: fanConcat}
-	m["SCAN"] = cmdSpec{kind: kNone, scan: true}
+	set("SCRIPT", cmdSpec{fan: fanSub})
+	set("FUNCTION", cmdSpec{fan: fanSub})
+	set("DBSIZE", cmdSpec{fan: fanSum})
+	set("FLUSHDB", cmdSpec{fan: fanFirst})
+	set("FLUSHALL", cmdSpec{fan: fanFirst})
+	set("KEYS", cmdSpec{fan: fanConcat})
+	set("SCAN", cmdSpec{scan: true})
 	// keyed multi-key commands that are split per slot
-	for _, n := range []string{"DEL", "UNLINK", "EXISTS", "TOUCH", "MGET"} {
-		m[n] = cmdSpec{kind: kAll, split: true}
+	for _, n := range []string{"DEL", "UNLINK", "EXISTS", "TOUCH", "MGET", "MSET"} {
+		set(n, cmdSpec{split: true})
 	}
-	m["MSET"] = cmdSpec{kind: kPairs, split: true}
-	// everything else with its key at argument 1 (listed so the coverage test can prove
-	// that no matrix command was forgotten).
-	for _, n := range firstKeyed {
-		m[n] = cmdSpec{kind: kFirst}
-	}
+	// sharded Pub/Sub goes to the node owning the channel's slot.
+	m["SPUBLISH"] = cmdSpec{keys: &firstKey}
+	m["SSUBSCRIBE"] = cmdSpec{keys: &allKeys}
+	m["SUNSUBSCRIBE"] = cmdSpec{keys: &allKeys}
 	return m
 }()
-
-// firstKeyed are the matrix commands whose key is argument 1.
-var firstKeyed = []string{
-	"GET", "SETV", "TAKE", "DELEX", "GETEX", "LIMIT", "IDEM", "ONCE", "LEASE", "SEMAPHORE", "RELEASE", "SET",
-	"GETSET", "APPEND", "STRLEN", "INCR", "DECR", "INCRBY", "DECRBY", "TYPE", "MOVE", "EXPIRE", "PEXPIRE",
-	"EXPIREAT", "PEXPIREAT", "TTL", "PTTL", "PERSIST", "LPUSH", "LPUSHCAP", "RPUSHCAP", "RPUSH", "LPOP", "RPOP",
-	"LLEN", "LINDEX", "LRANGE", "LTRIM", "SADD", "SREM", "SISMEMBER", "SCARD", "SMEMBERS", "SPOP", "SRANDMEMBER",
-	"HSET", "HGET", "HDEL", "HLEN", "HGETALL", "HMGET", "HEXISTS", "HKEYS", "HVALS", "HINCRBY", "HSETNX",
-	"HSTRLEN", "HSCAN", "HEXPIRE", "HPEXPIRE", "HEXPIREAT", "HPEXPIREAT", "HTTL", "HPTTL", "HEXPIRETIME",
-	"HPEXPIRETIME", "HPERSIST", "ZADD", "ZRANGE", "ZREVRANGE", "ZRANGEBYSCORE", "ZRANGEBYLEX", "ZREVRANGEBYLEX",
-	"ZREM", "ZINCRBY", "ZCARD", "ZSCORE", "ZRANK", "ZREVRANK", "ZPOPMIN", "ZPOPMAX", "ZREMRANGEBYRANK",
-	"ZREMRANGEBYSCORE", "ZREMRANGEBYLEX", "GEOADD", "GEODIST", "GEOHASH", "GEOPOS", "GEOSEARCH", "BF.RESERVE",
-	"BF.ADD", "BF.MADD", "BF.INSERT", "BF.INFO", "BF.CARD", "BF.EXISTS", "BF.MEXISTS", "JSON.GET", "JSON.SET",
-	"JSON.DEL", "XADD", "XLEN", "XRANGE", "XREVRANGE", "XDEL", "XSETID", "XTRIM", "XACK", "XPENDING",
-	"XAUTOCLAIM", "XCLAIM", "SPUBLISH", "SSCAN", "ZSCAN", "JSON.MERGE", "JSON.TYPE", "JSON.STRLEN",
-	"JSON.ARRLEN", "JSON.OBJKEYS", "JSON.NUMINCRBY", "JSON.TOGGLE", "JSON.ARRAPPEND", "JSON.CLEAR",
-	"JSON.OBJLEN", "JSON.STRAPPEND", "JSON.NUMMULTBY", "JSON.ARRINSERT", "JSON.ARRPOP", "JSON.ARRTRIM",
-	"JSON.ARRINDEX", "JSON.FORGET", "JMERGE", "SETBIT", "BITFIELD", "BITFIELD_RO", "GETBIT", "BITCOUNT",
-	"BITPOS", "PFADD", "FILLGET", "FILLSET", "SETEX", "PSETEX", "SETNX", "GETDEL", "INCRBYFLOAT", "GETRANGE",
-	"SUBSTR", "SETRANGE", "SMISMEMBER", "ZCOUNT", "ZLEXCOUNT", "ZMSCORE", "ZRANDMEMBER", "HRANDFIELD",
-	"HINCRBYFLOAT", "LINSERT", "LSET", "LREM", "LPOS", "LPUSHX", "RPUSHX", "EXPIRETIME", "PEXPIRETIME", "DUMP",
-	"RESTORE",
-}
 
 // specOf looks a command name up case-insensitively without allocating.
 func specOf(name []byte) (cmdSpec, bool) {
 	var up [32]byte
 	if len(name) > len(up) {
-		return cmdSpec{}, false
+		return cmdSpec{keys: &firstKey}, false
 	}
 	for i, c := range name {
 		if c >= 'a' && c <= 'z' {
@@ -182,7 +131,7 @@ func specOf(name []byte) (cmdSpec, bool) {
 	}
 	s, ok := cmdSpecs[string(up[:len(name)])]
 	if !ok {
-		return cmdSpec{kind: kFirst}, false
+		return cmdSpec{keys: &firstKey}, false
 	}
 	return s, true
 }
@@ -296,37 +245,22 @@ func atoiBytes(b []byte) (int, bool) {
 }
 
 // keysOf appends the keys of the command args (args[0] is the name) to dst, in argument
-// order. Keyless commands add nothing. The returned slices alias args.
-func keysOf(kind keyKind, args [][]byte, dst [][]byte) [][]byte {
+// order, as rule r places them. Keyless commands add nothing. The returned slices alias args.
+func keysOf(r *commandKeyRule, args [][]byte, dst [][]byte) [][]byte {
 	n := len(args)
-	if n < 2 || kind == kNone {
-		return dst
-	}
-	switch kind {
-	case kFirst:
-		return append(dst, args[1])
-	case kAll:
-		return append(dst, args[1:]...)
-	case kTwo:
-		if n < 3 {
-			return append(dst, args[1])
+	switch r.kind {
+	case ruleRange:
+		last := int(r.b)
+		if last < 0 {
+			last += n
 		}
-		return append(dst, args[1], args[2])
-	case kPairs:
-		for i := 1; i < n; i += 2 {
+		for i := int(r.a); i <= last && i < n; i += int(r.c) {
 			dst = append(dst, args[i])
 		}
-	case kBlock:
-		if n > 2 {
-			dst = append(dst, args[1:n-1]...)
-		}
-	case kCount1, kCount2, kZStore:
-		at := 1
-		if kind != kCount1 {
-			at = 2
-		}
-		if kind == kZStore {
-			dst = append(dst, args[1])
+	case ruleNumKeys:
+		at := int(r.a)
+		if r.b > 0 && int(r.b) < n {
+			dst = append(dst, args[r.b])
 		}
 		if at < n {
 			if c, ok := atoiBytes(args[at]); ok {
@@ -336,30 +270,25 @@ func keysOf(kind keyKind, args [][]byte, dst [][]byte) [][]byte {
 				dst = append(dst, args[at+1:at+1+c]...)
 			}
 		}
-	case kStreams:
+	case ruleKeywordHalf:
 		for i := 1; i < n; i++ {
-			if upperEq(args[i], "STREAMS") {
+			if upperEq(args[i], r.keywords[0]) {
 				rest := n - i - 1
 				return append(dst, args[i+1:i+1+rest/2]...)
 			}
 		}
-	case kSub2:
-		if n > 2 {
-			dst = append(dst, args[2])
+	case ruleKeyAndStore:
+		first := int(r.a)
+		if first < n {
+			dst = append(dst, args[first])
 		}
-	case kBitop:
-		if n > 2 {
-			dst = append(dst, args[2:]...)
-		}
-	case kJMGet:
-		if n > 2 {
-			dst = append(dst, args[1:n-1]...)
-		}
-	case kGeoRad:
-		dst = append(dst, args[1])
-		for i := 2; i+1 < n; i++ {
-			if upperEq(args[i], "STORE") || upperEq(args[i], "STOREDIST") {
-				dst = append(dst, args[i+1])
+		for i := first + 1; i+1 < n; i++ {
+			for _, w := range r.keywords {
+				if upperEq(args[i], w) {
+					i++
+					dst = append(dst, args[i])
+					break
+				}
 			}
 		}
 	}
@@ -378,7 +307,7 @@ func CommandKeys(args ...string) []string {
 	}
 	spec, _ := specOf(bs[0])
 	var out []string
-	for _, k := range keysOf(spec.kind, bs, nil) {
+	for _, k := range keysOf(spec.keys, bs, nil) {
 		out = append(out, string(k))
 	}
 	return out

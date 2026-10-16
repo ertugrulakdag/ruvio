@@ -24,7 +24,6 @@ mod id_map;
 pub mod import;
 pub mod index;
 mod json;
-mod json_index;
 #[doc(hidden)]
 pub use json::fuzz_ops as json_fuzz_ops;
 mod keystats;
@@ -52,7 +51,6 @@ mod slots;
 mod slowlog;
 mod store;
 mod stream;
-mod stream_blocks;
 pub mod time;
 mod tls;
 mod transaction;

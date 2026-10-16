@@ -19,11 +19,9 @@ from pathlib import Path
 
 from resp_conformance import encode, read_response
 
+from _ruvio import free_port
 
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
+
 
 
 def free_cluster_port() -> int:

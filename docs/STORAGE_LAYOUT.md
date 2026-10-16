@@ -1,9 +1,10 @@
 # Storage Layout Boundary
 
-`KvShard` is generic over a `StorageIndex`. The default `AHashIndex` preserves
-the current randomized hash-map layout. `BTreeIndex` is an ordered reference
-implementation used to prove conformance and support controlled layout
-experiments.
+`KvShard` is generic over a `StorageIndex`. The default `AHashIndex` is the
+production layout: a key log, a 4-byte-per-key slot table, and slab pages, as
+[ARCHITECTURE](ARCHITECTURE.md#current-storage-core) describes. `BTreeIndex` is
+an ordered reference implementation used to prove conformance and support
+controlled layout experiments.
 
 ## Static Dispatch
 
@@ -54,5 +55,4 @@ covering:
 - p99 and p99.9 latency under saturation.
 
 `BTreeIndex` is a correctness baseline, not a claim that an ordered tree is
-appropriate for the production hot path. Future candidates may include a
-shard-local open-addressing table or arena-backed compact handles.
+appropriate for the production hot path.

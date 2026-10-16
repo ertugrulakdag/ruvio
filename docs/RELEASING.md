@@ -26,4 +26,33 @@ The Go client has no registry; Go modules are versions of a git tag. The server 
 
 Binary archives are workflow artifacts. Turn on `create_github_release` to attach them, with a `SHA256SUMS` file, to a GitHub Release. The binaries use the release profile (fat LTO, no profile-guided optimization). Performance numbers come from the builds described on each results page, so check those before quoting one for a downloaded binary.
 
-Leave a version input empty to bump that package's patch number, or fill it to publish that exact version. The site shows the current published versions by asking the registries when a page loads, so no page needs an edit after a release.
+Leave a version input empty to bump that package's patch number, or fill it to publish that exact version. `docker` and `server-binaries` share the server version, and `docker-ui` and `ui-host` share the UI version; run alone, these four targets refuse an empty version, so the two halves of a pair cannot ship under different numbers. The site shows the current published versions by asking the registries when a page loads. `server-binaries` (and `all`) also point the `v=x.y.z` download line in `README.md`, `site/start.html` and `site/packages.html` at the server version, and the version commit carries it.
+
+## Changelogs
+
+Every published package has a `CHANGELOG.md` next to its manifest (the server's is at the repository root, the C# client's in `clients/csharp/`, each .NET integration's in its project folder). Add a line under `## Unreleased` in the same change as the code. When `release_version.py --write` sets a new version, it moves those lines under `## <version> - <date>` and opens an empty `Unreleased`; a release with nothing recorded gets "No recorded changes."
+
+## Integration packages
+
+`integration-packages` does not choose versions. Bump the package first and commit the result:
+
+```bash
+python3 scripts/release_version.py Ruvio.AspNetCore.RateLimiting --write          # next patch
+python3 scripts/release_version.py Ruvio.AspNetCore.RateLimiting --set 0.2.0 --write
+```
+
+With `publish` ticked, the workflow stops when NuGet already has the version in the project file, because the push skips duplicates and would otherwise pass without publishing. An integration references `Ruvio.Client` as a project, so its package depends on the client version in the repository; publish that client version first.
+
+## Checklist
+
+| Step | How |
+| --- | --- |
+| Changes recorded | `## Unreleased` in each package's `CHANGELOG.md` lists what users will notice |
+| Branch green | `pr-gate` passed on the commit you release from; `release` does not check this |
+| Version | Leave the input empty for the next patch, or fill it; the pair rule above applies to `docker`/`server-binaries` and `docker-ui`/`ui-host` |
+| Server release | Run `server-binaries` with `create_github_release` on, then `docker` with the same `server_version` |
+| Go client | No workflow: move its `Unreleased` notes under the version by hand and push the tag `clients/go/vX.Y.Z`. A published tag is never moved |
+| Integration packages | Bump with `release_version.py`, commit, then run `integration-packages` with `publish` |
+| npm | A trusted publish can land as "staged"; approve it on npmjs.com |
+| Site | Run `pages` after the version commit if the site should show the new download line |
+

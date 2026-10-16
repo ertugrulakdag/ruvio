@@ -58,10 +58,8 @@ public sealed class RuvioClientOptions
 
     /// <summary>
     /// When true (the default), a broken command or shard socket is opened again before the
-    /// next command. The command that discovers the drop still fails, except a single
-    /// <c>GET</c>, <c>MGET</c>, <c>EXISTS</c>, <c>HGET</c>, <c>TTL</c>, or <c>PTTL</c>
-    /// whose reply had not started: that read is sent once more on the new socket.
-    /// Retrying a write could apply it twice. Set this to false to reconnect only from <c>ReconnectAsync</c>.
+    /// next command. The command that discovers the drop fails and is never sent again, even
+    /// a read whose reply had not started. Set this to false to reconnect only from <c>ReconnectAsync</c>.
     /// </summary>
     public bool Reconnect { get; set; } = true;
 

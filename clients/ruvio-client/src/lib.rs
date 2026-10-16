@@ -6,6 +6,7 @@ mod args;
 mod client;
 mod cluster;
 mod codec;
+mod command_keys;
 mod commands;
 mod error;
 mod extra;
@@ -34,8 +35,10 @@ pub use scan::ScanIter;
 
 pub use value::RespValue;
 
-/// Codec entry points for `examples/alloc_bench.rs`. Not a stable API.
+/// Codec entry points for `examples/alloc_bench.rs` and `tests/resp_vectors.rs`. Not a stable API.
 #[doc(hidden)]
 pub mod __bench {
-    pub use crate::codec::{append_strings as encode, read_value as parse};
+    pub use crate::codec::{
+        append_bytes as encode_bytes, append_strings as encode, read_value as parse,
+    };
 }

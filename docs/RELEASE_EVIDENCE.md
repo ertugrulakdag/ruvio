@@ -38,22 +38,22 @@ cargo build --locked --release --bin ruvio --bin ruvio-ctl
 
 | Gate | Why it is not marked complete |
 | --- | --- |
-| Randomized `kill -9` crash harness during append/sync/rename | Live SET harness passed on the Cherry EPYC host: 12 trials each of `everysec` and `always`, process `kill -9` during pipelined SET, restart, prefix check. `always` kept every acknowledged key. Named crash sites still abort inside `persistence::crash::tests`. This is not a power-loss or snapshot-rename kill. See `docs/BARE_METAL.md`. |
+| Randomized `kill -9` crash harness during append/sync/rename | Live SET harness passed on the Cherry EPYC host: 12 trials each of `everysec` and `always`, process `kill -9` during pipelined SET, restart, prefix check. `always` kept every acknowledged key. Named crash sites still abort inside `persistence::crash::tests`. This is not a power-loss or snapshot-rename kill. See `docs/evidence/2026-09-28-bare-metal.md`. |
 | Full-disk and permission-denied injection | Docker tmpfs `ENOSPC`, WAL-directory permission, process crash, replica network interruption/promotion, and bounded soak scenarios are available via `scripts/docker_resilience.py`. Local Docker recovered every acknowledged write and caught up 200/200 replica keys after a network partition. Native macOS randomized in-flight crash tests also passed 3 trials each for `everysec` and `always`. Real block-device and host-filesystem behavior still need production-like Linux validation. |
 | 24-hour mixed-workload soak | Not run by design in the current test plan; the 30-second Docker workload is only a bounded smoke test. |
-| String RSS within the same band as Redis | Open product P0 from the Cherry soak. The numbers are in `docs/MEMORY_DENSITY.md`. |
-| Bare-metal p50/p95/p99/p99.9 publication | One Cherry EPYC 7313P run is recorded in `docs/BARE_METAL.md`. Frequency boost was disabled. The 99.902% redis-benchmark bucket is not a computed p99.9. Container and laptop numbers are still not release evidence. |
-| SLSA/provenance attestations | Checksums and a CycloneDX SBOM are produced by `scripts/release_artifacts.sh`. Signed provenance is not wired yet. |
+| String RSS within the same band as Redis | The gap found in the 2026-09-28 Cherry soak (`docs/evidence/2026-09-28-string-memory-density.md`) was worked down. Later short runs are below Redis: total RSS 0.77× for 16-byte and 0.84× for 128-byte strings in `docs/evidence/2026-10-11-azure-command-comparison.md`. The 15-minute four-core soak itself was not re-run. |
+| Bare-metal p50/p95/p99/p99.9 publication | One Cherry EPYC 7313P run is recorded in `docs/evidence/2026-09-28-bare-metal.md`. Frequency boost was disabled. The 99.902% redis-benchmark bucket is not a computed p99.9. Container and laptop numbers are still not release evidence. |
+| SLSA/provenance attestations | `scripts/release_artifacts.sh` produces checksums and a CycloneDX SBOM when run by hand. The `release` workflow writes its own checksums and attaches no SBOM yet. Signed provenance is not wired yet. |
 
 The extended `ci.yml` workflow is manually dispatched; its Docker,
 cross-platform, fuzz, sanitizer, and supply-chain jobs are not automatic. The
 short, read-only `pr-gate.yml` workflow runs on pull requests and pushes to
-`main`, covering formatting, core tests, first-party Rust/.NET client tests,
-and local two-shard routing regressions. A workflow definition is not a passed
-run; consult the check result for the exact commit. The compatibility-matrix
-validator currently fails on stale `src/server.rs` references and is not part
-of the automatic gate. Run the main Rust suite with `cargo test --all-targets`
-and inspect `.github/workflows/ci.yml` for the remaining commands. Do not
+`main`, covering formatting, core tests, `scripts/check.sh` (which includes the
+compatibility-matrix validator), the instruction-count gate, client tests and
+local two-shard routing regressions. A workflow definition is not a passed
+run; consult the check result for the exact commit. Run the main Rust suite
+with `cargo test --lib --bins --tests` and inspect `.github/workflows/ci.yml`
+for the remaining commands. Do not
 treat Docker Desktop throughput as a substitute for the bare-metal performance
 P0.
 

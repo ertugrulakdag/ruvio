@@ -1,0 +1,14 @@
+---
+interface Props { size?: number; href?: string }
+const { size = 32, href = "/" } = Astro.props;
+---
+
+<a class="logo" href={href} style={`--logo-size:${size}px`}>
+  <img src="/images/ruvio-mark-128.png" width={size} height={size} alt="" />
+  <span>Ruvio</span>
+</a>
+
+<style>
+  .logo { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 20px; letter-spacing: -0.02em; color: var(--ink); white-space: nowrap; }
+  .logo img { width: var(--logo-size); height: var(--logo-size); }
+</style>

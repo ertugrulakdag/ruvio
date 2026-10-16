@@ -40,7 +40,7 @@ class _Node:
 
 
 class _State:
-    __slots__ = ("mode", "slots", "nodes", "by_addr", "seed", "moved", "watch", "gate")
+    __slots__ = ("mode", "slots", "nodes", "by_addr", "seed", "watch", "gate")
 
     def __init__(self, seed: _Node) -> None:
         self.mode = 0
@@ -48,15 +48,14 @@ class _State:
         self.nodes: List[_Node] = []
         self.by_addr: Dict[Tuple[str, int], _Node] = {(seed.host, seed.port): seed}
         self.seed = seed
-        self.moved = 0
         self.watch: Optional[_Node] = None
         self.gate: Optional[asyncio.Lock] = None  # serializes discovery / refresh
 
 
 class _RoutedFuture(asyncio.Future):  # type: ignore[type-arg]
     """The future of a single-key command handed to the shared connection. It behaves like any
-    future; only a ``-MOVED`` reply is intercepted (in ``set_exception``) and turned into one retry
-    on the node the reply names. This keeps the warm path free of an extra coroutine."""
+    future; only a ``-MOVED`` reply is intercepted (in ``set_exception``) and followed to the node
+    the reply names. This keeps the warm path free of an extra coroutine."""
 
     __slots__ = ("owner", "data", "conv", "dec")
 
@@ -218,7 +217,6 @@ class ClusterRuvio(Ruvio):
         c.nodes = nodes
         c.by_addr = by
         c.slots = topo.slots
-        c.moved = 0
 
     async def _refresh(self) -> bool:
         c = self._cl
@@ -333,14 +331,29 @@ class ClusterRuvio(Ruvio):
         return await self._special(name, data, conv, dec)
 
     async def _redirect(self, err: MovedError, data: bytes, conv: Conv, dec: bool, blocking: bool) -> Any:
-        mv = cl.parse_moved(err)
-        if mv is None:
-            raise err
+        """``-MOVED``: re-sends the command to the node the reply names, at most
+        ``MAX_REDIRECTS`` times; the last ``MovedError`` is raised when they run out."""
+        for hop in range(cl.MAX_REDIRECTS):
+            mv = cl.parse_moved(err)
+            if mv is None:
+                raise err
+            node = await self._moved_to(mv, hop)
+            try:
+                if blocking:
+                    return await self._send_blocking(node, data, conv, dec)
+                return await self._send(node, data, conv, dec)
+            except MovedError as e:
+                err = e
+        raise err
+
+    async def _moved_to(self, mv: Tuple[int, str, int], hop: int) -> _Node:
+        """The node a ``MOVED`` names. The command's first ``MOVED`` to a node in the table points
+        that one slot at it; an unknown node, or a second ``MOVED`` for the same command, reloads
+        the whole table."""
         slot, host, port = mv
         c = self._cl
-        c.moved += 1
         node = c.by_addr.get((host, port))
-        if node is None or node.idx < 0 or c.moved > 1:
+        if node is None or node.idx < 0 or hop:
             await self._refresh()
             node = c.by_addr.get((host, port))
             if node is None:
@@ -348,9 +361,7 @@ class ClusterRuvio(Ruvio):
                 c.by_addr[(host, port)] = node
         else:
             c.slots[slot] = node.idx
-        if blocking:
-            return await self._send_blocking(node, data, conv, dec)
-        return await self._send(node, data, conv, dec)
+        return node
 
     async def _single(self, slot: Optional[int], data: bytes, conv: Conv, dec: bool, blocking: bool) -> Any:
         node = self._owner(slot)
@@ -452,10 +463,11 @@ class ClusterRuvio(Ruvio):
         dec = self._decode
         if payload[0] is _MULTI and payload[-1] is _EXEC:
             return await self._batch_tx(payload, dec)
-        groups = cl.pipeline_groups(payload, c.slots)  # raises before anything is sent
+        groups, subs = cl.pipeline_groups(payload, c.slots)  # raises before anything is sent
         order = [((c.nodes[ni] if ni >= 0 else c.seed), pos, frames) for ni, (pos, frames) in groups.items()]
         results = await self._gather([self._node_batch(node, frames, dec) for node, _, frames in order])
-        replies: List[Any] = [None] * len(payload)
+        n = len(payload)
+        replies: List[Any] = [None] * (n if subs is None else n + len(subs))
         failure: Optional[BaseException] = None
         for (node, pos, frames), r in zip(order, results):
             if isinstance(r, BaseException):
@@ -467,11 +479,12 @@ class ClusterRuvio(Ruvio):
             raise failure
         for i, v in enumerate(replies):
             if v.__class__ is MovedError:
+                frame = payload[i] if i < n else subs[i - n][4]  # type: ignore[index]
                 try:
-                    replies[i] = await self._redirect(v, payload[i], None, dec, False)
+                    replies[i] = await self._redirect(v, frame, None, dec, False)
                 except ResponseError as e:
                     replies[i] = e
-        return replies
+        return replies if subs is None else cl.merge_pipeline(replies, n, subs)
 
     async def _batch_tx(self, payload: List[bytes], dec: bool) -> List[Any]:
         c = self._cl
@@ -490,16 +503,14 @@ class ClusterRuvio(Ruvio):
             raise CrossSlotError("CROSSSLOT the watched keys and the transaction keys live on different nodes")
         c.watch = None
         replies: List[Any] = []
-        for attempt in (0, 1):
+        for hop in range(cl.MAX_REDIRECTS + 1):
             replies = await self._node_batch(node, payload, dec)
             moved = next((r for r in replies if r.__class__ is MovedError), None)
-            if moved is None or attempt:
+            mv = None if moved is None or hop == cl.MAX_REDIRECTS else cl.parse_moved(moved)
+            if mv is None:
                 break
-            mv = cl.parse_moved(moved)
-            c.moved = 2
-            await self._refresh()
-            target = c.by_addr.get((mv[1], mv[2])) if mv else None
-            node = target or self._owner(mv[0] if mv else slot)
+            # nothing ran (MOVED commands are refused at queue time): the whole transaction follows
+            node = await self._moved_to(mv, hop)
         return replies
 
     # ---------------------------------------------------------------- connection-wide state

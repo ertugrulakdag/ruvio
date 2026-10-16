@@ -11,10 +11,21 @@ from __future__ import annotations
 import binascii
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from ._command_keys import (
+    COMMAND_KEY_RULES,
+    RULE_KEY_AND_STORE,
+    RULE_KEYWORD_HALF,
+    RULE_NONE,
+    RULE_NUMKEYS,
+    RULE_RANGE,
+)
 from ._resp import encode, encode_args
 from .errors import CrossSlotError, ResponseError, RuvioError
 
 SLOT_COUNT = 16384
+
+#: ``-MOVED`` redirects followed per command before the error is returned
+MAX_REDIRECTS = 3
 
 _crc16 = binascii.crc_hqx  # CRC-CCITT with poly 0x1021 and init 0 == CRC16/XMODEM, in C
 
@@ -67,20 +78,20 @@ def split_frame(data: bytes) -> List[bytes]:
 
 # --------------------------------------------------------------------------- key positions
 
-# kinds of key layout. A command that is not listed has exactly one key: argument 1.
+# Key positions come from the server's command table (_command_keys.py, generated). A command
+# that is not in it has exactly one key: argument 1. Sharded Pub/Sub has no keys there, but its
+# channels hash to slots like keys, so they are routed as keys here.
+_KEY_RULES: Dict[bytes, Tuple[Any, ...]] = {
+    **COMMAND_KEY_RULES,
+    b"SPUBLISH": (RULE_RANGE, 1, 1, 1, (), 0),
+    b"SSUBSCRIBE": (RULE_RANGE, 1, -1, 1, (), 0),
+    b"SUNSUBSCRIBE": (RULE_RANGE, 1, -1, 1, (), 0),
+}
+
+# routing kinds; a command that is not listed (its rule is "argument 1", or it has no rule) takes
+# the single-key fast path
 _KEYLESS = 1  # no key: any node
-_ALL = 2  # every argument after the name is a key
-_TWO = 3  # arguments 1 and 2 are keys
-_MSET = 4  # key value key value ...
-_LASTISTIMEOUT = 5  # BLPOP k1 k2 ... timeout
-_COUNT1 = 6  # name numkeys key...
-_COUNT2 = 7  # name x numkeys key...
-_STORECOUNT = 8  # name dest numkeys key...
-_STREAMS = 9  # ... STREAMS k1 k2 id1 id2
-_SUB2 = 10  # name subcommand key ...
-_BITOP = 11  # BITOP op dest src...
-_LASTISPATH = 12  # JSON.MGET k1 k2 ... path
-_GEO = 13  # GEORADIUS key ... [STORE key]
+_KEYS = 2  # keys placed by its _KEY_RULES rule
 # commands with their own routing
 _FAN_SUM = 20  # DBSIZE: ask every node, add the integers
 _FAN_FIRST = 21  # FLUSHDB, AUTH ...: run on every node, return one reply
@@ -90,33 +101,12 @@ _SLOT0 = 24  # PUBLISH: classic pub/sub meets on the owner of slot 0
 _TXN = 25  # MULTI / EXEC / DISCARD sent bare
 _COND = 26  # CLIENT / SCRIPT / FUNCTION: only some sub-commands run everywhere
 
-SPEC: Dict[bytes, int] = {}
-
-SPEC.update({n.encode(): _KEYLESS for n in (
-    "ACL BGSAVE CHANGES CLUSTER COMMAND CONFIG ECHO HELLO INFO JSON.FIND JSON.INDEX LASTSAVE LATENCY PING "
-    "PSUBSCRIBE PUNSUBSCRIBE QUIT RANDOMKEY READONLY READWRITE RESET RUVIO SAVE SLOWLOG SUBSCRIBE SWAPDB TIME "
-    "UNSUBSCRIBE WAIT"
-).split()})
-SPEC.update({n.encode(): _ALL for n in (
-    "DEL EXISTS MGET PFCOUNT PFMERGE SDIFF SDIFFSTORE SINTER SINTERSTORE SSUBSCRIBE SUNION SUNIONSTORE SUNSUBSCRIBE "
-    "TOUCH UNLINK WATCH"
-).split()})
-SPEC.update({n.encode(): _TWO for n in (
-    "BLMOVE BRPOPLPUSH COPY LMOVE RENAME RENAMENX RPOPLPUSH SMOVE GEOSEARCHSTORE ZRANGESTORE LCS"
-).split()})
-SPEC.update({b"MSET": _MSET, b"MSETNX": _MSET})
-SPEC.update({n.encode(): _LASTISTIMEOUT for n in "BLPOP BRPOP BZPOPMIN BZPOPMAX".split()})
-SPEC.update({n.encode(): _COUNT1 for n in "ZUNION ZINTER ZDIFF LMPOP SINTERCARD ZINTERCARD ZMPOP".split()})
-SPEC.update({n.encode(): _COUNT2 for n in "BLMPOP BZMPOP EVAL EVALSHA EVAL_RO EVALSHA_RO FCALL FCALL_RO".split()})
-SPEC.update({n.encode(): _STORECOUNT for n in "ZUNIONSTORE ZINTERSTORE ZDIFFSTORE".split()})
-SPEC.update({b"XREAD": _STREAMS, b"XREADGROUP": _STREAMS})
-SPEC.update({n.encode(): _SUB2 for n in "OBJECT MEMORY XGROUP XINFO".split()})
-SPEC[b"BITOP"] = _BITOP
-SPEC[b"JSON.MGET"] = _LASTISPATH
-SPEC.update({b"GEORADIUS": _GEO, b"GEORADIUSBYMEMBER": _GEO})
+SPEC: Dict[bytes, int] = {
+    n: _KEYLESS if r[0] == RULE_NONE else _KEYS for n, r in _KEY_RULES.items() if r[:4] != (RULE_RANGE, 1, 1, 1)
+}
 SPEC.update({b"DBSIZE": _FAN_SUM, b"FLUSHDB": _FAN_FIRST, b"FLUSHALL": _FAN_FIRST, b"AUTH": _FAN_FIRST,
              b"SELECT": _FAN_FIRST, b"KEYS": _FAN_CAT, b"SCAN": _SCAN, b"PUBLISH": _SLOT0})
-SPEC.update({b"MULTI": _TXN, b"EXEC": _TXN, b"DISCARD": _TXN, b"UNWATCH": _KEYLESS})
+SPEC.update({b"MULTI": _TXN, b"EXEC": _TXN, b"DISCARD": _TXN})
 SPEC.update({b"CLIENT": _COND, b"SCRIPT": _COND, b"FUNCTION": _COND})
 
 # (command, sub-command) pairs of CLIENT / SCRIPT / FUNCTION that must run on every node
@@ -152,57 +142,41 @@ _UNSUPPORTED_TXN = (
 )
 
 
-def _counted(args: List[bytes], at: int) -> List[bytes]:
-    if at >= len(args):
-        return []
-    try:
-        n = int(args[at])
-    except ValueError:
-        return []
-    return args[at + 1 : at + 1 + n]
+def _count(word: bytes) -> int:
+    """A key count as the server reads it: decimal digits with an optional ``+``, else 0."""
+    if word[:1] == b"+":
+        word = word[1:]
+    return int(word) if word.isdigit() else 0
 
 
 def command_keys(name: bytes, args: List[bytes]) -> List[bytes]:
     """The keys of a command in argument order (empty for keyless commands).
 
     ``name`` is the upper-case first word, ``args`` the whole argument vector including it."""
-    kind = SPEC.get(name)
-    n = len(args)
-    if kind is None:
+    rule = _KEY_RULES.get(name)
+    if rule is None:
         return args[1:2]
-    if kind == _SUB2:
-        return args[2:3]
-    if n < 2:
-        return []
-    if kind == _ALL:
-        return args[1:]
-    if kind == _TWO:
-        return args[1:3]
-    if kind == _MSET:
-        return args[1::2]
-    if kind == _LASTISTIMEOUT or kind == _LASTISPATH:
-        return args[1 : n - 1]
-    if kind == _COUNT1:
-        return _counted(args, 1)
-    if kind == _COUNT2:
-        return _counted(args, 2)
-    if kind == _STORECOUNT:
-        return [args[1]] + _counted(args, 2)
-    if kind == _STREAMS:
+    kind, a, b, c, words, _ = rule
+    n = len(args)
+    if kind == RULE_RANGE:
+        return args[a : (n + b if b < 0 else b) + 1 : c]
+    if kind == RULE_NUMKEYS:
+        keys = args[a + 1 : a + 1 + _count(args[a])] if a < n else []
+        return [args[b]] + keys if 0 < b < n else keys
+    if kind == RULE_KEYWORD_HALF:
         for i in range(1, n):
-            if args[i].upper() == b"STREAMS":
+            if args[i].upper() == words[0]:
                 return args[i + 1 : i + 1 + (n - i - 1) // 2]
         return []
-    if kind == _BITOP:
-        return args[2:]
-    if kind == _GEO:
-        keys = [args[1]]
-        for i in range(2, n - 1):
-            if args[i].upper() in (b"STORE", b"STOREDIST"):
+    if kind == RULE_KEY_AND_STORE:
+        keys = args[a : a + 1]
+        i = a + 1
+        while i + 1 < n:
+            if args[i].upper() in words:
                 keys.append(args[i + 1])
+                i += 1
+            i += 1
         return keys
-    if kind == _SLOT0 or kind == _SCAN:
-        return []
     return []
 
 
@@ -240,7 +214,8 @@ def plan(name: bytes, args: List[bytes]) -> Tuple[Any, ...]:
 
 
 def pipeline_slot(frame: bytes) -> Optional[int]:
-    """Slot of one pipelined command (None = keyless). Fan-out and cross-slot commands are refused."""
+    """Slot of one command inside a transaction (None = keyless). Fan-out and cross-slot commands
+    are refused: a transaction runs on one node."""
     name, key = frame_head(frame)
     name = name.upper()
     kind = SPEC.get(name)
@@ -251,26 +226,52 @@ def pipeline_slot(frame: bytes) -> Optional[int]:
         return p[1]
     if p[0] == PLAN_SPLIT:
         raise CrossSlotError(
-            f"CROSSSLOT {name.decode()} keys don't hash to the same slot; split it or call it outside the pipeline"
+            f"CROSSSLOT {name.decode()} keys don't hash to the same slot; a transaction must use keys in one slot"
         )
     raise RuvioError(f"{name.decode()} fans out to every node and cannot be pipelined on a cluster client")
 
 
+#: one sub-command of a split command inside a pipeline:
+#: ``(pipeline index, command name, key count, key positions, frame)``
+Sub = Tuple[int, bytes, int, List[int], bytes]
+
+
 def pipeline_groups(
     frames: List[bytes], table: List[int]
-) -> Dict[int, Tuple[List[int], List[bytes]]]:
+) -> Tuple[Dict[int, Tuple[List[int], List[bytes]]], Optional[List[Sub]]]:
     """Groups pipelined frames by node index (``-1`` = keyless: the seed), in one pass.
 
-    ``table`` is the slot -> node index list. Raises before anything is sent if a command
-    cannot be routed (cross-slot multi-key command, fan-out command)."""
+    ``table`` is the slot -> node index list. A cross-slot MGET/MSET/DEL/... is split per slot like
+    the plain command: its sub-commands get positions ``len(frames) + j`` where ``j`` indexes the
+    returned sub list (None when nothing was split); :func:`merge_pipeline` puts the merged reply
+    back at the command's own index. Raises before anything is sent if a command cannot be routed
+    (other cross-slot multi-key command, fan-out command)."""
     groups: Dict[int, Tuple[List[int], List[bytes]]] = {}
+    subs: Optional[List[Sub]] = None
     spec = SPEC
     for i, f in enumerate(frames):
         name, key = frame_head(f)
         if not name.isupper():
             name = name.upper()
         if name in spec:
-            slot = pipeline_slot(f)
+            args = split_frame(f)
+            p = plan(name, args)
+            if p[0] == PLAN_SPLIT:
+                if subs is None:
+                    subs = []
+                keys = p[1]
+                for ni, parts in split_groups(name, args, keys, table.__getitem__).items():
+                    g = groups.get(ni)
+                    if g is None:
+                        g = groups[ni] = ([], [])
+                    for pos, sub in parts:
+                        g[0].append(len(frames) + len(subs))
+                        g[1].append(sub)
+                        subs.append((i, name, len(keys), pos, sub))
+                continue
+            if p[0] != PLAN_SLOT:
+                raise RuvioError(f"{name.decode()} fans out to every node and cannot be pipelined on a cluster client")
+            slot = p[1]
         else:
             slot = None if key is None else key_slot(key)
         ni = -1 if slot is None else table[slot]
@@ -279,7 +280,21 @@ def pipeline_groups(
             g = groups[ni] = ([], [])
         g[0].append(i)
         g[1].append(f)
-    return groups
+    return groups, subs
+
+
+def merge_pipeline(replies: List[Any], n: int, subs: List[Sub]) -> List[Any]:
+    """Merges the replies of split sub-commands (``replies[n:]``) into one reply per command."""
+    out = replies[:n]
+    j = 0
+    while j < len(subs):
+        i, name, nkeys = subs[j][0], subs[j][1], subs[j][2]
+        parts: List[Tuple[List[int], Any]] = []
+        while j < len(subs) and subs[j][0] == i:
+            parts.append((subs[j][3], replies[n + j]))
+            j += 1
+        out[i] = merge_split(name, nkeys, parts)
+    return out
 
 
 # --------------------------------------------------------------------------- split commands

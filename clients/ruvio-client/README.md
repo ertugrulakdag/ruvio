@@ -22,7 +22,7 @@
 
 ---
 
-Blocking RESP2 client for [Ruvio](https://salihcantekin.github.io/ruvio/). Connecting does not send `CLIENT SETINFO` or `HELLO`. Give the client one address; it sends `CLUSTER SLOTS` and, on a sharded server, opens one socket per shard and routes by hash slot. `MOVED` refreshes the map. `MGET` / `MSET` / `DEL` split across shards. Methods take `&mut self` and are named after the command they send. They cover every command in [`docs/compatibility-matrix.json`](../../docs/compatibility-matrix.json) (287/287, checked by `tests/coverage.rs`) plus the options that change what Ruvio does. `execute` and `execute_many` send any argument list, as `redis-cli` would; `execute_binary` does the same with raw byte arguments.
+Blocking RESP2 client for [Ruvio](https://salihcantekin.github.io/ruvio/). Connecting does not send `CLIENT SETINFO` or `HELLO`. Give the client one address; it sends `CLUSTER SLOTS` and, on a sharded server, opens one socket per shard and routes by hash slot. `MOVED` is followed up to three times per command. `MGET` / `MSET` / `DEL` / `EXISTS` / `UNLINK` / `TOUCH` split across slots; other commands whose keys span slots fail with `CROSSSLOT` before anything is sent. Methods take `&mut self` and are named after the command they send. They cover every command in [`docs/compatibility-matrix.json`](../../docs/compatibility-matrix.json) (287/287, checked by `tests/coverage.rs`) plus the options that change what Ruvio does. `execute` and `execute_many` send any argument list, as `redis-cli` would; `execute_binary` does the same with raw byte arguments.
 
 ```rust
 use std::time::Duration;
@@ -40,7 +40,15 @@ let top = db.zrevrange_with_scores("leaderboard", 0, 9)?;
 
 ## Connecting
 
-`hash_slot(key)` is the same 0–16383 slot Ruvio uses, including `{hash tags}`. Set `ClientOptions::discover_cluster` to `false` to stay on the seed socket. An incomplete, overlapping, or malformed `CLUSTER SLOTS` map fails discovery instead of silently using an ambiguous owner. A disconnected stale owner triggers a refresh from another connected node before sending the command; a dropped in-flight command is not replayed automatically. Cross-slot `MSET` / `DEL` and `RENAME` are client-side operations, not atomic transactions: an error may leave some keys changed. Use a shared hash tag for atomic multi-key writes.
+`hash_slot(key)` is the same 0–16383 slot Ruvio uses, including `{hash tags}`. Set `ClientOptions::discover_cluster` to `false` to stay on the seed socket. An incomplete, overlapping, or malformed `CLUSTER SLOTS` map fails discovery instead of silently using an ambiguous owner. A disconnected stale owner triggers a refresh from another connected node before sending the command; a dropped in-flight command is not replayed automatically. Cross-slot `MSET` / `DEL` are client-side operations, not atomic transactions: an error may leave some keys changed. Use a shared hash tag for atomic multi-key writes.
+
+| In a cluster | What the client does |
+| --- | --- |
+| `MOVED` | Followed up to 3 times per command; the 4th `MOVED` is returned. Every `MOVED` points that slot at the named node and the command is sent again there. The whole slot map is reloaded first when that node is unknown to the client, and on the command's second and third `MOVED`; the slot still points at the named node afterwards. |
+| `MGET`, `MSET`, `DEL`, `EXISTS`, `UNLINK`, `TOUCH` across slots | Sent once per slot and merged: `MGET` keeps key order, counts are summed, `MSET` returns `OK`. |
+| `RENAME`, `RENAMENX`, `COPY`, `LMOVE`, `SMOVE`, `SINTERSTORE`, `BITOP`, `EVAL`, ... across slots | Not sent: `Error::Server("CROSSSLOT Keys in request do not hash to the same slot")`, the server's own reply. Put the keys under one hash tag. |
+| `execute_many` (a pipeline) | Commands are grouped per node and replies come back in command order. A cross-slot split command is split as above and its merged reply sits at its index; any other cross-slot command gets the `CROSSSLOT` error at its index and the rest of the pipeline still runs. A pipeline holding `MULTI` goes to one node and must stay in one slot. |
+| `execute_binary` | Routed by the second argument; no splitting or cross-slot check. |
 
 A standalone client is bound to one logical database. Database 0 sends nothing after discovery. Any other index sends `SELECT` before the connect call returns. Cluster mode has only database 0.
 
@@ -231,50 +239,9 @@ on that address; they flush those databases. Without the variable the live tests
   typed option; send them with `execute`.
 - No multiplexed/async connection: concurrent callers need one client each.
 
-## Unreleased
+## Changes
 
-- Typed methods for every matrix command (287/287): `DELEX`, `SET ... IFEQ`, `LPUSHCAP`/`RPUSHCAP`,
-  the full `BF.*` and `JSON.*` families including `JSON.INDEX`/`JSON.FIND`, bitmaps, HyperLogLog,
-  `SSCAN`/`ZSCAN`, `ZUNION`/`ZINTER`/`ZDIFF` and their stores, `DUMP`/`RESTORE`, `WAIT`, `COMMAND`,
-  `LATENCY`, and the rest of the strings, sets, sorted sets and hashes.
-- Helpers: `LockGuard`, `LeaseGuard`, `SemaphorePermit`, `rate_limit`, `get_or_create`,
-  `idempotent`, `scan_iter`/`hscan_iter`/`sscan_iter`/`zscan_iter`, `push_recent`/`recent`,
-  `seen_before`/`maybe_seen`.
-- `execute_binary`, `set_bytes`, `hash_slot_bytes`, `RespValue::into_string` / `into_bytes`.
-- Fewer allocations on existing commands: fixed-arity commands no longer build `Vec<String>`.
-
-## 0.2.5
-
-- `geo_add`, `geo_dist`, `geo_hash`, `geo_pos`, `geo_search`, `geo_search_store`, `geo_radius`, and `geo_radius_by_member`.
-
-## 0.2.4
-
-- A dropped command or shard socket is opened again before the next command. The command that sees the drop returns an error. Subscriptions on a dedicated Pub/Sub socket are sent again after it reopens.
-- `on_connection_lost` and `on_connection_restored` take a `ConnectionNotice` (`host`, `port`, `subscriber`).
-- `ClientOptions::reconnect` (default true), `max_reconnect_attempts`, `reconnect_base_delay`, `reconnect_max_delay`, `set_reconnect_delay`, and `reconnect`. `None` from the delay stops the retry. `max_reconnect_attempts` is not applied while a custom delay is set.
-
-## 0.2.3
-
-- `subscribe` / `psubscribe` / `ssubscribe` open a dedicated Pub/Sub socket so command traffic stays on the original connection. `subscriber()` still returns that extra socket if you want it separately. `listen` calls a callback for each delivery.
-
-## 0.2.2
-
-- `del_key`, `unlink_key`, `exists_key`, `watch_key`, `blpop_key`, and `brpop_key` take one key. The slice methods remain for many keys.
-
-## 0.2.1
-
-- A sharded server is discovered from one seed address. Commands are routed by hash slot, `MOVED` is followed, and `MGET` / `MSET` / `DEL` split across shards.
-- `cluster_shards`, `cluster_info`, `cluster_myid`, `cluster_keyslot`, `readonly`, `readwrite`.
-- `hash_slot`, `is_cluster`, `shard_count`, and `ClientOptions::discover_cluster`.
-
-## 0.2.0
-
-- Typed methods for every command Ruvio supports.
-- `ClientOptions::database`, `connect_database`, `connect_ip`, `connect_addr`, `select`, `into_database`, and `database`.
-- `set_expires_at` (`PXAT`), `set_keep_ttl` (`KEEPTTL`), `set_and_get` (`GET`), and `ping_message`.
-- `expire` sends `PEXPIRE` when the duration is not whole seconds. It used to round up to the next second.
-- `RespValue::as_integer`, `as_array`, and `is_null`.
-- The minimum Rust version is 1.87.
+See [CHANGELOG.md](https://github.com/salihcantekin/ruvio/blob/main/clients/ruvio-client/CHANGELOG.md).
 
 ## Typed JSON values (`serde` feature)
 

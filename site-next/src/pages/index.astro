@@ -1,0 +1,289 @@
+---
+import Page from "../layouts/Page.astro";
+import PlatformSwitch from "../components/PlatformSwitch.astro";
+import RadialSpeed from "../components/charts/RadialSpeed.astro";
+import MemoryDumbbell from "../components/charts/MemoryDumbbell.astro";
+import CommandMosaic from "../components/charts/CommandMosaic.astro";
+import RecoveryScale from "../components/charts/RecoveryScale.astro";
+import { platforms, commands, families, fmtOps, fmtX, pct, serverVersion } from "../data/bench";
+import { clients, site } from "../config/site";
+import CodeBlock from "../components/content/CodeBlock.astro";
+
+const jobs = [
+  { title: "Caches without stampedes", cmds: ["FILLGET", "FILLSET"], text: "When a hot key expires, one caller refills it while the others wait or get the stale copy.", href: "/use-cases/#cache" },
+  { title: "Locks and leases", cmds: ["LEASE", "RELEASE", "SEMAPHORE"], text: "A named lease returns a fencing token; a semaphore caps holders, each with its own expiry.", href: "/use-cases/#locks" },
+  { title: "Conditional writes", cmds: ["SETV", "TAKE", "IDEM"], text: "Versioned writes, stock that cannot go negative, and request replays that return the stored answer.", href: "/use-cases/#versions" },
+  { title: "Rate limits", cmds: ["LIMIT"], text: "A fixed window per key in one call, returning what is left of the allowance.", href: "/use-cases/#rate-limits" },
+  { title: "Change feeds", cmds: ["CHANGES"], text: "Read the writes on a shard from a cursor instead of polling keys.", href: "/use-cases/#changes" },
+  { title: "Delayed jobs", cmds: ["XADD … DELAY"], text: "A stream entry stays hidden from consumer groups until its delay passes.", href: "/use-cases/#delayed" },
+];
+
+const steps = [
+  { name: "Parse", text: "The connection's shard reads the request." },
+  { name: "Record", text: "The write is checked and appended to the shard's log." },
+  { name: "Apply", text: "The shard changes its own keys. No lock is taken." },
+  { name: "Reply", text: "The answer goes back on the same thread." },
+];
+
+// The hero terminal: a container start, then two coordination commands and their replies.
+const hero = `$ docker run -d -p 6379:6379 \\
+    -e RUVIO_REQUIREPASS=change-me \\
+    salihcantekin/ruvio:linux
+$ redis-cli -a change-me
+6379> LEASE job:nightly 30000
+(integer) 1
+6379> LIMIT api:key:42 100 60000
+(integer) 99`;
+---
+
+<Page>
+  <section class="hero">
+    <div class="wrap hero-in">
+      <div class="hero-copy">
+        <p class="kicker">Redis protocol server, written in Rust · v{serverVersion}</p>
+        <h1>One process instead of a cache, a lock service and a delay queue.</h1>
+        <p class="hero-lede">Ruvio speaks RESP, so <code>redis-cli</code> and your existing clients connect. Each shard owns its keys: no lock on the hot path, and the durability you choose at startup.</p>
+        <div class="ctas">
+          <a class="btn" href="/get-started/">Get started</a>
+          <a class="btn ghost" href="/docs/">Read the docs</a>
+        </div>
+        <ul class="facts">
+          <li>{commands.length} commands</li>
+          <li>{clients.length} first-party clients</li>
+          <li>Linux, macOS and Windows builds</li>
+        </ul>
+      </div>
+      <CodeBlock lang="redis-session" copy={false} code={hero} />
+    </div>
+  </section>
+
+  <section class="section" id="product">
+    <div class="wrap">
+      <div class="head-row">
+        <div>
+          <p class="kicker">Product</p>
+          <h2 class="title">Coordination work, finished on the shard that owns the key</h2>
+          <p class="lede">The jobs teams usually spread over several services are single commands in Ruvio, next to the strings, hashes, lists, sets, sorted sets, streams and JSON you already use.</p>
+        </div>
+        <div class="ctas"><a class="btn ghost" href="/examples/">Try them in the browser</a><a class="btn ghost" href="/use-cases/">All use cases</a></div>
+      </div>
+      <div class="grid grid-3">
+        {jobs.map((j) => (
+          <a class="card job" href={j.href}>
+            <div class="chips">{j.cmds.map((c) => <span>{c}</span>)}</div>
+            <h3>{j.title}</h3>
+            <p>{j.text}</p>
+          </a>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <div data-platform-scope>
+    <section class="section band" id="performance">
+      <div class="wrap">
+        <div class="head-row">
+          <div>
+            <p class="kicker">Performance</p>
+            <h2 class="title">Faster than Redis on the commands you run every day</h2>
+            <p class="lede">Each bar is one command measured against Redis {platforms[0].redisVersion} on the same machine. Bars outside the dashed ring are faster than Redis; bars inside it are slower.</p>
+          </div>
+          <PlatformSwitch />
+        </div>
+        {platforms.map((p, i) => {
+          const sorted = [...p.rows].sort((a, b) => b.ratio - a.ratio);
+          const behind = sorted.filter((r) => r.ratio < 0.97);
+          return (
+            <div data-platform={p.id} hidden={i !== 0}>
+              <div class="kpis">
+                <div><b>{fmtX(p.geomean)}</b><span>geometric mean throughput across {p.rows.length} commands</span></div>
+                <div><b>{p.atPar}<em>/{p.rows.length}</em></b><span>commands at 0.97× of Redis or faster</span></div>
+                <div><b>−{pct(p.memSaved)}</b><span>memory across {p.memory.length} data shapes, {p.memLower} of {p.memory.length} below Redis</span></div>
+                <div><b>{commands.length}</b><span>commands, each with a typed method in {clients.length} clients</span></div>
+              </div>
+              <div class="speed">
+                <div class="chart" data-chart><RadialSpeed platform={p} /></div>
+                <div class="lists">
+                  <div>
+                    <h3>Largest gains</h3>
+                    <ol>{sorted.slice(0, 5).map((r) => <li><span class="n">{r.label}</span><span class="x">{fmtX(r.ratio)}</span><span class="ops">{fmtOps(r.ruvio)} vs {fmtOps(r.redis)} ops/s</span></li>)}</ol>
+                  </div>
+                  <div>
+                    <h3>Still behind Redis ({behind.length})</h3>
+                    <ol>{behind.map((r) => <li><span class="n">{r.label}</span><span class="x lo">{fmtX(r.ratio)}</span><span class="ops">{fmtOps(r.ruvio)} vs {fmtOps(r.redis)} ops/s</span></li>)}</ol>
+                  </div>
+                  <div class="legend"><span><i style="background:var(--c1)"></i>faster</span><span><i style="background:var(--c2)"></i>within 3%</span><span><i style="background:var(--redis)"></i>slower</span></div>
+                </div>
+              </div>
+              <p class="source">Source: <a href={`${site.github}/blob/main/${p.file}`}>{p.file}</a> · {p.machine} · {p.clients} clients, pipeline {p.pipeline} · in-memory profile, 1 shard · <a href="/benchmarks/">all results</a></p>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+
+    <section class="section" id="memory">
+      <div class="wrap">
+        <div class="head-row">
+          <div>
+            <p class="kicker">Memory</p>
+            <h2 class="title">Less memory for the same data</h2>
+            <p class="lede">Memory added by loading each data shape, Ruvio next to Redis on the same machine. Left is less; the axis is logarithmic, so the same saving has the same length at any size.</p>
+          </div>
+          <div class="legend"><span><i style="background:var(--c1)"></i>Ruvio</span><span><i style="background:var(--redis)"></i>Redis</span></div>
+        </div>
+        {platforms.map((p, i) => (
+          <div data-platform={p.id} hidden={i !== 0}>
+            <div data-chart class="chart"><MemoryDumbbell platform={p} /></div>
+            <p class="source">Source: <a href={`${site.github}/blob/main/${p.file}`}>{p.file}</a> · {p.machine}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  </div>
+
+  <section class="section band" id="architecture">
+    <div class="wrap arch">
+      <div>
+        <p class="kicker">Architecture</p>
+        <h2 class="title">One owner per shard</h2>
+        <p class="lede">The shard that owns a key parses, records, applies and replies. The hot path takes no lock and does not hop to another thread, and a feature allocates only when a key uses it.</p>
+        <p class="more-link"><a href="/docs/architecture/">How it works</a></p>
+      </div>
+      <div class="shards" aria-label="Request path inside one shard">
+        {[0, 1, 2].map((n) => (
+          <div class={`shard ${n === 1 ? "focus" : ""}`}>
+            <div class="shard-head"><span>Shard {n}</span><small>owns its keys</small></div>
+            <ol>{steps.map((s) => <li><b>{s.name}</b><span>{s.text}</span></li>)}</ol>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="durability">
+    <div class="wrap">
+      <div class="head-row">
+        <div>
+          <p class="kicker">Durability</p>
+          <h2 class="title">Choose how much you can afford to lose</h2>
+          <p class="lede">Pick a profile at startup. A write is checked, appended, then applied; if the log cannot take the record, the key stays as it was and later writes are refused.</p>
+        </div>
+        <a class="btn ghost" href="/docs/recovery/">Recovery guarantees</a>
+      </div>
+      <RecoveryScale />
+      <p class="source">Bounds from <a href={`${site.github}/blob/main/docs/RECOVERY.md`}>docs/RECOVERY.md</a>; intervals are the defaults in <a href={`${site.github}/blob/main/ruvio.example.toml`}>ruvio.example.toml</a>.</p>
+    </div>
+  </section>
+
+  <section class="section band" id="compatibility">
+    <div class="wrap">
+      <div class="head-row">
+        <div>
+          <p class="kicker">Compatibility</p>
+          <h2 class="title">{commands.length} commands in {families.length} families, one square each</h2>
+          <p class="lede">The command list is checked in CI. Every command has a typed method in all {clients.length} first-party clients, with cluster routing from one seed address.</p>
+        </div>
+        <a class="btn ghost" href="/docs/commands/">Command reference</a>
+      </div>
+      <div data-chart class="chart"><CommandMosaic /></div>
+      <div class="client-row">
+        {clients.map((c) => (
+          <a class="client" href={`/docs/clients/${c.slug}/`}><b>{c.language}</b><code>{c.package}</code><small>{c.registry}</small></a>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="wrap cta-in">
+      <div>
+        <h2>Run it next to your app in a minute</h2>
+        <p>One binary or one container. Your Redis client already knows how to talk to it.</p>
+      </div>
+      <div class="ctas">
+        <a class="btn" href="/get-started/">Get started</a>
+        <a class="btn ghost" href={site.releases}>Download v{serverVersion}</a>
+      </div>
+    </div>
+  </section>
+</Page>
+
+<script>
+  import "../scripts/charts.ts";
+</script>
+
+<style>
+  .hero { position: relative; isolation: isolate; overflow: hidden; border-bottom: 1px solid var(--line); }
+  .hero::before {
+    content: ""; position: absolute; inset: 0; z-index: -1;
+    background:
+      radial-gradient(70% 55% at 50% 120%, rgba(var(--dusk), 0.48), rgba(var(--dusk), 0) 70%),
+      radial-gradient(40% 40% at 86% 8%, rgba(142, 170, 220, 0.1), transparent 70%),
+      linear-gradient(180deg, var(--sky-0) 0%, var(--sky-1) 50%, var(--sky-2) 80%, var(--sky-3) 100%);
+  }
+  .hero::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(var(--dusk), 0.7), transparent); }
+  .hero-in { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr); gap: 56px; align-items: center; padding-block: 88px 112px; }
+  .hero-in > * { min-width: 0; }
+  .hero h1 { font-size: clamp(36px, 4.8vw, 60px); line-height: 1.06; margin: 0 0 22px; max-width: 17ch; }
+  .hero-lede { font-size: 18.5px; color: var(--mute); max-width: 46ch; margin: 0 0 30px; }
+  .hero-lede code { font-size: 0.9em; }
+  .ctas { display: flex; flex-wrap: wrap; gap: 12px; }
+  .facts { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 30px 0 0; padding: 0; list-style: none; font-size: 14px; color: var(--mute); }
+  .facts li::before { content: ""; display: inline-block; width: 4px; height: 4px; background: var(--mute); margin-right: 9px; vertical-align: 3px; }
+
+  .job .chips { margin-bottom: 4px; }
+
+  .speed { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); gap: 40px; align-items: center; margin-top: 44px; }
+  .speed > * { min-width: 0; }
+  .chart { position: relative; }
+  .lists { display: grid; gap: 26px; }
+  .lists h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--mute); letter-spacing: 0; }
+  .lists ol { list-style: none; margin: 0; padding: 0; }
+  .lists li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 14px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+  .lists .n { font-weight: 600; font-size: 14.5px; overflow-wrap: anywhere; }
+  .lists .x { font-family: var(--f-mono); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .lists .x.lo { color: var(--mute); }
+  .lists .ops { grid-column: 1 / -1; font-family: var(--f-mono); font-size: 12px; color: var(--faint); }
+
+  .arch { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 48px; align-items: center; }
+  .more-link { margin: 18px 0 0; font-weight: 600; }
+  .more-link a::after { content: " →"; color: var(--mute); }
+  .shards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .shard { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 16px; opacity: 0.6; }
+  .shard.focus { opacity: 1; border-color: color-mix(in srgb, var(--c1) 60%, var(--line)); }
+  .shard-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 12px; }
+  .shard-head span { font-weight: 600; }
+  .shard-head small { font-size: 12px; color: var(--faint); }
+  .shard ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; counter-reset: s; }
+  .shard li { position: relative; padding: 0 0 14px 22px; display: grid; gap: 2px; }
+  .shard li::before { content: ""; position: absolute; left: 3px; top: 7px; width: 8px; height: 8px; border-radius: 50%; background: var(--c3); }
+  .shard.focus li::before { background: var(--c1); }
+  .shard li:not(:last-child)::after { content: ""; position: absolute; left: 6.5px; top: 18px; bottom: 2px; width: 1px; background: var(--line); }
+  .shard li b { font-size: 14px; }
+  .shard li span { font-size: 12.5px; color: var(--mute); line-height: 1.45; }
+
+  .client-row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-top: 40px; }
+  .client { display: grid; gap: 4px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); min-width: 0; }
+  .client:hover { border-color: color-mix(in srgb, var(--ink) 30%, var(--line)); }
+  .client code { font-size: 11.5px; color: var(--mute); overflow-wrap: anywhere; }
+  .client small { font-size: 12px; color: var(--faint); }
+
+  .cta { border-top: 1px solid var(--line); background: linear-gradient(180deg, var(--bg), var(--sky-1)); }
+  .cta-in { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 24px; padding-block: 64px; }
+  .cta h2 { margin: 0 0 6px; font-size: clamp(24px, 3vw, 32px); }
+  .cta p { margin: 0; color: var(--mute); }
+
+  @media (max-width: 1000px) {
+    .client-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (max-width: 900px) {
+    .hero-in, .speed, .arch { grid-template-columns: minmax(0, 1fr); }
+    .hero-in { padding-block: 48px 72px; gap: 36px; }
+    .shards { grid-template-columns: minmax(0, 1fr); }
+    .shard:not(.focus) { display: none; }
+  }
+  @media (max-width: 520px) {
+    .client-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+</style>

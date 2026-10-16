@@ -5,6 +5,14 @@ Idempotent: the sections sit between <!-- azure-2026-10-11:start --> and <!-- ..
 inserted right after the page lede (newest first).
     python3 scripts/render_azure_pages.py
 """
+
+import sys
+
+# The section this script rendered is a dated record; rerunning it would rewrite the page
+# from the frozen data file. Refuse unless asked to on purpose.
+if __name__ == "__main__" and "--force" not in sys.argv[1:]:
+    sys.exit(f"{__file__}: frozen record (x86-azure-2026-10-11); pass --force to re-render it on purpose")
+
 import json, re, statistics
 from pathlib import Path
 

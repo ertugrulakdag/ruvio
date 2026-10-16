@@ -157,7 +157,8 @@ db.incr("visits")?;
 ```csharp
 using Ruvio.Client;
 
-await using var db = await RuvioClient.ConnectAsync("127.0.0.1", 6379);
+await using var connection = await RuvioConnection.ConnectAsync("127.0.0.1", 6379);
+var db = await connection.GetDefaultDatabaseAsync();
 await db.SetAsync("session:ada", "hello");
 string? value = await db.GetStringAsync("session:ada");
 ```
@@ -232,9 +233,9 @@ Not claimed: a cluster bus, online slot migration, failover, replica acknowledge
 
 ### Docker Desktop and memory density
 
-The capped Docker Desktop comparison (containers limited to 4 CPUs and 2 GiB, 2026-10-01) is in [docs/BENCHMARK_RESULTS.md](docs/BENCHMARK_RESULTS.md#capped-docker-desktop-comparison-2026-10-01).
+The capped Docker Desktop comparison (containers limited to 4 CPUs and 2 GiB, 2026-10-01) is in [the 2026-10-07 benchmark record](docs/evidence/2026-10-07-benchmark-results.md#capped-docker-desktop-comparison-2026-10-01).
 
-Docker RSS is not the bare-metal result; the memory detail is in [docs/MEMORY_DENSITY.md](docs/MEMORY_DENSITY.md) and on the [memory page](https://salihcantekin.github.io/ruvio/testing-memory.html). Natively on this Mac, 1,000,000 `LIMIT` keys added 148.9 MiB against 85.9 MiB for 1,000,000 plain 64-byte strings, about 1.7× per key.
+Docker RSS is not the bare-metal result; the memory detail is in [the string memory density record](docs/evidence/2026-09-28-string-memory-density.md) and on the [memory page](https://salihcantekin.github.io/ruvio/testing-memory.html). Natively on this Mac, 1,000,000 `LIMIT` keys added 148.9 MiB against 85.9 MiB for 1,000,000 plain 64-byte strings, about 1.7× per key.
 
 ## Repository layout
 
@@ -244,7 +245,7 @@ Docker RSS is not the bare-metal result; the memory detail is in [docs/MEMORY_DE
 | [`clients/`](clients/README.md) | Rust, C#, Go, Java, Python and Node.js SDKs, and the operator UI. |
 | [`integrations/`](integrations/README.md) | .NET framework integrations. |
 | [`docs/`](docs/README.md) | Configuration, compatibility, recovery, threat model. |
-| [`site/`](site) | The GitHub Pages site. `main` publishes it. |
+| [`site/`](site) | The GitHub Pages site, published from `main` by the manual `pages` workflow. |
 | [`deploy/`](deploy/README.md) | systemd unit, Kubernetes example, local Docker stack. |
 | [`tests/`](tests/README.md), [`fuzz/`](fuzz/README.md), [`benches/`](benches/README.md) | Integration tests, libFuzzer targets, instruction-count benchmark. |
 | [`examples/`](examples/README.md), [`scripts/`](scripts/README.md), `benchmark/` | Contributor probes, check and release scripts, the benchmark script (result files stay local). |

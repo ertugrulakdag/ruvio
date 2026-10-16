@@ -51,34 +51,33 @@ pub(in crate::protocol) fn parse_timeout_ms(bytes: &[u8]) -> Result<Option<u64>,
     Ok(Some((seconds * 1_000.0).ceil() as u64))
 }
 
-pub(in crate::protocol) fn parse_scan(
-    arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.is_empty() {
+pub(in crate::protocol) fn parse_scan<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() == 0 {
         return Err(ProtocolError::Invalid("SCAN expects a cursor"));
     }
 
-    let cursor = parse_u64(&arguments[0])?;
+    let cursor = parse_u64(args.bytes(0))?;
     let mut pattern = None;
     let mut count = 10;
     let mut type_name = None;
     let mut index = 1;
 
-    while index < arguments.len() {
-        let name = arguments[index].as_ref();
-        let Some(value) = arguments.get(index + 1) else {
+    while index < args.len() {
+        let name = args.bytes(index);
+
+        if index + 1 >= args.len() {
             return Err(ProtocolError::Invalid("syntax error"));
-        };
+        }
 
         if name.eq_ignore_ascii_case(b"MATCH") {
-            pattern = Some(value.clone());
+            pattern = Some(args.arg(index + 1));
         } else if name.eq_ignore_ascii_case(b"COUNT") {
-            let parsed = parse_i64(value)?;
+            let parsed = parse_i64(args.bytes(index + 1))?;
 
             count = usize::try_from(parsed)
                 .map_err(|_| ProtocolError::Invalid("value is not an integer"))?;
         } else if name.eq_ignore_ascii_case(b"TYPE") {
-            type_name = Some(value.clone());
+            type_name = Some(args.arg(index + 1));
         } else {
             return Err(ProtocolError::Invalid("syntax error"));
         }

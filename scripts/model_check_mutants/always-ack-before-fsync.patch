@@ -1,8 +1,8 @@
-diff --git a/src/persistence/wal.rs b/src/persistence/wal.rs
-index 6dce97f..5999d9b 100644
---- a/src/persistence/wal.rs
-+++ b/src/persistence/wal.rs
-@@ -508,7 +508,9 @@ impl WalSink {
+diff --git a/src/persistence/wal/sync.rs b/src/persistence/wal/sync.rs
+index 480cead..56b5b87 100644
+--- a/src/persistence/wal/sync.rs
++++ b/src/persistence/wal/sync.rs
+@@ -180,7 +180,9 @@ impl WalSink {
          if let Some(error) = &self.failed {
              return Err(PersistenceError::Failed(error.clone()));
          }

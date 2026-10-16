@@ -100,8 +100,9 @@ Differences from Redis:
 `Ruvio.Client`:
 
 ```csharp
-await using var ruvio = await RuvioClient.ConnectAsync(new RuvioClientOptions { Database = 2 });
-await ruvio.SelectAsync(3);
+await using var connection = await RuvioConnection.ConnectAsync(new RuvioClientOptions { Database = 2 });
+var ruvio = await connection.GetDefaultDatabaseAsync();
+ruvio = await connection.GetDatabaseAsync(3); // SELECT 3 on the same socket
 bool moved = await ruvio.MoveKeyAsync("user:1", 4);
 await ruvio.SwapDatabasesAsync(3, 4);
 await ruvio.FlushDatabaseAsync();

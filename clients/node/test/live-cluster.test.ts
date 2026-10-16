@@ -135,6 +135,10 @@ test('cluster: pipelines group by node and keep the caller order', { skip: CSKIP
     assert.equal(r[273], 'PONG');
     await assert.rejects(c.pipeline().get('a').sunion('{a}x', '{b}y').execStrict(), RuvioError);
     assert.deepEqual(await c.pipeline().exec(), []);
+    // the other split commands inside a pipeline: sent per slot, merged reply at their index
+    const [s0, s1, s2] = spread(3, 'ps:');
+    const sp = await c.pipeline().mset({ [s0!]: 'm0', [s1!]: 'm1' }).exists(s0!, s1!, s2!).get(s1!).touch(s0!, s2!).unlink(s0!, s2!).del(s1!, s2!).exec();
+    assert.deepEqual(sp, ['OK', 2, 'm1', 1, 1, 1]);
     // a pipeline over a stale table recovers per command
     const hot = ks.slice(0, 30);
     _forceStaleTable(c, c.nodes[0]!);
@@ -154,11 +158,12 @@ test('cluster: MOVED recovery from a stale slot table', { skip: CSKIP }, async (
     await Promise.all(ks.map((k, i) => c.set(k, 'v' + i)));
     _forceStaleTable(c, c.nodes[1]!); // every slot now "belongs" to the second shard
     const r0 = c.redirectCount;
+    const f0 = c.refreshCount;
     assert.equal(await c.get(ks[0]!), 'v0');
     const got = await Promise.all(ks.map((k) => c.get(k)));
     assert.deepEqual(got, ks.map((_, i) => 'v' + i));
     assert.ok(c.redirectCount > r0, 'redirects were followed');
-    assert.ok(c.refreshCount >= 1, 'more than one moved slot refreshed the table');
+    assert.equal(c.refreshCount, f0, 'every MOVED named a known node: each slot is patched, no reload');
     const before = c.redirectCount;
     for (const k of ks) await c.get(k);
     assert.equal(c.redirectCount, before, 'table is correct again: no further MOVED');

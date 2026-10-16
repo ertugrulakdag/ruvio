@@ -355,7 +355,7 @@ pub struct KvShard<C = SystemClock, I = AHashIndex> {
     /// earliest field deadline, so the maintenance tick finds due fields without a scan.
     field_sweep: Option<Box<FieldSweep>>,
     /// `None` until the first `JSON.INDEX CREATE`.
-    json_indexes: Option<Box<crate::json_index::JsonIndexes>>,
+    json_indexes: Option<Box<crate::json::index::JsonIndexes>>,
     /// `None` until the first `FILLGET`.
     fills: Option<Box<fill::FillTable>>,
     cached_now: Cell<Option<u64>>,

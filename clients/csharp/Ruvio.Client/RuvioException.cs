@@ -17,7 +17,7 @@ public sealed class RuvioException(string message, bool isServerReply = false, E
 
     /// <summary>
     /// True when the socket closed before any byte of this command's reply arrived.
-    /// A single read can be sent again. A write cannot.
+    /// The client does not send it again; the caller may resend a read. A write may already have run.
     /// </summary>
     public bool ClosedBeforeReply { get; } = closedBeforeReply;
 }

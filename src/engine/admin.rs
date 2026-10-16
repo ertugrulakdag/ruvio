@@ -28,3 +28,14 @@ pub fn apply_connection_auth<'a>(
         _ => None,
     }
 }
+
+pub(crate) fn config_get_response(config: &AppConfig, pattern: &[u8]) -> Response<'static> {
+    let mut array = Vec::new();
+
+    for (name, value) in config.config_get(pattern) {
+        array.push(Some(Cow::Owned(name.into_bytes())));
+        array.push(Some(Cow::Owned(value.into_bytes())));
+    }
+
+    Response::Array(array)
+}

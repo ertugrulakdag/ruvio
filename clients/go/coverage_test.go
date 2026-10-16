@@ -10,298 +10,6 @@ import (
 	"testing"
 )
 
-// commandMethods maps every command of docs/compatibility-matrix.json to its typed
-// method. "Tx.X" and "PubSub.X" live on those types; the rest are on *Client.
-var commandMethods = map[string]string{
-	"RUVIO":                 "Ruvio",
-	"PING":                  "Ping",
-	"HELLO":                 "Hello",
-	"AUTH":                  "Auth",
-	"ACL WHOAMI":            "ACLWhoAmI",
-	"ACL USERS":             "ACLUsers",
-	"ACL LIST":              "ACLList",
-	"ACL GETUSER":           "ACLGetUser",
-	"ACL CAT":               "ACLCat",
-	"ACL SETUSER":           "ACLSetUser",
-	"ACL LOAD":              "ACLLoad",
-	"ACL SAVE":              "ACLSave",
-	"GET":                   "Get",
-	"SETV":                  "SetV",
-	"TAKE":                  "Take",
-	"DELEX":                 "DelIfEq",
-	"GETEX":                 "GetEx",
-	"LIMIT":                 "Limit",
-	"IDEM":                  "IdemBegin",
-	"ONCE":                  "Once",
-	"LEASE":                 "Lease",
-	"SEMAPHORE":             "Semaphore",
-	"RELEASE":               "Release",
-	"CHANGES":               "Changes",
-	"SET":                   "Set",
-	"MGET":                  "MGet",
-	"MSET":                  "MSet",
-	"GETSET":                "GetSet",
-	"APPEND":                "Append",
-	"STRLEN":                "StrLen",
-	"INCR":                  "Incr",
-	"DECR":                  "Decr",
-	"INCRBY":                "IncrBy",
-	"DECRBY":                "DecrBy",
-	"DEL":                   "Del",
-	"UNLINK":                "Unlink",
-	"EXISTS":                "Exists",
-	"TYPE":                  "Type",
-	"RENAME":                "Rename",
-	"SCAN":                  "Scan",
-	"DBSIZE":                "DBSize",
-	"SELECT":                "Select",
-	"FLUSHDB":               "FlushDB",
-	"FLUSHALL":              "FlushAll",
-	"SWAPDB":                "SwapDB",
-	"MOVE":                  "Move",
-	"EXPIRE":                "Expire",
-	"PEXPIRE":               "PExpire",
-	"EXPIREAT":              "ExpireAt",
-	"PEXPIREAT":             "PExpireAt",
-	"TTL":                   "TTL",
-	"PTTL":                  "PTTL",
-	"PERSIST":               "Persist",
-	"LPUSH":                 "LPush",
-	"LPUSHCAP":              "LPushCap",
-	"RPUSHCAP":              "RPushCap",
-	"RPUSH":                 "RPush",
-	"LPOP":                  "LPop",
-	"RPOP":                  "RPop",
-	"LLEN":                  "LLen",
-	"LINDEX":                "LIndex",
-	"LRANGE":                "LRange",
-	"LTRIM":                 "LTrim",
-	"BLPOP":                 "BLPop",
-	"BRPOP":                 "BRPop",
-	"SADD":                  "SAdd",
-	"SREM":                  "SRem",
-	"SISMEMBER":             "SIsMember",
-	"SCARD":                 "SCard",
-	"SMEMBERS":              "SMembers",
-	"SINTER":                "SInter",
-	"SUNION":                "SUnion",
-	"SDIFF":                 "SDiff",
-	"SINTERSTORE":           "SInterStore",
-	"SUNIONSTORE":           "SUnionStore",
-	"SDIFFSTORE":            "SDiffStore",
-	"SMOVE":                 "SMove",
-	"SPOP":                  "SPop",
-	"SRANDMEMBER":           "SRandMember",
-	"HSET":                  "HSet",
-	"HGET":                  "HGet",
-	"HDEL":                  "HDel",
-	"HLEN":                  "HLen",
-	"HGETALL":               "HGetAll",
-	"HMGET":                 "HMGet",
-	"HEXISTS":               "HExists",
-	"HKEYS":                 "HKeys",
-	"HVALS":                 "HVals",
-	"HINCRBY":               "HIncrBy",
-	"HSETNX":                "HSetNX",
-	"HSTRLEN":               "HStrLen",
-	"HSCAN":                 "HScan",
-	"HEXPIRE":               "HExpire",
-	"HPEXPIRE":              "HPExpire",
-	"HEXPIREAT":             "HExpireAt",
-	"HPEXPIREAT":            "HPExpireAt",
-	"HTTL":                  "HTTL",
-	"HPTTL":                 "HPTTL",
-	"HEXPIRETIME":           "HExpireTime",
-	"HPEXPIRETIME":          "HPExpireTime",
-	"HPERSIST":              "HPersist",
-	"ZADD":                  "ZAdd",
-	"ZRANGE":                "ZRange",
-	"ZREVRANGE":             "ZRevRange",
-	"ZRANGEBYSCORE":         "ZRangeByScore",
-	"ZRANGEBYLEX":           "ZRangeByLex",
-	"ZREVRANGEBYLEX":        "ZRevRangeByLex",
-	"ZREM":                  "ZRem",
-	"ZINCRBY":               "ZIncrBy",
-	"ZCARD":                 "ZCard",
-	"ZSCORE":                "ZScore",
-	"ZRANK":                 "ZRank",
-	"ZREVRANK":              "ZRevRank",
-	"ZPOPMIN":               "ZPopMin",
-	"ZPOPMAX":               "ZPopMax",
-	"BZPOPMIN":              "BZPopMin",
-	"BZPOPMAX":              "BZPopMax",
-	"ZREMRANGEBYRANK":       "ZRemRangeByRank",
-	"ZREMRANGEBYSCORE":      "ZRemRangeByScore",
-	"ZREMRANGEBYLEX":        "ZRemRangeByLex",
-	"GEOADD":                "GeoAdd",
-	"GEODIST":               "GeoDist",
-	"GEOHASH":               "GeoHash",
-	"GEOPOS":                "GeoPosition",
-	"GEOSEARCH":             "GeoSearch",
-	"GEOSEARCHSTORE":        "GeoSearchStore",
-	"GEORADIUS":             "GeoRadius",
-	"GEORADIUSBYMEMBER":     "GeoRadiusByMember",
-	"BF.RESERVE":            "BFReserve",
-	"BF.ADD":                "BFAdd",
-	"BF.MADD":               "BFMAdd",
-	"BF.INSERT":             "BFInsert",
-	"BF.INFO":               "BFInfo",
-	"BF.CARD":               "BFCard",
-	"BF.EXISTS":             "BFExists",
-	"BF.MEXISTS":            "BFMExists",
-	"JSON.GET":              "JSONGet",
-	"JSON.INDEX":            "JSONIndexCreate",
-	"JSON.FIND":             "JSONFind",
-	"JSON.MGET":             "JSONMGet",
-	"JSON.SET":              "JSONSet",
-	"JSON.DEL":              "JSONDel",
-	"XADD":                  "XAdd",
-	"XLEN":                  "XLen",
-	"XRANGE":                "XRange",
-	"XREVRANGE":             "XRevRange",
-	"XREAD":                 "XRead",
-	"XDEL":                  "XDel",
-	"XSETID":                "XSetID",
-	"XTRIM":                 "XTrim",
-	"XGROUP CREATE":         "XGroupCreate",
-	"XGROUP CREATECONSUMER": "XGroupCreateConsumer",
-	"XREADGROUP":            "XReadGroup",
-	"XGROUP DESTROY":        "XGroupDestroy",
-	"XGROUP SETID":          "XGroupSetID",
-	"XGROUP DELCONSUMER":    "XGroupDelConsumer",
-	"XACK":                  "XAck",
-	"XPENDING":              "XPending",
-	"XAUTOCLAIM":            "XAutoClaim",
-	"XCLAIM":                "XClaim",
-	"XINFO STREAM":          "XInfoStream",
-	"XINFO GROUPS":          "XInfoGroups",
-	"XINFO CONSUMERS":       "XInfoConsumers",
-	"INFO":                  "Info",
-	"WAIT":                  "Wait",
-	"CONFIG GET":            "ConfigGet",
-	"SAVE":                  "Save",
-	"BGSAVE":                "BgSave",
-	"MULTI":                 "Tx.Multi",
-	"EXEC":                  "Tx.ExecQueued",
-	"DISCARD":               "Tx.Discard",
-	"WATCH":                 "Tx.Watch",
-	"UNWATCH":               "Tx.Unwatch",
-	"EVAL":                  "Eval",
-	"EVALSHA":               "EvalSHA",
-	"SCRIPT LOAD":           "ScriptLoad",
-	"SCRIPT EXISTS":         "ScriptExists",
-	"SCRIPT FLUSH":          "ScriptFlush",
-	"SCRIPT KILL":           "ScriptKill",
-	"FCALL":                 "FCall",
-	"FUNCTION LOAD":         "FunctionLoad",
-	"FUNCTION LIST":         "FunctionList",
-	"FUNCTION DELETE":       "FunctionDelete",
-	"CLUSTER SLOTS":         "ClusterSlots",
-	"CLUSTER NODES":         "ClusterNodes",
-	"CLUSTER SHARDS":        "ClusterShards",
-	"CLUSTER INFO":          "ClusterInfo",
-	"CLUSTER MYID":          "ClusterMyID",
-	"CLUSTER KEYSLOT":       "ClusterKeySlot",
-	"READONLY":              "ReadOnly",
-	"READWRITE":             "ReadWrite",
-	"SPUBLISH":              "SPublish",
-	"SSUBSCRIBE":            "PubSub.SSubscribe",
-	"SUNSUBSCRIBE":          "PubSub.SUnsubscribe",
-	"PUBLISH":               "Publish",
-	"SUBSCRIBE":             "PubSub.Subscribe",
-	"UNSUBSCRIBE":           "PubSub.Unsubscribe",
-	"PSUBSCRIBE":            "PubSub.PSubscribe",
-	"PUNSUBSCRIBE":          "PubSub.PUnsubscribe",
-	"CLIENT GETNAME":        "ClientGetName",
-	"CLIENT SETNAME":        "ClientSetName",
-	"CLIENT TRACKING":       "ClientTracking",
-	"SSCAN":                 "SScan",
-	"ZSCAN":                 "ZScan",
-	"JSON.MERGE":            "JSONMerge",
-	"JSON.TYPE":             "JSONType",
-	"JSON.STRLEN":           "JSONStrLen",
-	"JSON.ARRLEN":           "JSONArrLen",
-	"JSON.OBJKEYS":          "JSONObjKeys",
-	"JSON.NUMINCRBY":        "JSONNumIncrBy",
-	"JSON.TOGGLE":           "JSONToggle",
-	"JSON.ARRAPPEND":        "JSONArrAppend",
-	"JSON.CLEAR":            "JSONClear",
-	"JSON.OBJLEN":           "JSONObjLen",
-	"JSON.STRAPPEND":        "JSONStrAppend",
-	"JSON.NUMMULTBY":        "JSONNumMultBy",
-	"JSON.ARRINSERT":        "JSONArrInsert",
-	"JSON.ARRPOP":           "JSONArrPop",
-	"JSON.ARRTRIM":          "JSONArrTrim",
-	"JSON.ARRINDEX":         "JSONArrIndex",
-	"JSON.FORGET":           "JSONForget",
-	"JMERGE":                "JMerge",
-	"COMMAND":               "Command",
-	"SETBIT":                "SetBit",
-	"BITFIELD":              "BitField",
-	"BITFIELD_RO":           "BitFieldRO",
-	"GETBIT":                "GetBit",
-	"BITCOUNT":              "BitCount",
-	"BITPOS":                "BitPos",
-	"BITOP":                 "BitOp",
-	"PFADD":                 "PFAdd",
-	"PFCOUNT":               "PFCount",
-	"PFMERGE":               "PFMerge",
-	"FILLGET":               "FillGet",
-	"FILLSET":               "FillSet",
-	"SETEX":                 "SetEX",
-	"PSETEX":                "PSetEX",
-	"SETNX":                 "SetNX",
-	"GETDEL":                "GetDel",
-	"MSETNX":                "MSetNX",
-	"INCRBYFLOAT":           "IncrByFloat",
-	"GETRANGE":              "GetRange",
-	"SUBSTR":                "Substr",
-	"SETRANGE":              "SetRange",
-	"SMISMEMBER":            "SMIsMember",
-	"SINTERCARD":            "SInterCard",
-	"ZCOUNT":                "ZCount",
-	"ZLEXCOUNT":             "ZLexCount",
-	"ZMSCORE":               "ZMScore",
-	"ZUNIONSTORE":           "ZUnionStore",
-	"ZINTERSTORE":           "ZInterStore",
-	"ZDIFFSTORE":            "ZDiffStore",
-	"ZUNION":                "ZUnion",
-	"ZINTER":                "ZInter",
-	"ZDIFF":                 "ZDiff",
-	"ZRANDMEMBER":           "ZRandMember",
-	"HRANDFIELD":            "HRandField",
-	"HINCRBYFLOAT":          "HIncrByFloat",
-	"LINSERT":               "LInsert",
-	"LSET":                  "LSet",
-	"LREM":                  "LRem",
-	"LPOS":                  "LPos",
-	"LMOVE":                 "LMove",
-	"RPOPLPUSH":             "RPopLPush",
-	"BLMOVE":                "BLMove",
-	"LPUSHX":                "LPushX",
-	"RPUSHX":                "RPushX",
-	"LMPOP":                 "LMPop",
-	"BLMPOP":                "BLMPop",
-	"KEYS":                  "Keys",
-	"RANDOMKEY":             "RandomKey",
-	"TOUCH":                 "Touch",
-	"RENAMENX":              "RenameNX",
-	"EXPIRETIME":            "ExpireTime",
-	"PEXPIRETIME":           "PExpireTime",
-	"COPY":                  "Copy",
-	"ECHO":                  "Echo",
-	"OBJECT":                "ObjectEncoding",
-	"MEMORY":                "MemoryUsage",
-	"CLIENT ID":             "ClientID",
-	"CLIENT LIST":           "ClientList",
-	"CLIENT INFO":           "ClientInfo",
-	"CLIENT KILL":           "ClientKill",
-	"SLOWLOG":               "SlowLogGet",
-	"LATENCY":               "LatencyLatest",
-	"DUMP":                  "Dump",
-	"RESTORE":               "Restore",
-}
-
 // optionMethods are the typed forms of options that change what Ruvio does.
 var optionMethods = map[string]string{
 	"SET IFEQ":                 "SetIfEq",
@@ -358,6 +66,23 @@ func hasMethod(spec string) bool {
 	return ok
 }
 
+// methodSpecs turns a "go" field of command_methods.json (one name or a list) into names.
+func methodSpecs(raw json.RawMessage) []string {
+	var one string
+	if json.Unmarshal(raw, &one) == nil {
+		if one == "" {
+			return nil
+		}
+		return []string{one}
+	}
+	var many []string
+	_ = json.Unmarshal(raw, &many)
+	return many
+}
+
+// TestCoverage checks that every command of docs/compatibility-matrix.json has a typed method,
+// named by the "go" field of clients/testdata/command_methods.json. "Tx.X" and "PubSub.X" live
+// on those types; the rest are on *Client.
 func TestCoverage(t *testing.T) {
 	raw, err := os.ReadFile("../../docs/compatibility-matrix.json")
 	if err != nil {
@@ -371,18 +96,40 @@ func TestCoverage(t *testing.T) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatal(err)
 	}
+	raw, err = os.ReadFile("../testdata/command_methods.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table struct {
+		Commands map[string]map[string]json.RawMessage `json:"commands"`
+	}
+	if err := json.Unmarshal(raw, &table); err != nil {
+		t.Fatal(err)
+	}
+	inMatrix := make(map[string]bool, len(m.Commands))
 	covered := 0
 	for _, c := range m.Commands {
-		spec, ok := commandMethods[c.Name]
-		if !ok {
-			t.Errorf("%s: no typed method in the coverage table", c.Name)
+		inMatrix[c.Name] = true
+		specs := methodSpecs(table.Commands[c.Name]["go"])
+		if len(specs) == 0 {
+			t.Errorf("%s: no typed method in command_methods.json", c.Name)
 			continue
 		}
-		if !hasMethod(spec) {
-			t.Errorf("%s: method %s does not exist", c.Name, spec)
-			continue
+		ok := true
+		for _, spec := range specs {
+			if !hasMethod(spec) {
+				t.Errorf("%s: method %s does not exist", c.Name, spec)
+				ok = false
+			}
 		}
-		covered++
+		if ok {
+			covered++
+		}
+	}
+	for name := range table.Commands {
+		if !inMatrix[name] {
+			t.Errorf("%s: in command_methods.json but not in the matrix", name)
+		}
 	}
 	for opt, spec := range optionMethods {
 		if !hasMethod(spec) {

@@ -1,6 +1,7 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
+COPY Directory.Build.props Directory.Packages.props ./
 COPY clients/csharp/Ruvio.Client ./clients/csharp/Ruvio.Client
 COPY clients/csharp/Ruvio.Client.Generators ./clients/csharp/Ruvio.Client.Generators
 COPY clients/csharp/Ruvio.Client.AspNetCore ./clients/csharp/Ruvio.Client.AspNetCore

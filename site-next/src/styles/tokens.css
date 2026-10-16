@@ -1,0 +1,74 @@
+/*
+ * Ruvio site theme ("Dusk Rust").
+ * Every color, font and radius on the marketing pages and in the docs comes from here.
+ * To change the look, edit this file only; components never use literal colors.
+ */
+:root {
+  /* Surfaces */
+  --bg: #0a0c14;
+  --bg-band: #0d1019;
+  --surface: #10131f;
+  --surface-2: #151a2a;
+  --line: #242b3e;
+  --line-soft: rgba(160, 175, 215, 0.18);
+
+  /* Text */
+  --ink: #e9ecf3;
+  --mute: #959db0;
+  --faint: #808a9e;
+
+  /* Reading: long text sits on a slightly lifted "paper" panel in a softer ink than headings.
+     --paper is translucent so the ground below shows through; --paper-solid is for overlays. */
+  --paper: rgba(16, 20, 33, 0.78);
+  --paper-solid: #0f1320;
+  --paper-line: #262e44;
+  --ink-body: #c9cfdc;
+  --leading: 1.75;
+
+  /* Brand: the rust tone of the logo's beak, kept calm on dark ground */
+  --accent: #b4512a;
+  --accent-hover: #a84b27;
+  --accent-ink: #ffffff;
+
+  /* Data colors: Ruvio, a cool counterpart, a quiet third, and Redis */
+  --c1: #b9603b;
+  --c2: #8da2c0;
+  --c3: #66739a;
+  --redis: #5f6b8a;
+
+  /* Code */
+  --code-bg: #080a12;
+  --code-ink: #dfe4ee;
+  --code-dim: rgba(220, 228, 240, 0.64);
+
+  /* Hero sky: night to dusk; --dusk is the horizon glow as an RGB triple */
+  --sky-0: #0a0c14;
+  --sky-1: #11162e;
+  --sky-2: #20152a;
+  --sky-3: #35160f;
+  --dusk: 176, 76, 36;
+
+  /* Page ground: the night background with a cool glow up left, a dusk glow down right and a
+     faint dot grid, so long pages are not one flat colour. Fixed to the viewport (see global.css). */
+  --ground-glow-a: rgba(141, 162, 192, 0.09);
+  --ground-glow-b: rgba(var(--dusk), 0.09);
+  --ground-dot: rgba(160, 175, 215, 0.075);
+  --ground:
+    radial-gradient(70vw 60vh at 8% -8%, var(--ground-glow-a), transparent 70%),
+    radial-gradient(60vw 55vh at 100% 105%, var(--ground-glow-b), transparent 70%),
+    radial-gradient(circle, var(--ground-dot) 1px, transparent 1.4px) 0 0 / 24px 24px,
+    var(--bg);
+
+  /* Type */
+  --f-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* Shape and rhythm */
+  --radius: 8px;
+  --radius-s: 6px;
+  --max: 1160px;
+  --gutter: max(16px, env(safe-area-inset-left, 0px));
+  --section-y: clamp(56px, 8vw, 96px);
+
+  color-scheme: dark;
+}

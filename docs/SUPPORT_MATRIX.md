@@ -5,8 +5,8 @@ unsupported until it appears here.
 
 | Host OS | Architecture | Runtime | Notes |
 | --- | --- | --- | --- |
-| macOS | aarch64 / x86_64 | evented (kqueue) | CI runs the same tests as Linux. |
-| Windows | x86_64 | evented (IOCP) | CI runs the same tests as Linux. |
+| macOS | aarch64 / x86_64 | evented (kqueue) | The manual `ci` workflow runs the same tests as Linux on Apple silicon (`macos-latest`). x86_64 builds but is not tested in CI. |
+| Windows | x86_64 | evented (IOCP) | The manual `ci` workflow runs the same tests as Linux. |
 | Linux | x86_64 | evented (epoll) | Production images use this process. |
 
 ## Kernel and Filesystem

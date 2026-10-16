@@ -1,0 +1,142 @@
+---
+import Page from "../layouts/Page.astro";
+import CodeTabs, { type CodeTab } from "../components/content/CodeTabs.astro";
+import { clientExamples } from "../data/client-examples";
+import { clients } from "../config/site";
+import SideNav from "../components/content/SideNav.astro";
+import PageIntro from "../components/PageIntro.astro";
+import { cases, type UseCase } from "../data/use-cases";
+import { integrationsFor } from "../data/integrations";
+
+// The redis-cli lines first, then the same steps in every client that has an example for this case,
+// then the framework integration package that does the job for you, one tab per ecosystem.
+const tabsFor = (c: UseCase): CodeTab[] => [
+  { key: "cli", label: "redis-cli", lang: "redis", code: c.code },
+  ...clients.flatMap((k) => {
+    const code = clientExamples[c.id]?.[k.slug];
+    return code ? [{ key: k.slug, label: k.language, lang: k.lang, code }] : [];
+  }),
+  ...integrationsFor(c.id).map((i) => ({ key: `pkg-${i.ecosystem.id}`, label: `${i.ecosystem.label} package`, ...i.example })),
+];
+
+---
+
+<Page title="Use cases" description="Coordination jobs Ruvio finishes in one command on the shard that owns the key: rate limits, locks, idempotency, cache fills, delayed jobs and change feeds.">
+  <PageIntro title="Use cases" kicker="Coordination in one command">
+    Ruvio speaks RESP, so any Redis client can talk to it. What sets it apart is a set of commands that finish a
+    coordination job on the shard that owns the key, in one call. Below are the jobs people reach for, with the
+    commands as you would type them in <code>redis-cli</code> and a link to the reference.
+  </PageIntro>
+
+  <div class="reading">
+    <div class="wrap">
+      <SideNav items={[...cases.map((c) => ({ id: c.id, label: c.nav })), { id: "from-redis", label: "Moving from Redis" }]} label="Use cases">
+        <div class="cases">
+          {cases.map((c, i) => (
+            <article class="case panel" id={c.id} aria-labelledby={`${c.id}-h`}>
+              <header class="case-head">
+                <span class="case-no" aria-hidden="true">{String(i + 1).padStart(2, "0")}</span>
+                <div>
+                  <h2 id={`${c.id}-h`}>{c.title}</h2>
+                  <p class="problem">{c.problem}</p>
+                </div>
+              </header>
+              <div class="case-grid">
+                <div class="prose">
+                  <p set:html={c.body} />
+                  {c.note && <p class="callout"><b>Keep in mind</b><span set:html={c.note} /></p>}
+                  <p class="refs">
+                    <span>Reference</span>
+                    {c.refs.map((r) => <a href={r.href}>{r.label}</a>)}
+                  </p>
+                  {integrationsFor(c.id).map((i) => (
+                    <p class="refs">
+                      <span>{i.ecosystem.label} {i.packages.length > 1 ? "packages" : "package"}</span>
+                      {i.packages.map((p) => <a href={`/integrations/#${p.anchor}`}><code>{p.package}</code></a>)}
+                    </p>
+                  ))}
+                </div>
+                <CodeTabs id={c.id} label={`${c.title}: code`} tabs={tabsFor(c)} />
+              </div>
+            </article>
+          ))}
+
+          <article class="case panel" id="from-redis" aria-labelledby="from-redis-h">
+            <header class="case-head">
+              <span class="case-no" aria-hidden="true">{String(cases.length + 1).padStart(2, "0")}</span>
+              <div>
+                <h2 id="from-redis-h">Moving from Redis</h2>
+                <p class="problem">
+                  Ruvio is not a full Redis clone. It speaks RESP2 and covers the commands listed in the command
+                  reference. Check that the commands you use are there before you switch.
+                </p>
+              </div>
+            </header>
+            <div class="prose">
+              <p>
+                <code>ruvio-ctl import</code> copies keys with their TTLs from a running Redis and can verify the copy.
+                It does not move consumer groups, Lua scripts, ACL users or module types.
+              </p>
+              <p>
+                Start with <a href="/get-started/">Get started</a>, then pick a <a href="/docs/clients/">client</a>.
+                For durability modes and what each one promises, see <a href="/docs/configuration/">Configuration</a>{" "}
+                and <a href="/docs/recovery/">Recovery</a>.
+              </p>
+              <p class="refs">
+                <span>Reference</span>
+                <a href="/docs/import/">Import</a>
+                <a href="/docs/compatibility/">Compatibility</a>
+                <a href="/docs/commands/">Commands</a>
+              </p>
+            </div>
+          </article>
+        </div>
+      </SideNav>
+    </div>
+  </div>
+
+  <section class="section band next">
+    <div class="wrap next-row">
+      <div>
+        <h2 class="title">Try it on your machine</h2>
+        <p class="lede">One Docker command or a prebuilt binary, then <code>redis-cli</code>. Or try three of these commands <a href="/examples/">in the browser</a>.</p>
+      </div>
+      <div class="next-actions">
+        <a class="btn" href="/get-started/">Get started</a>
+        <a class="btn ghost" href="/docs/commands/">Command reference</a>
+      </div>
+    </div>
+  </section>
+</Page>
+
+<style>
+  .cases { display: grid; gap: 20px; container-type: inline-size; }
+  .case { scroll-margin-top: 88px; }
+  .case-head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: start; margin-bottom: 22px; }
+  .case-no {
+    font-family: var(--f-mono); font-size: 13px; font-weight: 500; color: var(--c1);
+    padding: 4px 8px; border: 1px solid color-mix(in srgb, var(--c1) 45%, var(--paper-line)); border-radius: 4px; margin-top: 4px;
+  }
+  .case h2 { margin: 0 0 6px; font-size: 24px; line-height: 1.25; }
+  .problem { margin: 0; color: var(--ink); font-size: 17px; line-height: 1.6; max-width: 62ch; }
+  .case-grid { display: grid; gap: 20px; }
+  /* Client snippets are longer than the redis-cli lines: the code gets the full width and scrolls
+     sideways instead of breaking identifiers mid-word. */
+  .case-grid :global(pre) { font-size: 13px; white-space: pre; overflow-x: auto; }
+  .case-grid > :first-child { max-width: 72ch; }
+  .refs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; font-size: 14px; }
+  .refs span { color: var(--faint); }
+  .lede a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--accent); }
+  .next-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 24px 40px; }
+  .next-row .title { font-size: clamp(24px, 3vw, 32px); }
+  .next-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+  @container (min-width: 760px) {
+    .case-head { margin-bottom: 26px; }
+  }
+  @media (max-width: 900px) {
+    .case { scroll-margin-top: 124px; }
+    .case h2 { font-size: 21px; }
+    .case-head { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+    .case-no { justify-self: start; }
+  }
+</style>

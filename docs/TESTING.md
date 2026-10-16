@@ -18,9 +18,13 @@ before every `git push` from that clone. The toolchain is pinned in `rust-toolch
 ## Automated test surface
 
 `.github/workflows/pr-gate.yml` runs automatically for pull requests and
-pushes to `main` on Linux. It checks Rust formatting and core tests, Rust and
-.NET client tests, Python benchmark-regression units, and a real two-shard
-routing smoke plus serial live Rust client tests. The extended workflow at
+pushes to `main` on Linux. It checks Rust formatting and core tests,
+`scripts/check.sh`, hot-path instruction counts, Python benchmark-regression
+units, a real two-shard routing smoke, and every client suite (Rust, C# with the
+.NET integrations, Go on its `go.mod` floor, Node, Python 3.9 and 3.13, Java)
+against live servers started by `scripts/run_with_servers.sh`. Live client
+tests skip themselves without `RUVIO_TEST_ADDR`, so a suite run without a
+server proves only the offline tests. The extended workflow at
 `.github/workflows/ci.yml` is **manual-dispatch only**. When dispatched, it
 defines these additional checks:
 
@@ -43,8 +47,20 @@ See the workflow file for the exact commands and job boundaries. A local
 re-run of the principal Rust suite is:
 
 ```bash
-cargo test --all-targets
+cargo test --lib --bins --tests
 ```
+
+## Known flaky tests
+
+These fail now and then under load and pass on a re-run. A failure in one of
+them is re-run once before it is investigated; a second failure is a real
+failure. Remove a line when its test is fixed.
+
+| Test | Where |
+| --- | --- |
+| `evented_hot_keys_save_publishes_after_hot_partition` | `src/runtime/evented/tests/cluster.rs` |
+| `data_directory_lock_excludes_a_second_owner` | `src/persistence/mod.rs` |
+| `CancelledCallersNeverObserveAnotherCallersReplyUnderSaturation` | `clients/csharp/Ruvio.Client.Tests/PooledRequestTests.cs` |
 
 ## Risk areas and their test groups
 
@@ -78,13 +94,13 @@ so a hang fails the run instead of stalling it.
 | --- | --- | --- |
 | Protocol limits | Every numeric argument of every command at the integer extremes neither aborts the server nor drops the connection; oversized frames, arguments and argument counts get an error and keep the connection; byte limits above 2 GiB are refused; input before AUTH is capped | `tests/command_surface_live.rs` (`every_command_survives_extreme_numbers_and_keeps_the_connection`, `oversized_input_before_auth_is_refused_and_the_server_keeps_serving`); `tests/parse_matrix.rs`; `random_draw_counts_past_the_limit_are_refused`, `protocol_limits_above_two_gib_are_rejected` and the `evented_oversized_*` / `evented_frame_with_too_many_arguments_*` tests in `src/protocol/tests.rs` and `src/runtime/evented/tests/connection.rs` |
 | Authentication and ACL side doors | No command runs before AUTH, and a denied command or key is refused, directly, inside MULTI, from a script and for a key owned by another shard behind one port; feeds that name keys of every pattern are refused to key-restricted users; SLOWLOG hides passwords | `tests/command_surface_live.rs` (`no_command_runs_before_auth_on_any_entry_path`, `a_user_denied_a_command_is_refused_on_every_entry_path`, `a_key_restricted_user_cannot_reach_other_keys_on_any_entry_path`); `src/acl.rs`, `src/runtime/session.rs`, `src/runtime/evented/tests/single_port.rs`, `src/script.rs` |
-| Iteration under change | SCAN, HSCAN, SSCAN and ZSCAN end and return every element present for the whole walk while tables convert, grow, migrate and shrink; random draws reach every element evenly in every encoding | `src/engine/tests/scan_churn.rs`; `src/store/tests.rs` (`*scan*`, `*random*`), `src/slots.rs`, `src/engine/tests/zset.rs` |
+| Iteration under change | SCAN, HSCAN, SSCAN and ZSCAN end and return every element present for the whole walk while tables convert, grow, migrate and shrink; random draws reach every element evenly in every encoding | `src/engine/tests/scan_churn.rs`; `src/store/tests/` (`*scan*`, `*random*` in `keyspace.rs`, `sets.rs`, `hashes.rs`, `sorted_sets.rs`), `src/slots.rs`, `src/engine/tests/zset.rs` |
 | Persistence and crashes | A kill at any point recovers every acknowledged write as a prefix, expired keys stay expired, WAL write and sync failures (injected) keep the log consistent, torn tails are cut, checkpoint rounds never reuse or mix files, an interrupted restore blocks startup, ACL and config files are written atomically, temporary files are swept, a logged write replay cannot apply is an error | `tests/process_live.rs` (`a_kill_at_any_point_recovers_every_acknowledged_write_as_a_prefix`), `tests/recovery_live.rs`, `src/persistence/crash.rs` (`killed_process_recovers_at_crash_sites`), `src/persistence/wal.rs`, `src/persistence/snapshot.rs`, `src/persistence/tooling.rs`, `src/engine/tests/replay_failures.rs`, `src/runtime/evented/tests/wal.rs` |
 | Replication | Mixed handshake versions fail loudly, a changed history forces a full resync, a replica never expires or evicts by itself | `src/replication.rs`, `src/runtime/evented/tests/replica.rs`, `src/engine/tests/expire.rs`, `src/engine/tests/evict.rs` |
 | Memory limit | With an `allkeys` policy a write that fits is never refused while older keys can be evicted, for any value size, shard count and durability profile; the limit is split across shards; unsynced log bytes do not evict keys; output buffers, MULTI queues and Lua memory are capped | `tests/memory_limit_live.rs`, `tests/memory_budget.rs`, `src/engine/tests/evict.rs`, `src/output.rs`, `src/transaction.rs`, `src/script.rs` |
 | Blocking clients and connections | A blocked client that hangs up (plain or TLS) gives up its waiter; idle servers do not spin; SIGHUP does not stop the server; running out of descriptors keeps existing clients and recovers for new ones | `src/runtime/evented/tests/hangups.rs`, `src/runtime/evented/tests/connection.rs`, `src/runtime/mod.rs`, `tests/process_live.rs` |
 | Crash, restart and disk-fault contracts under a random workload | After kill -9, SIGTERM, a simulated power loss, a torn WAL write or an injected `EIO`/`ENOSPC` on WAL or checkpoint files, the recovered keyspace is a cut of the acknowledged history that the profile allows (`always`: every acknowledged write; `everysec`: all but the last sync window; `snapshot`: at least the last `SAVE`; `memory`: empty), with no holes, no resurrected or expired keys and multi-key commands all-or-nothing; no write is acknowledged after a WAL sync failure; live replies match a reference model; a replica converges to its primary | `scripts/model_check.py` (with the LD_PRELOAD fault shim `scripts/model_check_shim.c`); seeded smoke runs in `tests/model_check_live.rs` (`a_short_seeded_model_check_run_passes`, `the_model_checker_reports_a_server_that_loses_writes`) |
-| Growth traps | One command over many elements, and many commands on one growing value, stay close to linear (ratio of thread CPU time at n and 8n) | `src/engine/tests/complexity.rs`; FLUSHALL and lazy-free hand-off in `src/lazy_free.rs` and `src/store/tests.rs`; hash field TTL sweeps in `src/store/tests.rs` |
+| Growth traps | One command over many elements, and many commands on one growing value, stay close to linear (ratio of thread CPU time at n and 8n) | `src/engine/tests/complexity.rs`; FLUSHALL and lazy-free hand-off in `src/lazy_free.rs` and `src/store/tests/shrink.rs`; hash field TTL sweeps in `src/store/tests/field_ttl.rs` |
 
 The live groups (`tests/*_live.rs`) start the real `ruvio` binary on free local ports and
 finish in seconds. A test marked `#[ignore]` names a known gap in its reason; run it with
@@ -190,7 +206,7 @@ records integration-level storage call counts and durations, API process
 working set/CPU time, Ruvio process RSS, and k6 stage tags. This configured arrival rate is not
 the measured capacity of Ruvio, the SUT, or the load generator. The first
 30-minute two-host VPS result is
-recorded in [`SCENARIO_LAB_RESULTS.md`](SCENARIO_LAB_RESULTS.md) (the raw
+recorded in the [.NET scenario lab record](evidence/2026-10-03-dotnet-scenario-lab.md) (the raw
 k6 summaries are not part of this repository).
 The fault/recovery checks passed, but the run dropped load iterations, had
 four failed checks, and reported inconsistent threshold status; it is
@@ -248,15 +264,13 @@ process-crash tests above.
 ## Performance and memory measurements
 
 Ruvio has dated, reproducible benchmark records rather than a single general
-performance claim:
-
-- [`BENCHMARK_RESULTS.md`](BENCHMARK_RESULTS.md) records native and Docker
-  Desktop runs, workloads, versions, and measurement limitations.
-- [`BARE_METAL.md`](BARE_METAL.md) records a 2026-09-28 Cherry EPYC Linux run,
-  including Redis comparisons, durability profiles, two 15-minute soaks, and
-  `SIGKILL` recovery trials.
-- [`MEMORY_DENSITY.md`](MEMORY_DENSITY.md) records memory-density results and
-  the open RSS gap.
+performance claim. [`evidence/README.md`](evidence/README.md) lists them,
+newest first: the 2026-10-11 Azure command and memory comparison, native and
+Docker Desktop runs from 2026-10-01 to 2026-10-07, the .NET scenario lab, and
+the 2026-09-28 Cherry EPYC Linux run with Redis comparisons, durability
+profiles, two 15-minute soaks and `SIGKILL` recovery trials. Current numbers
+are on the [performance](../site/testing-performance.html) and
+[memory](../site/testing-memory.html) pages.
 
 Laptop and Docker Desktop measurements are useful for repeatable functional
 checks and same-machine regression detection. They are not substitutes for

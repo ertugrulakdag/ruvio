@@ -14,6 +14,8 @@ pub(crate) use table::{
     lookup as command_spec,
 };
 #[cfg(test)]
+mod client_spec;
+#[cfg(test)]
 pub(crate) mod consistency;
 #[cfg(test)]
 mod tests;
@@ -179,7 +181,7 @@ impl JsonOpKind {
     }
 }
 
-/// `JSON.INDEX` and `JSON.FIND`: field indexes over JSON documents (J10).
+/// `JSON.INDEX` and `JSON.FIND`: field indexes over JSON documents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JsonIndexKind {
     Create,

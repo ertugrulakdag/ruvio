@@ -1,0 +1,87 @@
+---
+// Two-column page body: a sticky list of the page's sections and the content.
+// On narrow screens the list becomes a sticky, horizontally scrolling strip under the header.
+export type NavEntry = { id: string; label: string };
+interface Props { items: NavEntry[]; label?: string }
+const { items, label = "On this page" } = Astro.props;
+---
+
+<div class="split">
+  <nav class="side-nav" aria-label={label} data-side-nav>
+    <p class="side-title">{label}</p>
+    <ol>
+      {items.map((item) => <li><a href={`#${item.id}`}>{item.label}</a></li>)}
+    </ol>
+  </nav>
+  <div class="split-body">
+    <slot />
+  </div>
+</div>
+
+<style>
+  .split { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 56px; align-items: start; }
+  .side-nav { position: sticky; top: 96px; max-height: calc(100vh - 120px); overflow-y: auto; }
+  .side-title { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--faint); }
+  .side-nav ol { list-style: none; margin: 0; padding: 0; border-left: 1px solid var(--line); }
+  .side-nav a {
+    display: block; padding: 6px 0 6px 14px; margin-left: -1px; border-left: 2px solid transparent;
+    font-size: 14px; line-height: 1.4; color: var(--mute);
+  }
+  .side-nav a:hover { color: var(--ink); }
+  .side-nav a[aria-current="true"] { color: var(--ink); border-left-color: var(--accent); }
+  .split-body { min-width: 0; }
+
+  @media (max-width: 900px) {
+    .split { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    .side-nav {
+      top: 64px; z-index: 20; max-height: none; overflow: visible;
+      margin-inline: calc(-1 * var(--gutter)); padding-inline: var(--gutter);
+      background: var(--bg); border-bottom: 1px solid var(--line);
+    }
+    .side-title { display: none; }
+    .side-nav ol {
+      display: flex; gap: 4px; border-left: 0; overflow-x: auto; scrollbar-width: none;
+      padding-block: 8px; overscroll-behavior-x: contain;
+    }
+    .side-nav ol::-webkit-scrollbar { display: none; }
+    .side-nav li { flex: none; }
+    .side-nav a {
+      margin: 0; padding: 6px 12px; border: 1px solid transparent; border-radius: var(--radius-s);
+      font-size: 13.5px; white-space: nowrap;
+    }
+    .side-nav a[aria-current="true"] { border-color: var(--line); border-left-color: var(--line); background: var(--surface); }
+  }
+</style>
+
+<script>
+  // Marks the section whose heading has scrolled past the top bar as current.
+  const nav = document.querySelector<HTMLElement>("[data-side-nav]");
+  if (nav) {
+    const list = nav.querySelector("ol")!;
+    const links = [...nav.querySelectorAll<HTMLAnchorElement>("a[href^='#']")];
+    const targets = links.map((a) => document.getElementById(a.hash.slice(1)));
+    const strip = window.matchMedia("(max-width: 900px)");
+    let current = -1;
+    let queued = false;
+    const update = () => {
+      queued = false;
+      const line = (strip.matches ? nav.getBoundingClientRect().bottom : 64) + 48;
+      let idx = 0;
+      targets.forEach((el, i) => { if (el && el.getBoundingClientRect().top <= line) idx = i; });
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) {
+        const last = targets.findLastIndex((el) => el && el.getBoundingClientRect().top < window.innerHeight);
+        if (last > idx) idx = last;
+      }
+      if (idx === current) return;
+      current = idx;
+      links.forEach((a, i) => (i === idx ? a.setAttribute("aria-current", "true") : a.removeAttribute("aria-current")));
+      if (list.scrollWidth > list.clientWidth) {
+        list.scrollTo({ left: links[idx].offsetLeft - list.offsetLeft - 16, behavior: "smooth" });
+      }
+    };
+    const queue = () => { if (!queued) { queued = true; requestAnimationFrame(update); } };
+    addEventListener("scroll", queue, { passive: true });
+    addEventListener("resize", queue);
+    update();
+  }
+</script>

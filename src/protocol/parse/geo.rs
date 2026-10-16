@@ -1,20 +1,17 @@
 use super::*;
 
-pub(in crate::protocol) fn parse_geo_add(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.is_empty() {
+pub(in crate::protocol) fn parse_geo_add<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() == 0 {
         return Err(ProtocolError::Invalid(
             "GEOADD expects a key and at least one longitude, latitude, and member",
         ));
     }
 
-    let key = arguments.remove(0);
     let mut options = SortedSetAddOptions::default();
-    let mut index = 0;
+    let mut index = 1;
 
-    while index < arguments.len() {
-        let token = arguments[index].as_ref();
+    while index < args.len() {
+        let token = args.bytes(index);
 
         if token.eq_ignore_ascii_case(b"nx") {
             if options.condition == SortedSetCondition::Exists {
@@ -37,125 +34,110 @@ pub(in crate::protocol) fn parse_geo_add(
         index += 1;
     }
 
-    let rest = arguments.split_off(index);
+    let rest = args.len() - index;
 
-    if rest.is_empty() || !rest.len().is_multiple_of(3) {
+    if rest == 0 || !rest.is_multiple_of(3) {
         return Err(ProtocolError::Invalid(
             "GEOADD expects longitude, latitude, and member triples",
         ));
     }
 
-    let mut members = Vec::with_capacity(rest.len() / 3);
-    let mut rest = rest.into_iter();
+    let mut members = Vec::with_capacity(rest / 3);
 
-    while let Some(longitude) = rest.next() {
-        let latitude = rest.next().expect("triple length checked");
-        let member = rest.next().expect("triple length checked");
-
-        members.push((parse_float(&longitude)?, parse_float(&latitude)?, member));
+    for at in (index..args.len()).step_by(3) {
+        members.push((
+            parse_float(args.bytes(at))?,
+            parse_float(args.bytes(at + 1))?,
+            args.arg(at + 2),
+        ));
     }
 
     Ok(Command::GeoAdd {
-        key,
+        key: args.arg(0),
         members,
         options,
     })
 }
 
-pub(in crate::protocol) fn parse_geo_dist(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() != 3 && arguments.len() != 4 {
+pub(in crate::protocol) fn parse_geo_dist<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() != 3 && args.len() != 4 {
         return Err(ProtocolError::Invalid(
             "GEODIST expects a key, two members, and an optional unit",
         ));
     }
 
-    let unit = if arguments.len() == 4 {
-        parse_geo_unit(&arguments.pop().expect("length checked"))?
+    let unit = if args.len() == 4 {
+        parse_geo_unit(args.bytes(3))?
     } else {
         1.0
     };
 
-    let to = arguments.pop().expect("length checked");
-    let from = arguments.pop().expect("length checked");
-    let key = arguments.pop().expect("length checked");
-
     Ok(Command::GeoDist {
-        key,
-        from,
-        to,
+        key: args.arg(0),
+        from: args.arg(1),
+        to: args.arg(2),
         unit,
     })
 }
 
-pub(in crate::protocol) fn parse_geo_pos(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() < 2 {
+pub(in crate::protocol) fn parse_geo_pos<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() < 2 {
         return Err(ProtocolError::Invalid(
             "GEOPOS expects a key and at least one member",
         ));
     }
 
-    let key = arguments.remove(0);
-
     Ok(Command::GeoPos {
-        key,
-        members: arguments,
+        key: args.arg(0),
+        members: args.rest(1),
     })
 }
 
-pub(in crate::protocol) fn parse_geo_hash(
-    mut arguments: Vec<Bytes<'_>>,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() < 2 {
+pub(in crate::protocol) fn parse_geo_hash<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() < 2 {
         return Err(ProtocolError::Invalid(
             "GEOHASH expects a key and at least one member",
         ));
     }
 
-    let key = arguments.remove(0);
-
     Ok(Command::GeoHash {
-        key,
-        members: arguments,
+        key: args.arg(0),
+        members: args.rest(1),
     })
 }
 
-pub(in crate::protocol) fn parse_geo_radius(
-    mut arguments: Vec<Bytes<'_>>,
+pub(in crate::protocol) fn parse_geo_radius<'a>(
+    args: &Args<'a, '_>,
     by_member: bool,
-) -> Result<Command<'_>, ProtocolError> {
+) -> Parsed<'a> {
     let minimum = if by_member { 4 } else { 5 };
 
-    if arguments.len() < minimum {
+    if args.len() < minimum {
         return Err(ProtocolError::Invalid(
             "GEORADIUS expects a key, center, radius, and unit",
         ));
     }
 
-    let key = arguments.remove(0);
-    let center = if by_member {
-        GeoCenter::Member(arguments.remove(0))
+    let (center, radius_at) = if by_member {
+        (GeoCenter::Member(args.arg(1)), 2)
     } else {
-        let longitude = parse_float(&arguments.remove(0))?;
-        let latitude = parse_float(&arguments.remove(0))?;
+        let longitude = parse_float(args.bytes(1))?;
+        let latitude = parse_float(args.bytes(2))?;
 
-        GeoCenter::Coordinates(longitude, latitude)
+        (GeoCenter::Coordinates(longitude, latitude), 3)
     };
 
-    let radius = parse_float(&arguments.remove(0))?;
-    let unit = parse_geo_unit(&arguments.remove(0))?;
+    let radius = parse_float(args.bytes(radius_at))?;
+    let unit = parse_geo_unit(args.bytes(radius_at + 1))?;
 
     if radius < 0.0 {
         return Err(ProtocolError::Invalid("radius must be non-negative"));
     }
 
-    let options = parse_geo_options(&arguments, true)?;
+    let options = parse_geo_options(args, radius_at + 2, true)?;
 
     Ok(Command::GeoSearch {
-        key,
+        key: args.arg(0),
         center,
         area: GeoArea::Radius(radius * unit),
         unit,
@@ -175,23 +157,16 @@ pub(in crate::protocol) fn parse_geo_radius(
     })
 }
 
-pub(in crate::protocol) fn parse_geo_search(
-    mut arguments: Vec<Bytes<'_>>,
-    store: bool,
-) -> Result<Command<'_>, ProtocolError> {
-    if arguments.len() < if store { 2 } else { 1 } {
+pub(in crate::protocol) fn parse_geo_search<'a>(args: &Args<'a, '_>, store: bool) -> Parsed<'a> {
+    if args.len() < if store { 2 } else { 1 } {
         return Err(ProtocolError::Invalid(
             "GEOSEARCH expects a key, a center, and a shape",
         ));
     }
 
-    let destination = if store {
-        Some(arguments.remove(0))
-    } else {
-        None
-    };
-
-    let key = arguments.remove(0);
+    let destination = if store { Some(args.arg(0)) } else { None };
+    let key_at = usize::from(store);
+    let key = args.arg(key_at);
     let mut center = None;
     let mut area = None;
     let mut unit = 1.0;
@@ -203,36 +178,36 @@ pub(in crate::protocol) fn parse_geo_search(
     let mut with_hash = false;
     let mut with_coord = false;
     let mut storedist = false;
-    let mut index = 0;
+    let mut index = key_at + 1;
 
-    while index < arguments.len() {
-        let token = arguments[index].as_ref();
+    while index < args.len() {
+        let token = args.bytes(index);
 
         if token.eq_ignore_ascii_case(b"frommember") {
-            if center.is_some() || index + 1 >= arguments.len() {
+            if center.is_some() || index + 1 >= args.len() {
                 return Err(ProtocolError::Invalid("syntax error"));
             }
 
-            center = Some(GeoCenter::Member(arguments[index + 1].clone()));
+            center = Some(GeoCenter::Member(args.arg(index + 1)));
             index += 1;
         } else if token.eq_ignore_ascii_case(b"fromlonlat") {
-            if center.is_some() || index + 2 >= arguments.len() {
+            if center.is_some() || index + 2 >= args.len() {
                 return Err(ProtocolError::Invalid("syntax error"));
             }
 
-            let longitude = parse_float(&arguments[index + 1])?;
-            let latitude = parse_float(&arguments[index + 2])?;
+            let longitude = parse_float(args.bytes(index + 1))?;
+            let latitude = parse_float(args.bytes(index + 2))?;
 
             center = Some(GeoCenter::Coordinates(longitude, latitude));
             index += 2;
         } else if token.eq_ignore_ascii_case(b"byradius") {
-            if area.is_some() || index + 2 >= arguments.len() {
+            if area.is_some() || index + 2 >= args.len() {
                 return Err(ProtocolError::Invalid("syntax error"));
             }
 
-            let radius = parse_float(&arguments[index + 1])?;
+            let radius = parse_float(args.bytes(index + 1))?;
 
-            unit = parse_geo_unit(&arguments[index + 2])?;
+            unit = parse_geo_unit(args.bytes(index + 2))?;
 
             if radius < 0.0 {
                 return Err(ProtocolError::Invalid("radius must be non-negative"));
@@ -241,14 +216,14 @@ pub(in crate::protocol) fn parse_geo_search(
             area = Some(GeoArea::Radius(radius * unit));
             index += 2;
         } else if token.eq_ignore_ascii_case(b"bybox") {
-            if area.is_some() || index + 3 >= arguments.len() {
+            if area.is_some() || index + 3 >= args.len() {
                 return Err(ProtocolError::Invalid("syntax error"));
             }
 
-            let width = parse_float(&arguments[index + 1])?;
-            let height = parse_float(&arguments[index + 2])?;
+            let width = parse_float(args.bytes(index + 1))?;
+            let height = parse_float(args.bytes(index + 2))?;
 
-            unit = parse_geo_unit(&arguments[index + 3])?;
+            unit = parse_geo_unit(args.bytes(index + 3))?;
 
             if width < 0.0 || height < 0.0 {
                 return Err(ProtocolError::Invalid(
@@ -277,11 +252,11 @@ pub(in crate::protocol) fn parse_geo_search(
         } else if token.eq_ignore_ascii_case(b"any") {
             any = true;
         } else if token.eq_ignore_ascii_case(b"count") {
-            if index + 1 >= arguments.len() {
+            if index + 1 >= args.len() {
                 return Err(ProtocolError::Invalid("syntax error"));
             }
 
-            let value = parse_usize(&arguments[index + 1])?;
+            let value = parse_usize(args.bytes(index + 1))?;
 
             if value == 0 {
                 return Err(ProtocolError::Invalid("COUNT must be > 0"));
@@ -357,8 +332,10 @@ pub(in crate::protocol) struct GeoOptions<'a> {
     pub(in crate::protocol) store: Option<GeoStore<'a>>,
 }
 
+/// `GEORADIUS` options from argument `from` on.
 pub(in crate::protocol) fn parse_geo_options<'a>(
-    arguments: &[Bytes<'a>],
+    args: &Args<'a, '_>,
+    from: usize,
     allow_store: bool,
 ) -> Result<GeoOptions<'a>, ProtocolError> {
     let mut descending = false;
@@ -369,10 +346,10 @@ pub(in crate::protocol) fn parse_geo_options<'a>(
     let mut with_hash = false;
     let mut with_coord = false;
     let mut store = None;
-    let mut index = 0;
+    let mut index = from;
 
-    while index < arguments.len() {
-        let token = arguments[index].as_ref();
+    while index < args.len() {
+        let token = args.bytes(index);
 
         if token.eq_ignore_ascii_case(b"withdist") {
             with_dist = true;
@@ -389,11 +366,11 @@ pub(in crate::protocol) fn parse_geo_options<'a>(
         } else if token.eq_ignore_ascii_case(b"any") {
             any = true;
         } else if token.eq_ignore_ascii_case(b"count") {
-            if index + 1 >= arguments.len() {
+            if index + 1 >= args.len() {
                 return Err(ProtocolError::Invalid("syntax error"));
             }
 
-            let value = parse_usize(&arguments[index + 1])?;
+            let value = parse_usize(args.bytes(index + 1))?;
 
             if value == 0 {
                 return Err(ProtocolError::Invalid("COUNT must be > 0"));
@@ -402,23 +379,23 @@ pub(in crate::protocol) fn parse_geo_options<'a>(
             count = Some(value);
             index += 1;
         } else if token.eq_ignore_ascii_case(b"storedist") && allow_store {
-            if index + 1 >= arguments.len() || store.is_some() {
+            if index + 1 >= args.len() || store.is_some() {
                 return Err(ProtocolError::Invalid("syntax error"));
             }
 
             store = Some(GeoStore {
-                destination: arguments[index + 1].clone(),
+                destination: args.arg(index + 1),
                 distance: true,
             });
 
             index += 1;
         } else if token.eq_ignore_ascii_case(b"store") && allow_store {
-            if index + 1 >= arguments.len() || store.is_some() {
+            if index + 1 >= args.len() || store.is_some() {
                 return Err(ProtocolError::Invalid("syntax error"));
             }
 
             store = Some(GeoStore {
-                destination: arguments[index + 1].clone(),
+                destination: args.arg(index + 1),
                 distance: false,
             });
 

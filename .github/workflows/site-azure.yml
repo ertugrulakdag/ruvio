@@ -1,0 +1,45 @@
+name: site-azure
+
+# Manual only. Push does not publish the site.
+# Builds site-next/ (Astro) and uploads the static output to Azure Static Web Apps.
+# Azure does not build: the docs are generated from docs/, clients/ and integrations/ in this
+# repository, so the build runs here with a pinned Node and Azure only receives site-next/dist.
+# Secrets: AZURE_STATIC_WEB_APPS_API_TOKEN, the deployment token from the Static Web App's
+# Overview page ("Manage deployment token").
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-azure
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site-next/package-lock.json
+      - name: Build
+        working-directory: site-next
+        run: |
+          npm ci
+          npm run check
+          npm run build
+      - name: Upload to Azure Static Web Apps
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: upload
+          app_location: site-next/dist
+          skip_app_build: true
+          skip_api_build: true
+
+# Started by hand from the Actions tab only.

@@ -1,8 +1,8 @@
-//! Shard side of the JSON field indexes (see `crate::json_index`): registry, hooks that keep
+//! Shard side of the JSON field indexes (see `crate::json::index`): registry, hooks that keep
 //! the postings in step with the keyspace, the bounded build scan and the lookup.
 
 use super::*;
-use crate::json_index::{Definition, IndexState, JsonIndexes, Scalar};
+use crate::json::index::{Definition, IndexState, JsonIndexes, Scalar};
 
 /// Index definitions live in database 0 under this prefix, so the WAL, snapshots and
 /// replication carry them like any other key.
@@ -36,11 +36,11 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
     }
 
     /// A full copy of the named index, so a rolled-back `DROP` brings it back ready.
-    pub(crate) fn json_index_copy(&self, name: &str) -> Option<crate::json_index::Index> {
+    pub(crate) fn json_index_copy(&self, name: &str) -> Option<crate::json::index::Index> {
         self.json_indexes.as_ref()?.copy_of(name)
     }
 
-    pub(crate) fn json_index_restore(&mut self, index: crate::json_index::Index) -> bool {
+    pub(crate) fn json_index_restore(&mut self, index: crate::json::index::Index) -> bool {
         self.json_indexes
             .get_or_insert_with(Box::default)
             .restore(index)

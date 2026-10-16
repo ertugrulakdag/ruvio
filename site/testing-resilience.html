@@ -20,6 +20,7 @@
       <nav aria-label="Main navigation">
         <a href="index.html">Home</a>
         <a href="start.html">Start</a>
+        <a href="use-cases.html">Use cases</a>
         <details>
           <summary>Build</summary>
           <div class="nav-menu">
@@ -227,7 +228,7 @@ python3 scripts/model_check.py --seed 1 --duration 3600 --config all \
 <section class="panel">
 <h2 id="native">Native in-flight process kills · 2026-10-03</h2>
   <p><strong>Environment:</strong> Apple M4 Pro, macOS. <strong>Method:</strong> three randomized process kills during pipelined writes for each of <code>everysec</code> and <code>always</code>. <strong>Result:</strong> six of six trials restarted with a continuous key prefix and all client-observed acknowledged writes present; recovered key counts were 297/576/810 (<code>everysec</code>) and 592/621/320 (<code>always</code>). <strong>Limit:</strong> process termination only; native filesystem faults and host power loss remain untested. Run <code>./scripts/test.sh --native-resilience</code> for a new local report.</p>
-  <p><a href="https://github.com/salihcantekin/ruvio/blob/main/docs/TESTING.md">Native trial and caveats</a> <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/BARE_METAL.md">Earlier Linux kill-9 trials</a></p>
+  <p><a href="https://github.com/salihcantekin/ruvio/blob/main/docs/TESTING.md">Native trial and caveats</a> <a href="https://github.com/salihcantekin/ruvio/blob/main/docs/evidence/2026-09-28-bare-metal.md">Earlier Linux kill-9 trials</a></p>
 </section>
 </article></main>
   <footer class="foot"><div class="foot-inner">Test evidence is dated and scoped: a passing container scenario is not a durability certification.</div></footer>

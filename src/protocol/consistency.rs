@@ -6,12 +6,12 @@
 use super::table::{COMMANDS, flags};
 use super::*;
 
-const POOL: &[&str] = &[
+pub(super) const POOL: &[&str] = &[
     "k", "v", "0", "1", "2", "-1", "10", "1.5", "*", "-", "+", "$", ">", "a", "b", "f",
 ];
 
 /// Subcommands and option words the random search would not find on its own.
-const WORDS: &[&str] = &[
+pub(super) const WORDS: &[&str] = &[
     "GET",
     "SET",
     "INCRBY",
@@ -89,7 +89,7 @@ const WORDS: &[&str] = &[
 ];
 
 /// Whole commands for syntax the random search does not reach.
-const SAMPLES: &[&[&str]] = &[
+pub(super) const SAMPLES: &[&[&str]] = &[
     &["LINSERT", "l", "BEFORE", "a", "b"],
     &["LMOVE", "a", "b", "LEFT", "RIGHT"],
     &["BLMOVE", "a", "b", "LEFT", "RIGHT", "0"],
@@ -132,10 +132,10 @@ const SAMPLES: &[&[&str]] = &[
     &["XAUTOCLAIM", "x", "g", "c", "0", "0-0"],
 ];
 
-struct Rng(u64);
+pub(super) struct Rng(pub(super) u64);
 
 impl Rng {
-    fn next(&mut self) -> usize {
+    pub(super) fn next(&mut self) -> usize {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
@@ -143,7 +143,7 @@ impl Rng {
     }
 }
 
-fn frame(words: &[&str]) -> Vec<u8> {
+pub(super) fn frame(words: &[&str]) -> Vec<u8> {
     let mut out = format!("*{}\r\n", words.len()).into_bytes();
 
     for word in words {
@@ -289,7 +289,14 @@ fn hand_kept_command_lists_agree_with_the_table() {
     eprintln!("acl name mismatches:\n{}", acl_name.join("\n"));
     eprintln!("write flag mismatches:\n{}", write_flag.join("\n"));
     eprintln!("blocking without the table flag: {blocking:?}");
-    assert!(acl_name.is_empty() && write_flag.is_empty() && blocking.is_empty());
+    // A row no generated form parses is a row this test cannot check: give the search the
+    // words it needs (`WORDS`) instead of letting the command drop out silently.
+    assert!(
+        never_parsed.is_empty()
+            && acl_name.is_empty()
+            && write_flag.is_empty()
+            && blocking.is_empty()
+    );
 }
 
 /// Rows with keys the table cannot place by position: after a `numkeys` argument or a
@@ -309,7 +316,7 @@ const KEYS_BEYOND_POSITIONS: &[&str] = &[
     "zinterstore",
     "zunionstore",
 ];
-const CHANNEL_ROWS: &[&str] = &["spublish", "ssubscribe", "sunsubscribe"];
+pub(super) const CHANNEL_ROWS: &[&str] = &["spublish", "ssubscribe", "sunsubscribe"];
 
 /// The keys the row's first/last/step place in `words`.
 fn table_keys<'w>(first: i8, last: i8, step: i8, words: &[&'w str]) -> Vec<&'w [u8]> {

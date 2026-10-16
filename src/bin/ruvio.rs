@@ -469,3 +469,27 @@ fn linux_open_file_limit() -> Option<u64> {
 fn invalid_config(error: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, error)
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    /// A flag missing from `docs/CONFIGURATION.md` is a flag nobody finds.
+    #[test]
+    fn every_command_line_flag_is_documented() {
+        let docs = include_str!("../../docs/CONFIGURATION.md");
+        let command = super::Cli::command();
+        let missing: Vec<String> = command
+            .get_arguments()
+            .filter_map(|argument| argument.get_long())
+            .map(|long| format!("--{long}"))
+            .filter(|flag| !docs.contains(&format!("`{flag}`")))
+            .collect();
+
+        assert!(command.get_arguments().count() > 40);
+        assert!(
+            missing.is_empty(),
+            "flags missing from docs/CONFIGURATION.md: {missing:?}"
+        );
+    }
+}

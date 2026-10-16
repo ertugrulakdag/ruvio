@@ -20,6 +20,7 @@
       <nav aria-label="Main navigation">
         <a href="index.html">Home</a>
         <a href="start.html">Start</a>
+        <a href="use-cases.html">Use cases</a>
         <details>
           <summary>Build</summary>
           <div class="nav-menu">
@@ -443,7 +444,7 @@
 <section class="panel">
 <h2>Four-core bare-metal baseline · 2026-09-28</h2>
   <p><strong>Environment:</strong> pinned Cherry EPYC 7313P Ubuntu host, four Ruvio shards versus four Redis 8.10.2 processes, both <code>memory</code> durability, 25 clients and 500k requests per shard, pipeline 16, 64 bytes; five matrix samples. <strong>Result:</strong> aggregate SET medians 3.05M/s versus 2.49M/s; GET 3.21M/s versus 3.26M/s. <strong>Limit:</strong> historical pre-WAL-change build, not today's binary or a Redis Cluster comparison. Multi-shard p99 is the slowest shard, not an aggregate latency percentile.</p>
-  <p><a href="https://github.com/salihcantekin/ruvio/blob/main/docs/BARE_METAL.md">Bare-metal setup, full matrix and 15-minute soaks</a></p>
+  <p><a href="https://github.com/salihcantekin/ruvio/blob/main/docs/evidence/2026-09-28-bare-metal.md">Bare-metal setup, full matrix and 15-minute soaks</a></p>
 </section>
 </article></main>
   <footer class="foot"><div class="foot-inner">Test evidence is dated and scoped: a passing container scenario is not a durability certification.</div></footer>

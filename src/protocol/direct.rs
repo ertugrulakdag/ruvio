@@ -1,6 +1,6 @@
-//! Parsers for common commands that read the frame directly. They match the older
-//! `parse/commands.rs` functions argument for argument (same errors, same order) but do not
-//! first copy the arguments into a `Vec`: one allocation fewer on every call.
+//! Parsers for common commands. They were the first to read the frame directly instead of
+//! an argument `Vec`, and match the vector-based parsers they replaced argument for argument
+//! (same errors, same order). Every table row now reads [`Args`] the same way.
 
 use super::table::Args;
 use super::*;

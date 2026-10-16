@@ -126,7 +126,7 @@ def test_pipeline_slot_rules():
     assert cl.pipeline_slot(encode("FOO", ())) is None
     assert cl.pipeline_slot(encode("MGET", ("{t}a", "{t}b"))) == cl.key_slot("t")
     assert cl.pipeline_slot(encode("PUBLISH", ("c", "m"))) == 0
-    with pytest.raises(ruvio.CrossSlotError, match="split it"):
+    with pytest.raises(ruvio.CrossSlotError, match="transaction must use keys in one slot"):
         cl.pipeline_slot(encode("MGET", ("a", "b")))
     for name in ("DBSIZE", "KEYS", "FLUSHDB"):
         with pytest.raises(ruvio.RuvioError, match="cannot be pipelined"):
@@ -140,16 +140,50 @@ def test_pipeline_groups_by_node_with_keyless_on_the_seed():
     lo = next(k for k in (f"k{i}" for i in range(99)) if cl.key_slot(k) < 8192)
     hi = next(k for k in (f"k{i}" for i in range(99)) if cl.key_slot(k) >= 8192)
     frames = [encode("SET", (lo, 1)), encode("PING", ()), encode("GET", (hi,)), encode("get", (lo,)), encode("MGET", ("{t}a", "{t}b"))]
-    groups = cl.pipeline_groups(frames, table)
+    groups, subs = cl.pipeline_groups(frames, table)
+    assert subs is None  # nothing was split
     assert groups[-1][0] == [1]  # keyless
     tag_node = table[cl.key_slot("t")]
     assert groups[0][0][:2] == [0, 3]
     assert groups[1][0] == ([2, 4] if tag_node == 1 else [2])
     assert tag_node in groups and 4 in groups[tag_node][0]
     assert [f for f in groups[0][1][:2]] == [frames[0], frames[3]]
-    assert cl.pipeline_groups([], table) == {}
-    with pytest.raises(ruvio.CrossSlotError):
-        cl.pipeline_groups([encode("DEL", ("a", "b"))], table)
+    assert cl.pipeline_groups([], table) == ({}, None)
+    for bad in (encode("SINTER", ("a", "b")), encode("RENAME", ("a", "b"))):
+        with pytest.raises(ruvio.CrossSlotError):
+            cl.pipeline_groups([encode("PING", ()), bad], table)
+    for fan in (encode("DBSIZE", ()), encode("KEYS", ("*",)), encode("SCAN", (0,))):
+        with pytest.raises(ruvio.RuvioError, match="cannot be pipelined"):
+            cl.pipeline_groups([fan], table)
+
+
+def test_pipeline_groups_split_cross_slot_commands_per_slot():
+    table = [0] * 8192 + [1] * 8192
+    a, b, c = "a", "b", "{a}c"  # a and {a}c share a slot, b is elsewhere
+    assert cl.key_slot(a) != cl.key_slot(b) and cl.key_slot(a) == cl.key_slot(c)
+    frames = [encode("GET", (a,)), encode("MGET", (b, a, c)), encode("PING", ()), encode("MSET", (a, 1, b, 2))]
+    groups, subs = cl.pipeline_groups(frames, table)
+    n = len(frames)
+    assert [s[0] for s in subs] == [1, 1, 3, 3]  # pipeline index of each sub-command
+    assert cl.split_frame(subs[0][4]) == [b"MGET", b"b"] and subs[0][3] == [0]
+    assert cl.split_frame(subs[1][4]) == [b"MGET", b"a", b"{a}c"] and subs[1][3] == [1, 2]
+    assert cl.split_frame(subs[2][4]) == [b"MSET", b"a", b"1"] and cl.split_frame(subs[3][4]) == [b"MSET", b"b", b"2"]
+    # every sub-command sits in its slot's node group, at position n + its sub index
+    for ni, (pos, fs) in groups.items():
+        for p, f in zip(pos, fs):
+            if p >= n:
+                assert subs[p - n][4] == f and table[cl.key_slot(cl.split_frame(f)[1])] == ni
+            else:
+                assert frames[p] == f
+    # the split commands themselves are not sent; their sub-commands are
+    assert sorted(p for pos, _ in groups.values() for p in pos) == [0, 2] + list(range(n, n + len(subs)))
+    # replies come back per position; merging puts one reply at each command's index
+    replies = ["va", None, "PONG", None] + [["vb"], ["va", "vc"], "OK", "OK"]
+    assert cl.merge_pipeline(replies, n, subs) == ["va", ["vb", "va", "vc"], "PONG", "OK"]  # MGET key order
+    counts = cl.pipeline_groups([encode("DEL", (a, b, c)), encode("EXISTS", (b, a))], table)[1]
+    assert cl.merge_pipeline([None, None, 1, 2, 1, 1], 2, counts) == [3, 2]
+    err = ruvio.ResponseError("ERR nope")
+    assert cl.merge_pipeline([None, None, 1, err, 1, 1], 2, counts) == [err, 2]  # the error stays at its index
 
 
 # --------------------------------------------------------------------------- split / merge

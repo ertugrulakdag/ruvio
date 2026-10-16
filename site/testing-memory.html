@@ -20,6 +20,7 @@
       <nav aria-label="Main navigation">
         <a href="index.html">Home</a>
         <a href="start.html">Start</a>
+        <a href="use-cases.html">Use cases</a>
         <details>
           <summary>Build</summary>
           <div class="nav-menu">
@@ -191,7 +192,7 @@
 <h2>Four-core mixed-key soak · 2026-09-28</h2>
   <p><strong>Method:</strong> a historical 15-minute Cherry EPYC run with four shards and four Redis processes, a warm one-million-key range per shard, and SET/GET/INCR at pipeline 16. <strong>Result:</strong> Ruvio RSS plateau 2.78 GiB versus Redis 648 MiB (about 4.4×).</p>
       <p>This older, different key mix exposed a memory-density issue. Subsequent one-million-string Docker probes measured much lower Ruvio RSS after layout changes, but <strong>the original four-shard mixed-key soak has not been repeated</strong>. Do not compare its ratio directly with the newer single-shard string result.</p>
-  <p><a href="https://github.com/salihcantekin/ruvio/blob/main/docs/MEMORY_DENSITY.md">Density investigation and remaining verification</a></p>
+  <p><a href="https://github.com/salihcantekin/ruvio/blob/main/docs/evidence/2026-09-28-string-memory-density.md">String density investigation (2026-09-28 record)</a></p>
 </section>
 
 <section class="panel">

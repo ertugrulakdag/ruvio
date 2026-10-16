@@ -236,22 +236,27 @@ against `CLUSTER KEYSLOT`); `ruvio.key_slot(key)` exposes it.
 
 Behaviour worth knowing:
 
-- **`-MOVED`**: the first one patches that slot in the table (node already known); a second one
-  since the last refresh, or a node that is not in the table, re-reads `CLUSTER SLOTS`. The
-  command is then retried **once** on the node the reply names (a second `MOVED` raises
-  `MovedError`). `MOVED` means the command was not executed, so the retry is safe.
+- **`-MOVED`**: the command is re-sent to the node the reply names, at most **3 times** per
+  command (then the last `MovedError` is raised). A command's first `MOVED` to a node already in
+  the table points that one slot at it; a node that is not in the table, or a second `MOVED` for
+  the same command, re-reads `CLUSTER SLOTS`. `MOVED` means the command was not executed, so
+  following it is safe.
 - **No replay after transport failures.** A dropped node socket fails the command that saw it
   (`ConnectionError`), is closed, and is reopened by the next command for that node. Other nodes
   are not affected. A pipeline/split call that touched several nodes still reads every healthy
   node's replies before raising.
 - **Pipelines** group commands by node, send each group as one pipelined write (all groups are
   written before any is read; asyncio gathers them) and return replies in the caller's order.
-  A cross-slot multi-key command, or a fan-out command (`DBSIZE`, `KEYS`, `SCAN`...), inside a
-  pipeline raises before sending. A command in a pipeline that gets `MOVED` is retried singly
-  after the batch, so its order relative to the other commands is not preserved for that retry.
+  A cross-slot `MGET`/`MSET`/`DEL`/`EXISTS`/`UNLINK`/`TOUCH` is split per slot exactly like the
+  plain command, and its index in the reply list holds the merged reply (`MGET` in key order,
+  summed counts, `OK`; an error from any part is that index's error). Any other cross-slot
+  multi-key command, or a fan-out command (`DBSIZE`, `KEYS`, `SCAN`...), inside a pipeline raises
+  before sending. A command in a pipeline that gets `MOVED` is followed singly after the batch,
+  so its order relative to the other commands is not preserved for that retry.
 - **Transactions** (`pipeline(transaction=True)`, `transaction()`) need all keys in one slot, else
   `CrossSlotError`. If `WATCH` ran on another node than the transaction's keys the call also
-  raises (the watch would not apply). A `MOVED` transaction is re-sent once, whole, to the new owner.
+  raises (the watch would not apply). A `MOVED` transaction is re-sent whole to the new owner,
+  following at most 3 redirects like a single command.
 - **Blocking commands** (asyncio): `BLPOP`, `BRPOP`, `BLMOVE`, `BLMPOP`, `BZPOP*`, `XREAD ... BLOCK`
   and `FILLGET ... WAIT` run on a short-lived dedicated connection to the owning node, so they
   never stall the shared one. The sync client simply blocks on that node's socket.
@@ -290,15 +295,15 @@ RUVIO_TEST_FLUSHALL=1 ...                                               # also r
   extraction through the typed methods, a check that **all 287 matrix commands have a routing
   rule**, topology / `MOVED` / scan-cursor parsing, and the router against scripted fake servers
   (`tests/fakecluster.py`) on both clients: owner-only routing, fail-fast `CROSSSLOT` (no byte
-  sent), split reassembly order, `MOVED` patch / refresh / unknown node / retry-once, no replay
-  after a transport failure, pipeline grouping and order, transactions on one node, standalone
+  sent), split reassembly order, `MOVED` patch / refresh / unknown node / at most 3 redirects, no
+  replay after a transport failure, pipeline grouping and order, cross-slot split inside a pipeline, transactions on one node, standalone
   fallback.
 - `tests/test_cluster_live.py` runs against a 3-shard server with
   `RUVIO_CLUSTER_ADDR=127.0.0.1:17330` (shard i on base+i; start it with
   `shards = 3` and `port_mode = "per-shard"`) on both clients: slot table vs `CLUSTER KEYSLOT`,
   keys spread over all shards, cross-slot `MGET/MSET/DEL/EXISTS/TOUCH/UNLINK` order,
   cross-slot errors leave data untouched, same-slot multi-key commands, script fan-out,
-  pipeline order, tx single-slot / cross-slot, `WATCH` + retry, `MOVED` recovery from a fully
+  pipeline order, cross-slot split inside a pipeline, tx single-slot / cross-slot, `WATCH` + retry, `MOVED` recovery from a fully
   stale table (command, pipeline, split, transaction), helpers, scan iterators over all nodes,
   `BLPOP`, pub/sub and sharded pub/sub, losing one node's connection. The standalone fallback
   test uses `RUVIO_TEST_ADDR` (plain server). Cluster mode has only database 0, so the older

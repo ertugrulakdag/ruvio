@@ -19,6 +19,7 @@
       <nav aria-label="Main navigation">
         <a href="index.html">Home</a>
         <a href="start.html">Start</a>
+        <a href="use-cases.html">Use cases</a>
         <details>
           <summary>Build</summary>
           <div class="nav-menu">
@@ -367,9 +368,9 @@ var item = await db.PopListLeftBlockingAsync("nolist", TimeSpan.FromMilliseconds
       <p>Give the client one seed address. On connect it sends <code>CLUSTER SLOTS</code>. A standalone server answers with an error and the client keeps one socket (this fallback was checked on port 17370). A sharded server returns the slot map; the client then opens one socket per shard and sends each single-key command to the owner of its slot (<code>CRC16</code>, <code>{hash tags}</code> honoured). <code>RuvioClientOptions.DiscoverCluster = false</code> keeps the seed socket only.</p>
       <ul>
         <li>Split by shard and merged in the caller's order: <code>MGET</code>, <code>MSET</code>, <code>DEL</code>, <code>UNLINK</code>, <code>EXISTS</code>, <code>TOUCH</code>. <code>FLUSHDB</code>, <code>FLUSHALL</code>, <code>DBSIZE</code> go to every shard. <code>BITOP</code>, <code>SINTERCARD</code> and <code>JSON.MGET</code> route by their real keys.</li>
-        <li>Other cross-slot commands fail with <code>CROSSSLOT</code>. Only database 0 exists.</li>
-        <li><code>MOVED</code> refreshes the map and the command is retried once.</li>
-        <li>Pipelines that touch several shards are grouped per shard.</li>
+        <li>Other cross-slot commands, <code>RENAME</code> included, fail with <code>CROSSSLOT</code> before anything is sent. Only database 0 exists.</li>
+        <li><code>MOVED</code> points the slot at the named node and the command is sent there, up to three times. The map is reloaded only when the node is unknown or the same command is moved a second time.</li>
+        <li>Pipelines that touch several shards are grouped per shard. The split commands above are split inside a pipeline too, with the merged reply at their index.</li>
       </ul>
 <pre>await using var connection = await RuvioConnection.ConnectAsync("127.0.0.1", 17380);   // any shard port
 IRuvioClient db = await connection.GetDefaultDatabaseAsync();
@@ -402,7 +403,7 @@ int slot = RuvioClient.GetHashSlot("somekey");   // 11058, same as CLUSTER KEYSL
         </table>
       </div>
       <p>Not as good as hoped: the stepwise <code>BeginTransactionAsync</code> / <code>ExecuteTransactionAsync</code> form with keys in different slots does not fail fast with a CROSSSLOT-style message. It surfaced a server <code>MOVED</code> error after commands were already sent.</p>
-      <p>Keep a transaction to one slot (use a <code>{hash tag}</code>) and send it in one <code>ExecuteManyAsync</code> group. A <code>RENAME</code> across slots was accepted and worked.</p>
+      <p>Keep a transaction to one slot (use a <code>{hash tag}</code>) and send it in one <code>ExecuteManyAsync</code> group. This run predates the current rule: a <code>RENAME</code> across slots, emulated then, is now refused with <code>CROSSSLOT</code> before sending.</p>
       <p>Throughput, 16 callers, 50/50 GET/SET, 3 seconds after a 1 second warmup, Release build, loopback, 4-vCPU shared VM with the servers on the same machine: the two runs gave 50.7k (cluster) vs 41.1k (standalone) and 40.6k vs 99.8k ops/s, and a Debug-build run gave 10k vs 56k. The ordering flipped between runs, so no claim is made about cluster versus standalone speed. Not release evidence.</p>
 </section>
 
@@ -411,7 +412,7 @@ int slot = RuvioClient.GetHashSlot("somekey");   // 11058, same as CLUSTER KEYSL
       <ul>
         <li>A server <code>-ERR</code> becomes <code>RuvioException</code> with the server text. <code>IsServerReply</code> is true and the connection stays usable. A framing failure closes the connection. <code>ClosedBeforeReply</code> is true when no byte of the reply arrived.</li>
         <li>Nil maps to <code>null</code> (<code>string?</code>, <code>long?</code>, nullable results). Commands that "refuse" (<code>LIMIT</code>, <code>TAKE</code>, <code>LEASE</code>, <code>IncrementWithLimitAsync</code>) return <code>null</code>.</li>
-        <li>Reconnect is on by default: a dropped socket is reopened before the next command (up to <code>MaxReconnectAttempts</code>, exponential delay). The command that finds the drop fails, so a write is never applied twice. One exception: a single <code>GET</code>, <code>MGET</code>, <code>EXISTS</code>, <code>HGET</code>, <code>TTL</code> or <code>PTTL</code> that got no reply byte is sent once more. Pipelines are not retried. Pub/Sub channels are subscribed again. Events: <code>ConnectionLost</code>, <code>ConnectionRestored</code>, <code>ConnectionFailed</code>.</li>
+        <li>Reconnect is on by default: a dropped socket is reopened before the next command (up to <code>MaxReconnectAttempts</code>, exponential delay). The command that finds the drop fails, so a write is never applied twice. No command is sent again, reads included. Pub/Sub channels are subscribed again. Events: <code>ConnectionLost</code>, <code>ConnectionRestored</code>, <code>ConnectionFailed</code>.</li>
         <li>Cancellation: pass a <code>CancellationToken</code>. Before dispatch it skips the command. After dispatch it only stops your wait; the server may still have run it.</li>
       </ul>
 <pre>try { await db.IncrementAsync("greeting"); }
@@ -442,8 +443,8 @@ catch (OperationCanceledException) { }   // and the connection still answers PIN
 <h2 id="testing">Testing</h2>
 <pre>dotnet test clients/csharp/Ruvio.Client.Tests
 RUVIO_TEST_ADDR=127.0.0.1:6379 RUVIO_CLUSTER_ADDR=127.0.0.1:6379 dotnet test clients/csharp/Ruvio.Client.Tests</pre>
-      <p>Without a server: 198 tests, 193 pass and 5 live tests are skipped. With <code>RUVIO_TEST_ADDR</code> (standalone) and <code>RUVIO_CLUSTER_ADDR</code> (3 shards): 198 of 198 passed on this run. The suite covers the RESP codec and parser, the generated verbs, multiplexing and reconnect with scripted fake servers, cluster routing with scripted servers, the 287-command matrix mapping, and a live run of every command family and helper.</p>
-      <p>The live tests use databases 12 to 14, flush them and end with <code>FLUSHALL</code>: point them at a disposable server only. <code>Ruvio.Client.AspNetCore.Tests</code>: 11 tests passed.</p>
+      <p>Without a server the live tests are skipped. With <code>RUVIO_TEST_ADDR</code> (standalone) and <code>RUVIO_CLUSTER_ADDR</code> (3 shards) every test runs. The suite covers the RESP codec and parser, the generated verbs, multiplexing and reconnect with scripted fake servers, cluster routing with scripted servers, the 287-command matrix mapping, and a live run of every command family and helper.</p>
+      <p>The live tests use databases 12 to 14, flush them and end with <code>FLUSHALL</code>: point them at a disposable server only. <code>Ruvio.Client.AspNetCore</code> has its own test project, <code>Ruvio.Client.AspNetCore.Tests</code>.</p>
 </section>
 
 <section class="panel">

@@ -2,24 +2,13 @@
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <RootNamespace>Ruvio.Client</RootNamespace>
     <AssemblyName>Ruvio.Client</AssemblyName>
     <Version>0.3.2</Version>
-    <Authors>Salih Cantekin</Authors>
     <Description>RESP2 client for Ruvio. It does not send CLIENT SETINFO.</Description>
     <PackageId>Ruvio.Client</PackageId>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageIcon>ruvio-icon.png</PackageIcon>
     <PackageTags>ruvio;redis;resp</PackageTags>
-    <RepositoryUrl>https://github.com/salihcantekin/ruvio</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
-    <PackageProjectUrl>https://salihcantekin.github.io/ruvio/</PackageProjectUrl>
-    <PublishRepositoryUrl>true</PublishRepositoryUrl>
-    <IncludeSymbols>true</IncludeSymbols>
-    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>

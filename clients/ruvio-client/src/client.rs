@@ -70,6 +70,9 @@ impl Default for ClientOptions {
     }
 }
 
+/// The shared slot for an `on_connection_lost` / `on_connection_restored` callback.
+pub(crate) type NoticeHook = Arc<Mutex<Option<Arc<dyn Fn(ConnectionNotice) + Send + Sync>>>>;
+
 /// A command or subscriber socket dropped, or came back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionNotice {
@@ -93,8 +96,8 @@ pub struct Client {
     options: ClientOptions,
     dedicated_subscriber: bool,
     pubsub: Option<Box<Client>>,
-    on_lost: Arc<Mutex<Option<Arc<dyn Fn(ConnectionNotice) + Send + Sync>>>>,
-    on_restored: Arc<Mutex<Option<Arc<dyn Fn(ConnectionNotice) + Send + Sync>>>>,
+    on_lost: NoticeHook,
+    on_restored: NoticeHook,
     reconnect_delay: Option<Arc<dyn Fn(u32) -> Option<Duration> + Send + Sync>>,
     subscriptions: Vec<Vec<String>>,
     read_timeout: Option<Option<Duration>>,

@@ -1,13 +1,13 @@
-diff --git a/src/persistence/wal.rs b/src/persistence/wal.rs
-index 6dce97f..8393a4f 100644
---- a/src/persistence/wal.rs
-+++ b/src/persistence/wal.rs
-@@ -1364,7 +1364,7 @@ impl WalSink {
+diff --git a/src/persistence/wal/append.rs b/src/persistence/wal/append.rs
+index 1f9310e..16a73e8 100644
+--- a/src/persistence/wal/append.rs
++++ b/src/persistence/wal/append.rs
+@@ -412,7 +412,7 @@ impl WalSink {
                  "WAL fsync failed; writes are refused until restart"
              );
          }
 -        self.sync_failed = true;
 +        // Recovery retries the segment like after a failed write.
          self.failed = Some(error.clone());
-         Err(PersistenceError::Failed(error))
-     }
+         // Also when another descriptor's sync (the preallocation fill) failed and this is
+         // only where the error is picked up: the unsynced records' clients are refused.

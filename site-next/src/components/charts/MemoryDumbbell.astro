@@ -1,0 +1,71 @@
+---
+// Memory added by loading each data shape: a dot for Ruvio, a dot for Redis, joined by the saving.
+// Log axis, so the same percentage saving has the same length on a 1 MiB shape and a 20 MiB one.
+import type { Platform } from "../../data/bench";
+import { fmtMiB } from "../../data/bench";
+
+interface Props { platform: Platform }
+const { platform } = Astro.props;
+
+const rows = [...platform.memory].sort((a, b) => b.saved - a.saved);
+const mib = rows.flatMap((r) => [r.ruvioKib / 1024, r.redisKib / 1024]);
+const NICE = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
+const lo = [...NICE].reverse().find((v) => v <= Math.min(...mib)) ?? NICE[0];
+const hi = Math.max(...mib) * 1.15;
+const ticks = NICE.filter((v) => v >= lo && v <= hi);
+const pos = (v: number) => (Math.log(v / lo) / Math.log(hi / lo)) * 100;
+const at = (kib: number) => `${pos(kib / 1024).toFixed(2)}%`;
+const savedText = (s: number) => (s > 0.005 ? `−${Math.round(s * 100)}%` : s < -0.005 ? `+${Math.round(-s * 100)}%` : "same");
+---
+
+<div class="mem">
+  <div class="axis">
+    <span>Data shape</span>
+    <div class="ticks">{ticks.map((v, i) => <span style={`left:${pos(v).toFixed(2)}%`}>{v}{i === 0 ? " MiB" : ""}</span>)}</div>
+    <span class="r">Saved</span>
+  </div>
+  {rows.map((r, i) => {
+    const a = Math.min(r.ruvioKib, r.redisKib), b = Math.max(r.ruvioKib, r.redisKib);
+    return (
+      <div class="row" tabindex="0" data-tip={r.label} data-tip-sub={`${savedText(r.saved)} memory`} data-tip-sub2={`Ruvio ${fmtMiB(r.ruvioKib)} MiB · Redis ${fmtMiB(r.redisKib)} MiB`}>
+        <span class="lab">{r.label}</span>
+        <div class="track">
+          {ticks.map((v) => <i class="gl" style={`left:${pos(v).toFixed(2)}%`}></i>)}
+          <span class="span-bar" style={`left:${at(a)};width:calc(${at(b)} - ${at(a)});animation-delay:${i * 40}ms`}></span>
+          <span class="dot redis" style={`left:${at(r.redisKib)}`}></span>
+          <span class="dot ruvio" style={`left:${at(r.ruvioKib)}`}></span>
+        </div>
+        <span class={`saved ${r.saved > 0.005 ? "" : "flat"}`}>{savedText(r.saved)}</span>
+      </div>
+    );
+  })}
+</div>
+
+<style>
+  .mem { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px 26px 18px; }
+  .axis, .row { display: grid; grid-template-columns: minmax(0, 15rem) minmax(0, 1fr) 4.2rem; gap: 18px; align-items: center; }
+  .axis { font-family: var(--f-mono); font-size: 11.5px; color: var(--faint); padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+  .r { text-align: right; }
+  .ticks { position: relative; height: 16px; }
+  .ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  .ticks span:first-child { transform: none; }
+  .row { padding: 7px 0; border-radius: 4px; outline: none; }
+  .row.is-on .lab { color: var(--ink); }
+  .row.is-on .track { background-color: var(--surface-2); }
+  .lab { font-size: 14px; color: var(--mute); min-width: 0; }
+  .track { position: relative; height: 22px; border-radius: 3px; }
+  .gl { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); }
+  .span-bar { position: absolute; top: 50%; height: 4px; margin-top: -2px; border-radius: 2px; background: color-mix(in srgb, var(--c1) 40%, transparent); transform-origin: right; animation: grow 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+  .dot { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; }
+  .dot.ruvio { background: var(--c1); box-shadow: 0 0 0 3px var(--surface); }
+  .dot.redis { background: var(--redis); box-shadow: 0 0 0 3px var(--surface); }
+  .saved { font-family: var(--f-mono); font-size: 13.5px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .saved.flat { color: var(--mute); }
+  @keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+  @media (max-width: 600px) {
+    .mem { padding: 18px 16px 14px; }
+    .axis, .row { grid-template-columns: minmax(0, 1fr) 3.4rem; gap: 4px 12px; }
+    .axis > :first-child { display: none; }
+    .lab { grid-column: 1 / -1; font-size: 13px; }
+  }
+</style>

@@ -1,0 +1,65 @@
+---
+// How much acknowledged data each durability profile can lose, on a log time ruler.
+// Bounds follow docs/RECOVERY.md; the intervals are the defaults in ruvio.example.toml.
+import { durabilityDefaults } from "../../data/bench";
+
+const { syncIntervalMs, snapshotIntervalMs } = durabilityDefaults;
+const MIN = 1, MAX = 3_600_000; // 1 ms .. 1 h
+const pos = (ms: number) => (Math.log10(ms / MIN) / Math.log10(MAX / MIN)) * 100;
+const fmt = (ms: number) => (ms >= 60_000 ? `${ms / 60_000} min` : ms >= 1000 ? `${ms / 1000} s` : `${ms} ms`);
+const ticks = [1, 1000, 60_000, 3_600_000].map((ms) => ({ ms, at: pos(ms), label: ms === 1 ? "1 ms" : ms === 1000 ? "1 s" : ms === 60_000 ? "1 min" : "1 h" }));
+
+const rows = [
+  { id: "always", end: 0, window: "nothing acknowledged", lost: "Only a write that was never acknowledged (a torn final record).", note: "fdatasync before the reply" },
+  { id: "everysec", end: pos(syncIntervalMs), window: `up to ${fmt(syncIntervalMs)}`, lost: "Writes the kernel accepted but had not synced yet.", note: `sync_interval_ms = ${syncIntervalMs}` },
+  { id: "snapshot", end: pos(snapshotIntervalMs), window: `up to ${fmt(snapshotIntervalMs)}`, lost: "Writes after the last durable checkpoint.", note: `snapshot_interval_ms = ${snapshotIntervalMs}` },
+  { id: "memory", end: 100, window: "everything", lost: "All in-memory state when the process stops.", note: "no disk writes" },
+];
+---
+
+<div class="rec">
+  <div class="ruler" aria-hidden="true">
+    <span></span>
+    <div class="scale">{ticks.map((t) => <span style={`left:${t.at.toFixed(2)}%`}>{t.label}</span>)}</div>
+  </div>
+  {rows.map((r) => (
+    <div class="row">
+      <div class="name"><code>{r.id}</code><small>{r.note}</small></div>
+      <div class="track" style={`--end:${r.end.toFixed(2)}%`} role="img" aria-label={`${r.id}: may lose ${r.window}`}>
+        {r.end === 0 ? <i class="zero"></i> : <i class={`fill ${r.id === "memory" ? "open" : ""}`}></i>}
+        <b class={r.end > 70 ? "inside" : ""}>{r.window}</b>
+      </div>
+      <p class="lost">{r.lost}</p>
+    </div>
+  ))}
+</div>
+
+<style>
+  .rec { display: grid; gap: 4px; }
+  .ruler, .row { display: grid; grid-template-columns: 11rem minmax(0, 1fr); column-gap: 22px; }
+  .ruler .scale { position: relative; height: 18px; font-family: var(--f-mono); font-size: 11.5px; color: var(--faint); }
+  .ruler .scale span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  .ruler .scale span:first-child { transform: none; }
+  .ruler .scale span:last-child { transform: translateX(-100%); }
+  .row { padding: 14px 0; border-top: 1px solid var(--line); align-items: center; row-gap: 6px; }
+  .name { display: grid; gap: 2px; }
+  .name code { font-size: 15px; color: var(--ink); }
+  .name small { font-family: var(--f-mono); font-size: 11.5px; color: var(--faint); }
+  .track {
+    position: relative; height: 26px; border-radius: 4px;
+    background-image: linear-gradient(to right, var(--line) 1px, transparent 1px);
+    background-size: calc(100% / 6.556) 100%;
+    background-color: color-mix(in srgb, var(--surface) 60%, transparent);
+  }
+  .fill { position: absolute; inset: 6px auto 6px 0; width: var(--end); border-radius: 3px; background: var(--c1); }
+  .fill.open { background: linear-gradient(90deg, var(--c1) 85%, color-mix(in srgb, var(--c1) 0%, transparent)); }
+  .zero { position: absolute; left: 0; top: 3px; bottom: 3px; width: 3px; border-radius: 2px; background: var(--c2); }
+  .track b { position: absolute; top: 50%; left: calc(var(--end) + 10px); transform: translateY(-50%); font-size: 13px; font-weight: 600; white-space: nowrap; color: var(--ink); }
+  .track b.inside { left: auto; right: max(12px, calc(100% - var(--end) + 12px)); color: var(--accent-ink); }
+  .lost { grid-column: 2; margin: 0; font-size: 14px; color: var(--mute); }
+  @media (max-width: 700px) {
+    .ruler, .row { grid-template-columns: minmax(0, 1fr); }
+    .ruler > span { display: none; }
+    .lost { grid-column: 1; }
+  }
+</style>

@@ -1,0 +1,103 @@
+---
+// Starlight header override: the site logo and the same main menu as the marketing pages,
+// then Starlight's search, social icons and theme select. Below 50rem the menu, social icons
+// and theme select move into the sidebar popover (see DocsMobileMenuFooter.astro).
+import Search from "@astrojs/starlight/components/Search.astro";
+import SocialIcons from "@astrojs/starlight/components/SocialIcons.astro";
+import ThemeSelect from "@astrojs/starlight/components/ThemeSelect.astro";
+import Logo from "../Logo.astro";
+import { mainNav } from "../../config/site";
+import { currentNavHref } from "./nav";
+
+const current = currentNavHref(Astro.url.pathname);
+---
+
+<div class="docs-header">
+  <div class="brand">
+    <Logo size={28} />
+  </div>
+  <nav class="site-nav sl-hidden md:sl-flex print:hidden" aria-label="Main">
+    {mainNav.map((item) => (
+      <a href={item.href} aria-current={item.href === current ? "page" : undefined}>{item.label}</a>
+    ))}
+  </nav>
+  <div class="search print:hidden"><Search /></div>
+  <div class="right-group sl-hidden md:sl-flex print:hidden">
+    <div class="social-icons"><SocialIcons /></div>
+    <ThemeSelect />
+  </div>
+</div>
+
+<style>
+  .docs-header {
+    display: flex;
+    align-items: center;
+    gap: 1.75rem;
+    height: 100%;
+    max-width: 100%;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    flex: none;
+  }
+  .brand :global(a) {
+    text-decoration: none;
+  }
+  .site-nav {
+    gap: 1.5rem;
+    font-size: var(--sl-text-sm);
+    white-space: nowrap;
+  }
+  .site-nav a {
+    color: var(--sl-color-gray-3);
+    text-decoration: none;
+  }
+  .site-nav a:hover,
+  .site-nav a[aria-current="page"] {
+    color: var(--sl-color-white);
+  }
+  .site-nav a[aria-current="page"] {
+    font-weight: 600;
+  }
+  .search {
+    display: flex;
+    justify-content: flex-end;
+    margin-inline-start: auto;
+    min-width: 0;
+  }
+  .right-group {
+    align-items: center;
+    gap: 1rem;
+  }
+  .social-icons {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+  .social-icons::after {
+    content: "";
+    height: 1.5rem;
+    border-inline-end: 1px solid var(--sl-color-hairline-light);
+  }
+  @media (min-width: 50rem) {
+    .search {
+      flex: 0 1 16rem;
+    }
+  }
+  @media (min-width: 50rem) and (max-width: 68rem) {
+    .docs-header {
+      gap: 1.25rem;
+    }
+    .site-nav {
+      gap: 1rem;
+    }
+    .search {
+      flex: none;
+    }
+    .search :global(button > span),
+    .search :global(button > kbd) {
+      display: none !important;
+    }
+  }
+</style>

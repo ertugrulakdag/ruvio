@@ -56,17 +56,26 @@ unsafe impl GlobalAlloc for Count {
 #[global_allocator]
 static GLOBAL: Count = Count;
 
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut u64) -> i32;
     fn getpid() -> i32;
 }
 
+#[cfg(target_os = "macos")]
 #[inline(never)]
 fn instructions() -> u64 {
     let mut buf = [0u64; 64];
     // SAFETY: buffer is larger than rusage_info_v4.
     unsafe { proc_pid_rusage(getpid(), 4, buf.as_mut_ptr()) };
     buf[31]
+}
+
+// proc_pid_rusage is macOS only; elsewhere the example still builds (so `cargo test
+// --all-targets` links) and main exits before measuring.
+#[cfg(not(target_os = "macos"))]
+fn instructions() -> u64 {
+    0
 }
 
 fn warm() -> (KvShard, Vec<u8>) {
@@ -206,6 +215,12 @@ fn one(name: &str, shard: &mut KvShard, output: &mut Vec<u8>) {
 }
 
 fn main() {
+    if !cfg!(target_os = "macos") {
+        eprintln!(
+            "hot_count reads instruction counts through proc_pid_rusage and runs on macOS only"
+        );
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("loop") {
         const N: u64 = 200_000;
         for name in ["none", "get", "set", "incr", "hset", "zadd"] {
