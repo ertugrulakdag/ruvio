@@ -4,7 +4,7 @@
 use std::{
     io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
@@ -105,25 +105,25 @@ impl Server {
                 return false;
             }
             if TcpStream::connect(&self.address).is_ok() {
-                return self.answers_as_this_server();
+                // A reset or timeout means whoever answered went away mid-probe (a stranger
+                // that was stopped, for example); look again.
+                if let Ok(ours) = self.answers_as_this_server() {
+                    return ours;
+                }
             }
             assert!(Instant::now() < deadline, "server did not start");
             std::thread::sleep(Duration::from_millis(10));
         }
     }
 
-    /// `CONFIG GET dir` names this server's data directory; a server that refuses the
-    /// command (for example behind a password) is taken as this one.
-    fn answers_as_this_server(&self) -> bool {
-        let mut client = Client::connect(&self.address);
+    fn answers_as_this_server(&self) -> std::io::Result<bool> {
+        let password = self
+            .env
+            .iter()
+            .find(|(key, _)| key == "RUVIO_REQUIREPASS")
+            .map(|(_, password)| password.as_str());
 
-        if let Some((_, password)) = self.env.iter().find(|(key, _)| key == "RUVIO_REQUIREPASS") {
-            client.call(&["AUTH", password]);
-        }
-
-        let reply = client.call(&["CONFIG", "GET", "dir"]);
-
-        reply.starts_with("ERR:") || reply.contains(&*self.data_dir.to_string_lossy())
+        answers_as(&self.address, &self.data_dir, password)
     }
 
     /// Kills the process without a clean shutdown (like a crash).
@@ -144,6 +144,61 @@ impl Server {
             self.address
         );
     }
+}
+
+/// Whether the server on `address` uses `data_dir`, read from `CONFIG GET dir`; a server that
+/// refuses the command (for example behind a password) is taken as that one. Fails instead of
+/// panicking when the connection breaks, since the answering process may be a stranger that
+/// took the port after `free_port` released it.
+pub fn answers_as(address: &str, data_dir: &Path, password: Option<&str>) -> std::io::Result<bool> {
+    let stream = TcpStream::connect(address)?;
+
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+
+    let mut writer = stream.try_clone()?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    let mut call = |args: &[&str]| -> std::io::Result<()> {
+        let mut frame = format!("*{}\r\n", args.len());
+
+        for arg in args {
+            frame.push_str(&format!("${}\r\n{}\r\n", arg.len(), arg));
+        }
+        writer.write_all(frame.as_bytes())
+    };
+
+    if let Some(password) = password {
+        call(&["AUTH", password])?;
+        read_line(&mut reader, &mut line)?;
+    }
+
+    call(&["CONFIG", "GET", "dir"])?;
+    read_line(&mut reader, &mut line)?;
+
+    if line.starts_with('-') {
+        return Ok(true);
+    }
+
+    // `*2`, then `dir` and the path as two bulk strings (four lines).
+    let dir = data_dir.to_string_lossy();
+
+    for _ in 0..4 {
+        read_line(&mut reader, &mut line)?;
+        if line.contains(&*dir) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+/// Reads one line into `line`; a closed connection is an error, not an empty line.
+fn read_line(reader: &mut BufReader<TcpStream>, line: &mut String) -> std::io::Result<()> {
+    line.clear();
+    if reader.read_line(line)? == 0 {
+        return Err(std::io::ErrorKind::UnexpectedEof.into());
+    }
+    Ok(())
 }
 
 pub struct Client {

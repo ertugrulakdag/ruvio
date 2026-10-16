@@ -11,10 +11,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use common::{Client, free_port};
+use common::{Client, answers_as, free_port};
 
 struct Process {
     child: Child,
+    address: String,
 }
 
 impl Drop for Process {
@@ -24,9 +25,11 @@ impl Drop for Process {
     }
 }
 
-/// Starts `ruvio` with a copy of the repository config; `shell_prefix` runs before `exec`
-/// (for example a descriptor limit).
-fn start(dir: &Path, address: &str, env: &[(&str, &str)], shell_prefix: &str) -> Process {
+/// Starts `ruvio` on a free port with a copy of the repository config; `shell_prefix` runs
+/// before `exec` (for example a descriptor limit). `free_port` releases the port before the
+/// server binds it, so another test's server can take it in between (the kill test restarts
+/// its servers); then this one exits or a stranger answers, and a new port is tried.
+fn start(dir: &Path, env: &[(&str, &str)], shell_prefix: &str) -> Process {
     let config = dir.join("ruvio.toml");
 
     if !config.exists() {
@@ -37,34 +40,57 @@ fn start(dir: &Path, address: &str, env: &[(&str, &str)], shell_prefix: &str) ->
         .unwrap();
     }
 
-    let mut command = Command::new("sh");
+    for _ in 0..5 {
+        let address = format!("127.0.0.1:{}", free_port());
+        let mut command = Command::new("sh");
 
-    command
-        .arg("-c")
-        .arg(format!("{shell_prefix} exec \"$0\" \"$@\""))
-        .arg(env!("CARGO_BIN_EXE_ruvio"))
-        .arg("--config")
-        .arg(&config)
-        .args(["--address", address, "--data-dir"])
-        .arg(dir.join("data"))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    for (key, value) in env {
-        command.env(key, value);
-    }
-
-    let mut child = command.spawn().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(20);
-
-    while TcpStream::connect(address).is_err() {
-        if let Ok(Some(status)) = child.try_wait() {
-            panic!("server exited at startup: {status}");
+        command
+            .arg("-c")
+            .arg(format!("{shell_prefix} exec \"$0\" \"$@\""))
+            .arg(env!("CARGO_BIN_EXE_ruvio"))
+            .arg("--config")
+            .arg(&config)
+            .args(["--address", &address, "--data-dir"])
+            .arg(dir.join("data"))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        for (key, value) in env {
+            command.env(key, value);
         }
-        assert!(Instant::now() < deadline, "server did not start");
-        std::thread::sleep(Duration::from_millis(10));
+
+        let mut process = Process {
+            child: command.spawn().unwrap(),
+            address,
+        };
+
+        if process.wait_ready(&dir.join("data")) {
+            return process;
+        }
     }
 
-    Process { child }
+    panic!("server did not start on any of five ports");
+}
+
+impl Process {
+    /// True once this server answers on its address; false when it exited first or a
+    /// stranger answers there.
+    fn wait_ready(&mut self, data_dir: &Path) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(20);
+
+        loop {
+            if self.child.try_wait().unwrap().is_some() {
+                return false;
+            }
+            if TcpStream::connect(&self.address).is_ok() {
+                // A broken probe means whoever answered went away mid-probe; look again.
+                if let Ok(ours) = answers_as(&self.address, data_dir, None) {
+                    return ours;
+                }
+            }
+            assert!(Instant::now() < deadline, "server did not start");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
 
 fn ping(address: &str) -> bool {
@@ -88,8 +114,8 @@ fn ping(address: &str) -> bool {
 #[test]
 fn sighup_neither_stops_nor_disturbs_the_server() {
     let dir = tempfile::tempdir().unwrap();
-    let address = format!("127.0.0.1:{}", free_port());
-    let mut server = start(dir.path(), &address, &[], "");
+    let mut server = start(dir.path(), &[], "");
+    let address = server.address.clone();
     let mut client = Client::connect(&address);
 
     client.call(&["SET", "k", "v"]);
@@ -117,8 +143,8 @@ fn sighup_neither_stops_nor_disturbs_the_server() {
 #[test]
 fn descriptor_exhaustion_keeps_existing_clients_and_recovers_for_new_ones() {
     let dir = tempfile::tempdir().unwrap();
-    let address = format!("127.0.0.1:{}", free_port());
-    let mut server = start(dir.path(), &address, &[], "ulimit -n 64 &&");
+    let mut server = start(dir.path(), &[], "ulimit -n 64 &&");
+    let address = server.address.clone();
     let mut veteran = Client::connect(&address);
 
     veteran.call(&["SET", "k", "v"]);
@@ -204,7 +230,6 @@ fn write_until_killed(address: &str) -> u64 {
 #[test]
 fn a_kill_at_any_point_recovers_every_acknowledged_write_as_a_prefix() {
     let dir = tempfile::tempdir().unwrap();
-    let address = format!("127.0.0.1:{}", free_port());
     let env = [
         ("RUVIO_DURABILITY", "always"),
         ("RUVIO_SNAPSHOT_INTERVAL_MS", "200"),
@@ -212,9 +237,9 @@ fn a_kill_at_any_point_recovers_every_acknowledged_write_as_a_prefix() {
     let mut total_acknowledged = 0;
 
     for (trial, kill_after_ms) in [150u64, 420, 700].into_iter().enumerate() {
-        let mut server = start(dir.path(), &address, &env, "");
+        let mut server = start(dir.path(), &env, "");
         let writer = {
-            let address = address.clone();
+            let address = server.address.clone();
 
             std::thread::spawn(move || write_until_killed(&address))
         };
@@ -225,8 +250,8 @@ fn a_kill_at_any_point_recovers_every_acknowledged_write_as_a_prefix() {
         let acknowledged = writer.join().unwrap();
         drop(server);
 
-        let _server = start(dir.path(), &address, &env, "");
-        let mut client = Client::connect(&address);
+        let _server = start(dir.path(), &env, "");
+        let mut client = Client::connect(&_server.address);
         // Each trial starts writing from w0 again, so the keys present now come from the
         // trial with the most writes; all of this trial's acknowledged ones must be there.
         let mut present = 0u64;
