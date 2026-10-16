@@ -14,6 +14,8 @@ pub(crate) use table::{
     lookup as command_spec,
 };
 #[cfg(test)]
+mod client_spec;
+#[cfg(test)]
 pub(crate) mod consistency;
 #[cfg(test)]
 mod tests;

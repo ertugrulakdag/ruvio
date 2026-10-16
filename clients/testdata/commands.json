@@ -1,0 +1,3380 @@
+{
+  "description": "One entry per command: arity and flags as COMMAND INFO reports them, and where the keys are among the arguments (argument 0 is the command name). Generated from the server's command table by `RUVIO_WRITE_CLIENT_SPEC=1 cargo test --lib client_spec`; do not edit by hand.",
+  "key_rules": {
+    "none": "no keys",
+    "range": "arguments first..=last every step; a negative last counts from the end, -1 being the last argument",
+    "numkeys": "the argument at count_at is a key count and that many keys follow it; before, when not 0, is the position of one more key ahead of the count",
+    "keyword_half": "after the argument equal to keyword (any case), the first half of the remaining arguments",
+    "key_and_store": "the argument at first, and the argument after any of keywords (any case)"
+  },
+  "commands": [
+    {
+      "name": "ACL",
+      "arity": -2,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "APPEND",
+      "arity": 3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "AUTH",
+      "arity": -2,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "BF.ADD",
+      "arity": 3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "BF.CARD",
+      "arity": 2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "BF.EXISTS",
+      "arity": 3,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "BF.INFO",
+      "arity": -2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "BF.INSERT",
+      "arity": -4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "BF.MADD",
+      "arity": -3,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "BF.MEXISTS",
+      "arity": -3,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "BF.RESERVE",
+      "arity": -4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "BGSAVE",
+      "arity": -1,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "BITCOUNT",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "BITFIELD",
+      "arity": -2,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "BITFIELD_RO",
+      "arity": -2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "BITOP",
+      "arity": -4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 2,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "BITPOS",
+      "arity": -3,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "BLMOVE",
+      "arity": 6,
+      "flags": [
+        "write",
+        "denyoom",
+        "blocking"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 2,
+        "step": 1
+      }
+    },
+    {
+      "name": "BLMPOP",
+      "arity": -5,
+      "flags": [
+        "write",
+        "blocking"
+      ],
+      "keys": {
+        "kind": "numkeys",
+        "count_at": 2,
+        "before": 0
+      }
+    },
+    {
+      "name": "BLPOP",
+      "arity": -3,
+      "flags": [
+        "write",
+        "blocking"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -2,
+        "step": 1
+      }
+    },
+    {
+      "name": "BRPOP",
+      "arity": -3,
+      "flags": [
+        "write",
+        "blocking"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -2,
+        "step": 1
+      }
+    },
+    {
+      "name": "BZPOPMAX",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "blocking"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -2,
+        "step": 1
+      }
+    },
+    {
+      "name": "BZPOPMIN",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "blocking"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -2,
+        "step": 1
+      }
+    },
+    {
+      "name": "CHANGES",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "CLIENT",
+      "arity": -2,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "CLUSTER",
+      "arity": -2,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "COMMAND",
+      "arity": -1,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "CONFIG",
+      "arity": -2,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "COPY",
+      "arity": -3,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 2,
+        "step": 1
+      }
+    },
+    {
+      "name": "DBSIZE",
+      "arity": 1,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "DECR",
+      "arity": 2,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "DECRBY",
+      "arity": 3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "DEL",
+      "arity": -2,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "DELEX",
+      "arity": 4,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "DISCARD",
+      "arity": 1,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "DUMP",
+      "arity": 2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ECHO",
+      "arity": 2,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "EVAL",
+      "arity": -3,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "numkeys",
+        "count_at": 2,
+        "before": 0
+      }
+    },
+    {
+      "name": "EVALSHA",
+      "arity": -3,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "numkeys",
+        "count_at": 2,
+        "before": 0
+      }
+    },
+    {
+      "name": "EXEC",
+      "arity": 1,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "EXISTS",
+      "arity": -2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "EXPIRE",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "EXPIREAT",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "EXPIRETIME",
+      "arity": 2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "FCALL",
+      "arity": -3,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "numkeys",
+        "count_at": 2,
+        "before": 0
+      }
+    },
+    {
+      "name": "FILLGET",
+      "arity": 3,
+      "flags": [
+        "write",
+        "fast",
+        "blocking"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "FILLSET",
+      "arity": -5,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "FLUSHALL",
+      "arity": -1,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "FLUSHDB",
+      "arity": -1,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "FUNCTION",
+      "arity": -2,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "GEOADD",
+      "arity": -5,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "GEODIST",
+      "arity": -4,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "GEOHASH",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "GEOPOS",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "GEORADIUS",
+      "arity": -6,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "key_and_store",
+        "first": 1,
+        "keywords": [
+          "STORE",
+          "STOREDIST"
+        ]
+      }
+    },
+    {
+      "name": "GEORADIUSBYMEMBER",
+      "arity": -5,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "key_and_store",
+        "first": 1,
+        "keywords": [
+          "STORE",
+          "STOREDIST"
+        ]
+      }
+    },
+    {
+      "name": "GEOSEARCH",
+      "arity": -7,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "GEOSEARCHSTORE",
+      "arity": -8,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 2,
+        "step": 1
+      }
+    },
+    {
+      "name": "GET",
+      "arity": 2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "GETBIT",
+      "arity": 3,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "GETDEL",
+      "arity": 2,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "GETEX",
+      "arity": -2,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "GETRANGE",
+      "arity": 4,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "GETSET",
+      "arity": 3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HDEL",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HELLO",
+      "arity": -1,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "HEXISTS",
+      "arity": 3,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HEXPIRE",
+      "arity": -6,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HEXPIREAT",
+      "arity": -6,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HEXPIRETIME",
+      "arity": -5,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HGET",
+      "arity": 3,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HGETALL",
+      "arity": 2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HINCRBY",
+      "arity": 4,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HINCRBYFLOAT",
+      "arity": 4,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HKEYS",
+      "arity": 2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HLEN",
+      "arity": 2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HMGET",
+      "arity": -3,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HPERSIST",
+      "arity": -5,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HPEXPIRE",
+      "arity": -6,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HPEXPIREAT",
+      "arity": -6,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HPEXPIRETIME",
+      "arity": -5,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HPTTL",
+      "arity": -5,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HRANDFIELD",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HSCAN",
+      "arity": -3,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HSET",
+      "arity": -4,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HSETNX",
+      "arity": 4,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HSTRLEN",
+      "arity": 3,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HTTL",
+      "arity": -5,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "HVALS",
+      "arity": 2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "IDEM",
+      "arity": -4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "INCR",
+      "arity": 2,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "INCRBY",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "INCRBYFLOAT",
+      "arity": 3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "INFO",
+      "arity": -1,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "JMERGE",
+      "arity": 4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.ARRAPPEND",
+      "arity": -4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.ARRINDEX",
+      "arity": -4,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.ARRINSERT",
+      "arity": -5,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.ARRLEN",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.ARRPOP",
+      "arity": -2,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.ARRTRIM",
+      "arity": 5,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.CLEAR",
+      "arity": -2,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.DEL",
+      "arity": -2,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.FIND",
+      "arity": -4,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "JSON.FORGET",
+      "arity": -2,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.GET",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.INDEX",
+      "arity": -2,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "JSON.MERGE",
+      "arity": 4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.MGET",
+      "arity": -3,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -2,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.NUMINCRBY",
+      "arity": 4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.NUMMULTBY",
+      "arity": 4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.OBJKEYS",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.OBJLEN",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.SET",
+      "arity": 4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.STRAPPEND",
+      "arity": 4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.STRLEN",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.TOGGLE",
+      "arity": -2,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "JSON.TYPE",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "KEYS",
+      "arity": 2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "LATENCY",
+      "arity": -2,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "LEASE",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "LIMIT",
+      "arity": -4,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "LINDEX",
+      "arity": 3,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "LINSERT",
+      "arity": -5,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "LLEN",
+      "arity": 2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "LMOVE",
+      "arity": 5,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 2,
+        "step": 1
+      }
+    },
+    {
+      "name": "LMPOP",
+      "arity": -4,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "numkeys",
+        "count_at": 1,
+        "before": 0
+      }
+    },
+    {
+      "name": "LPOP",
+      "arity": -2,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "LPOS",
+      "arity": -3,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "LPUSH",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "LPUSHCAP",
+      "arity": -4,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "LPUSHX",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "LRANGE",
+      "arity": 4,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "LREM",
+      "arity": 4,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "LSET",
+      "arity": 4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "LTRIM",
+      "arity": 4,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "MEMORY",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 2,
+        "last": 2,
+        "step": 1
+      }
+    },
+    {
+      "name": "MGET",
+      "arity": -2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "MOVE",
+      "arity": 3,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "MSET",
+      "arity": -3,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 2
+      }
+    },
+    {
+      "name": "MSETNX",
+      "arity": -3,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 2
+      }
+    },
+    {
+      "name": "MULTI",
+      "arity": 1,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "OBJECT",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 2,
+        "last": 2,
+        "step": 1
+      }
+    },
+    {
+      "name": "ONCE",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "PERSIST",
+      "arity": 2,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "PEXPIRE",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "PEXPIREAT",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "PEXPIRETIME",
+      "arity": 2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "PFADD",
+      "arity": -2,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "PFCOUNT",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "PFMERGE",
+      "arity": -2,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "PING",
+      "arity": -1,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "PSETEX",
+      "arity": 4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "PSUBSCRIBE",
+      "arity": -2,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "PTTL",
+      "arity": 2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "PUBLISH",
+      "arity": 3,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "PUNSUBSCRIBE",
+      "arity": -1,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "RANDOMKEY",
+      "arity": 1,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "READONLY",
+      "arity": 1,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "READWRITE",
+      "arity": 1,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "RELEASE",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "RENAME",
+      "arity": 3,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 2,
+        "step": 1
+      }
+    },
+    {
+      "name": "RENAMENX",
+      "arity": 3,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 2,
+        "step": 1
+      }
+    },
+    {
+      "name": "RESTORE",
+      "arity": -4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "RPOP",
+      "arity": -2,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "RPOPLPUSH",
+      "arity": 3,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 2,
+        "step": 1
+      }
+    },
+    {
+      "name": "RPUSH",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "RPUSHCAP",
+      "arity": -4,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "RPUSHX",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "RUVIO",
+      "arity": -1,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "SADD",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SAVE",
+      "arity": 1,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "SCAN",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "SCARD",
+      "arity": 2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SCRIPT",
+      "arity": -2,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "SDIFF",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SDIFFSTORE",
+      "arity": -3,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SELECT",
+      "arity": 2,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "SEMAPHORE",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SET",
+      "arity": -3,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SETBIT",
+      "arity": 4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SETEX",
+      "arity": 4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SETNX",
+      "arity": 3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SETRANGE",
+      "arity": 4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SETV",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SINTER",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SINTERCARD",
+      "arity": -3,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "numkeys",
+        "count_at": 1,
+        "before": 0
+      }
+    },
+    {
+      "name": "SINTERSTORE",
+      "arity": -3,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SISMEMBER",
+      "arity": 3,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SLOWLOG",
+      "arity": -2,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "SMEMBERS",
+      "arity": 2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SMISMEMBER",
+      "arity": -3,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SMOVE",
+      "arity": 4,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 2,
+        "step": 1
+      }
+    },
+    {
+      "name": "SPOP",
+      "arity": -2,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SPUBLISH",
+      "arity": 3,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "SRANDMEMBER",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SREM",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SSCAN",
+      "arity": -3,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SSUBSCRIBE",
+      "arity": -2,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "STRLEN",
+      "arity": 2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SUBSCRIBE",
+      "arity": -2,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "SUBSTR",
+      "arity": 4,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SUNION",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SUNIONSTORE",
+      "arity": -3,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "SUNSUBSCRIBE",
+      "arity": -1,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "SWAPDB",
+      "arity": 3,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "TAKE",
+      "arity": -2,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "TOUCH",
+      "arity": -2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "TTL",
+      "arity": 2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "TYPE",
+      "arity": 2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "UNLINK",
+      "arity": -2,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "UNSUBSCRIBE",
+      "arity": -1,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "UNWATCH",
+      "arity": 1,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "WAIT",
+      "arity": 3,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "WATCH",
+      "arity": -2,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": -1,
+        "step": 1
+      }
+    },
+    {
+      "name": "XACK",
+      "arity": -4,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "XADD",
+      "arity": -5,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "XAUTOCLAIM",
+      "arity": -6,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "XCLAIM",
+      "arity": -6,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "XDEL",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "XGROUP",
+      "arity": -2,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 2,
+        "last": 2,
+        "step": 1
+      }
+    },
+    {
+      "name": "XINFO",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 2,
+        "last": 2,
+        "step": 1
+      }
+    },
+    {
+      "name": "XLEN",
+      "arity": 2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "XPENDING",
+      "arity": -3,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "XRANGE",
+      "arity": -4,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "XREAD",
+      "arity": -4,
+      "flags": [
+        "readonly",
+        "blocking"
+      ],
+      "keys": {
+        "kind": "keyword_half",
+        "keyword": "STREAMS"
+      }
+    },
+    {
+      "name": "XREADGROUP",
+      "arity": -7,
+      "flags": [
+        "write",
+        "denyoom",
+        "blocking"
+      ],
+      "keys": {
+        "kind": "keyword_half",
+        "keyword": "STREAMS"
+      }
+    },
+    {
+      "name": "XREVRANGE",
+      "arity": -4,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "XSETID",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "XTRIM",
+      "arity": -4,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZADD",
+      "arity": -4,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZCARD",
+      "arity": 2,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZCOUNT",
+      "arity": 4,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZDIFF",
+      "arity": -3,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "numkeys",
+        "count_at": 1,
+        "before": 0
+      }
+    },
+    {
+      "name": "ZDIFFSTORE",
+      "arity": -4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "numkeys",
+        "count_at": 2,
+        "before": 1
+      }
+    },
+    {
+      "name": "ZINCRBY",
+      "arity": 4,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZINTER",
+      "arity": -3,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "numkeys",
+        "count_at": 1,
+        "before": 0
+      }
+    },
+    {
+      "name": "ZINTERSTORE",
+      "arity": -4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "numkeys",
+        "count_at": 2,
+        "before": 1
+      }
+    },
+    {
+      "name": "ZLEXCOUNT",
+      "arity": 4,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZMSCORE",
+      "arity": -3,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZPOPMAX",
+      "arity": -2,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZPOPMIN",
+      "arity": -2,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZRANDMEMBER",
+      "arity": -2,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZRANGE",
+      "arity": -4,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZRANGEBYLEX",
+      "arity": -4,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZRANGEBYSCORE",
+      "arity": -4,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZRANK",
+      "arity": -3,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZREM",
+      "arity": -3,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZREMRANGEBYLEX",
+      "arity": 4,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZREMRANGEBYRANK",
+      "arity": 4,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZREMRANGEBYSCORE",
+      "arity": 4,
+      "flags": [
+        "write"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZREVRANGE",
+      "arity": -4,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZREVRANGEBYLEX",
+      "arity": -4,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZREVRANK",
+      "arity": -3,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZSCAN",
+      "arity": -3,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZSCORE",
+      "arity": 3,
+      "flags": [
+        "readonly",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
+      "name": "ZUNION",
+      "arity": -3,
+      "flags": [
+        "readonly"
+      ],
+      "keys": {
+        "kind": "numkeys",
+        "count_at": 1,
+        "before": 0
+      }
+    },
+    {
+      "name": "ZUNIONSTORE",
+      "arity": -4,
+      "flags": [
+        "write",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "numkeys",
+        "count_at": 2,
+        "before": 1
+      }
+    }
+  ]
+}

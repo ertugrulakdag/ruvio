@@ -62,7 +62,8 @@ The compiler or a test catches a missed step where the last column says so; the 
 | 8. Durability group (optional speed) | `src/runtime/evented/wal_group.rs` | not caught: an unlisted command takes the slower, correct path |
 | 9. Tests | `src/engine/tests/<family>.rs` | |
 | 10. Matrix and docs | `docs/compatibility-matrix.json`, `docs/COMPATIBILITY.md`, `docs/DATA_TYPES.md` | `scripts/check_compatibility_matrix.py` |
-| 11. Clients | see "Adding a client method" | each client's coverage test |
+| 11. Client command spec: arity, flags and where the keys are, for the clients' routing | `RULES` in `src/protocol/client_spec.rs` when a first/last/step range cannot place the keys; then `RUVIO_WRITE_CLIENT_SPEC=1 cargo test --lib client_spec` rewrites `clients/testdata/commands.json` and `key_vectors.json` | `client_command_spec_matches_the_server` (`scripts/check.sh`) |
+| 12. Clients | see "Adding a client method" | each client's coverage test |
 
 A write that needs a new WAL record also touches:
 

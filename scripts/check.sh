@@ -54,6 +54,7 @@ standards=(
 	info_fields_and_the_observability_table_agree
 	every_value_kind_survives_log_replay_checkpoint_and_dump
 	version_one_wal
+	client_command_spec_matches_the_server
 )
 # A filter that matches nothing passes silently, so first make sure every filter still
 # matches at least one test name (a filter may name a prefix shared by several tests).
