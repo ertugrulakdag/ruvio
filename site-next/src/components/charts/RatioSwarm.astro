@@ -1,0 +1,67 @@
+---
+// Every measured command as one dot on a shared log2 ratio axis, one lane per machine.
+// Dots that would overlap are stacked outward from the lane's centre line (a beeswarm).
+import type { Platform } from "../../data/bench";
+import { fmtX, fmtOps } from "../../data/bench";
+import { clamp } from "../../lib/geom";
+
+interface Props { platforms: Platform[] }
+const { platforms } = Astro.props;
+
+const W = 1000, L = 150, R = 24, PAD = 26, TOP = 10, AXIS = 34, D = 11;
+const LO = 0.6, HI = 2.6;
+const sx = (v: number) => L + (Math.log2(clamp(v, LO, HI) / LO) / Math.log2(HI / LO)) * (W - L - R);
+const TICKS = [0.7, 0.8, 1, 1.25, 1.5, 2, 2.5];
+
+function swarm(xs: number[]) {
+  const placed: { x: number; y: number }[] = [];
+  return xs.map((x) => {
+    for (let k = 0; ; k++) {
+      const y = k === 0 ? 0 : (k % 2 ? 1 : -1) * Math.ceil(k / 2) * (D * 0.9);
+      if (placed.every((p) => (p.x - x) ** 2 + (p.y - y) ** 2 >= D * D)) { placed.push({ x, y }); return y; }
+    }
+  });
+}
+let y0 = TOP;
+const lanes = platforms.map((p) => {
+  const rows = [...p.rows].sort((a, b) => a.ratio - b.ratio);
+  const ys = swarm(rows.map((r) => sx(r.ratio)));
+  const half = Math.max(48, Math.max(...ys.map(Math.abs)) + D / 2 + PAD);
+  const top = y0, cy = y0 + half;
+  y0 += half * 2;
+  return { p, top, cy, dots: rows.map((r, j) => ({ r, x: sx(r.ratio), y: cy + ys[j] })) };
+});
+const H = y0 + AXIS;
+---
+
+<svg class="swarm" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Distribution of Ruvio-to-Redis throughput ratios per machine">
+  {TICKS.map((v) => <line class={`grid ${v === 1 ? "one" : ""}`} x1={sx(v)} x2={sx(v)} y1={TOP} y2={H - AXIS + 6} />)}
+  {TICKS.map((v) => <text class="tick" x={sx(v)} y={H - 8} text-anchor="middle">{v === 1 ? "Redis 1×" : `${v}×`}</text>)}
+  {lanes.map((l, i) => (
+    <g>
+      {i > 0 && <line class="sep" x1={0} x2={W} y1={l.top} y2={l.top} />}
+      <text class="lane" x={0} y={l.cy - 4}>{l.p.short}</text>
+      <text class="lane-sub" x={0} y={l.cy + 16}>median {fmtX([...l.p.rows].map((r) => r.ratio).sort((a, b) => a - b)[Math.floor(l.p.rows.length / 2)])}</text>
+      {l.dots.map((d) => (
+        <circle class={`dot ${d.r.ratio >= 1 ? "up" : d.r.ratio >= 0.97 ? "par" : "down"}`} cx={d.x.toFixed(1)} cy={d.y.toFixed(1)} r={D / 2 - 0.5} tabindex="0"
+          data-tip={d.r.label} data-tip-sub={`${fmtX(d.r.ratio)} Redis on ${l.p.short}`} data-tip-sub2={`Ruvio ${fmtOps(d.r.ruvio)} · Redis ${fmtOps(d.r.redis)} ops/s`} />
+      ))}
+    </g>
+  ))}
+</svg>
+
+<style>
+  .swarm { display: block; width: 100%; height: auto; overflow: visible; }
+  .grid { stroke: var(--line); stroke-width: 1; }
+  .grid.one { stroke: var(--ink); stroke-opacity: 0.6; stroke-dasharray: 4 4; stroke-width: 1.25; }
+  .sep { stroke: var(--line); }
+  .tick { font-family: var(--f-mono); font-size: 13px; fill: var(--faint); }
+  .lane { font-size: 16px; font-weight: 600; fill: var(--ink); }
+  .lane-sub { font-family: var(--f-mono); font-size: 13px; fill: var(--mute); }
+  .dot { stroke: var(--bg); stroke-width: 1.5; outline: none; transition: opacity 0.15s ease; }
+  .dot.up { fill: var(--c1); }
+  .dot.par { fill: var(--c2); }
+  .dot.down { fill: var(--redis); stroke: var(--c2); stroke-width: 1; }
+  .dot.is-on { stroke: var(--ink); stroke-width: 2; }
+  :global([data-chart].has-focus) .dot:not(.is-on) { opacity: 0.3; }
+</style>

@@ -121,3 +121,11 @@ a.card:hover { border-color: color-mix(in srgb, var(--ink) 30%, var(--line)); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* KPI strip: a row of large numbers with one-line captions. */
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.kpis > div { background: var(--surface); padding: 22px; display: grid; gap: 6px; align-content: start; }
+.kpis b { font-size: clamp(30px, 3.4vw, 42px); font-weight: 600; letter-spacing: -0.03em; line-height: 1; }
+.kpis em { font-style: normal; color: var(--mute); }
+.kpis span { font-size: 14px; color: var(--mute); line-height: 1.4; }
+@media (max-width: 900px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

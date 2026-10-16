@@ -6,7 +6,7 @@ import path from "node:path";
 const repo = path.resolve(process.cwd(), "..");
 const readJson = (rel: string) => JSON.parse(fs.readFileSync(path.join(repo, rel), "utf8"));
 
-export type Row = { label: string; ruvio: number; redis: number; ratio: number };
+export type Row = { label: string; ruvio: number; redis: number; ratio: number; ratioLo: number; ratioHi: number; rounds: number };
 export type MemRow = { label: string; ruvioKib: number; redisKib: number; saved: number };
 export type Platform = {
   id: "mac" | "linux";
@@ -15,6 +15,11 @@ export type Platform = {
   file: string;
   date: string;
   machine: string;
+  durability: string;
+  shards: number;
+  rounds: number;
+  pinning: string;
+  commit: string;
   clients: number;
   pipeline: number;
   redisVersion: string;
@@ -31,7 +36,14 @@ const cleanLabel = (s: string) => s.replace(/\s*\(baseline, for scale\)/, "");
 
 function load(id: Platform["id"], file: string, name: string, short: string): Platform {
   const d = readJson(file);
-  const rows: Row[] = d.rows.map((r: any) => ({ label: cleanLabel(r.label), ruvio: r.ruvio, redis: r.redis, ratio: r.ruvio / r.redis }));
+  // ratioLo/ratioHi: the slowest Ruvio round against the fastest Redis round, and the reverse.
+  const rows: Row[] = d.rows.map((r: any) => {
+    const sr: number[] = r.samples?.ruvio ?? [r.ruvio], sx: number[] = r.samples?.redis ?? [r.redis];
+    return {
+      label: cleanLabel(r.label), ruvio: r.ruvio, redis: r.redis, ratio: r.ruvio / r.redis,
+      ratioLo: Math.min(...sr) / Math.max(...sx), ratioHi: Math.max(...sr) / Math.min(...sx), rounds: sr.length,
+    };
+  });
   const memory: MemRow[] = d.memory.map((m: any) => ({
     label: m.label,
     ruvioKib: m.ruvio.delta_kib,
@@ -45,6 +57,8 @@ function load(id: Platform["id"], file: string, name: string, short: string): Pl
   return {
     id, name, short, file, date: d.date,
     machine: d.environment?.machine ?? "",
+    durability: d.environment?.durability ?? "", shards: d.environment?.shards ?? 1, rounds: d.config.rounds,
+    pinning: d.environment?.pinning ?? "", commit: d.build?.commit ?? d.environment?.commit ?? "",
     clients: d.config.clients, pipeline: d.config.pipeline, redisVersion,
     rows, memory, geomean,
     atPar: rows.filter((r) => r.ratio >= 0.97).length,
@@ -59,6 +73,20 @@ export const platforms: Platform[] = [
   load("linux", "site/data/linux-hostinger-2026-10-14.json", "AMD EPYC, 2 vCPU", "AMD EPYC (x86)"),
 ];
 export const primary = platforms[0];
+
+// Throughput and p99 under load on one Azure VM: client counts, pipelining, fsync and shard counts.
+const azure = readJson("site/data/x86-azure-2026-10-11.json");
+export type LoadRow = { label: string; shards: number; ruvio: { rps: number; p99: number }; redis: { rps: number; p99: number } };
+export const loadRun = {
+  file: "site/data/x86-azure-2026-10-11.json",
+  date: azure.date as string,
+  machine: `${azure.host.cpu}, ${azure.host.vcpus} vCPU (Azure VM)`,
+  commit: azure.build.ruvio_commit as string,
+  rows: azure.concurrency.map((c: any) => ({
+    label: c.label, shards: c.ruvio_shards,
+    ruvio: { rps: c.ruvio.rps, p99: c.ruvio.p99_ms }, redis: { rps: c.redis.rps, p99: c.redis.p99_ms },
+  })) as LoadRow[],
+};
 
 // Command list checked by CI.
 const matrix = readJson("docs/compatibility-matrix.json");

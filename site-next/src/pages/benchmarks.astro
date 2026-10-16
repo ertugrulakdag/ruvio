@@ -1,0 +1,239 @@
+---
+import Page from "../layouts/Page.astro";
+import PlatformSwitch from "../components/PlatformSwitch.astro";
+import QuadrantScatter from "../components/charts/QuadrantScatter.astro";
+import RatioSwarm from "../components/charts/RatioSwarm.astro";
+import LoadArrows from "../components/charts/LoadArrows.astro";
+import MemoryDumbbell from "../components/charts/MemoryDumbbell.astro";
+import { platforms, loadRun, fmtOps, fmtX, fmtMiB, pct } from "../data/bench";
+import { site } from "../config/site";
+import { clamp } from "../lib/geom";
+
+const [mac, linux] = platforms;
+const blob = (f: string) => `${site.github}/blob/main/${f}`;
+
+// Ratio bar in the table: log2 scale from 0.5× to 2.5×, centred on Redis = 1×.
+const LO = 0.5, HI = 2.5;
+const at = (v: number) => (Math.log2(clamp(v, LO, HI) / LO) / Math.log2(HI / LO)) * 100;
+const one = at(1);
+---
+
+<Page title="Benchmarks" description="Ruvio against Redis 8.10.2 on the same machines: throughput for 60 commands, memory for 12 data shapes, and p99 latency under load. Every number comes from a record in the repository.">
+  <section class="intro">
+    <div class="wrap">
+      <p class="kicker">Benchmarks</p>
+      <h1>Measured against Redis, on the same machine, from the records in the repository</h1>
+      <p class="lede">Each run starts both servers on one host, drives them with the same load generator in alternating rounds, and stores the raw numbers in a JSON file next to the site. The charts below are drawn from those files when the site is built.</p>
+      <div class="kpis two">
+        {platforms.map((p) => (
+          <div>
+            <span class="plat">{p.name}</span>
+            <b>{fmtX(p.geomean)}</b>
+            <span>geometric mean over {p.rows.length} commands; {p.atPar} at 0.97× or faster; memory −{pct(p.memSaved)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="section band" id="machines">
+    <div class="wrap">
+      <div class="head-row">
+        <div>
+          <p class="kicker">Two machines</p>
+          <h2 class="title">Where each command lands on both machines</h2>
+          <p class="lede">Each dot is one command: its ratio to Redis on {mac.name} across, on {linux.name} up. The shaded corner holds the commands that are faster than Redis on both. Dots near the faint diagonal behave the same on ARM and x86.</p>
+        </div>
+      </div>
+      <div class="quad-grid">
+        <div class="chart" data-chart><QuadrantScatter x={mac} y={linux} /></div>
+        <div class="notes">
+          <h3>Reading it</h3>
+          <p>The two machines are very different: a 12-core laptop chip with no pinning, and a 2 vCPU cloud guest with the server and the load generator pinned to separate CPUs. A command that stays top-right on both is fast because of how Ruvio runs it, not because of the hardware.</p>
+          <div class="legend">
+            <span><i style="background:var(--c1)"></i>faster on both</span>
+            <span><i style="background:var(--c2)"></i>faster on one</span>
+            <span><i style="background:var(--redis)"></i>behind on both</span>
+          </div>
+          <p class="source">Sources: <a href={blob(mac.file)}>{mac.file}</a>, <a href={blob(linux.file)}>{linux.file}</a></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="spread">
+    <div class="wrap">
+      <div class="head-row">
+        <div>
+          <p class="kicker">Distribution</p>
+          <h2 class="title">All {mac.rows.length} commands on one axis</h2>
+          <p class="lede">The same results as a swarm: one dot per command, stacked where they crowd. Most of the mass sits right of the dashed Redis line on both machines.</p>
+        </div>
+      </div>
+      <div class="scroll-x"><div class="chart swarm-box" data-chart><RatioSwarm platforms={platforms} /></div></div>
+    </div>
+  </section>
+
+  <section class="section band" id="load">
+    <div class="wrap">
+      <div class="head-row">
+        <div>
+          <p class="kicker">Under load</p>
+          <h2 class="title">Throughput and tail latency together</h2>
+          <p class="lede">Each line joins Redis (hollow) to Ruvio (filled). In the first column further right is more requests per second; in the second, further left is a lower p99. Rows cover client counts, pipelining, fsync on every write, and more Ruvio shards.</p>
+        </div>
+        <div class="legend"><span><i class="o"></i>Redis</span><span><i style="background:var(--c1)"></i>Ruvio</span></div>
+      </div>
+      <LoadArrows />
+      <p class="source">Source: <a href={blob(loadRun.file)}>{loadRun.file}</a> · {loadRun.machine} · {loadRun.date}, commit {loadRun.commit} · server and load generator share the VM, so compare the two servers with each other, not with other hosts. Un-pipelined rows are limited by the load generator.</p>
+    </div>
+  </section>
+
+  <div data-platform-scope>
+    <section class="section" id="results">
+      <div class="wrap">
+        <div class="head-row">
+          <div>
+            <p class="kicker">Every row</p>
+            <h2 class="title">Full results</h2>
+            <p class="lede">Median requests per second over the rounds, Ruvio and Redis side by side. The whisker spans the worst and best pairing of rounds, so a wide whisker means a noisy row.</p>
+          </div>
+          <PlatformSwitch />
+        </div>
+        {platforms.map((p, i) => (
+          <div data-platform={p.id} hidden={i !== 0}>
+            <div class="table-wrap">
+              <table class="res" data-chart>
+                <thead>
+                  <tr><th>Command</th><th class="num">Ruvio ops/s</th><th class="num">Redis ops/s</th><th class="bar-h"><div class="bt"><span>0.5×</span><span style={`left:${one}%`}>1×</span><span>2.5×</span></div></th><th class="num">Ratio</th></tr>
+                </thead>
+                <tbody>
+                  {[...p.rows].sort((a, b) => b.ratio - a.ratio).map((r) => {
+                    const k = r.ratio >= 1 ? "up" : r.ratio >= 0.97 ? "par" : "down";
+                    const x = at(r.ratio);
+                    return (
+                      <tr tabindex="0" data-tip={r.label} data-tip-sub={`${fmtX(r.ratio)} Redis`} data-tip-sub2={`rounds: ${fmtX(r.ratioLo)} to ${fmtX(r.ratioHi)}`}>
+                        <td>{r.label}</td>
+                        <td class="num">{fmtOps(r.ruvio)}</td>
+                        <td class="num dim">{fmtOps(r.redis)}</td>
+                        <td class="bar"><div class="bt">
+                          <span class="ax" style={`left:${one}%`}></span>
+                          <span class="wh" style={`left:${at(r.ratioLo)}%;width:${at(r.ratioHi) - at(r.ratioLo)}%`}></span>
+                          <span class={`b ${k}`} style={`left:${Math.min(x, one)}%;width:${Math.abs(x - one)}%`}></span>
+                        </div></td>
+                        <td class={`num x ${k}`}>{fmtX(r.ratio)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p class="source">Source: <a href={blob(p.file)}>{p.file}</a> · {p.date}, commit {p.commit}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <section class="section band" id="memory">
+      <div class="wrap">
+        <div class="head-row">
+          <div>
+            <p class="kicker">Memory</p>
+            <h2 class="title">Memory added per data shape</h2>
+            <p class="lede">Resident memory after loading minus resident memory at idle, for each server. Left is less, on a log axis.</p>
+          </div>
+          <div class="legend"><span><i style="background:var(--c1)"></i>Ruvio</span><span><i style="background:var(--redis)"></i>Redis</span></div>
+        </div>
+        {platforms.map((p, i) => (
+          <div data-platform={p.id} hidden={i !== 0}>
+            <div class="chart" data-chart><MemoryDumbbell platform={p} /></div>
+            <p class="source">{p.memLower} of {p.memory.length} shapes below Redis · total {fmtMiB(p.memory.reduce((a, m) => a + m.ruvioKib, 0))} MiB against {fmtMiB(p.memory.reduce((a, m) => a + m.redisKib, 0))} MiB · <a href={blob(p.file)}>{p.file}</a></p>
+          </div>
+        ))}
+      </div>
+    </section>
+  </div>
+
+  <section class="section" id="method">
+    <div class="wrap">
+      <div class="head-row">
+        <div>
+          <p class="kicker">Method</p>
+          <h2 class="title">How the numbers are made</h2>
+        </div>
+      </div>
+      <div class="method">
+        {platforms.map((p) => (
+          <dl>
+            <dt class="h">{p.name}</dt>
+            <dt>Machine</dt><dd>{p.machine}</dd>
+            <dt>Redis</dt><dd>{p.redisVersion}</dd>
+            <dt>Load</dt><dd>{p.clients} clients, pipeline {p.pipeline}, {p.rounds} alternating rounds, median</dd>
+            <dt>Ruvio</dt><dd>{p.durability} profile, {p.shards} shard, release build, commit {p.commit}</dd>
+            <dt>Pinning</dt><dd>{p.pinning.replace(/\s*\(.*\)$/, "")}</dd>
+          </dl>
+        ))}
+        <div class="how">
+          <p>The rows come from <code>scripts/redis_compare_features.py</code>, which runs <code>redis-benchmark</code> against each server in turn. Absolute numbers describe one host; the ratio between the two servers is the result. Shared cloud machines vary from run to run, so a row within a few percent of 1× is a tie.</p>
+          <p><a class="btn ghost small" href="/docs/benchmarking/">Benchmarking guide</a> <a class="btn ghost small" href={`${site.github}/tree/main/site/data`}>All records</a></p>
+        </div>
+      </div>
+    </div>
+  </section>
+</Page>
+
+<script>
+  import "../scripts/charts.ts";
+</script>
+
+<style>
+  .intro { padding-block: 72px 56px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, var(--sky-0), var(--sky-1)); }
+  .intro h1 { font-size: clamp(32px, 4vw, 48px); line-height: 1.1; margin: 0 0 18px; max-width: 24ch; }
+  .intro .lede { margin-bottom: 36px; }
+  .kpis.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .plat { font-weight: 600; color: var(--ink) !important; }
+  .chart { position: relative; }
+  .scroll-x { overflow-x: auto; }
+  .swarm-box { min-width: 640px; }
+  .quad-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr); gap: 48px; align-items: center; }
+  .notes h3 { margin: 0 0 10px; font-size: 15px; }
+  .notes p { color: var(--mute); font-size: 15px; }
+  .legend i.o { background: var(--surface); border: 2px solid var(--c2); border-radius: 50%; }
+
+  .res { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .res th { text-align: left; font-family: var(--f-mono); font-size: 11.5px; font-weight: 500; color: var(--faint); padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .res td { padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  .res tr { outline: none; }
+  .res tbody tr.is-on td { background: var(--surface-2); }
+  .res .num { text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .res .dim { color: var(--mute); }
+  .res .x.down, .res .x.par { color: var(--mute); }
+  .bar-h { width: 34%; min-width: 220px; }
+  .bt { position: relative; height: 18px; }
+  .bar-h .bt span { position: absolute; top: 2px; transform: translateX(-50%); }
+  .bar-h .bt span:first-child { left: 0; transform: none; }
+  .bar-h .bt span:last-child { right: 0; transform: none; }
+  .bar .ax { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ink); opacity: 0.5; }
+  .bar .wh { position: absolute; top: 50%; height: 1px; background: var(--faint); }
+  .bar .b { position: absolute; top: 50%; height: 10px; margin-top: -5px; border-radius: 2px; min-width: 2px; }
+  .b.up { background: var(--c1); }
+  .b.par { background: var(--c2); }
+  .b.down { background: var(--redis); }
+
+  .method { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; }
+  .method dl { margin: 0; display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: 8px 14px; font-size: 14px; align-content: start; }
+  .method dt { color: var(--faint); }
+  .method dt.h { grid-column: 1 / -1; color: var(--ink); font-weight: 600; font-size: 15px; }
+  .method dd { margin: 0; color: var(--mute); overflow-wrap: anywhere; }
+  .how p { color: var(--mute); font-size: 14.5px; }
+  .how .btn { margin: 0 8px 8px 0; }
+
+  @media (max-width: 900px) {
+    .quad-grid, .method { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 640px) {
+    .kpis.two { grid-template-columns: minmax(0, 1fr); }
+    .res th:nth-child(2), .res td:nth-child(2), .res th:nth-child(3), .res td:nth-child(3) { display: none; }
+    .bar-h { min-width: 120px; }
+  }
+</style>
