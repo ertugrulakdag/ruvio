@@ -2,42 +2,45 @@ using System.Diagnostics;
 using Ruvio.Client;
 
 /// <summary>
-/// CPU and allocation per request: the plain single-connection client against the cluster
-/// client, per operation and pipeline depth. Run with DOTNET_ThreadPool_UnfairSemaphoreSpinLimit=0,
-/// or thread-pool spinning dominates the CPU numbers.
+/// CPU and allocation per request: the plain single-connection client, the cluster client with
+/// keys spread over the nodes, and the cluster client with every key in one hash tag (the routing
+/// code's own cost). Plain depth 4 is the per-socket batch a depth-16 pipeline leaves on each of
+/// four nodes. About a minute with the defaults. Run with
+/// DOTNET_ThreadPool_UnfairSemaphoreSpinLimit=0, or thread-pool spinning dominates the CPU numbers.
 /// </summary>
 internal static class ClusterCost
 {
     private const int KeyCount = 4096;
-    private const int Warmup = 1;
+    private const double Warmup = 0.5;
 
     public static async Task RunAsync(string[] args)
     {
         int port = int.Parse(args[0]);
         int workers = args.Length > 1 ? int.Parse(args[1]) : 8;
-        int seconds = args.Length > 2 ? int.Parse(args[2]) : 4;
-
-        string[] keys = Enumerable.Range(0, KeyCount).Select(i => Environment.GetEnvironmentVariable("CC_TAG") is { } tag ? $"{{{tag}}}key:{i}" : $"key:{i}").ToArray();
+        int seconds = args.Length > 2 ? int.Parse(args[2]) : 2;
         string value = new('x', 32);
 
         foreach (string op in new[] { "GET", "SET" })
         {
-            IReadOnlyList<string>[] commands = keys
-                .Select(key => op == "SET" ? (IReadOnlyList<string>)new[] { "SET", key, value } : new[] { "GET", key })
-                .ToArray();
-
-            foreach (int depth in new[] { 1, 16, 64 })
+            foreach ((string mode, int depth) in new[]
             {
-                foreach (bool cluster in new[] { false, true })
-                {
-                    await RowAsync(port, workers, seconds, op, depth, cluster, keys, value, commands);
-                }
+                ("plain", 4), ("plain", 16), ("cluster", 16), ("one-node", 16),
+                ("plain", 64), ("cluster", 64), ("one-node", 64),
+            })
+            {
+                string tag = mode == "one-node" ? "{t}" : "";
+                string[] keys = Enumerable.Range(0, KeyCount).Select(i => $"{tag}key:{i}").ToArray();
+                IReadOnlyList<string>[] commands = keys
+                    .Select(key => op == "SET" ? (IReadOnlyList<string>)new[] { "SET", key, value } : new[] { "GET", key })
+                    .ToArray();
+
+                await RowAsync(port, workers, seconds, op, depth, mode, keys, value, commands);
             }
         }
     }
 
     private static async Task RowAsync(
-        int port, int workers, int seconds, string op, int depth, bool cluster,
+        int port, int workers, int seconds, string op, int depth, string mode,
         string[] keys, string value, IReadOnlyList<string>[] commands)
     {
         var connections = new List<RuvioConnection>();
@@ -46,7 +49,7 @@ internal static class ClusterCost
         for (int worker = 0; worker < workers; worker++)
         {
             RuvioConnection connection = await RuvioConnection.ConnectAsync(
-                new RuvioClientOptions { Host = "127.0.0.1", Port = port, DiscoverCluster = cluster });
+                new RuvioClientOptions { Host = "127.0.0.1", Port = port, DiscoverCluster = mode != "plain" });
 
             connections.Add(connection);
             clients[worker] = await connection.GetDefaultDatabaseAsync();
@@ -72,7 +75,7 @@ internal static class ClusterCost
         double total = counts.Sum();
 
         Console.WriteLine(
-            $"{(cluster ? "cluster" : "plain")} {op} P={depth} ops/s={total / elapsed:F0} " +
+            $"{mode,-8} {op} P={depth} ops/s={total / elapsed:F0} " +
             $"user_ns/op={(process.UserProcessorTime - user).TotalNanoseconds / total:F0} " +
             $"sys_ns/op={(process.PrivilegedProcessorTime - system).TotalNanoseconds / total:F0} " +
             $"bytes/op={(GC.GetTotalAllocatedBytes(true) - allocated) / total:F0}");

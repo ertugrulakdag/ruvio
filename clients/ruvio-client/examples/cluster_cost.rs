@@ -3,10 +3,11 @@
 //! `cargo run --release --example cluster_cost -- --port 7000`
 //!
 //! Point it at a per-shard server. Eight threads, one client each, GET and SET at pipeline depths
-//! 1, 16 and 64, four seconds per row. CPU is the process's user and system time (`getrusage`).
+//! 16 and 64, two seconds per row, about a minute in all. CPU is the process's user and system time (`getrusage`).
 //! Rows: `plain` (no discovery), `cluster` (keys spread over the nodes) and `one-node` (cluster
 //! client, every key in one hash tag): `one-node` against `plain` is the routing code's own cost,
-//! `cluster` adds the writes and reads of the extra nodes.
+//! `cluster` adds the writes and reads of the extra nodes. Plain depth 4 is the per-socket batch a
+//! depth-16 pipeline leaves on each of four nodes.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
@@ -207,14 +208,20 @@ fn run(port: u16, mode: &str, op: &str, pipeline: usize, seconds: u64, threads: 
 
 fn main() {
     let port: u16 = arg("--port", "7000").parse().expect("port");
-    let seconds: u64 = arg("--seconds", "4").parse().expect("seconds");
+    let seconds: u64 = arg("--seconds", "2").parse().expect("seconds");
     let threads: usize = arg("--threads", "8").parse().expect("threads");
 
     for op in ["GET", "SET"] {
-        for pipeline in [1, 16, 64] {
-            for mode in ["plain", "cluster", "one-node"] {
-                run(port, mode, op, pipeline, seconds, threads);
-            }
+        for (mode, pipeline) in [
+            ("plain", 4),
+            ("plain", 16),
+            ("cluster", 16),
+            ("one-node", 16),
+            ("plain", 64),
+            ("cluster", 64),
+            ("one-node", 64),
+        ] {
+            run(port, mode, op, pipeline, seconds, threads);
         }
     }
 }

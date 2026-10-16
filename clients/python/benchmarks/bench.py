@@ -234,16 +234,20 @@ def cluster_bench(saddr: str, caddr: str, seconds: float) -> None:
     asyncio.run(run())
 
 
-def cluster_cost(port: int, seconds: float = 4.0, warmup: float = 1.0) -> None:
-    """Plain vs cluster CPU per request, one client, GET/SET at P=1/16/64 (process CPU, not wall time)."""
+def cluster_cost(port: int, seconds: float = 2.0, warmup: float = 0.5) -> None:
+    """CPU per request (process CPU, not wall time), one client, GET/SET at pipeline depths 16 and 64:
+    plain (no discovery), cluster (keys spread over the nodes) and one-node (every key in one hash tag,
+    the routing code's own cost), plus plain depth 4, the per-socket batch a depth-16 pipeline leaves
+    on each of four nodes. About a minute."""
     import resource
 
-    tag = "{" + os.environ["BENCH_TAG"] + "}" if os.environ.get("BENCH_TAG") else ""  # one hash tag: routing on one node
-    keys = [f"{tag}key:{i}" for i in range(4096)]
+    plain_keys = [f"key:{i}" for i in range(4096)]
+    tagged = [f"{{t}}key:{i}" for i in range(4096)]
     val = "x" * 32
 
     def run(kind: str, op: str, p: int) -> None:
-        r = ruvio.Ruvio("127.0.0.1", port, cluster=(kind == "cluster"))
+        keys = tagged if kind == "one-node" else plain_keys
+        r = ruvio.Ruvio("127.0.0.1", port, cluster=(kind != "plain"))
         r.connect()
         pos = 0
         n_keys = len(keys)
@@ -277,12 +281,13 @@ def cluster_cost(port: int, seconds: float = 4.0, warmup: float = 1.0) -> None:
                 ops += step()
         t1, ru1 = time.perf_counter(), resource.getrusage(resource.RUSAGE_SELF)
         r.close()
-        print(f"{kind} {op} P={p} ops/s={ops / (t1 - t0):.0f} user_ns/op={(ru1.ru_utime - ru0.ru_utime) * 1e9 / ops:.0f} "
+        print(f"{kind:<8} {op} P={p} ops/s={ops / (t1 - t0):.0f} user_ns/op={(ru1.ru_utime - ru0.ru_utime) * 1e9 / ops:.0f} "
               f"sys_ns/op={(ru1.ru_stime - ru0.ru_stime) * 1e9 / ops:.0f}", flush=True)
 
     for op in ("GET", "SET"):
-        for p in (1, 16, 64):
-            for kind in ("plain", "cluster"):
+        run("plain", op, 4)
+        for p in (16, 64):
+            for kind in ("plain", "cluster", "one-node"):
                 run(kind, op, p)
 
 

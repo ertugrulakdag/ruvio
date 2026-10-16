@@ -118,14 +118,16 @@ type pipeScratch struct {
 	target []int      // node index of each command (len(nodes) is the seed)
 	subs   []*request // one pipelined request per node in use
 	vals   [][]Value  // reply buffers handed to each node's request, kept between calls
+	conns  []*conn    // the connection each request went to
+	leads  []bool     // whether this goroutine reads that connection's replies
 }
 
 var pipePool = sync.Pool{New: func() any { return new(pipeScratch) }}
 
 // pipeSpread sends a pipeline whose commands go to several nodes: each node's frames are
 // copied once into one request, every node is written before any reply is awaited (so the
-// pipeline costs one round trip, without a goroutine per node), and each reply is stored at
-// its command's index.
+// pipeline costs one round trip, without a goroutine per node), the caller reads the replies of
+// every node nobody else is reading, and each reply is stored at its command's index.
 func (cl *cluster) pipeSpread(ctx context.Context, t *topology, r *request, n int, s *pipeScratch) ([]Value, error) {
 	if err := ctx.Err(); err != nil {
 		putReq(r)
@@ -156,6 +158,16 @@ func (cl *cluster) pipeSpread(ctx context.Context, t *topology, r *request, n in
 		sub.buf = append(sub.buf, r.buf[s.offs[i]:s.offs[i+1]]...)
 		sub.expect++
 	}
+	// Like roundTrip: the caller may read its own replies when its context cannot be canceled
+	// without a deadline.
+	canLead := ctx.Done() == nil
+	if !canLead {
+		_, canLead = ctx.Deadline()
+	}
+	if len(s.conns) < nodes {
+		s.conns = append(s.conns, make([]*conn, nodes-len(s.conns))...)
+		s.leads = append(s.leads, make([]bool, nodes-len(s.leads))...)
+	}
 	var first error
 	for ni, sub := range subs {
 		if sub == nil {
@@ -171,7 +183,10 @@ func (cl *cluster) pipeSpread(ctx context.Context, t *topology, r *request, n in
 		}
 		cn, err := node.shared(ctx)
 		if err == nil {
-			_, err = cn.send(sub, false) // the node's reader resolves it; this goroutine only waits
+			// Every node is written before any is read. A node with nobody reading lets this
+			// goroutine read its replies below, without a hand-off to the node's reader.
+			s.conns[ni] = cn
+			s.leads[ni], err = cn.send(sub, canLead)
 		}
 		if err != nil {
 			if first == nil {
@@ -188,7 +203,14 @@ func (cl *cluster) pipeSpread(ctx context.Context, t *topology, r *request, n in
 			continue
 		}
 		subs[ni] = nil
-		ok, err := sub.wait(ctx)
+		var ok bool
+		var err error
+		if s.leads[ni] {
+			ok, err = s.conns[ni].lead(ctx, sub)
+		} else {
+			ok, err = sub.wait(ctx)
+		}
+		s.conns[ni], s.leads[ni] = nil, false
 		if !ok { // abandoned: the reader owns the request now
 			s.vals[ni] = nil
 			if first == nil {

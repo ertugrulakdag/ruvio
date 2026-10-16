@@ -9,7 +9,9 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Plain vs cluster CPU per request. Not a test: run its main with the test classpath.
  * {@code java -cp target/classes:target/test-classes io.github.salihcantekin.ruvio.RoutingCostBench 127.0.0.1:17700}
- * A second argument makes every key share one hash tag (one node), to separate routing cost from multi-node cost.
+ * Rows: plain, cluster (keys spread over the nodes) and one-node (cluster client, every key in one hash tag,
+ * the routing code's own cost), at pipeline depths 16 and 64, plus plain depth 4 (the per-socket batch a
+ * depth-16 pipeline leaves on each of four nodes). About a minute.
  * CPU is summed over the Java threads (workers plus the connections' reader and writer threads) with
  * ThreadMXBean user and total times; sys is total minus user. JIT and GC threads are not included.
  * Allocation is summed over the worker threads only.
@@ -17,8 +19,8 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class RoutingCostBench {
     static final int W = 8;
     static final int KEYS = 4096;
-    static final long WARM_MS = 1_000;
-    static final long RUN_MS = 4_000;
+    static final long WARM_MS = 500;
+    static final long RUN_MS = 2_000;
 
     private RoutingCostBench() {
     }
@@ -27,8 +29,10 @@ public final class RoutingCostBench {
         String addr = args[0];
         RuvioOptions base = RuvioOptions.of(addr);
         String[] keys = new String[KEYS];
+        String[] tagged = new String[KEYS];
         for (int i = 0; i < KEYS; i++) {
-            keys[i] = args.length > 1 ? "{t}key:" + i : "key:" + i;
+            keys[i] = "key:" + i;
+            tagged[i] = "{t}key:" + i;
         }
         byte[] value = new byte[32];
         java.util.Arrays.fill(value, (byte) 'x');
@@ -38,9 +42,11 @@ public final class RoutingCostBench {
             throw new IllegalStateException("cluster/plain mode mismatch");
         }
         for (String op : new String[] {"GET", "SET"}) {
-            for (int p : new int[] {1, 16, 64}) {
+            row("plain", plain, op, 4, keys, value);
+            for (int p : new int[] {16, 64}) {
                 row("plain", plain, op, p, keys, value);
                 row("cluster", cluster, op, p, keys, value);
+                row("one-node", cluster, op, p, tagged, value);
             }
         }
         for (RuvioClient<String, byte[]> c : plain) {

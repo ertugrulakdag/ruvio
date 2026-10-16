@@ -21,18 +21,20 @@ import (
 //	RUVIO_COST_ADDR=127.0.0.1:7000 go test -run TestClusterCost -v -count=1
 //
 // Point it at a per-shard server. Eight workers with a client each, GET and SET at pipeline
-// depths 1, 16 and 64, RUVIO_COST_SECONDS (default 4) per row.
+// depths 16 and 64, RUVIO_COST_SECONDS (default 2) per row, about a minute in all. Plain depth 4
+// is the per-socket batch a depth-16 pipeline leaves on each of four nodes.
 func TestClusterCost(t *testing.T) {
 	addr := os.Getenv("RUVIO_COST_ADDR")
 	if addr == "" {
 		t.Skip("RUVIO_COST_ADDR not set")
 	}
-	seconds := 4
+	seconds := 2
 	if s := os.Getenv("RUVIO_COST_SECONDS"); s != "" {
 		fmt.Sscan(s, &seconds)
 	}
 	for _, op := range []string{"GET", "SET"} {
-		for _, depth := range []int{1, 16, 64} {
+		costRow(t, addr, "plain", op, 4, time.Duration(seconds)*time.Second)
+		for _, depth := range []int{16, 64} {
 			for _, mode := range []string{"plain", "cluster", "one-node"} {
 				costRow(t, addr, mode, op, depth, time.Duration(seconds)*time.Second)
 			}

@@ -4,8 +4,10 @@
 //   RUVIO_BENCH_ADDR=127.0.0.1:17800 npm run bench:cluster-cost
 //
 // The address is the seed of a per-shard server. "plain" connects there without discovery (the
-// server forwards misrouted keys); "cluster" discovers the shards. W workers, each with its own
-// client, loop over consecutive slices of 4096 keys; P=1 uses get/set, P>1 the pipeline API.
+// server forwards misrouted keys); "cluster" discovers the shards; "one-node" is the cluster client
+// with every key in one hash tag (the routing code's own cost). W workers, each with its own client,
+// loop over consecutive slices of 4096 keys. Pipeline depths 16 and 64, plus plain depth 4 (the
+// per-socket batch a depth-16 pipeline leaves on each of four nodes); about a minute.
 
 import { RuvioClient, ClusterClient } from '../src/index.js';
 
@@ -17,29 +19,28 @@ if (!addr) {
 const host = addr.split(':')[0]!;
 const port = Number(addr.split(':')[1]);
 const W = Number(process.env.BENCH_WORKERS ?? 8);
-const SECONDS = Number(process.env.BENCH_SECONDS ?? 4);
-const WARM_MS = Number(process.env.BENCH_WARMUP_MS ?? 1000);
-// BENCH_TAG puts every key in one hash tag, so the cluster rows measure routing on one node.
-const TAG = process.env.BENCH_TAG ? '{' + process.env.BENCH_TAG + '}' : '';
-const KEYS = Array.from({ length: 4096 }, (_, i) => TAG + 'key:' + i);
+const SECONDS = Number(process.env.BENCH_SECONDS ?? 2);
+const WARM_MS = Number(process.env.BENCH_WARMUP_MS ?? 500);
+const KEYS = Array.from({ length: 4096 }, (_, i) => 'key:' + i);
+const TAGGED = KEYS.map((k) => '{t}' + k);
 const VALUE = 'x'.repeat(32);
 
 type Client = RuvioClient | ClusterClient;
 
-async function worker(c: Client, w: number, op: 'GET' | 'SET', p: number, until: () => boolean, count: { n: number }): Promise<void> {
-  const slice = KEYS.length / W;
+async function worker(c: Client, w: number, op: 'GET' | 'SET', p: number, keys: string[], until: () => boolean, count: { n: number }): Promise<void> {
+  const slice = keys.length / W;
   const base = w * slice;
   let i = 0;
   while (!until()) {
     if (p === 1) {
-      const k = KEYS[base + (i++ % slice)]!;
+      const k = keys[base + (i++ % slice)]!;
       if (op === 'GET') await c.get(k);
       else await c.set(k, VALUE);
       count.n++;
     } else {
       const pl = c.pipeline();
       for (let j = 0; j < p; j++) {
-        const k = KEYS[base + (i++ % slice)]!;
+        const k = keys[base + (i++ % slice)]!;
         if (op === 'GET') pl.get(k);
         else pl.set(k, VALUE);
       }
@@ -49,12 +50,12 @@ async function worker(c: Client, w: number, op: 'GET' | 'SET', p: number, until:
   }
 }
 
-async function row(kind: 'plain' | 'cluster', clients: Client[], op: 'GET' | 'SET', p: number): Promise<void> {
+async function row(kind: string, clients: Client[], op: 'GET' | 'SET', p: number, keys: string[]): Promise<void> {
   const count = { n: 0 };
   let stop = false;
   const warmEnd = Date.now() + WARM_MS;
-  await Promise.all(clients.map((c, w) => worker(c, w, op, p, () => Date.now() >= warmEnd, { n: 0 })));
-  const runs = clients.map((c, w) => worker(c, w, op, p, () => stop, count));
+  await Promise.all(clients.map((c, w) => worker(c, w, op, p, keys, () => Date.now() >= warmEnd, { n: 0 })));
+  const runs = clients.map((c, w) => worker(c, w, op, p, keys, () => stop, count));
   const c0 = process.cpuUsage();
   const t0 = process.hrtime.bigint();
   const n0 = count.n;
@@ -66,7 +67,7 @@ async function row(kind: 'plain' | 'cluster', clients: Client[], op: 'GET' | 'SE
   await Promise.all(runs);
   const ops = n1 - n0;
   console.log(
-    `${kind} ${op} P=${p} ops/s=${Math.round(ops / secs)} user_ns/op=${Math.round((c1.user * 1000) / ops)} sys_ns/op=${Math.round((c1.system * 1000) / ops)}`,
+    `${kind.padEnd(8)} ${op} P=${p} ops/s=${Math.round(ops / secs)} user_ns/op=${Math.round((c1.user * 1000) / ops)} sys_ns/op=${Math.round((c1.system * 1000) / ops)}`,
   );
 }
 
@@ -81,19 +82,19 @@ for (let w = 0; w < W; w++) {
   cluster.push(d);
 }
 // Populate so GET hits.
-{
+for (const keys of [KEYS, TAGGED]) {
   const pl = plain[0]!.pipeline();
-  for (const k of KEYS) pl.set(k, VALUE);
+  for (const k of keys) pl.set(k, VALUE);
   await pl.exec();
 }
-// Optional filters (e.g. for profiling): BENCH_OPS=GET BENCH_DEPTHS=1,16 BENCH_KINDS=cluster
+// Optional filter (e.g. for profiling): BENCH_OPS=GET
 const ops = (process.env.BENCH_OPS ?? 'GET,SET').split(',') as ('GET' | 'SET')[];
-const depths = (process.env.BENCH_DEPTHS ?? '1,16,64').split(',').map(Number);
-const kinds = process.env.BENCH_KINDS ?? 'plain,cluster';
 for (const op of ops) {
-  for (const p of depths) {
-    if (kinds.includes('plain')) await row('plain', plain, op, p);
-    if (kinds.includes('cluster')) await row('cluster', cluster, op, p);
+  await row('plain', plain, op, 4, KEYS);
+  for (const p of [16, 64]) {
+    await row('plain', plain, op, p, KEYS);
+    await row('cluster', cluster, op, p, KEYS);
+    await row('one-node', cluster, op, p, TAGGED);
   }
 }
 for (const c of [...plain, ...cluster]) await c.quit();
