@@ -1688,7 +1688,9 @@ fn per_shard_wait_counts_the_shards_a_connection_forwarded_to() {
     let mut started = None;
 
     for attempt in 0..20u16 {
-        let base = 20_000 + (std::process::id() as u16 % 997) * 17 + attempt * 331;
+        // Below every OS's ephemeral range (Linux from 32768), so no other test's sockets sit
+        // there, with room for the bus ports.
+        let base = 10_000 + (std::process::id() as u16 % 600) * 17 + attempt * 37;
         let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let replication_port = probe.local_addr().unwrap().port();
 
@@ -1721,6 +1723,10 @@ fn per_shard_wait_counts_the_shards_a_connection_forwarded_to() {
 
             thread::sleep(Duration::from_millis(5));
         }
+
+        // A connect can reach another process on the port while this server's bind fails: give
+        // the failure time to show before trusting the port.
+        thread::sleep(Duration::from_millis(100));
 
         if server.is_finished() {
             // Bind failed (AddrInUse): try other ports.

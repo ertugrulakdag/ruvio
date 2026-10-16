@@ -128,6 +128,7 @@ fn default_config_file_holds_the_code_defaults() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "writes the config file, which fsyncs")]
 fn write_config_refuses_a_file_that_does_not_parse_and_writes_atomically() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("ruvio.toml");
@@ -168,6 +169,7 @@ fn write_config_refuses_a_file_that_does_not_parse_and_writes_atomically() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "writes the config file, which fsyncs")]
 fn sync_worker_modes_resolve_and_round_trip() {
     use crate::persistence::SyncWorkerMode;
     let mut config = super::AppConfig::default();
@@ -230,6 +232,7 @@ fn sync_worker_modes_resolve_and_round_trip() {
 use super::*;
 
 #[test]
+#[cfg_attr(miri, ignore = "writes the config file, which fsyncs")]
 fn environment_override_is_written_into_the_toml_and_users_stay() {
     let path = env::temp_dir().join(format!(
         "ruvio-config-{}-{}.toml",
@@ -606,6 +609,7 @@ fn parses_maxmemory_policy_from_file_and_environment() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "writes the config file, which fsyncs")]
 fn parses_memory_tuning_from_file_and_environment() {
     let mut config = AppConfig::default();
 
@@ -924,6 +928,7 @@ fn public_metrics_and_replication_require_a_secret() {
 
 #[cfg(unix)]
 #[test]
+#[cfg_attr(miri, ignore = "writes the config file, which fsyncs")]
 fn written_overrides_are_readable_by_the_owner_only() {
     use std::os::unix::fs::PermissionsExt;
 
