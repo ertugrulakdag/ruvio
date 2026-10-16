@@ -787,6 +787,10 @@ pub(super) async fn handle_client(
                 Ok(HotParse::Fallback) => {
                     match parse_command_with_limits(&input[consumed..], limits) {
                         Ok(Some((command, frame_length))) => {
+                            // Every key in one slot (true without a fabric): the lean path
+                            // may skip the `CROSSSLOT` check of the generic one.
+                            let mut one_slot = true;
+
                             // A subscribed client may only run (local) pub/sub commands;
                             // `gate` refuses the rest, so nothing is forwarded.
                             if let Some(forwarding) = state.forwarding.as_ref()
@@ -794,7 +798,9 @@ pub(super) async fn handle_client(
                             {
                                 let simple =
                                     wal_group_eligible(WalGroupCommand::Parsed(&command), &session);
-                                let owner = command_owner(&state, forwarding, &command);
+                                let (owner, slot_ok) = command_owner(&state, forwarding, &command);
+
+                                one_slot = slot_ok;
                                 let fan = fan_for(&state, &command).is_some();
                                 // Commands that leave this shard (or that SCAN answers for
                                 // every shard) are checked here: `gate` never sees them. Fan
@@ -824,11 +830,15 @@ pub(super) async fn handle_client(
 
                                 // SWAPDB would swap the home shard's databases only, and a
                                 // queued fan command would run on the other shards at once
-                                // and on this one at EXEC.
+                                // and on this one at EXEC; a queued PUBLISH could only reach
+                                // the other shards at queue time, before DISCARD or a failed
+                                // EXEC, so it is refused too.
                                 let unsupported: Option<&[u8]> =
                                     if matches!(command, Command::SwapDb(..)) {
                                         Some(SWAPDB_SHARDS_REPLY)
-                                    } else if fan && session.is_multi() {
+                                    } else if (fan || matches!(command, Command::Publish { .. }))
+                                        && session.is_multi()
+                                    {
                                         Some(FAN_IN_MULTI_REPLY)
                                     } else {
                                         None
@@ -882,14 +892,6 @@ pub(super) async fn handle_client(
                                         &mut output,
                                     )
                                     .await?;
-
-                                    if let Command::Publish { channel, message } = &command {
-                                        publish_everywhere(
-                                            forwarding,
-                                            channel.as_ref(),
-                                            message.as_ref(),
-                                        );
-                                    }
 
                                     if let Some(fan) = fan_for(&state, &command) {
                                         let frame = &input[consumed..consumed + frame_length];
@@ -1032,8 +1034,7 @@ pub(super) async fn handle_client(
 
                             if plain_command(&command)
                                 && lean_session(&state, &session, &auth)
-                                && (state.route.is_none()
-                                    || crate::routing::command_slot(&command).is_ok())
+                                && one_slot
                             {
                                 dispatch_plain(
                                     &state,
@@ -1047,6 +1048,17 @@ pub(super) async fn handle_client(
                             }
 
                             let mut parking = None;
+                            // A classic PUBLISH reaches the other shards only after this
+                            // shard ran it, so the auth, ACL and rate checks of `gate` and
+                            // the pub/sub session rules decided first; its reply (an integer)
+                            // says it ran.
+                            let publish = match (&command, state.forwarding.as_ref()) {
+                                (Command::Publish { channel, message }, Some(_)) => {
+                                    Some((channel.to_vec(), message.to_vec()))
+                                }
+                                _ => None,
+                            };
+                            let reply_at = output.len();
 
                             dispatch_command(
                                 &state,
@@ -1063,6 +1075,13 @@ pub(super) async fn handle_client(
                                 ahead.then_some(&mut parking),
                             )
                             .await?;
+
+                            if let Some((channel, message)) = publish
+                                && let Some(forwarding) = state.forwarding.as_ref()
+                                && output.get(reply_at) == Some(&b':')
+                            {
+                                publish_everywhere(forwarding, &channel, &message);
+                            }
 
                             // The command is about to wait: the group it joined is committed,
                             // and the replies queued ahead of it leave first (recorded before

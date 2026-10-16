@@ -197,6 +197,12 @@ mod tests {
 pub struct Stamp(u64);
 
 impl Stamp {
+    /// Measures the counter rate now (5 ms on x86-64), so no shard pays it on its first
+    /// timed command. Called once at server start; a stamp before it calibrates itself.
+    pub fn calibrate() {
+        let _ = ticks_per_micro();
+    }
+
     #[inline]
     pub fn now() -> Self {
         Self(ticks())

@@ -194,10 +194,29 @@ impl Fabric {
     }
 
     pub(super) fn send(&self, src: usize, dst: usize, message: Message) {
-        self.boxes[src * self.count + dst]
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .push(message);
+        self.send_bounded(src, dst, message, usize::MAX);
+    }
+
+    /// `send` that drops `message` when the mailbox already holds `limit` messages: for
+    /// deliveries nobody waits for, so a stalled shard cannot make its mailbox grow without
+    /// bound. Returns whether the message was queued.
+    pub(super) fn send_bounded(
+        &self,
+        src: usize,
+        dst: usize,
+        message: Message,
+        limit: usize,
+    ) -> bool {
+        {
+            let mut mailbox = self.boxes[src * self.count + dst]
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+
+            if mailbox.len() >= limit {
+                return false;
+            }
+            mailbox.push(message);
+        }
 
         // Only the 0 -> non-zero transition wakes the target; a busy shard is already draining.
         let previous = self.ports[dst].mask.fetch_or(1 << src, Ordering::AcqRel);
@@ -205,6 +224,7 @@ impl Fabric {
         if previous == 0 {
             self.ports[dst].notify.notify_one();
         }
+        true
     }
 
     fn drain(&self, me: usize, into: &mut Vec<Message>) {
@@ -1119,15 +1139,51 @@ pub(super) const FAN_IN_MULTI_REPLY: &[u8] =
 /// Keys of one command on different shards: the Redis Cluster answer, which every client
 /// recognises (a client that routes itself refuses the same command before sending it).
 pub(super) const SPLIT_REPLY: &[u8] = CROSSSLOT_REPLY;
-/// Which shard runs `command`. A hot key lives in the process-wide hot store, so it never
-/// decides the owner: a command on hot keys alone runs here, in order with the hot path.
+/// Which shard runs `command`, and whether every key of the command is in one hash slot
+/// (the `CROSSSLOT` rule the lean path relies on). The usual case, keys in one slot, costs
+/// one `command_slot` and no allocation; only a cross-slot command walks the keys to tell a
+/// split over shards from a cross-slot command on this shard. A hot key lives in the
+/// process-wide hot store, so it never decides the owner: a command on hot keys alone runs
+/// here, in order with the hot path.
 pub(super) fn command_owner(
     state: &ShardState,
     forwarding: &Forwarding,
     command: &Command<'_>,
-) -> Owner {
-    let mut owner = None;
+) -> (Owner, bool) {
     let hot = state.hot_store.is_some() && !state.published_config.hot_keys.is_empty();
+
+    // A sharded channel has a slot but is not a key: a subscription cannot be forwarded, so
+    // the connection's shard answers (with `MOVED` when another shard owns the channel).
+    let sharded_channel = matches!(
+        command,
+        Command::ShardPublish { .. } | Command::ShardSubscribe(_) | Command::ShardUnsubscribe(_)
+    );
+
+    if sharded_channel {
+        return (Owner::Local, true);
+    }
+
+    if !hot {
+        match crate::routing::command_slot(command) {
+            Ok(None) => return (Owner::Local, true),
+            Ok(Some(slot)) => {
+                let found = shard_for_slot(slot, forwarding.fabric.count);
+
+                return (
+                    if found == forwarding.me {
+                        Owner::Local
+                    } else {
+                        Owner::Remote(found)
+                    },
+                    true,
+                );
+            }
+            Err(_) => {}
+        }
+    }
+
+    let one_slot = crate::routing::command_slot(command).is_ok();
+    let mut owner = None;
 
     for key in crate::routing::command_keys(command) {
         if hot && crate::hot_store::matches_hot_key(&state.published_config.hot_keys, key) {
@@ -1137,15 +1193,18 @@ pub(super) fn command_owner(
 
         match owner {
             None => owner = Some(found),
-            Some(previous) if previous != found => return Owner::Split,
+            Some(previous) if previous != found => return (Owner::Split, one_slot),
             Some(_) => {}
         }
     }
 
-    match owner {
-        Some(found) if found != forwarding.me => Owner::Remote(found),
-        _ => Owner::Local,
-    }
+    (
+        match owner {
+            Some(found) if found != forwarding.me => Owner::Remote(found),
+            _ => Owner::Local,
+        },
+        one_slot,
+    )
 }
 
 /// Shard that owns the hot command's key, when it is not this one.
@@ -1218,17 +1277,24 @@ pub(super) fn fan_for(state: &ShardState, command: &Command<'_>) -> Option<Fan> 
     fan_kind(command).filter(|_| state.single_port && !matches!(command, Command::Publish { .. }))
 }
 
-/// Sends a classic `PUBLISH` to every other shard, without waiting for them: a subscriber
-/// may sit on any shard. The caller still runs it locally and replies with the local count.
+/// Deliveries a shard may hold from one other shard before new ones are dropped: pub/sub is
+/// best effort (Redis drops to a slow subscriber too), and a shard stuck in a long command must
+/// not let its mailbox grow with every publish in the process.
+const PUBLISH_MAILBOX_LIMIT: usize = 4096;
+
+/// Sends a classic `PUBLISH` the caller has already run (and that passed its auth, ACL and
+/// rate checks there) to every other shard, without waiting for them: a subscriber may sit on
+/// any shard. The caller's reply counts its own shard's receivers.
 pub(super) fn publish_everywhere(forwarding: &Forwarding, channel: &[u8], message: &[u8]) {
     for dst in (0..forwarding.fabric.shard_count()).filter(|dst| *dst != forwarding.me) {
-        forwarding.fabric.send(
+        forwarding.fabric.send_bounded(
             forwarding.me,
             dst,
             Message::Publish {
                 channel: channel.to_vec(),
                 message: message.to_vec(),
             },
+            PUBLISH_MAILBOX_LIMIT,
         );
     }
 }

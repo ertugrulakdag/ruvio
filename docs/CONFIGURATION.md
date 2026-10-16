@@ -598,7 +598,9 @@ warning at startup and will be removed; any one per-shard port already serves
 every key) opens one port only, spreads connections over the shards, runs
 keyless commands (`DBSIZE`, `KEYS`, `FLUSHALL`, `SCAN`) across every shard and
 lets `WAIT` cover every shard; in `per-shard` those stay per shard, as in Redis
-Cluster, and cluster clients fan them out themselves. Classic `PUBLISH` reaches subscribers on every shard in both modes.
+Cluster, and cluster clients fan them out themselves; a client that is not cluster-aware and
+talks to one port sees one shard's keys there, and its `FLUSHALL` clears that shard only.
+Classic `PUBLISH` reaches subscribers on every shard in both modes.
 `advertised_host` (`RUVIO_ADVERTISE_HOST`, `--advertised-host`, default
 `127.0.0.1`) is the host the cluster replies name. `advertised_port` (`RUVIO_ADVERTISE_PORT`, `--advertised-port`) is the
 port they name for shard 0; shard `i` is that port plus `i`. Leave it unset

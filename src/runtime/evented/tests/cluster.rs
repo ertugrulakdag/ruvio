@@ -609,8 +609,6 @@ fn evented_script_quota_keeps_both_shards_responsive() {
 
 #[test]
 fn evented_shards_keep_keys_scripts_and_subscribers_local() {
-    use std::io::ErrorKind;
-
     let (left, right, stop, left_server, right_server) = serve_two_shards();
     let left_key = key_on_shard(0, "owned");
     let right_key = key_on_shard(1, "other");
@@ -716,7 +714,6 @@ fn evented_shards_keep_keys_scripts_and_subscribers_local() {
     );
     subscriber.read_exact(&mut message).unwrap();
     assert_eq!(message, expected);
-    let _ = ErrorKind::TimedOut;
     let info = String::from_utf8(request(right, &resp(&[&[b"INFO"]]))).unwrap();
     let queued_peak = info
         .lines()
@@ -725,6 +722,86 @@ fn evented_shards_keep_keys_scripts_and_subscribers_local() {
         .parse::<usize>()
         .unwrap();
     assert!(queued_peak >= expected.len(), "{info}");
+    stop.request();
+    left_server.join().unwrap();
+    right_server.join().unwrap();
+}
+
+#[test]
+fn a_publish_the_gate_refuses_reaches_no_other_shard() {
+    use std::io::ErrorKind;
+
+    let (left, right, stop, left_server, right_server) =
+        serve_two_shards_with(|config| config.security.requirepass = "secret".into());
+    let mut subscriber = StdTcpStream::connect(right).unwrap();
+
+    subscriber
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    subscriber
+        .write_all(&resp(&[&[b"AUTH", b"secret"], &[b"SUBSCRIBE", b"news"]]))
+        .unwrap();
+    let expected = [
+        b"+OK\r\n".to_vec(),
+        crate::pubsub::encode_subscribe(b"news", 1),
+    ]
+    .concat();
+    let mut subscribed = vec![0u8; expected.len()];
+
+    subscriber.read_exact(&mut subscribed).unwrap();
+    assert_eq!(subscribed, expected);
+
+    // Unauthenticated: refused on the publishing shard, and nothing crosses to the other.
+    let refused = request(left, &resp(&[&[b"PUBLISH", b"news", b"leak"]]));
+
+    assert!(refused.starts_with(b"-NOAUTH"), "{refused:?}");
+    subscriber
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let mut quiet = [0u8; 1];
+    let missed = subscriber.read(&mut quiet).unwrap_err();
+
+    assert!(
+        matches!(missed.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock),
+        "{missed}"
+    );
+
+    // Inside MULTI a PUBLISH would reach the other shards before DISCARD: refused.
+    let queued = String::from_utf8(request(
+        left,
+        &resp(&[
+            &[b"AUTH", b"secret"],
+            &[b"MULTI"],
+            &[b"PUBLISH", b"news", b"queued"],
+            &[b"DISCARD"],
+        ]),
+    ))
+    .unwrap();
+
+    assert!(queued.contains("cannot be queued in MULTI"), "{queued}");
+    let missed = subscriber.read(&mut quiet).unwrap_err();
+
+    assert!(matches!(
+        missed.kind(),
+        ErrorKind::TimedOut | ErrorKind::WouldBlock
+    ));
+
+    // Authenticated and outside MULTI: delivered.
+    assert_eq!(
+        request(
+            left,
+            &resp(&[&[b"AUTH", b"secret"], &[b"PUBLISH", b"news", b"hello"]])
+        ),
+        b"+OK\r\n:0\r\n"
+    );
+    subscriber
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    let expected = crate::pubsub::encode_message(b"news", b"hello");
+    let mut message = vec![0u8; expected.len()];
+
+    subscriber.read_exact(&mut message).unwrap();
+    assert_eq!(message, expected);
     stop.request();
     left_server.join().unwrap();
     right_server.join().unwrap();

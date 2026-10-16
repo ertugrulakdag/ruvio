@@ -433,6 +433,8 @@ pub fn run(config: &AppConfig, shutdown: ShutdownToken) -> io::Result<()> {
 pub fn run_with_force(config: &AppConfig, shutdown: ShutdownToken, force: bool) -> io::Result<()> {
     let config = &one_shard_without_hot_keys(config.clone());
 
+    crate::time::Stamp::calibrate();
+
     if force && config.replication.role == crate::config::ReplicationRole::Replica {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
