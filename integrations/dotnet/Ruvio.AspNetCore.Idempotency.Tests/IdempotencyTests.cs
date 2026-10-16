@@ -43,7 +43,9 @@ public class IdempotencyTests
             new EndpointMetadataCollection(selected ? [new RuvioIdempotencyAttribute()] : []), "test"));
         var services = new ServiceCollection();
 
-        if (client is not null) services.AddSingleton(client);
+        if (client is not null)
+            services.AddSingleton(client);
+
         c.RequestServices = services.BuildServiceProvider();
 
         return c;
@@ -208,9 +210,12 @@ public class IdempotencyTests
     {
         var (client, stub) = StubClient.Create();
 
-        if (failure == "store") stub.FailCompletion = true;
+        if (failure == "store")
+            stub.FailCompletion = true;
 
-        if (failure == "ownership") stub.LoseOwnership = true;
+        if (failure == "ownership")
+            stub.LoseOwnership = true;
+
         using var cts = new CancellationTokenSource();
         var c = Context(client);
 
@@ -220,29 +225,36 @@ public class IdempotencyTests
         var responseFeature = c.Features.Get<IHttpResponseFeature>();
         var middleware = Middleware(async ctx =>
         {
-            if (failure == "handler") throw new InvalidOperationException("handler failed");
+            if (failure == "handler")
+                throw new InvalidOperationException("handler failed");
 
             if (failure == "cancellation") { cts.Cancel(); ctx.RequestAborted.ThrowIfCancellationRequested(); }
 
-            if (failure == "headers") ctx.Response.ContentType = new string('a', 8193);
+            if (failure == "headers")
+                ctx.Response.ContentType = new string('a', 8193);
 
-            if (failure == "starting") ctx.Response.OnStarting(() => throw new InvalidOperationException("starting"));
+            if (failure == "starting")
+                ctx.Response.OnStarting(() => throw new InvalidOperationException("starting"));
 
-            if (failure == "writer-overflow") ctx.Response.BodyWriter.GetMemory(33);
+            if (failure == "writer-overflow")
+                ctx.Response.BodyWriter.GetMemory(33);
 
             if (failure is "overflow" or "caught-overflow")
             {
                 try { await ctx.Response.Body.WriteAsync(new byte[33]); }
                 catch (IOException) when (failure == "caught-overflow") { }
             }
-            else await ctx.Response.Body.WriteAsync("ok"u8.ToArray());
+            else
+                await ctx.Response.Body.WriteAsync("ok"u8.ToArray());
         });
 
         var error = await Record.ExceptionAsync(() => middleware.InvokeAsync(c));
 
         Assert.NotNull(error);
 
-        if (failure == "cancellation") Assert.IsAssignableFrom<OperationCanceledException>(error);
+        if (failure == "cancellation")
+            Assert.IsAssignableFrom<OperationCanceledException>(error);
+
         Assert.Same(requestBody, c.Request.Body);
         Assert.Same(responseBody, c.Response.Body);
         Assert.Same(responseFeature, c.Features.Get<IHttpResponseFeature>());
@@ -262,7 +274,9 @@ public class IdempotencyTests
         var (client, stub) = StubClient.Create();
         var c = Context(client, new string('x', 33));
 
-        if (contentLengthKnown) c.Request.ContentLength = 33;
+        if (contentLengthKnown)
+            c.Request.ContentLength = 33;
+
         var original = c.Request.Body;
 
         await Middleware(_ => throw new Exception("Must not execute")).InvokeAsync(c);
@@ -520,10 +534,14 @@ public class IdempotencyTests
         var c = Context(selected: false);
         var middleware = Middleware(_ => Task.CompletedTask);
 
-        for (int i = 0; i < 100; i++) _ = middleware.InvokeAsync(c);
+        for (int i = 0; i < 100; i++)
+            _ = middleware.InvokeAsync(c);
+
         long before = GC.GetAllocatedBytesForCurrentThread();
 
-        for (int i = 0; i < 100; i++) _ = middleware.InvokeAsync(c);
+        for (int i = 0; i < 100; i++)
+            _ = middleware.InvokeAsync(c);
+
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.Equal(0, allocated);
@@ -901,26 +919,32 @@ public class StubClient : DispatchProxy
                 {
                     Records[key] = new Entry(fingerprint, owner);
 
-                    if (FailAfterAcquisition) throw new IOException("Acquisition reply lost");
+                    if (FailAfterAcquisition)
+                        throw new IOException("Acquisition reply lost");
 
                     return Task.FromResult(Array("acquired"));
                 }
 
-                if (entry.Fingerprint != fingerprint) return Task.FromResult(Array("conflict"));
+                if (entry.Fingerprint != fingerprint)
+                    return Task.FromResult(Array("conflict"));
 
                 return Task.FromResult(entry.State == "completed" ? Array("completed", entry.Result!) : Array("pending"));
             }
 
-            if (FailCompletion) throw new IOException("Store failed");
+            if (FailCompletion)
+                throw new IOException("Store failed");
 
-            if (LoseOwnership) return Task.FromResult(false);
+            if (LoseOwnership)
+                return Task.FromResult(false);
 
             if (!Records.TryGetValue(key, out var existing) || existing.Owner != owner ||
                 existing.Fingerprint != fingerprint)
                 return Task.FromResult(false);
+
             string result = (string)args[3]!;
 
-            if (existing.State == "completed") return Task.FromResult(existing.Result == result);
+            if (existing.State == "completed")
+                return Task.FromResult(existing.Result == result);
 
             return CompleteAsync(existing, result);
         }
@@ -928,13 +952,16 @@ public class StubClient : DispatchProxy
 
     private async Task<bool> CompleteAsync(Entry existing, string result)
     {
-        if (BeforeCompletion is not null) await BeforeCompletion();
+        if (BeforeCompletion is not null)
+            await BeforeCompletion();
+
         lock (Records)
         {
             existing.State = "completed";
             existing.Result = result;
 
-            if (FailAfterCompletion) throw new IOException("Completion reply lost");
+            if (FailAfterCompletion)
+                throw new IOException("Completion reply lost");
 
             return true;
         }

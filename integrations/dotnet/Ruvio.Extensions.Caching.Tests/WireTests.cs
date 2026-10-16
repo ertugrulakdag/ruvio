@@ -60,6 +60,7 @@ public class WireTests
             Assert.Equal(explicitDeadline.ToUnixTimeMilliseconds(), sentDeadline);
         else
             Assert.InRange(sentDeadline, before + 30000, after + 30000);
+
         Assert.Contains("\n0\n", Text(command[2]));
         await wire.Reply("+OK\r\n"u8.ToArray());
         await setting;
@@ -158,6 +159,7 @@ public class WireTests
 
             RuvioConnection connection = await connecting;
             RuvioClient client = await connection.GetDefaultDatabaseAsync();
+
             return new(listener, peer, connection, client);
         }
 

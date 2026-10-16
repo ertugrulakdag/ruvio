@@ -10,7 +10,9 @@ public class LiveTests
     {
         string? address = Environment.GetEnvironmentVariable("RUVIO_TEST_ADDR");
 
-        if (string.IsNullOrWhiteSpace(address)) return null;
+        if (string.IsNullOrWhiteSpace(address))
+            return null;
+
         var uri = new Uri("tcp://" + address);
         RuvioConnection connection = await RuvioConnection.ConnectAsync(uri.Host, uri.Port);
 
@@ -23,7 +25,9 @@ public class LiveTests
     [Fact]
     public async Task OnlyOneOwnerHoldsAResourceAndReleaseHandsItOver()
     {
-        if (await ConnectAsync() is not { } connected) return;
+        if (await ConnectAsync() is not { } connected)
+            return;
+
         await using RuvioConnection connection = connected.Connection;
         IRuvioClient client = connected.Client;
         RuvioLockProvider provider = Provider(client);
@@ -42,7 +46,9 @@ public class LiveTests
     [Fact]
     public async Task AWaitingCallerGetsTheLockWhenTheHolderReleases()
     {
-        if (await ConnectAsync() is not { } connected) return;
+        if (await ConnectAsync() is not { } connected)
+            return;
+
         await using RuvioConnection connection = connected.Connection;
         IRuvioClient client = connected.Client;
         RuvioLockProvider provider = Provider(client);
@@ -61,7 +67,9 @@ public class LiveTests
     [Fact]
     public async Task ALockThatExpiredIsNotReleasedForANewOwner()
     {
-        if (await ConnectAsync() is not { } connected) return;
+        if (await ConnectAsync() is not { } connected)
+            return;
+
         await using RuvioConnection connection = connected.Connection;
         IRuvioClient client = connected.Client;
         var options = new RuvioLockOptions { KeyPrefix = "test:lock:" + Guid.NewGuid().ToString("N") + ":", AutoRenew = false };
@@ -81,7 +89,9 @@ public class LiveTests
     [Fact]
     public async Task AutoRenewalKeepsAShortLeaseAlive()
     {
-        if (await ConnectAsync() is not { } connected) return;
+        if (await ConnectAsync() is not { } connected)
+            return;
+
         await using RuvioConnection connection = connected.Connection;
         IRuvioClient client = connected.Client;
         RuvioLockProvider provider = Provider(client);
@@ -99,7 +109,9 @@ public class LiveTests
     [Fact]
     public async Task LockLostFiresWhenAnotherOwnerTakesTheKey()
     {
-        if (await ConnectAsync() is not { } connected) return;
+        if (await ConnectAsync() is not { } connected)
+            return;
+
         await using RuvioConnection connection = connected.Connection;
         IRuvioClient client = connected.Client;
         string prefix = "test:lock:" + Guid.NewGuid().ToString("N") + ":";

@@ -34,6 +34,7 @@ internal static class AllocationProfile
 
             long sampled = listener.Types.Values.Sum();
             Console.WriteLine($"== {operation} c={concurrency} ops={completed} bytes/op={bytes / (double)completed:F0}");
+
             foreach ((string type, long amount) in listener.Types.OrderByDescending(pair => pair.Value).Take(14))
             {
                 double share = sampled == 0 ? 0 : amount / (double)sampled;
@@ -56,6 +57,7 @@ internal static class AllocationProfile
                 _ => ["LIMIT", $"alloc-profile:limit:{worker}", "1000000000", "60000"],
             };
             long local = 0;
+
             while (Stopwatch.GetTimestamp() < deadline)
             {
                 switch (operation)
@@ -70,10 +72,13 @@ internal static class AllocationProfile
                         await client.ExecuteAsync(command).ConfigureAwait(false);
                         break;
                 }
+
                 local++;
             }
+
             Interlocked.Add(ref completed, local);
         }));
+
         return completed;
     }
 
@@ -95,7 +100,9 @@ internal static class AllocationProfile
 
             int typeIndex = data.PayloadNames.IndexOf("TypeName");
             int amountIndex = data.PayloadNames.IndexOf("AllocationAmount64");
-            if (typeIndex < 0) return;
+            if (typeIndex < 0)
+                return;
+
             string type = data.Payload[typeIndex] as string ?? "?";
             long amount = amountIndex >= 0 ? Convert.ToInt64(data.Payload[amountIndex]) : 100_000;
             Types.AddOrUpdate(type, amount, (_, current) => current + amount);

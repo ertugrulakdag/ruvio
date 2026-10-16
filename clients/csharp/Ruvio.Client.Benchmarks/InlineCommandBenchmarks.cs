@@ -29,6 +29,7 @@ public class InlineCommandBenchmarks
     public int Encode()
     {
         using PooledFrame frame = _command.EncodePooled();
+
         return frame.Length;
     }
 }

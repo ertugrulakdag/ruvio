@@ -395,6 +395,7 @@ public sealed class RuvioDistributedCache : IDistributedCache
     {
         if (!duration.HasValue)
             return 0;
+
         long value = duration.Value.Ticks / TimeSpan.TicksPerMillisecond;
 
         if (value <= 0 || value > DateTimeOffset.MaxValue.ToUnixTimeMilliseconds())

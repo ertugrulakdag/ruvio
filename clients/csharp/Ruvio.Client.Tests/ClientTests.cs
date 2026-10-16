@@ -205,6 +205,7 @@ public class ClientTests
         {
             await Task.Yield();
             cancellationToken.ThrowIfCancellationRequested();
+
             return Read(buffer.Span[..Math.Min(1, buffer.Length)]);
         }
     }

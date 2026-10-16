@@ -10,9 +10,11 @@ internal static class SocketPhases
         if (args.Length is not (2 or 3 or 4) || !int.TryParse(args[0], out int port) ||
             port is < 1 or > 65535 || !int.TryParse(args[1], out int seconds) || seconds is < 1 or > 60)
             throw new ArgumentException("Expected port seconds (1-60) [concurrency (1/16/128)], using a disposable standalone server.");
+
         int concurrency = args.Length >= 3 ? int.Parse(args[2]) : 1;
         if (concurrency is not (1 or 16 or 128))
             throw new ArgumentException("Concurrency must be 1, 16 or 128.");
+
         bool pipeline = args.Length == 4 && args[3] == "--pipeline";
         if (args.Length == 4 && !pipeline)
             throw new ArgumentException("Expected --pipeline as the fourth argument.");
@@ -37,6 +39,7 @@ internal static class SocketPhases
                 {
                     long deadline = Stopwatch.GetTimestamp() + duration * Stopwatch.Frequency;
                     long completed = 0;
+
                     while (Stopwatch.GetTimestamp() < deadline)
                     {
                         IReadOnlyList<RespValue> replies = await client.ExecuteManyAsync(batch);
@@ -44,10 +47,13 @@ internal static class SocketPhases
                             ? reply.Kind != RespKind.Bulk || reply.Bytes?.Length != 256
                             : reply.AsString() != "OK"))
                             throw new InvalidOperationException("Unexpected pipeline reply.");
+
                         completed += replies.Count;
                     }
+
                     return completed;
                 }
+
                 async ValueTask Execute()
                 {
                     if (operation == "get")
@@ -55,26 +61,33 @@ internal static class SocketPhases
                         if ((await client.GetAsync(key).ConfigureAwait(false))?.Length != 256)
                             throw new InvalidOperationException("Unexpected GET reply.");
                     }
-                    else await client.SetAsync(key, value).ConfigureAwait(false);
+                    else
+                        await client.SetAsync(key, value).ConfigureAwait(false);
                 }
 
                 async Task<long> Workers(int duration)
                 {
-                    if (pipeline) return await Pipeline(duration);
+                    if (pipeline)
+                        return await Pipeline(duration);
+
                     long deadline = Stopwatch.GetTimestamp() + duration * Stopwatch.Frequency;
                     long completed = 0;
                     await Task.WhenAll(Enumerable.Range(0, concurrency).Select(async _ =>
                     {
                         long local = 0;
+
                         while (Stopwatch.GetTimestamp() < deadline)
                         {
                             await Execute();
                             local++;
                         }
+
                         Interlocked.Add(ref completed, local);
                     }));
+
                     return completed;
                 }
+
                 await Workers(1);
                 var phases = new Dictionary<string, (long Count, double TotalMs)>();
                 object gate = new();
@@ -98,7 +111,9 @@ internal static class SocketPhases
                 {
                     foreach (var tag in tags)
                     {
-                        if (tag.Key != "phase" || tag.Value is not string phase) continue;
+                        if (tag.Key != "phase" || tag.Value is not string phase)
+                            continue;
+
                         lock (gate)
                         {
                             phases.TryGetValue(phase, out var previous);
@@ -138,6 +153,7 @@ internal static class SocketPhases
         {
             await client.DeleteAsync(key);
         }
+
         Console.WriteLine(JsonSerializer.Serialize(new
         {
             runtime = Environment.Version.ToString(), concurrency, pipeline,

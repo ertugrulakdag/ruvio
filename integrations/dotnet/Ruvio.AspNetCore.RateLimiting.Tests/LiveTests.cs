@@ -14,7 +14,9 @@ public class LiveTests
     {
         string? address = Environment.GetEnvironmentVariable("RUVIO_TEST_ADDR");
 
-        if (string.IsNullOrWhiteSpace(address)) return;
+        if (string.IsNullOrWhiteSpace(address))
+            return;
+
         var uri = new Uri("tcp://" + address);
 
         await using var firstConnection = await RuvioConnection.ConnectAsync(uri.Host, uri.Port);

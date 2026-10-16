@@ -72,7 +72,9 @@ public class HealthCheckTests
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
-            if (targetMethod?.Name != nameof(IRuvioClient.PingAsync)) throw new NotSupportedException();
+            if (targetMethod?.Name != nameof(IRuvioClient.PingAsync))
+                throw new NotSupportedException();
+
             Token = (CancellationToken)args![0]!;
 
             return new ValueTask<string>(Reply);

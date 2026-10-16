@@ -114,6 +114,7 @@ internal static class RespCodec
         try
         {
             int written = WriteCommands(rented.AsSpan(0, size), commands);
+
             return new PooledFrame(rented, written);
         }
         catch
@@ -473,12 +474,14 @@ internal sealed class RespReader : IDisposable
     private bool TryReadBuffered(out RespValue? reply)
     {
         reply = null;
+
         if (_start == _end)
         {
             return false;
         }
 
         int prefix = _buffer[_start];
+
         if (prefix != (byte)'+' && prefix != (byte)'-' && prefix != (byte)':' && prefix != (byte)'$')
         {
             return false;
@@ -487,9 +490,11 @@ internal sealed class RespReader : IDisposable
         int saved = _start;
         _start++;
         ReplyStarted = true;
+
         if (!TryTakeLineBytes(out ReadOnlySpan<byte> line, out _))
         {
             _start = saved;
+
             return false;
         }
 
@@ -528,10 +533,12 @@ internal sealed class RespReader : IDisposable
                 if (_end - _start < value + 2)
                 {
                     _start = saved;
+
                     return false;
                 }
 
                 int length = (int)value;
+
                 if (_buffer[_start + length] != (byte)'\r' || _buffer[_start + length + 1] != (byte)'\n')
                 {
                     throw new RuvioException("bulk payload was not terminated");
@@ -759,6 +766,7 @@ internal sealed class RespReader : IDisposable
     private bool TryTakeSimple(out RespValue? value, out int need)
     {
         value = TryTakeLineBytes(out ReadOnlySpan<byte> line, out need) ? RespValue.Simple(line) : null;
+
         return value is not null;
     }
 

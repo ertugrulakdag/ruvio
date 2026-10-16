@@ -370,7 +370,6 @@ public sealed class RuvioOutputCacheStore : IOutputCacheStore
             }
         }
 
-
         return count;
     }
 
@@ -388,6 +387,7 @@ public sealed class RuvioOutputCacheStore : IOutputCacheStore
                 throw new RuvioException(reply.Text ?? "Output-cache command failed.");
 
             outcome = "success";
+
             return reply;
         }
         finally

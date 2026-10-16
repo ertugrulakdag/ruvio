@@ -93,13 +93,16 @@ public class RespCommandTests
         foreach (string line in File.ReadLines(Path.Combine(RespVerbGeneratorTests.FindClientDirectory(), "RespVerbs.txt")))
         {
             string verb = line.Trim();
-            if (verb.Length == 0 || verb.StartsWith('#')) continue;
+            if (verb.Length == 0 || verb.StartsWith('#'))
+                continue;
 
             RespCommand command = new(verb);
+
             for (int arguments = 0; arguments <= 5; arguments++)
             {
                 Assert.Equal(RespCodec.Encode(command.AsList()), Encode(command));
-                if (arguments < 5) command = command.With(arguments % 2 == 0 ? (RespArg)"kéy" : (RespArg)long.MinValue);
+                if (arguments < 5)
+                    command = command.With(arguments % 2 == 0 ? (RespArg)"kéy" : (RespArg)long.MinValue);
             }
         }
     }
@@ -129,6 +132,7 @@ public class RespCommandTests
     private static RespCommand Build(string[] parts)
     {
         RespCommand command = new(parts[0]);
+
         for (int index = 1; index < parts.Length; index++)
         {
             command = long.TryParse(parts[index], out long number) && number.ToString(System.Globalization.CultureInfo.InvariantCulture) == parts[index]
@@ -142,6 +146,7 @@ public class RespCommandTests
     private static byte[] Encode(RespCommand command)
     {
         using PooledFrame frame = command.EncodePooled();
+
         return frame.Buffer.AsSpan(0, frame.Length).ToArray();
     }
 }

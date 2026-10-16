@@ -33,7 +33,9 @@ public class HttpTests
     {
         string? address = Environment.GetEnvironmentVariable("RUVIO_TEST_ADDR");
 
-        if (string.IsNullOrWhiteSpace(address)) return null;
+        if (string.IsNullOrWhiteSpace(address))
+            return null;
+
         var uri = new Uri("tcp://" + address);
         RuvioConnection connection = await RuvioConnection.ConnectAsync(uri.Host, uri.Port);
         IRuvioClient client = await connection.GetDefaultDatabaseAsync();
@@ -50,7 +52,9 @@ public class HttpTests
 
         WebApplication app = builder.Build();
 
-        if (mvc) app.MapControllers();
+        if (mvc)
+            app.MapControllers();
+
         map(app);
         await app.StartAsync();
 
@@ -84,7 +88,8 @@ public class HttpTests
             return Results.Ok(orderId);
         }).WithDistributedLock("pay:{orderId}"));
 
-        if (host is null) return;
+        if (host is null)
+            return;
 
         Task<HttpResponseMessage> first = host.Http.PostAsync("/orders/1/pay", null);
 
@@ -113,12 +118,14 @@ public class HttpTests
 
         await using Host? host = await StartAsync(app => app.MapGet("/boom", () =>
         {
-            if (Interlocked.Increment(ref calls) == 1) throw new InvalidOperationException("boom");
+            if (Interlocked.Increment(ref calls) == 1)
+                throw new InvalidOperationException("boom");
 
             return Results.Ok();
         }).WithDistributedLock("boom"));
 
-        if (host is null) return;
+        if (host is null)
+            return;
 
         using HttpResponseMessage failed = await host.Http.GetAsync("/boom");
         using HttpResponseMessage next = await host.Http.GetAsync("/boom");
@@ -154,7 +161,8 @@ public class HttpTests
             }).WithDistributedLock("impatient", conflictStatusCode: 423);
         });
 
-        if (host is null) return;
+        if (host is null)
+            return;
 
         Task<HttpResponseMessage> first = host.Http.GetAsync("/queued");
 
@@ -189,7 +197,8 @@ public class HttpTests
             app.MapGet("/typo/{id}", () => Results.Ok()).WithDistributedLock("typo:{ident}");
         });
 
-        if (host is null) return;
+        if (host is null)
+            return;
 
         Assert.Contains("\"resource\":\"nightly-job\"", await host.Http.GetStringAsync("/job"));
         using HttpResponseMessage typo = await host.Http.GetAsync("/typo/1");
@@ -202,7 +211,8 @@ public class HttpTests
     {
         await using Host? host = await StartAsync(app => app.UseRuvioLock(), mvc: true);
 
-        if (host is null) return;
+        if (host is null)
+            return;
 
         Task<HttpResponseMessage> first = host.Http.PostAsync("/mvc-lock/1", null);
 

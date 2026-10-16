@@ -67,6 +67,7 @@ public class BinaryCommandTests
 
         if (tagged)
             key = "prefix:{" + key + "}:suffix";
+
         int expected = RuvioClient.GetHashSlot(key);
 
         for (int i = 0; i < 1000; i++)
@@ -77,6 +78,7 @@ public class BinaryCommandTests
 
         for (int i = 0; i < 10000; i++)
             actual = RuvioClient.GetHashSlot(key);
+
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.Equal(expected, actual);

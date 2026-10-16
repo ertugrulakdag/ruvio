@@ -61,6 +61,7 @@ public sealed class RespVerbGenerator : IIncrementalGenerator
         builder.AppendLine();
         builder.AppendLine("        internal static ReadOnlySpan<byte> Bulk(string name) => name switch");
         builder.AppendLine("        {");
+
         foreach (string name in names)
         {
             builder.Append("            \"");
@@ -71,6 +72,7 @@ public sealed class RespVerbGenerator : IIncrementalGenerator
             builder.Append(name);
             builder.AppendLine("\\r\\n\"u8,");
         }
+
         builder.AppendLine("            _ => default,");
         builder.AppendLine("        };");
 

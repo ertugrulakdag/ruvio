@@ -71,6 +71,7 @@ public sealed class RuvioConnection : IRuvioConnection
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(address);
+
         return ConnectAsync(address.ToString(), port, database, cancellationToken);
     }
 
@@ -132,6 +133,7 @@ public sealed class RuvioConnection : IRuvioConnection
                                                   .ConfigureAwait(false);
                 
             AddClient(client);
+
             return client;
         }
         finally
@@ -212,6 +214,7 @@ public sealed class RuvioConnection : IRuvioConnection
                 client.ConnectionRestored -= OnConnectionRestored;
                 client.Dispose();
             }
+
             _clients.Clear();
         }
         finally
@@ -224,6 +227,7 @@ public sealed class RuvioConnection : IRuvioConnection
     public ValueTask DisposeAsync()
     {
         Dispose();
+
         return ValueTask.CompletedTask;
     }
 
@@ -260,6 +264,7 @@ public static class RuvioConnectionExtensions
     public static async Task<IRuvioClient> GetDefaultDatabaseAsync(this Task<IRuvioConnection> connectionTask, CancellationToken cancellationToken = default)
     {
         var connection = await connectionTask.ConfigureAwait(false);
+
         return await connection.GetDefaultDatabaseAsync(cancellationToken).ConfigureAwait(false);
     }
 }

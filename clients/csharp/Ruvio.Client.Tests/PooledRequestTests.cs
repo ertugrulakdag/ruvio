@@ -60,15 +60,19 @@ public class PooledRequestTests
         await Task.WhenAll(Enumerable.Range(0, 32).Select(worker => Task.Run(async () =>
         {
             var random = new Random(worker);
+
             for (int i = 0; i < 200; i++)
             {
                 string value = $"{worker}:{i}";
                 using var cancel = new CancellationTokenSource();
                 bool cancels = i % 3 == 0;
+
                 if (cancels)
                 {
-                    if (random.Next(4) == 0) cancel.Cancel();
-                    else cancel.CancelAfter(TimeSpan.FromTicks(random.Next(1, 20_000)));
+                    if (random.Next(4) == 0)
+                        cancel.Cancel();
+                    else
+                        cancel.CancelAfter(TimeSpan.FromTicks(random.Next(1, 20_000)));
                 }
 
                 try
@@ -154,6 +158,7 @@ public class PooledRequestTests
             listener.Start();
             var server = new EchoServer(listener);
             server._accepting = server.AcceptAsync();
+
             return Task.FromResult(server);
         }
 
@@ -173,7 +178,8 @@ public class PooledRequestTests
                 while (true)
                 {
                     TcpClient client = await _listener.AcceptTcpClientAsync(_stop.Token);
-                    lock (_sessions) _sessions.Add(ServeAsync(client));
+                    lock (_sessions)
+                        _sessions.Add(ServeAsync(client));
                 }
             }
             catch (OperationCanceledException)
@@ -209,7 +215,8 @@ public class PooledRequestTests
             _listener.Stop();
             await _accepting;
             Task[] sessions;
-            lock (_sessions) sessions = [.. _sessions];
+            lock (_sessions)
+                sessions = [.. _sessions];
             await Task.WhenAll(sessions);
             _stop.Dispose();
         }

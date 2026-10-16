@@ -52,6 +52,7 @@ builder.Services.AddRuvioRateLimiting(options =>
     options.PartitionKey = context =>
     {
         var runId = context.Request.Headers["X-Lab-Run"].ToString();
+
         if (runId.Length is < 1 or > 64 ||
             runId.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '-'))
         {
@@ -120,6 +121,7 @@ app.Use(async (context, next) =>
     if (!context.Request.Path.StartsWithSegments("/bench"))
     {
         await next(context);
+
         return;
     }
 
@@ -127,10 +129,12 @@ app.Use(async (context, next) =>
     string requestId = context.Request.Headers["X-Lab-Request-ID"].ToString();
     string testRun = context.Request.Headers["X-Lab-Test-Run"].ToString();
     string loadStage = context.Request.Headers["X-Lab-Stage"].ToString();
+
     if (backend is not ("ruvio" or "redis") || requestId.Length is < 1 or > 128 ||
         testRun.Length is < 1 or > 64 || loadStage != "steady")
     {
         context.Response.StatusCode = StatusCodes.Status400BadRequest;
+
         return;
     }
 
@@ -145,6 +149,7 @@ app.Use(async (context, next) =>
     Activity.Current?.SetTag("load_stage", loadStage);
     if (Activity.Current is { } requestActivity)
         context.Response.Headers["X-Lab-Trace-ID"] = requestActivity.TraceId.ToString();
+
     try
     {
         await next(context);
@@ -163,6 +168,7 @@ app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
 app.MapGet("/health/ready", async (Ruvio.Client.IRuvioClient client, CancellationToken cancellationToken) =>
 {
     var pong = await client.PingAsync(cancellationToken);
+
     return pong == "PONG"
         ? Results.Ok(new { status = "ready", ruvio = pong })
         : Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
@@ -185,6 +191,7 @@ app.MapGet(
 app.MapGet("/api/catalog/{sku}", (string sku, ScenarioState state) =>
 {
     state.RecordCatalogOriginRead();
+
     return Results.Ok(new CatalogItem(sku, "Scenario Lab Widget", DateTimeOffset.UtcNow));
 })
 .CacheOutput(policy => policy.Expire(TimeSpan.FromSeconds(15)).Tag("catalog"));
@@ -192,6 +199,7 @@ app.MapGet("/api/catalog/{sku}", (string sku, ScenarioState state) =>
 app.MapPost("/api/catalog/invalidate", async (IOutputCacheStore store, CancellationToken cancellationToken) =>
 {
     await store.EvictByTagAsync("catalog", cancellationToken);
+
     return Results.NoContent();
 });
 
@@ -203,6 +211,7 @@ app.MapPost("/api/orders", (OrderRequest request, ScenarioState state) =>
         request.Quantity);
 
     state.RecordOrderEffect();
+
     return Results.Created($"/api/orders/{order.OrderNumber}", order);
 })
 .WithMetadata(
@@ -211,6 +220,7 @@ app.MapPost("/api/orders", (OrderRequest request, ScenarioState state) =>
 app.MapGet("/api/rate-limited", (ScenarioState state) =>
 {
     state.RecordRateLimitedEndpointCall();
+
     return Results.Ok(new { accepted = true });
 })
 .WithMetadata(new RuvioRateLimitAttribute("probe", 20, 60));
@@ -223,9 +233,11 @@ app.MapGet("/bench/catalog/{sku}", async (
 {
     string key = $"scenario:bench:cache:{sku}";
     byte[]? cached = await storage.GetCacheAsync(key, cancellationToken);
+
     if (cached is not null)
     {
         context.Response.Headers["X-Lab-Cache"] = "hit";
+
         return Results.Bytes(cached, "application/json");
     }
 
@@ -233,6 +245,7 @@ app.MapGet("/bench/catalog/{sku}", async (
     byte[] value = JsonSerializer.SerializeToUtf8Bytes(
         new CatalogItem(sku, "Scenario Lab Widget", DateTimeOffset.UtcNow));
     await storage.SetCacheAsync(key, value, TimeSpan.FromSeconds(15), cancellationToken);
+
     return Results.Bytes(value, "application/json");
 });
 
@@ -255,10 +268,13 @@ app.MapPost("/bench/orders", async (
 
     if (result.State == "completed" && result.Result is not null)
         return Results.Text(result.Result, "application/json", Encoding.UTF8, StatusCodes.Status201Created);
+
     if (result.State == "conflict")
         return Results.Conflict();
+
     if (result.State == "pending")
         return Results.StatusCode(425);
+
     if (result.State != "acquired")
         return Results.StatusCode(StatusCodes.Status500InternalServerError);
 
@@ -268,6 +284,7 @@ app.MapPost("/bench/orders", async (
     await storage.CompleteIdempotencyAsync(
         $"scenario:bench:idem:{key}", fingerprint, owner, serialized, cancellationToken);
     state.RecordOrderEffect();
+
     return Results.Text(serialized, "application/json", Encoding.UTF8, StatusCodes.Status201Created);
 });
 
@@ -280,11 +297,14 @@ app.MapGet("/bench/rate-limited", async (
     string partition = context.Request.Headers["X-Lab-Run"].ToString();
     if (partition.Length is < 1 or > 128)
         return Results.BadRequest();
+
     long? remaining = await storage.LimitAsync(
         $"scenario:bench:rate:{partition}", 20, TimeSpan.FromSeconds(60), cancellationToken);
     if (remaining is null)
         return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+
     state.RecordRateLimitedEndpointCall();
+
     return Results.Ok(new { accepted = true, remaining });
 });
 
@@ -343,6 +363,7 @@ internal static class ProcessMetrics
         () =>
         {
             CurrentProcess.Refresh();
+
             return CurrentProcess.WorkingSet64;
         },
         "By");
@@ -351,6 +372,7 @@ internal static class ProcessMetrics
         () =>
         {
             CurrentProcess.Refresh();
+
             return CurrentProcess.TotalProcessorTime.TotalSeconds;
         },
         "s");

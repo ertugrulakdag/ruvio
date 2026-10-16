@@ -22,12 +22,15 @@ public class KeyedCommandBenchmarks
         parts[0] = "HSET";
         parts[1] = "key";
         int index = 2;
+
         foreach ((string field, string value) in _pairs)
         {
             parts[index++] = field;
             parts[index++] = value;
         }
+
         using PooledFrame frame = new RespCommand(parts).EncodePooled();
+
         return frame.Length;
     }
 
@@ -35,6 +38,7 @@ public class KeyedCommandBenchmarks
     public int Inline()
     {
         using PooledFrame frame = RespCommand.KeyedPairs("HSET", "key", _pairs).EncodePooled();
+
         return frame.Length;
     }
 }

@@ -13,7 +13,6 @@ public sealed class RuvioLockMiddleware(RequestDelegate next)
 {
     private readonly RequestDelegate next = next ?? throw new ArgumentNullException(nameof(next));
 
-
     /// <summary>Handles one request.</summary>
     public Task InvokeAsync(HttpContext context)
     {
@@ -31,6 +30,7 @@ public sealed class RuvioLockMiddleware(RequestDelegate next)
         if (resource is null)
         {
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
+
             return;
         }
 
@@ -61,6 +61,7 @@ public sealed class RuvioLockMiddleware(RequestDelegate next)
             RuvioLockTelemetry.Errors.Add(1, tags);
             activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
             context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+
             return;
         }
 
@@ -73,6 +74,7 @@ public sealed class RuvioLockMiddleware(RequestDelegate next)
             context.Response.StatusCode = metadata.RejectStatusCode;
             // Tell well-behaved clients when it is worth trying again; the lease is the longest it can last.
             context.Response.Headers.RetryAfter = Math.Max(1, metadata.LeaseSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
             return;
         }
 
@@ -135,7 +137,8 @@ public sealed class RuvioLockMiddleware(RequestDelegate next)
         while (index < templateSpan.Length)
         {
             int open = templateSpan[index..].IndexOf('{');
-            if (open >= 0) open += index;
+            if (open >= 0)
+                open += index;
 
             if (open < 0)
             {

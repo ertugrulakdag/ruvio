@@ -59,6 +59,7 @@ public class RespVerbGeneratorTests
         {
             if (!generated.AsSpan(index).StartsWith("internal static ReadOnlySpan<byte> Bulk(", StringComparison.Ordinal))
                 count++;
+
             index += 4;
         }
 

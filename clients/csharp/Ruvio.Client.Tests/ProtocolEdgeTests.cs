@@ -168,6 +168,7 @@ public class ProtocolEdgeTests
 
         // With() appends at every inline position, then spills into a caller-independent list.
         RespCommand grown = new("X");
+
         for (int i = 1; i <= 8; i++)
         {
             grown = grown.With(i % 2 == 0 ? (RespArg)i : (RespArg)("s" + i));

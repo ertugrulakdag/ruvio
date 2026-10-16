@@ -84,12 +84,14 @@ internal readonly struct RespCommand
 
         IReadOnlyList<string> current = AsList();
         var arguments = new string[current.Count + 1];
+
         for (int index = 0; index < current.Count; index++)
         {
             arguments[index] = current[index];
         }
 
         arguments[^1] = argument.ToString();
+
         return new RespCommand(arguments);
     }
 
@@ -105,10 +107,14 @@ internal readonly struct RespCommand
     internal static RespCommand Keyed(string name, string key, string[] arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
+
         if (arguments.Length <= InlineArguments - 1)
         {
             RespCommand command = new(name, key);
-            foreach (string argument in arguments) command = command.With(argument);
+
+            foreach (string argument in arguments)
+                command = command.With(argument);
+
             return command;
         }
 
@@ -116,6 +122,7 @@ internal readonly struct RespCommand
         parts[0] = name;
         parts[1] = key;
         arguments.AsSpan().CopyTo(parts.AsSpan(2));
+
         return new RespCommand(parts);
     }
 
@@ -123,11 +130,14 @@ internal readonly struct RespCommand
         string name, string key, (string Left, string Right)[] pairs)
     {
         ArgumentNullException.ThrowIfNull(pairs);
+
         if (pairs.Length <= (InlineArguments - 1) / 2)
         {
             RespCommand command = new(name, key);
+
             foreach ((string left, string right) in pairs)
                 command = command.With(left).With(right);
+
             return command;
         }
 
@@ -135,11 +145,13 @@ internal readonly struct RespCommand
         parts[0] = name;
         parts[1] = key;
         int index = 2;
+
         foreach ((string left, string right) in pairs)
         {
             parts[index++] = left;
             parts[index++] = right;
         }
+
         return new RespCommand(parts);
     }
 
@@ -170,9 +182,11 @@ internal readonly struct RespCommand
     /// <summary>The list form, for cluster routing, retries, and other rare paths.</summary>
     internal IReadOnlyList<string> AsList()
     {
-        if (_list is not null) return _list;
+        if (_list is not null)
+            return _list;
 
         var arguments = new string[Count];
+
         for (int index = 0; index < Count; index++)
         {
             arguments[index] = Part(index).ToString();
@@ -183,12 +197,14 @@ internal readonly struct RespCommand
 
     internal PooledFrame EncodePooled()
     {
-        if (_list is not null) return RespCodec.EncodePooled(_list);
+        if (_list is not null)
+            return RespCodec.EncodePooled(_list);
 
         ReadOnlySpan<byte> verbBulk = RespVerbs.Bulk(_name!);
         int firstPart = verbBulk.IsEmpty ? 0 : 1;
         Span<int> lengths = stackalloc int[InlineArguments + 1];
         int size = 1 + Digits(Count) + 2 + verbBulk.Length;
+
         for (int index = firstPart; index < Count; index++)
         {
             RespArg part = Part(index);
@@ -204,10 +220,12 @@ internal readonly struct RespCommand
             int cursor = WriteLine(destination, 0, (byte)'*', Count);
             verbBulk.CopyTo(destination[cursor..]);
             cursor += verbBulk.Length;
+
             for (int index = firstPart; index < Count; index++)
             {
                 RespArg part = Part(index);
                 cursor = WriteLine(destination, cursor, (byte)'$', lengths[index]);
+
                 if (part.Text is null)
                 {
                     Utf8Formatter.TryFormat(part.Number, destination[cursor..], out int written);
@@ -238,14 +256,18 @@ internal readonly struct RespCommand
         cursor += written;
         destination[cursor++] = (byte)'\r';
         destination[cursor++] = (byte)'\n';
+
         return cursor;
     }
 
     private static int Digits(long value)
     {
-        if (value == long.MinValue) return 20;
+        if (value == long.MinValue)
+            return 20;
+
         int digits = value < 0 ? 2 : 1;
         ulong magnitude = (ulong)Math.Abs(value);
+
         while (magnitude >= 10)
         {
             magnitude /= 10;

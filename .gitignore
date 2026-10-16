@@ -33,3 +33,7 @@ __pycache__/
 
 # Machine type and container CPU chosen by deploy/local.sh
 /deploy/.local.env
+
+# C# layout tool build output
+scripts/csharp-format/bin/
+scripts/csharp-format/obj/

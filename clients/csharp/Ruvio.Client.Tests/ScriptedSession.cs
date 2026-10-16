@@ -43,6 +43,7 @@ internal sealed class ScriptedSession : IAsyncDisposable
 
         TcpClient accepted = await TestDeadlines.AcceptAsync(listener);
         NetworkStream stream = accepted.GetStream();
+
         if (database != 0)
         {
             byte[] expected = RespCodec.Encode(["SELECT", database.ToString()]);
@@ -51,6 +52,7 @@ internal sealed class ScriptedSession : IAsyncDisposable
             Assert.Equal(expected, received);
             await stream.WriteAsync(Encoding.ASCII.GetBytes("+OK\r\n"));
         }
+
         RuvioConnection connection = await connecting;
         RuvioClient client = await connection.GetDefaultDatabaseAsync();
 
@@ -61,6 +63,7 @@ internal sealed class ScriptedSession : IAsyncDisposable
     {
         TcpClient accepted = await TestDeadlines.AcceptAsync(_listener);
         _extra.Add(accepted);
+
         return new SubscriberPipe(accepted);
     }
 

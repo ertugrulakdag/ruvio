@@ -50,6 +50,7 @@ internal sealed class CommandMultiplexer
         });
 
         _dedicatedReader = dedicatedReader;
+
         if (dedicatedReader)
         {
             _readingOwner = 1;
@@ -67,27 +68,36 @@ internal sealed class CommandMultiplexer
         IReadOnlyList<IReadOnlyList<string>> commands, CancellationToken token)
     {
         Request? request = Admit(commands.Count, token, out Exception? error);
-        if (request is null) return ValueTask.FromException<IReadOnlyList<RespValue>>(error!);
+        if (request is null)
+            return ValueTask.FromException<IReadOnlyList<RespValue>>(error!);
+
         request.SetCommands(commands);
         bool lead = CanLead(token);
+
         return LeadOrWait(lead, request, request.SubmitMany(this));
     }
 
     internal ValueTask<RespValue> SendCommandAsync(in RespCommand command, CancellationToken token)
     {
         Request? request = Admit(1, token, out Exception? error);
-        if (request is null) return ValueTask.FromException<RespValue>(error!);
+        if (request is null)
+            return ValueTask.FromException<RespValue>(error!);
+
         request.SetCommand(command);
         bool lead = CanLead(token);
+
         return LeadOrWait(lead, request, request.SubmitOne(this));
     }
 
     internal ValueTask<RespValue> SendAsync(IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken token)
     {
         Request? request = Admit(1, token, out Exception? error);
-        if (request is null) return ValueTask.FromException<RespValue>(error!);
+        if (request is null)
+            return ValueTask.FromException<RespValue>(error!);
+
         request.SetArguments(arguments);
         bool lead = CanLead(token);
+
         return LeadOrWait(lead, request, request.SubmitOne(this));
     }
 
@@ -95,9 +105,12 @@ internal sealed class CommandMultiplexer
         ReadOnlyMemory<byte> payload, int replies, CancellationToken token)
     {
         Request? request = Admit(replies, token, out Exception? error);
-        if (request is null) return ValueTask.FromException<IReadOnlyList<RespValue>>(error!);
+        if (request is null)
+            return ValueTask.FromException<IReadOnlyList<RespValue>>(error!);
+
         request.SetPayload(payload);
         bool lead = CanLead(token);
+
         return LeadOrWait(lead, request, request.SubmitMany(this));
     }
 
@@ -117,6 +130,7 @@ internal sealed class CommandMultiplexer
         if (pending.IsCompleted)
         {
             ReleaseReading();
+
             return pending;
         }
 
@@ -181,10 +195,12 @@ internal sealed class CommandMultiplexer
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(replies);
         error = token.IsCancellationRequested ? new OperationCanceledException(token)
             : IsBroken ? Failure() : null;
-        if (error is not null) return null;
+        if (error is not null)
+            return null;
 
         Request request = Rent();
         request.Initialize(replies, token);
+
         return request;
     }
 
@@ -202,6 +218,7 @@ internal sealed class CommandMultiplexer
         {
             request.DisposePayload();
             _capacity.Release();
+
             return false;
         }
 
@@ -219,6 +236,7 @@ internal sealed class CommandMultiplexer
         catch (Exception exception)
         {
             error = exception;
+
             return false;
         }
 
@@ -227,6 +245,7 @@ internal sealed class CommandMultiplexer
         if (Interlocked.Increment(ref _scheduled) == 1)
         {
             _ = WriteLoopAsync(request);
+
             return true;
         }
 
@@ -235,6 +254,7 @@ internal sealed class CommandMultiplexer
 
         WriterFinished();
         error = IsBroken ? Failure() : new InvalidOperationException("Admitted request exceeded the writer queue capacity.");
+
         return false;
     }
 
@@ -245,6 +265,7 @@ internal sealed class CommandMultiplexer
         try
         {
             await _capacity.WaitAsync(request.Token).ConfigureAwait(false);
+
             if (!PublishAdmitted(request, out Exception? error))
             {
                 _capacity.Release();
@@ -259,6 +280,7 @@ internal sealed class CommandMultiplexer
             request.FailUnpublished(error is OperationCanceledException && request.Token.IsCancellationRequested
                 ? new OperationCanceledException(request.Token)
                 : error);
+
             return;
         }
 
@@ -272,6 +294,7 @@ internal sealed class CommandMultiplexer
             {
                 Request request = _pool[--_pooled]!;
                 _pool[_pooled] = null;
+
                 return request;
             }
         }
@@ -318,7 +341,8 @@ internal sealed class CommandMultiplexer
                 {
                     long encodeStarted = RuvioSocket.PhaseMetricsEnabled ? Stopwatch.GetTimestamp() : 0;
                     encoded = request.Encode();
-                    if (encodeStarted != 0) RuvioSocket.RecordSocketPhase("encode", encodeStarted);
+                    if (encodeStarted != 0)
+                        RuvioSocket.RecordSocketPhase("encode", encodeStarted);
                 }
                 catch (Exception error)
                 {
@@ -360,6 +384,7 @@ internal sealed class CommandMultiplexer
                         RuvioSocket.RecordSocketPhase("write", started);
                     }
                 }
+
                 current = null;
                 current = await NextWriteAsync().ConfigureAwait(false);
             }
@@ -367,6 +392,7 @@ internal sealed class CommandMultiplexer
         catch (Exception error)
         {
             Fail(error);
+
             if (current is not null && !pending)
             {
                 current.TryFail(Failure(closedBeforeReply: true));
@@ -397,10 +423,12 @@ internal sealed class CommandMultiplexer
         {
             buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
             first.Buffer.AsSpan(0, length).CopyTo(buffer);
+
             while (current is not null)
             {
                 Request request = current;
                 ThrowIfBroken();
+
                 if (request.Token.IsCancellationRequested)
                 {
                     request.TryCancel();
@@ -415,7 +443,8 @@ internal sealed class CommandMultiplexer
                     {
                         long started = RuvioSocket.PhaseMetricsEnabled ? Stopwatch.GetTimestamp() : 0;
                         frame = request.Encode();
-                        if (started != 0) RuvioSocket.RecordSocketPhase("encode", started);
+                        if (started != 0)
+                            RuvioSocket.RecordSocketPhase("encode", started);
                     }
                     catch (Exception error)
                     {
@@ -423,13 +452,16 @@ internal sealed class CommandMultiplexer
                         request.DisposePayload();
                         Finish(request);
                         current = null;
-                        if (consumed < 15 && _outgoing.Reader.TryRead(out current)) consumed++;
+                        if (consumed < 15 && _outgoing.Reader.TryRead(out current))
+                            consumed++;
+
                         continue;
                     }
 
                     using (frame)
                     {
                         int required = checked(length + frame.Length);
+
                         if (required > buffer.Length)
                         {
                             byte[] larger = ArrayPool<byte>.Shared.Rent(required);
@@ -437,6 +469,7 @@ internal sealed class CommandMultiplexer
                             ArrayPool<byte>.Shared.Return(buffer);
                             buffer = larger;
                         }
+
                         frame.Buffer.AsSpan(0, frame.Length).CopyTo(buffer.AsSpan(length));
                         request.SentAt = Stopwatch.GetTimestamp();
                         RuvioSocket.RecordSocketPhase("queue", request.QueuedAt);
@@ -451,24 +484,30 @@ internal sealed class CommandMultiplexer
                 if (consumed < 15 && length < 64 * 1024 && _outgoing.Reader.TryRead(out current))
                     consumed++;
             }
+
             await _stream.WriteAsync(buffer.AsMemory(0, length)).ConfigureAwait(false);
             RuvioSocket.RecordSocketWrite(length);
         }
         catch (Exception error)
         {
             Fail(error);
+
             if (current is not null)
             {
                 current.TryFail(Failure(closedBeforeReply: true));
                 current.DisposePayload();
                 Finish(current);
             }
+
             throw;
         }
         finally
         {
-            if (buffer is not null) ArrayPool<byte>.Shared.Return(buffer);
-            for (int index = 0; index < consumed; index++) WriterFinished();
+            if (buffer is not null)
+                ArrayPool<byte>.Shared.Return(buffer);
+
+            for (int index = 0; index < consumed; index++)
+                WriterFinished();
         }
     }
 
@@ -505,6 +544,7 @@ internal sealed class CommandMultiplexer
                 if (!await ReadRepliesAsync(request).ConfigureAwait(false))
                 {
                     Volatile.Write(ref _readingOwner, 0);
+
                     return;
                 }
             }
@@ -544,6 +584,7 @@ internal sealed class CommandMultiplexer
                     else
                     {
                         var values = new RespValue[request.Replies];
+
                         for (int i = 0; i < values.Length; i++)
                         {
                             values[i] = await _reader.ReadAsync(CancellationToken.None).ConfigureAwait(false);
@@ -709,12 +750,15 @@ internal sealed class CommandMultiplexer
 
     private void ThrowIfBroken()
     {
-        if (IsBroken) throw Failure();
+        if (IsBroken)
+            throw Failure();
     }
 
     private void Fail(Exception error)
     {
-        if (Interlocked.CompareExchange(ref _failure, error, null) is not null) return;
+        if (Interlocked.CompareExchange(ref _failure, error, null) is not null)
+            return;
+
         _outgoing.Writer.TryComplete();
         _pending.Writer.TryComplete();
         _stream.Dispose();
@@ -725,7 +769,9 @@ internal sealed class CommandMultiplexer
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Interlocked.CompareExchange(ref _writerStopped, stopped, null);
         Fail(new RuvioException("connection is closed"));
-        if (Volatile.Read(ref _scheduled) == 0) _writerStopped.TrySetResult();
+        if (Volatile.Read(ref _scheduled) == 0)
+            _writerStopped.TrySetResult();
+
         await Task.WhenAll(_writerStopped.Task, _receiver).ConfigureAwait(false);
 
         // A caller reading its own reply sees the closed stream and gives up the read side.
@@ -802,6 +848,7 @@ internal sealed class CommandMultiplexer
         internal ValueTask<RespValue> SubmitOne(CommandMultiplexer owner)
         {
             Exception? error = Submit(owner);
+
             return error is null
                 ? new ValueTask<RespValue>(this, _core.Version)
                 : ValueTask.FromException<RespValue>(error);
@@ -810,6 +857,7 @@ internal sealed class CommandMultiplexer
         internal ValueTask<IReadOnlyList<RespValue>> SubmitMany(CommandMultiplexer owner)
         {
             Exception? error = Submit(owner);
+
             return error is null
                 ? new ValueTask<IReadOnlyList<RespValue>>(this, _core.Version)
                 : ValueTask.FromException<IReadOnlyList<RespValue>>(error);
@@ -833,10 +881,12 @@ internal sealed class CommandMultiplexer
                 _registration.Dispose();
                 DisposePayload();
                 owner.Return(this);
+
                 return error;
             }
 
             _ = owner.PublishWhenAvailableAsync(this);
+
             return null;
         }
 
@@ -848,24 +898,33 @@ internal sealed class CommandMultiplexer
 
         internal bool TrySetResult(RespValue value)
         {
-            if (Interlocked.Exchange(ref _completed, 1) != 0) return false;
+            if (Interlocked.Exchange(ref _completed, 1) != 0)
+                return false;
+
             _single = value;
             _core.SetResult(true);
+
             return true;
         }
 
         internal bool TrySetResult(IReadOnlyList<RespValue> values)
         {
-            if (Interlocked.Exchange(ref _completed, 1) != 0) return false;
+            if (Interlocked.Exchange(ref _completed, 1) != 0)
+                return false;
+
             _many = values;
             _core.SetResult(true);
+
             return true;
         }
 
         internal bool TryFail(Exception error)
         {
-            if (Interlocked.Exchange(ref _completed, 1) != 0) return false;
+            if (Interlocked.Exchange(ref _completed, 1) != 0)
+                return false;
+
             _core.SetException(error);
+
             return true;
         }
 
@@ -905,6 +964,7 @@ internal sealed class CommandMultiplexer
             try
             {
                 _core.GetResult(token);
+
                 return _single!;
             }
             finally
@@ -919,6 +979,7 @@ internal sealed class CommandMultiplexer
             try
             {
                 _core.GetResult(token);
+
                 // The reader stores one reply unboxed; list callers with one command still get a list.
                 return _many ?? [_single!];
             }
@@ -976,6 +1037,7 @@ internal sealed class CommandMultiplexer
             if (_ownedFrame is PooledFrame frame)
             {
                 _ownedFrame = null;
+
                 return frame;
             }
 

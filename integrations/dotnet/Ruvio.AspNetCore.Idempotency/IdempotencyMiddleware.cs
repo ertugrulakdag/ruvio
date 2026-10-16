@@ -104,6 +104,7 @@ public sealed class IdempotencyMiddleware
         else
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+
             return;
         }
 
@@ -118,6 +119,7 @@ public sealed class IdempotencyMiddleware
             key.AsSpan().ContainsAnyExceptInRange('!', '~'))
         {
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
+
             return;
         }
 
@@ -128,12 +130,14 @@ public sealed class IdempotencyMiddleware
         if (TooLong(identityParts) || TooLong(requestParts))
         {
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
+
             return;
         }
 
         if (request.ContentLength > options.MaxRequestBodyBytes)
         {
             context.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+
             return;
         }
 
@@ -154,6 +158,7 @@ public sealed class IdempotencyMiddleware
             if (rejectionStatus is int status)
             {
                 context.Response.StatusCode = status;
+
                 return;
             }
 
@@ -173,6 +178,7 @@ public sealed class IdempotencyMiddleware
             if (State is "pending" or "conflict")
             {
                 context.Response.StatusCode = StatusCodes.Status409Conflict;
+
                 return;
             }
 
@@ -444,11 +450,13 @@ internal sealed class BufferedResponseFeature(IHttpResponseFeature inner, Stream
         inner.ReasonPhrase = ReasonPhrase;
         inner.Headers.Clear();
 
-        foreach (var header in Headers) inner.Headers.Add(header);
+        foreach (var header in Headers)
+            inner.Headers.Add(header);
     }
 
     internal async Task RunStartingAsync()
     {
-        while (starting.TryPop(out var callback)) await callback.Callback(callback.State);
+        while (starting.TryPop(out var callback))
+            await callback.Callback(callback.State);
     }
 }

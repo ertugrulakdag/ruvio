@@ -50,7 +50,9 @@ public class MiddlewareTests
 
         long start = GC.GetAllocatedBytesForCurrentThread();
 
-        for (int i = 0; i < 1000; i++) Assert.Same(Task.CompletedTask, middleware.InvokeAsync(context));
+        for (int i = 0; i < 1000; i++)
+            Assert.Same(Task.CompletedTask, middleware.InvokeAsync(context));
+
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - start);
     }
 
@@ -77,7 +79,8 @@ public class MiddlewareTests
         Assert.Equal(5, stub.Permits);
         Assert.Equal(60_000, stub.Window);
 
-        if (remaining is null) Assert.Equal("60", context.Response.Headers.RetryAfter.ToString());
+        if (remaining is null)
+            Assert.Equal("60", context.Response.Headers.RetryAfter.ToString());
     }
 
     [Fact]
@@ -185,7 +188,9 @@ public class MiddlewareTests
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
-            if (targetMethod?.Name != nameof(IRuvioClient.LimitAsync)) throw new NotSupportedException();
+            if (targetMethod?.Name != nameof(IRuvioClient.LimitAsync))
+                throw new NotSupportedException();
+
             Calls++;
             Key = (string)args![0]!;
             Permits = (long)args[1]!;

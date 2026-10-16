@@ -94,6 +94,7 @@ internal sealed class RuvioSocket : IDisposable
         if (options.Password is null)
         {
             connection._initialized = true;
+
             return connection;
         }
 
@@ -128,6 +129,7 @@ internal sealed class RuvioSocket : IDisposable
         }
 
         connection._initialized = true;
+
         return connection;
     }
 
@@ -178,6 +180,7 @@ internal sealed class RuvioSocket : IDisposable
         if (_initialized && !_independentIo)
         {
             CommandMultiplexer? multiplexer = TryMultiplexer(out Exception? error);
+
             return multiplexer is null
                 ? ValueTask.FromException<RespValue>(error!)
                 : multiplexer.SendCommandAsync(command, cancellationToken);
@@ -204,6 +207,7 @@ internal sealed class RuvioSocket : IDisposable
         if (_initialized && !_independentIo)
         {
             CommandMultiplexer? multiplexer = TryMultiplexer(out Exception? error);
+
             return multiplexer is null
                 ? ValueTask.FromException<RespValue>(error!)
                 : multiplexer.SendAsync(arguments, cancellationToken);
@@ -347,11 +351,13 @@ internal sealed class RuvioSocket : IDisposable
         try
         {
             error = null;
+
             return Multiplexer;
         }
         catch (Exception exception)
         {
             error = exception;
+
             return null;
         }
     }
@@ -362,14 +368,19 @@ internal sealed class RuvioSocket : IDisposable
         {
             ThrowIfClosed();
             CommandMultiplexer? existing = Volatile.Read(ref _multiplexer);
-            if (existing is not null) return existing;
+            if (existing is not null)
+                return existing;
+
             lock (_multiplexerGate)
             {
                 ThrowIfClosed();
                 existing = _multiplexer;
-                if (existing is not null) return existing;
+                if (existing is not null)
+                    return existing;
+
                 existing = new CommandMultiplexer(_stream, _reader, _maxInFlight, coalesceWrites: true, dedicatedReader: _dedicatedReader);
                 Volatile.Write(ref _multiplexer, existing);
+
                 return existing;
             }
         }
@@ -435,7 +446,9 @@ internal sealed class RuvioSocket : IDisposable
 
     internal static Activity? StartPhase(string phase, Activity? parentActivity, long startedTimestamp = 0)
     {
-        if (!Activities.HasListeners()) return null;
+        if (!Activities.HasListeners())
+            return null;
+
         ActivityContext parent = parentActivity?.Context ?? default;
         DateTimeOffset start = startedTimestamp == 0
             ? default

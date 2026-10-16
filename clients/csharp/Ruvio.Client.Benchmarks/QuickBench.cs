@@ -55,6 +55,7 @@ internal static class QuickBench
     private static void Encode(string name, Func<RespCommand> build)
     {
         const int Iterations = 200_000;
+
         for (int index = 0; index < 150_000; index++)
         {
             using PooledFrame warm = build().EncodePooled();
@@ -62,6 +63,7 @@ internal static class QuickBench
 
         long bytes = GC.GetAllocatedBytesForCurrentThread();
         long start = Stopwatch.GetTimestamp();
+
         for (int index = 0; index < Iterations; index++)
         {
             using PooledFrame frame = build().EncodePooled();
@@ -76,6 +78,7 @@ internal static class QuickBench
         const int Iterations = 200_000;
         var stream = new ReplayStream(Encoding.ASCII.GetBytes(reply));
         using var reader = new RespReader(stream);
+
         for (int index = 0; index < 150_000; index++)
         {
             stream.Rewind();
@@ -84,6 +87,7 @@ internal static class QuickBench
 
         long bytes = GC.GetAllocatedBytesForCurrentThread();
         long start = Stopwatch.GetTimestamp();
+
         for (int index = 0; index < Iterations; index++)
         {
             stream.Rewind();
@@ -111,6 +115,7 @@ internal static class QuickBench
         await Task.WhenAll(Enumerable.Range(0, callers).Select(async worker =>
         {
             long local = 0;
+
             while (Stopwatch.GetTimestamp() < deadline)
             {
                 await operation(worker, local).ConfigureAwait(false);

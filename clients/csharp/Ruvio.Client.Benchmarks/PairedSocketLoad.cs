@@ -34,6 +34,7 @@ internal static class PairedSocketLoad
     {
         if (args.Length is not (5 or 6) || (args.Length == 6 && args[5] != "--full"))
             throw new ArgumentException("Expected host ruvio-port redis-port seconds output.json [--full]; BENCH_PASSWORD is required.");
+
         // Quick runs one ruvio -> redis pass; --full runs the ruvio/redis/redis/ruvio order.
         bool full = args.Length == 6;
         int repeats = full ? 4 : 2;
@@ -43,14 +44,17 @@ internal static class PairedSocketLoad
         int seconds = int.Parse(args[3], CultureInfo.InvariantCulture);
         if (seconds is < 5 or > 120)
             throw new ArgumentOutOfRangeException(nameof(args), "Case duration must be 5-120 seconds.");
+
         string password = Environment.GetEnvironmentVariable("BENCH_PASSWORD")
             ?? throw new InvalidOperationException("BENCH_PASSWORD is required.");
         string run = Guid.NewGuid().ToString("N");
         var results = new List<object>();
         using var process = Process.GetCurrentProcess();
+
         for (int repeat = 0; repeat < repeats; repeat++)
         {
             string backend = repeat == 0 || repeat == 3 ? "ruvio" : "redis";
+
             foreach (string profile in new[] { "hot", "native" })
             foreach (int concurrency in new[] { 1, 16 })
             {
@@ -77,24 +81,30 @@ internal static class PairedSocketLoad
                 {
                     string key = $"paired:{run}:{repeat}:{profile}:{concurrency}:{worker}";
                     string value = new('x', 256);
+
                     if (!measure)
                     {
-                        if (client is not null) await client.SetAsync(key, value);
+                        if (client is not null)
+                            await client.SetAsync(key, value);
                         else if (!await database!.StringSetAsync(key, value))
                             throw new InvalidOperationException("Redis setup SET failed.");
                     }
+
                     string[] get = ["GET", key];
                     string[] set = ["SET", key, value];
                     string[] begin = ["IDEM", key + ":idem", "BEGIN", "fp", "owner", "60000"];
                     string[] limit = ["LIMIT", key + ":limit", "1000000000", "60000"];
                     long counter = 0;
+
                     while (Stopwatch.GetTimestamp() < deadline)
                     {
                         int op = (int)(counter++ & 1);
                         // Change every SET so identical-value optimizations cannot bias the comparison.
                         if (profile == "hot" && op == 1)
                             set[2] = value[..240] + counter.ToString("D16", CultureInfo.InvariantCulture);
+
                         long start = Stopwatch.GetTimestamp();
+
                         if (client is not null)
                         {
                             RespValue reply = await client.ExecuteAsync(
@@ -105,7 +115,8 @@ internal static class PairedSocketLoad
                                 : op == 0 ? reply.Items is { Count: > 0 } items &&
                                     items[0].AsString() is "acquired" or "pending"
                                           : reply.Kind == RespKind.Integer && reply.Integer >= 0;
-                            if (!valid) throw new InvalidOperationException("Unexpected Ruvio reply.");
+                            if (!valid)
+                                throw new InvalidOperationException("Unexpected Ruvio reply.");
                         }
                         else if (profile == "hot")
                         {
@@ -140,12 +151,14 @@ internal static class PairedSocketLoad
                         }
                     }
                 }
+
                 async Task Workers(int duration, bool measure)
                 {
                     long deadline = Stopwatch.GetTimestamp() + duration * Stopwatch.Frequency;
                     await Task.WhenAll(Enumerable.Range(0, concurrency)
                         .Select(worker => Worker(worker, deadline, measure)));
                 }
+
                 await Workers(2, false);
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
@@ -161,13 +174,17 @@ internal static class PairedSocketLoad
                 double Percentile(int op, double fraction)
                 {
                     long target = (long)Math.Ceiling(counts[op] * fraction), sum = 0;
+
                     for (int i = 0; i < buckets[op].Length; i++)
                     {
                         sum += buckets[op][i];
-                        if (sum >= target) return (i + 1) / 1000.0;
+                        if (sum >= target)
+                            return (i + 1) / 1000.0;
                     }
+
                     throw new InvalidOperationException("Empty latency histogram.");
                 }
+
                 string[] operations = profile == "hot" ? ["GET", "SET"] : ["BEGIN", "LIMIT"];
                 results.Add(new
                 {

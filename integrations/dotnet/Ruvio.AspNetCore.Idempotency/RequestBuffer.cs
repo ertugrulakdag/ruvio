@@ -41,7 +41,9 @@ internal static class RequestBuffer
 
             int read = await input.ReadAsync(bytes.AsMemory(length), cancellation);
 
-            if (read == 0) break;
+            if (read == 0)
+                break;
+
             length += read;
         }
 

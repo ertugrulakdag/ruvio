@@ -40,6 +40,7 @@ internal static class RedisMetrics
         ];
         var output = new StringBuilder();
         var declared = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (string raw in responses
                      .SelectMany(response => (response.ToString() ?? "")
                          .Split('\n', StringSplitOptions.RemoveEmptyEntries)))
@@ -54,6 +55,7 @@ internal static class RedisMetrics
 
             string name = line[..colon];
             string value = line[(colon + 1)..];
+
             if (NumericMetrics.Contains(name) &&
                 double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double number))
             {
@@ -66,6 +68,7 @@ internal static class RedisMetrics
             if (name.StartsWith("cmdstat_", StringComparison.Ordinal))
             {
                 string command = name["cmdstat_".Length..];
+
                 foreach (string field in value.Split(','))
                 {
                     int equals = field.IndexOf('=');
@@ -100,9 +103,11 @@ internal static class RedisMetrics
     {
         if (declared.Add(name))
             output.Append("# TYPE ").Append(name).Append(counter ? " counter\n" : " gauge\n");
+
         output.Append(name);
         if (label is { } item)
             output.Append("{").Append(item.Key).Append("=\"").Append(item.Value).Append("\"}");
+
         output.Append(' ').Append(value.ToString("R", CultureInfo.InvariantCulture)).Append('\n');
     }
 }

@@ -72,6 +72,7 @@ public sealed class RespValue
     private static RespValue[] CreateIntegers()
     {
         var values = new RespValue[MaxCachedInteger - MinCachedInteger + 1];
+
         for (int i = 0; i < values.Length; i++)
         {
             values[i] = new RespValue(RespKind.Integer, null, i + MinCachedInteger, null, null);
@@ -90,9 +91,15 @@ public sealed class RespValue
 
     internal static RespValue Simple(ReadOnlySpan<byte> line)
     {
-        if (line.SequenceEqual("OK"u8)) return Ok;
-        if (line.SequenceEqual("PONG"u8)) return Pong;
-        if (line.SequenceEqual("QUEUED"u8)) return Queued;
+        if (line.SequenceEqual("OK"u8))
+            return Ok;
+
+        if (line.SequenceEqual("PONG"u8))
+            return Pong;
+
+        if (line.SequenceEqual("QUEUED"u8))
+            return Queued;
+
         return new(RespKind.Simple, Encoding.UTF8.GetString(line), 0, null, null);
     }
 

@@ -14,11 +14,14 @@ public class MiddlewareTests
         var context = new DefaultHttpContext();
         var middleware = new RuvioLockMiddleware(static _ => Task.CompletedTask);
 
-        for (int i = 0; i < 100; i++) Assert.Same(Task.CompletedTask, middleware.InvokeAsync(context));
+        for (int i = 0; i < 100; i++)
+            Assert.Same(Task.CompletedTask, middleware.InvokeAsync(context));
 
         long start = GC.GetAllocatedBytesForCurrentThread();
 
-        for (int i = 0; i < 1000; i++) Assert.Same(Task.CompletedTask, middleware.InvokeAsync(context));
+        for (int i = 0; i < 1000; i++)
+            Assert.Same(Task.CompletedTask, middleware.InvokeAsync(context));
+
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - start);
     }
 
@@ -32,7 +35,9 @@ public class MiddlewareTests
     [Fact]
     public async Task SecondRequestIsRejectedWith409WhileTheFirstRunsAndTheLockIsFreedAfter()
     {
-        if (await Live.ConnectAsync() is not { } live) return;
+        if (await Live.ConnectAsync() is not { } live)
+            return;
+
         await using RuvioConnection connection = live.Connection;
         using ServiceProvider services = live.Services();
         var gate = new TaskCompletionSource();
@@ -59,7 +64,9 @@ public class MiddlewareTests
     [Fact]
     public async Task TheLockIsReleasedWhenTheEndpointThrows()
     {
-        if (await Live.ConnectAsync() is not { } live) return;
+        if (await Live.ConnectAsync() is not { } live)
+            return;
+
         await using RuvioConnection connection = live.Connection;
         using ServiceProvider services = live.Services();
         var failing = new RuvioLockMiddleware(_ => throw new InvalidOperationException("boom"));
@@ -74,7 +81,9 @@ public class MiddlewareTests
     [Fact]
     public async Task TemplatedNamesLockPerValueAndAMissingValueIsA400()
     {
-        if (await Live.ConnectAsync() is not { } live) return;
+        if (await Live.ConnectAsync() is not { } live)
+            return;
+
         await using RuvioConnection connection = live.Connection;
         using ServiceProvider services = live.Services();
         var gate = new TaskCompletionSource();
@@ -104,7 +113,9 @@ public class MiddlewareTests
     [Fact]
     public async Task RequestAbortedTokenFiresWhenTheClientDisconnectsAndIsRestoredAfterwards()
     {
-        if (await Live.ConnectAsync() is not { } live) return;
+        if (await Live.ConnectAsync() is not { } live)
+            return;
+
         await using RuvioConnection connection = live.Connection;
         using ServiceProvider services = live.Services();
         using var disconnect = new CancellationTokenSource();
@@ -116,6 +127,7 @@ public class MiddlewareTests
         {
             inside = context.RequestAborted;
             disconnect.Cancel();
+
             return Task.CompletedTask;
         });
 
@@ -129,7 +141,9 @@ public class MiddlewareTests
     [Fact]
     public async Task LockLossCancelsTheRequestToken()
     {
-        if (await Live.ConnectAsync() is not { } live) return;
+        if (await Live.ConnectAsync() is not { } live)
+            return;
+
         await using RuvioConnection connection = live.Connection;
         // A 1 s lease; deleting the key under it makes the next renewal find another owner (none).
         using ServiceProvider services = live.Services();
@@ -157,7 +171,9 @@ public class MiddlewareTests
         {
             string? address = Environment.GetEnvironmentVariable("RUVIO_TEST_ADDR");
 
-            if (string.IsNullOrWhiteSpace(address)) return null;
+            if (string.IsNullOrWhiteSpace(address))
+                return null;
+
             var uri = new Uri("tcp://" + address);
             RuvioConnection connection = await RuvioConnection.ConnectAsync(uri.Host, uri.Port);
 
@@ -178,7 +194,9 @@ public class MiddlewareTests
         {
             var context = new DefaultHttpContext { RequestServices = services };
 
-            if (route is { } r) context.Request.RouteValues[r.Item1] = r.Item2;
+            if (route is { } r)
+                context.Request.RouteValues[r.Item1] = r.Item2;
+
             context.SetEndpoint(new Endpoint(_ => Task.CompletedTask,
                 new EndpointMetadataCollection(new RuvioLockAttribute(resource, leaseSeconds)), "test"));
 

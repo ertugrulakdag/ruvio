@@ -168,10 +168,12 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         Assert.Contains("k1", page.Keys);
         Assert.Contains("k1", (await db.ScanAsync(0, "k*", 100, "string")).Keys);
         var walked = new List<string>();
+
         await foreach (string key in db.ScanKeysAsync("k*", 1))
         {
             walked.Add(key);
         }
+
         Assert.Equal(["k1", "k3", "k4"], walked.Order().ToArray());
         Assert.Equal(1, await db.UnlinkAsync("k4"));
         Assert.Equal(1, await db.DeleteAsync("k3"));
@@ -260,10 +262,12 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         SetScanPage page = await db.ScanSetAsync("big", 0, "m1*", 100);
         Assert.Equal(6, page.Members.Count);
         var members = new List<string>();
+
         await foreach (string member in db.ScanSetMembersAsync("big", count: 4))
         {
             members.Add(member);
         }
+
         Assert.Equal(15, members.Distinct().Count());
     }
 
@@ -287,10 +291,12 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         Assert.Single((await db.ScanHashAsync("h", 0)).Fields, field => field.Key == "g");
         Assert.Single((await db.ScanHashAsync("h", 0, "g*")).Fields);
         var fields = new List<KeyValuePair<string, string>>();
+
         await foreach (KeyValuePair<string, string> field in db.ScanHashEntriesAsync("h", count: 1))
         {
             fields.Add(field);
         }
+
         Assert.Equal(2, fields.Count);
         Assert.Equal([1L], await db.ExpireHashFieldsAsync("h", TimeSpan.FromSeconds(100), "g"));
         Assert.Equal([1L], await db.ExpireHashFieldsAsync("h", TimeSpan.FromMilliseconds(100500), FieldExpireCondition.Always, "g"));
@@ -327,10 +333,12 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         Assert.Equal(3, (await db.GetSortedSetRandomMembersWithScoresAsync("z", 3)).Count);
         Assert.Equal(3, (await db.ScanSortedSetAsync("z", 0)).Entries.Count);
         var entries = new List<SortedSetEntry>();
+
         await foreach (SortedSetEntry entry in db.ScanSortedSetEntriesAsync("z", count: 1))
         {
             entries.Add(entry);
         }
+
         Assert.Equal(3, entries.Count);
         Assert.Equal([new SortedSetEntry("a", 1), new SortedSetEntry("c", 3), new SortedSetEntry("b", 6), new SortedSetEntry("d", 8)],
             await db.GetSortedSetUnionAsync(["z", "z2"], [1, 2], SortedSetAggregate.Max));

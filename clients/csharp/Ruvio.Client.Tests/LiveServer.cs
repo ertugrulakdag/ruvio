@@ -199,8 +199,10 @@ internal sealed class RecordingProxy : IAsyncDisposable
             {
                 string word = Encoding.UTF8.GetString(data, cursor, Math.Min(size, 64)).ToUpperInvariant();
 
-                if (index == 0) first = word;
-                else second = word;
+                if (index == 0)
+                    first = word;
+                else
+                    second = word;
             }
 
             cursor += size + 2;

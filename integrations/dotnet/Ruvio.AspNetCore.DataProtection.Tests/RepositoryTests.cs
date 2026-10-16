@@ -195,7 +195,8 @@ public class RepositoryTests
         var builder = services.AddDataProtection().SetApplicationName(application)
             .PersistKeysToRuvio(o => o.Key = key).ProtectKeysWithCertificate(certificate);
 
-        if (!generate) builder.DisableAutomaticKeyGeneration();
+        if (!generate)
+            builder.DisableAutomaticKeyGeneration();
 
         return services.BuildServiceProvider();
     }
@@ -246,8 +247,10 @@ public class RepositoryTests
         public static async Task<Scope> Open()
         {
             RuvioConnection connection = await Connect();
+
             return new Scope(connection, await connection.GetDefaultDatabaseAsync());
         }
+
         public static Task<RuvioConnection> Connect()
         {
             var address = Environment.GetEnvironmentVariable("RUVIO_TEST_ADDR")!.Split(':');
@@ -269,6 +272,7 @@ public sealed class LiveFactAttribute : FactAttribute
     {
         if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RUVIO_TEST_ADDR")))
             Skip = "Set RUVIO_TEST_ADDR to run against an isolated Ruvio server.";
+
         Timeout = 30000;
     }
 }

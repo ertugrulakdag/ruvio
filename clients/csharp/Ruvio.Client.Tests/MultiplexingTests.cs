@@ -42,16 +42,19 @@ public class MultiplexingTests
             Task<RespValue>[] queued = Enumerable.Range(0, 20).Select(i =>
                 mux.SendCommandAsync(new RespCommand("ECHO", Value(i)), CancellationToken.None).AsTask()).ToArray();
             stream.Resume.TrySetResult();
+
             if (fail)
             {
                 foreach (Task<RespValue> task in queued.Prepend(first))
                     await Assert.ThrowsAsync<RuvioException>(() => task);
+
                 Assert.Equal(2, stream.Writes);
             }
             else
             {
                 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 using var reader = new RespReader(server.GetStream());
+
                 for (int i = -1; i < 20; i++)
                 {
                     RespValue frame = await reader.ReadAsync(deadline.Token);
@@ -59,10 +62,13 @@ public class MultiplexingTests
                     Assert.Equal(expected, frame.Items![1].AsString());
                     await server.GetStream().WriteAsync(Encoding.ASCII.GetBytes($"+{expected}\r\n"), deadline.Token);
                 }
+
                 Assert.Equal("first", (await first).AsString());
                 await Assert.ThrowsAsync<EncoderFallbackException>(() => invalid!);
+
                 for (int i = 0; i < queued.Length; i++)
                     Assert.Equal(Value(i), (await queued[i]).AsString());
+
                 Assert.Equal(coalesce ? (large ? 4 : 3) : 21, stream.Writes);
             }
         }
@@ -101,6 +107,7 @@ public class MultiplexingTests
                 await server.GetStream().WriteAsync(Encoding.ASCII.GetBytes($"+{value}\r\n"), deadline.Token);
             }
         }
+
         for (int wave = 0; wave < 32; wave++)
         {
             int batch = wave;
@@ -110,6 +117,7 @@ public class MultiplexingTests
                 Assert.Equal(value, (await client.ExecuteAsync(["ECHO", value], deadline.Token)).AsString());
             })));
         }
+
         await responding;
     }
 
@@ -210,6 +218,7 @@ public class MultiplexingTests
                 CancellationToken.None)).ToArray();
         Assert.True(stream.Started.Task.IsCompleted);
         await mux.StopAsync();
+
         foreach (ValueTask<IReadOnlyList<RespValue>> call in calls)
             await Assert.ThrowsAsync<RuvioException>(async () => await call);
     }
@@ -220,10 +229,13 @@ public class MultiplexingTests
         await using var session = await ScriptedSession.Open();
         Task<RespValue>[] calls = Enumerable.Range(0, 64)
             .Select(i => session.Client.ExecuteAsync("ECHO", i.ToString()).AsTask()).ToArray();
+
         for (int i = 0; i < calls.Length; i++)
             await session.Expect("ECHO", i.ToString());
+
         await session.Reply(string.Concat(Enumerable.Range(0, 64).Select(i => $"+{i}\r\n")));
         RespValue[] replies = await Task.WhenAll(calls);
+
         for (int i = 0; i < replies.Length; i++)
             Assert.Equal(i.ToString(), replies[i].AsString());
     }
@@ -288,9 +300,12 @@ public class MultiplexingTests
         await using var session = await ScriptedSession.Open();
         ValueTask<RespValue>[] calls = Enumerable.Range(0, 16)
             .Select(i => session.Client.ExecuteAsync("ECHO", i.ToString())).ToArray();
+
         for (int i = 0; i < calls.Length; i++)
             await session.Expect("ECHO", i.ToString());
+
         session.CloseCommandSocket();
+
         foreach (ValueTask<RespValue> call in calls)
             await Assert.ThrowsAsync<RuvioException>(async () => await call);
     }
@@ -385,9 +400,12 @@ public class MultiplexingTests
             int writes = Interlocked.Increment(ref Writes);
             Started.TrySetResult();
             await Resume.Task.WaitAsync(token);
-            if (FailSecondWrite && writes == 2) throw new IOException("Injected batch write failure.");
+            if (FailSecondWrite && writes == 2)
+                throw new IOException("Injected batch write failure.");
+
             await inner.WriteAsync(buffer, token);
         }
+
         protected override void Dispose(bool disposing)
         {
             if (disposing)
@@ -395,6 +413,7 @@ public class MultiplexingTests
                 Resume.TrySetResult();
                 inner.Dispose();
             }
+
             base.Dispose(disposing);
         }
     }

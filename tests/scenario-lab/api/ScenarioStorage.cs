@@ -68,14 +68,17 @@ internal sealed class ScenarioStorage(
         => Measure("cache.get", async () =>
         {
             cancellationToken.ThrowIfCancellationRequested();
+
             if (BackendForCurrentRequest() == "redis")
             {
                 RedisValue value = await Database.StringGetAsync(key).ConfigureAwait(false);
+
                 return value.IsNull ? null : (byte[]?)value;
             }
 
             RespValue reply = await RuvioCall(
                 [Text("GET"), Text(key)], cancellationToken).ConfigureAwait(false);
+
             return reply.Kind switch
             {
                 RespKind.Null => null,
@@ -88,9 +91,11 @@ internal sealed class ScenarioStorage(
         => Measure("cache.set", async () =>
         {
             cancellationToken.ThrowIfCancellationRequested();
+
             if (BackendForCurrentRequest() == "redis")
             {
                 await Database.StringSetAsync(key, value, lifetime).ConfigureAwait(false);
+
                 return;
             }
 
@@ -107,6 +112,7 @@ internal sealed class ScenarioStorage(
         => Measure("idempotency.begin", async () =>
         {
             cancellationToken.ThrowIfCancellationRequested();
+
             if (BackendForCurrentRequest() == "redis")
             {
                 RedisResult result = await Database.ScriptEvaluateAsync(
@@ -118,6 +124,7 @@ internal sealed class ScenarioStorage(
                         (long)lifetime.TotalMilliseconds
                     ]).ConfigureAwait(false);
                 RedisResult[] values = (RedisResult[])result!;
+
                 return (values[0].ToString(), values.Length > 1 ? values[1].ToString() : null);
             }
 
@@ -139,12 +146,14 @@ internal sealed class ScenarioStorage(
         => Measure("idempotency.complete", async () =>
         {
             cancellationToken.ThrowIfCancellationRequested();
+
             if (BackendForCurrentRequest() == "redis")
             {
                 long completed = (long)await Database.ScriptEvaluateAsync(
                     CompleteScript, [key], [fingerprint, owner, result]).ConfigureAwait(false);
                 if (completed != 1)
                     throw new InvalidOperationException("Redis idempotency completion did not match its owner.");
+
                 return;
             }
 
@@ -158,12 +167,14 @@ internal sealed class ScenarioStorage(
         => Measure("rate_limit", async () =>
         {
             cancellationToken.ThrowIfCancellationRequested();
+
             if (BackendForCurrentRequest() == "redis")
             {
                 long remaining = (long)await Database.ScriptEvaluateAsync(
                     LimitScript,
                     [key],
                     [permits, (long)window.TotalMilliseconds]).ConfigureAwait(false);
+
                 return remaining < 0 ? null : remaining;
             }
 
@@ -180,6 +191,7 @@ internal sealed class ScenarioStorage(
         await Measure(operation, async () =>
         {
             await action().ConfigureAwait(false);
+
             return true;
         }).ConfigureAwait(false);
     }
@@ -197,6 +209,7 @@ internal sealed class ScenarioStorage(
             clientActivity?.SetTag("db.operation.name", operation);
             T result = await action().ConfigureAwait(false);
             activity?.SetStatus(ActivityStatusCode.Ok);
+
             return result;
         }
         catch (Exception error)

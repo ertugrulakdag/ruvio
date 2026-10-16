@@ -74,19 +74,44 @@ public static class RuvioServiceCollectionExtensions
     // Reads each setting by hand: ConfigurationBinder reflects over the options type, which breaks trimming and NativeAOT.
     private static void BindOptions(IConfiguration configuration, RuvioClientOptions options)
     {
-        if (configuration["Host"] is { Length: > 0 } host) options.Host = host;
-        if (Number(configuration, "Port") is { } port) options.Port = port;
-        if (configuration["Username"] is { } username) options.Username = username;
-        if (configuration["Password"] is { } password) options.Password = password;
-        if (Number(configuration, "Database") is { } database) options.Database = database;
-        if (Span(configuration, "ConnectTimeout") is { } connectTimeout) options.ConnectTimeout = connectTimeout;
-        if (Number(configuration, "MaxInFlightRequests") is { } inFlight) options.MaxInFlightRequests = inFlight;
-        if (Flag(configuration, "DedicatedReaderThread") is { } dedicatedReader) options.DedicatedReaderThread = dedicatedReader;
-        if (Flag(configuration, "DiscoverCluster") is { } discover) options.DiscoverCluster = discover;
-        if (Flag(configuration, "Reconnect") is { } reconnect) options.Reconnect = reconnect;
-        if (Number(configuration, "MaxReconnectAttempts") is { } attempts) options.MaxReconnectAttempts = attempts;
-        if (Span(configuration, "ReconnectBaseDelay") is { } baseDelay) options.ReconnectBaseDelay = baseDelay;
-        if (Span(configuration, "ReconnectMaxDelay") is { } maxDelay) options.ReconnectMaxDelay = maxDelay;
+        if (configuration["Host"] is { Length: > 0 } host)
+            options.Host = host;
+
+        if (Number(configuration, "Port") is { } port)
+            options.Port = port;
+
+        if (configuration["Username"] is { } username)
+            options.Username = username;
+
+        if (configuration["Password"] is { } password)
+            options.Password = password;
+
+        if (Number(configuration, "Database") is { } database)
+            options.Database = database;
+
+        if (Span(configuration, "ConnectTimeout") is { } connectTimeout)
+            options.ConnectTimeout = connectTimeout;
+
+        if (Number(configuration, "MaxInFlightRequests") is { } inFlight)
+            options.MaxInFlightRequests = inFlight;
+
+        if (Flag(configuration, "DedicatedReaderThread") is { } dedicatedReader)
+            options.DedicatedReaderThread = dedicatedReader;
+
+        if (Flag(configuration, "DiscoverCluster") is { } discover)
+            options.DiscoverCluster = discover;
+
+        if (Flag(configuration, "Reconnect") is { } reconnect)
+            options.Reconnect = reconnect;
+
+        if (Number(configuration, "MaxReconnectAttempts") is { } attempts)
+            options.MaxReconnectAttempts = attempts;
+
+        if (Span(configuration, "ReconnectBaseDelay") is { } baseDelay)
+            options.ReconnectBaseDelay = baseDelay;
+
+        if (Span(configuration, "ReconnectMaxDelay") is { } maxDelay)
+            options.ReconnectMaxDelay = maxDelay;
     }
 
     private static int? Number(IConfiguration configuration, string key)

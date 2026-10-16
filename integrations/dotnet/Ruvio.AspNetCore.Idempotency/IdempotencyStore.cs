@@ -31,12 +31,14 @@ internal static class IdempotencyStore
         if (state == "completed" && items.Count == 2 && items[1].Kind == RespKind.Bulk)
         {
             RecordState(state);
+
             return (state, items[1].AsString());
         }
 
         if (items.Count == 1 && state is "acquired" or "pending" or "conflict")
         {
             RecordState(state);
+
             return (state, null);
         }
 

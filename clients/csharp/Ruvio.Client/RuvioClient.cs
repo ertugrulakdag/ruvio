@@ -525,6 +525,7 @@ public sealed partial class RuvioClient : IRuvioClient
         CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
+
         if (command.Count == 0)
         {
             throw new ArgumentException("A command needs at least one argument.", nameof(command));
@@ -660,6 +661,7 @@ public sealed partial class RuvioClient : IRuvioClient
         }
 
         ThrowIfDisposed();
+
         for (int index = 0; index < commands.Count; index++)
         {
             RejectSelect(commands[index]);
@@ -961,6 +963,7 @@ public sealed partial class RuvioClient : IRuvioClient
         try
         {
             ThrowIfDisposed();
+
             if (!_seed.IsBroken)
             {
                 return;

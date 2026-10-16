@@ -37,6 +37,7 @@ public class ReadSideTests
         IReadOnlyList<RespValue> replies = await client.ExecuteManyAsync(commands);
 
         Assert.Equal(50, replies.Count);
+
         for (int i = 1; i < 50; i += 2)
         {
             Assert.Equal($"v{i - 1}", replies[i].AsString());

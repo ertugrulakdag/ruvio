@@ -140,7 +140,8 @@ internal sealed class BoundedResponseBody(int limit) : IHttpResponseBodyFeature
         public override void CancelPendingFlush() => canceled = true;
         public override void Complete(Exception? exception = null)
         {
-            if (exception is not null) throw new IOException("Response writer failed.", exception);
+            if (exception is not null)
+                throw new IOException("Response writer failed.", exception);
         }
 
         public override ValueTask<FlushResult> FlushAsync(CancellationToken cancellationToken = default)

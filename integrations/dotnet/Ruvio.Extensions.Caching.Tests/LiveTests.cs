@@ -277,8 +277,10 @@ public class LiveTests
         public static async Task<Scope> Open()
         {
             RuvioConnection connection = await Connect();
+
             return new Scope(connection, await connection.GetDefaultDatabaseAsync());
         }
+
         public static Task<RuvioConnection> Connect()
         {
             string[] address = Environment.GetEnvironmentVariable("RUVIO_TEST_ADDR")!.Split(':');
@@ -305,6 +307,7 @@ public sealed class LiveFactAttribute : FactAttribute
     {
         if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RUVIO_TEST_ADDR")))
             Skip = "Set RUVIO_TEST_ADDR to run against an isolated live Ruvio server.";
+
         Timeout = 30000;
     }
 }

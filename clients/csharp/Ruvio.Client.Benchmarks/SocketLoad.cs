@@ -11,6 +11,7 @@ internal static class SocketLoad
         bool inline = args.Length > 2 && args[2] == "--inline";
         string? selectedOperation = null;
         int? selectedConcurrency = null;
+
         if (args.Length == 4)
         {
             string[] selected = args[3].Split(':');
@@ -19,21 +20,29 @@ internal static class SocketLoad
                 !int.TryParse(selected[1], out int concurrency) ||
                 concurrency is not (1 or 2 or 4 or 16 or 128))
                 throw new ArgumentException("Case must be get/set/limit:1/2/4/16/128.");
+
             selectedOperation = selected[0];
             selectedConcurrency = concurrency;
         }
+
         if (args.Length > 4 || (args.Length > 2 && !inline) || seconds <= 0)
             throw new ArgumentException("Expected [port] [positive seconds] [--inline [operation:concurrency]].");
+
         string run = Guid.NewGuid().ToString("N");
         Console.Error.WriteLine($"socket-load runtime={Environment.Version} run={run} port={port} seconds={seconds}");
         var results = new List<object>();
         using var process = Process.GetCurrentProcess();
+
         foreach (string operation in new[] { "get", "set", "limit" })
         {
-            if (selectedOperation is not null && operation != selectedOperation) continue;
+            if (selectedOperation is not null && operation != selectedOperation)
+                continue;
+
             foreach (int concurrency in new[] { 1, 2, 4, 16, 128 })
             {
-                if (selectedConcurrency is not null && concurrency != selectedConcurrency) continue;
+                if (selectedConcurrency is not null && concurrency != selectedConcurrency)
+                    continue;
+
                 Console.Error.WriteLine($"socket-load {operation} concurrency={concurrency} inline={inline}");
                 using var connection = await RuvioConnection.ConnectAsync(new RuvioClientOptions
                 {
@@ -61,6 +70,7 @@ internal static class SocketLoad
                             "set" => new RespCommand("SET", command[1], command[2]),
                             _ => new RespCommand("LIMIT", command[1], 1000000000L, 60000L),
                         };
+
                         while (Stopwatch.GetTimestamp() < deadline)
                         {
                             long started = Stopwatch.GetTimestamp();
@@ -75,6 +85,7 @@ internal static class SocketLoad
                             };
                             if (!valid)
                                 throw new InvalidOperationException($"Unexpected {operation} reply: {reply.Kind}");
+
                             if (measure)
                             {
                                 long duration = Stopwatch.GetTimestamp() - started;
@@ -86,6 +97,7 @@ internal static class SocketLoad
                         }
                     }));
                 }
+
                 Console.Error.WriteLine("phase=warmup");
                 await Workers(Stopwatch.GetTimestamp() + Stopwatch.Frequency, false);
                 GC.Collect();
@@ -104,13 +116,17 @@ internal static class SocketLoad
                 double Percentile(double fraction)
                 {
                     long target = (long)Math.Ceiling(completed * fraction), sum = 0;
+
                     for (int i = 0; i < buckets.Length; i++)
                     {
                         sum += buckets[i];
-                        if (sum >= target) return i / 1000.0;
+                        if (sum >= target)
+                            return i / 1000.0;
                     }
+
                     return 100;
                 }
+
                 results.Add(new
                 {
                     operation, concurrency, inline, completed, elapsedSeconds = elapsed,
@@ -127,13 +143,17 @@ internal static class SocketLoad
                     managedHeapBytes = GC.GetGCMemoryInfo().HeapSizeBytes,
                 });
                 var keys = new List<string> { getKey };
+
                 for (int worker = 0; worker < concurrency; worker++)
                     keys.Add($"socket-load:{run}:{(operation == "set" ? "set" : "limit")}:{worker}");
+
                 foreach (string[] chunk in keys.Chunk(32))
                     await client.ExecuteAsync(new[] { "DEL" }.Concat(chunk).ToArray());
+
                 Console.Error.WriteLine($"completed={completed} opsPerSecond={completed / elapsed:F0}");
             }
         }
+
         Console.WriteLine(JsonSerializer.Serialize(results, new JsonSerializerOptions { WriteIndented = true }));
     }
 }
