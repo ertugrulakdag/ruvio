@@ -20,7 +20,8 @@ def _s(v: Any) -> Any:
 
 
 def _ok(r: Any) -> bool:
-    return r == "OK"
+    # The hiredis parser returns b"OK" when replies are not decoded.
+    return r == "OK" or r == b"OK"
 
 
 def _bool(r: Any) -> bool:
@@ -112,7 +113,7 @@ def _changes(r: Any) -> List[Tuple[int, Any]]:
 
 
 def _set_reply(r: Any) -> bool:
-    return r == "OK"
+    return r == "OK" or r == b"OK"
 
 
 def _entries(r: Any) -> List[StreamEntry]:
