@@ -495,6 +495,11 @@ it waits asynchronously if a producer has reserved a slot but not yet published.
 There is no idle writer task, spin loop, per-request worker or reader-mode switch.
 Pending replies do not prevent direct writing when the writer is idle.
 
+The read side works the same way. A caller whose call cannot be cancelled and that finds
+nobody reading reads the socket itself until its own reply is in, completing the requests
+queued before it on the way; its reply then needs no hand-off from a reader to the thread
+pool. Otherwise a background reader drains the reply queue and stops when it is empty.
+
 `RuvioClientOptions.MaxInFlightRequests` defaults to 256 and must be positive. It
 limits admitted command groups per socket, including queued writes and pending
 replies; one `ExecuteManyAsync` pipeline is one group. Additional calls asynchronously
@@ -504,7 +509,7 @@ by the writer into pooled buffers that are returned after writing, not after the
 server replies. Raw frames and cancellable binary/string argument lists are copied
 after admission so caller-owned memory can be reused after cancellation.
 
-`RuvioClientOptions.DedicatedReaderThread` (off by default) gives each command socket
+`RuvioClientOptions.DedicatedReaderThread` (off by default) instead gives each command socket
 blocking I/O and a reader thread of its own: the caller that owns the writer writes its
 frames synchronously, and the thread reads the replies and completes the callers, who
 resume on the thread pool. This skips the runtime's async socket engine and one thread-pool

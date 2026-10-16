@@ -4,6 +4,7 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 
 ## Unreleased
 
+- A call that cannot be cancelled and finds nobody reading now reads its own reply instead of waiting for a reader to hand it over through the thread pool. User CPU per request fell 3-14% on small pipelines and cluster pipelines on a 4-shard local server.
 - New `RuvioClientOptions.DedicatedReaderThread` (off by default; `DedicatedReaderThread` in ASP.NET Core configuration): each command socket keeps blocking I/O and gets a reader thread, skipping the async socket engine and a thread-pool hand-off per round trip. On a 4-shard local server it cut user CPU per request by about 45% for 16-command pipelines on one socket and by 25-35% for pipelines split over the shards, at the cost of one thread per socket. Pub/Sub sockets are unchanged.
 - Cluster pipelines are cheaper: commands are assigned to nodes in one pass without a dictionary or upper-cased names, each node's commands are encoded once into a pooled frame, every node is written before any reply is awaited, and only error replies are checked for `MOVED`. Pipeline allocation per request fell by a fifth to a half; see `docs/evidence/2026-10-16-client-cluster-routing.md`.
 - Fixed: an integer reply of `-9223372036854775808` (`long.MinValue`, for example from `INCRBY` or `DECRBY`) was rejected as "bad RESP integer" and closed the connection; it is now read as `long.MinValue`.

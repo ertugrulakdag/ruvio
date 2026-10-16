@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using System.Threading.Tasks.Sources;
 
@@ -12,7 +13,11 @@ internal sealed class CommandMultiplexer
     private readonly SemaphoreSlim _capacity;
     private readonly Channel<Request> _outgoing;
     private readonly Channel<Request> _pending;
-    private readonly Task _receiver;
+    private readonly bool _dedicatedReader;
+    // 1 while one party owns the read side: a caller reading its own reply (see LeadAsync), the
+    // background loop, or the dedicated reader thread.
+    private int _readingOwner;
+    private Task _receiver;
     private readonly Request?[] _pool;
     private readonly bool _coalesceWrites;
     private int _pooled;
@@ -44,7 +49,16 @@ internal sealed class CommandMultiplexer
             AllowSynchronousContinuations = true,
         });
 
-        _receiver = dedicatedReader ? StartReaderThread() : ReadLoopAsync();
+        _dedicatedReader = dedicatedReader;
+        if (dedicatedReader)
+        {
+            _readingOwner = 1;
+            _receiver = StartReaderThread();
+        }
+        else
+        {
+            _receiver = Task.CompletedTask;
+        }
     }
 
     internal bool IsBroken => Volatile.Read(ref _failure) is not null;
@@ -55,7 +69,8 @@ internal sealed class CommandMultiplexer
         Request? request = Admit(commands.Count, token, out Exception? error);
         if (request is null) return ValueTask.FromException<IReadOnlyList<RespValue>>(error!);
         request.SetCommands(commands);
-        return request.SubmitMany(this);
+        bool lead = CanLead(token);
+        return LeadOrWait(lead, request, request.SubmitMany(this));
     }
 
     internal ValueTask<RespValue> SendCommandAsync(in RespCommand command, CancellationToken token)
@@ -63,7 +78,8 @@ internal sealed class CommandMultiplexer
         Request? request = Admit(1, token, out Exception? error);
         if (request is null) return ValueTask.FromException<RespValue>(error!);
         request.SetCommand(command);
-        return request.SubmitOne(this);
+        bool lead = CanLead(token);
+        return LeadOrWait(lead, request, request.SubmitOne(this));
     }
 
     internal ValueTask<RespValue> SendAsync(IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken token)
@@ -71,7 +87,8 @@ internal sealed class CommandMultiplexer
         Request? request = Admit(1, token, out Exception? error);
         if (request is null) return ValueTask.FromException<RespValue>(error!);
         request.SetArguments(arguments);
-        return request.SubmitOne(this);
+        bool lead = CanLead(token);
+        return LeadOrWait(lead, request, request.SubmitOne(this));
     }
 
     internal ValueTask<IReadOnlyList<RespValue>> SendAsync(
@@ -80,7 +97,82 @@ internal sealed class CommandMultiplexer
         Request? request = Admit(replies, token, out Exception? error);
         if (request is null) return ValueTask.FromException<IReadOnlyList<RespValue>>(error!);
         request.SetPayload(payload);
-        return request.SubmitMany(this);
+        bool lead = CanLead(token);
+        return LeadOrWait(lead, request, request.SubmitMany(this));
+    }
+
+    /// <summary>
+    /// When nobody is reading, a caller whose wait cannot be cancelled reads the socket itself
+    /// until its own reply is in, completing the requests queued before it on the way. Its reply
+    /// then needs no hand-off from a reader to the thread pool. Others wait for the reader.
+    /// </summary>
+    // Taken before the request is submitted, so the writer does not start the background reader for it.
+    private bool CanLead(CancellationToken token) => !_dedicatedReader && !token.CanBeCanceled && TryTakeReading();
+
+    private ValueTask<T> LeadOrWait<T>(bool lead, Request request, ValueTask<T> pending)
+    {
+        if (!lead)
+            return pending;
+
+        if (pending.IsCompleted)
+        {
+            ReleaseReading();
+            return pending;
+        }
+
+        return LeadAsync(request, pending);
+    }
+
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    private async ValueTask<T> LeadAsync<T>(Request mine, ValueTask<T> pending)
+    {
+        await ReadUntilAsync(mine).ConfigureAwait(false);
+
+        return await pending.ConfigureAwait(false);
+    }
+
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+    private async ValueTask ReadUntilAsync(Request mine)
+    {
+        try
+        {
+            while (!mine.IsCompleted)
+            {
+                if (_pending.Reader.TryRead(out Request? request))
+                {
+                    if (!await ReadRepliesAsync(request).ConfigureAwait(false))
+                        break;
+
+                    continue;
+                }
+
+                // Its request is not in the reply queue yet: still being written, or waiting for capacity.
+                if (!await _pending.Reader.WaitToReadAsync().ConfigureAwait(false))
+                    break;
+            }
+        }
+        finally
+        {
+            ReleaseReading();
+        }
+    }
+
+    private bool TryTakeReading() => Interlocked.CompareExchange(ref _readingOwner, 1, 0) == 0;
+
+    /// <summary>Gives up the read side; requests queued meanwhile get the background reader.</summary>
+    private void ReleaseReading()
+    {
+        Volatile.Write(ref _readingOwner, 0);
+
+        if (_pending.Reader.TryPeek(out _))
+            EnsureReader();
+    }
+
+    /// <summary>Called after a request enters the reply queue: starts the background reader unless someone reads.</summary>
+    private void EnsureReader()
+    {
+        if (TryTakeReading())
+            _receiver = ReadLoopAsync();
     }
 
     private Request? Admit(int replies, CancellationToken token, out Exception? error)
@@ -247,6 +339,7 @@ internal sealed class CommandMultiplexer
                 Activity? parent = request.Parent;
                 await _pending.Writer.WriteAsync(request).ConfigureAwait(false);
                 pending = true;
+                EnsureReader();
                 long started = Stopwatch.GetTimestamp();
 
                 using (var activity = RuvioSocket.StartPhase("write", parent))
@@ -347,6 +440,7 @@ internal sealed class CommandMultiplexer
                         request.SentAt = Stopwatch.GetTimestamp();
                         RuvioSocket.RecordSocketPhase("queue", request.QueuedAt);
                         await _pending.Writer.WriteAsync(request).ConfigureAwait(false);
+                        EnsureReader();
                         // Do not touch a published request: the reader can recycle it.
                         current = null;
                         length = required;
@@ -400,72 +494,89 @@ internal sealed class CommandMultiplexer
         return remaining;
     }
 
+    /// <summary>The background reader: drains the reply queue, then gives up the read side.</summary>
     private async Task ReadLoopAsync()
     {
-        Request? current = null;
+        while (true)
+        {
+            while (_pending.Reader.TryRead(out Request? request))
+            {
+                if (!await ReadRepliesAsync(request).ConfigureAwait(false))
+                {
+                    Volatile.Write(ref _readingOwner, 0);
+                    return;
+                }
+            }
+
+            Volatile.Write(ref _readingOwner, 0);
+
+            // A request queued after the last TryRead found the read side taken; take it back.
+            if (!_pending.Reader.TryPeek(out _) || !TryTakeReading())
+                return;
+        }
+    }
+
+    /// <summary>
+    /// Reads one request's replies and completes it. False when the connection failed: then the
+    /// request and everything queued behind it have been failed.
+    /// </summary>
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    private async ValueTask<bool> ReadRepliesAsync(Request request)
+    {
         bool replyStarted = false;
 
         try
         {
-            await foreach (Request request in _pending.Reader.ReadAllAsync().ConfigureAwait(false))
+            _reader.PrepareReply();
+            ThrowIfBroken();
+
+            using (var activity = RuvioSocket.StartPhase("reply", request.Parent, request.SentAt))
             {
-                current = request;
-                replyStarted = false;
-                _reader.PrepareReply();
-                ThrowIfBroken();
-
-                using (var activity = RuvioSocket.StartPhase("reply", request.Parent, request.SentAt))
+                try
                 {
-                    try
+                    if (request.Replies == 1)
                     {
-                        if (request.Replies == 1)
-                        {
-                            RespValue value = await _reader.ReadAsync(CancellationToken.None).ConfigureAwait(false);
-                            replyStarted = true;
-                            request.TrySetResult(value);
-                        }
-                        else
-                        {
-                            var values = new RespValue[request.Replies];
-                            for (int i = 0; i < values.Length; i++)
-                            {
-                                values[i] = await _reader.ReadAsync(CancellationToken.None).ConfigureAwait(false);
-                                replyStarted = true;
-                            }
-
-                            request.TrySetResult(values);
-                        }
+                        RespValue value = await _reader.ReadAsync(CancellationToken.None).ConfigureAwait(false);
+                        replyStarted = true;
+                        request.TrySetResult(value);
                     }
-                    finally
+                    else
                     {
-                        RuvioSocket.RecordSocketPhase("reply", request.SentAt);
+                        var values = new RespValue[request.Replies];
+                        for (int i = 0; i < values.Length; i++)
+                        {
+                            values[i] = await _reader.ReadAsync(CancellationToken.None).ConfigureAwait(false);
+                            replyStarted = true;
+                        }
+
+                        request.TrySetResult(values);
                     }
                 }
-
-                Finish(request);
-                current = null;
+                finally
+                {
+                    RuvioSocket.RecordSocketPhase("reply", request.SentAt);
+                }
             }
+
+            Finish(request);
+
+            return true;
         }
         catch (Exception error)
         {
             // ReplyStarted belongs to this request, never to another concurrent caller.
-            bool closedBeforeReply = current is not null && !replyStarted && !_reader.ReplyStarted;
+            bool closedBeforeReply = !replyStarted && !_reader.ReplyStarted;
             Fail(error);
+            request.TryFail(new RuvioException(error.Message, false, error, closedBeforeReply));
+            Finish(request);
 
-            if (current is not null)
+            while (_pending.Reader.TryRead(out Request? queued))
             {
-                current.TryFail(new RuvioException(
-                    error.Message, false, error, closedBeforeReply));
-                Finish(current);
+                queued.TryFail(Failure(closedBeforeReply: true));
+                Finish(queued);
             }
-        }
-        finally
-        {
-            while (_pending.Reader.TryRead(out Request? request))
-            {
-                request.TryFail(Failure(closedBeforeReply: true));
-                Finish(request);
-            }
+
+            return false;
         }
     }
 
@@ -615,6 +726,18 @@ internal sealed class CommandMultiplexer
         Fail(new RuvioException("connection is closed"));
         if (Volatile.Read(ref _scheduled) == 0) _writerStopped.TrySetResult();
         await Task.WhenAll(_writerStopped.Task, _receiver).ConfigureAwait(false);
+
+        // A caller reading its own reply sees the closed stream and gives up the read side.
+        while (!_dedicatedReader && Volatile.Read(ref _readingOwner) != 0)
+            await Task.Delay(1).ConfigureAwait(false);
+
+        // Requests that reached the reply queue after the last reader left.
+        while (_pending.Reader.TryRead(out Request? request))
+        {
+            request.TryFail(Failure(closedBeforeReply: true));
+            Finish(request);
+        }
+
         _reader.Dispose();
     }
 
@@ -746,6 +869,8 @@ internal sealed class CommandMultiplexer
         }
 
         internal bool TryCancel() => TryFail(new OperationCanceledException(Token));
+
+        internal bool IsCompleted => Volatile.Read(ref _completed) != 0;
 
         internal void Release()
         {

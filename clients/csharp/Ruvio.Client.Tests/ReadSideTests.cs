@@ -5,9 +5,12 @@ using Xunit;
 
 namespace Ruvio.Client.Tests;
 
-/// <summary><see cref="RuvioClientOptions.DedicatedReaderThread"/>: blocking sockets with a reader thread each.</summary>
+/// <summary>
+/// The read side of a command socket: a caller reading its own reply, the background reader, and
+/// <see cref="RuvioClientOptions.DedicatedReaderThread"/> (blocking sockets with a reader thread each).
+/// </summary>
 [Collection("Live")]
-public class DedicatedReaderTests
+public class ReadSideTests
 {
     [LiveFact(Timeout = 15000)]
     public async Task CommandsPipelinesAndConcurrentCallersWork()
@@ -92,8 +95,40 @@ public class DedicatedReaderTests
         Assert.Equal(keys, await client.GetManyAsync(keys));
     }
 
-    [Fact(Timeout = 15000)]
-    public async Task APeerThatClosesFailsTheCommandAndTheNextOneReconnects()
+    [LiveFact(Timeout = 15000)]
+    public async Task CancellableAndPlainCallersShareTheReadSide()
+    {
+        (string host, int port) = LiveServer.Address!.Value;
+        await using RuvioConnection connection = await RuvioConnection.ConnectAsync(new RuvioClientOptions
+        {
+            Host = host,
+            Port = port,
+            Database = 13,
+            DiscoverCluster = false,
+        });
+        RuvioClient client = await connection.GetDefaultDatabaseAsync();
+        using var cancel = new CancellationTokenSource();
+
+        // Callers without a token may read for everyone; callers with one wait for the reader.
+        await Task.WhenAll(Enumerable.Range(0, 32).Select(worker => Task.Run(async () =>
+        {
+            CancellationToken token = worker % 2 == 0 ? CancellationToken.None : cancel.Token;
+
+            for (int round = 0; round < 100; round++)
+            {
+                string key = $"lead:{worker}:{round}";
+                IReadOnlyList<RespValue> replies = await client.ExecuteManyAsync(
+                    [["SET", key, key], ["GET", key]], token);
+
+                Assert.Equal(key, replies[1].AsString());
+            }
+        })));
+    }
+
+    [Theory(Timeout = 15000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task APeerThatClosesFailsTheCommandAndTheNextOneReconnects(bool dedicatedReader)
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -120,7 +155,7 @@ public class DedicatedReaderTests
             Host = "127.0.0.1",
             Port = port,
             DiscoverCluster = false,
-            DedicatedReaderThread = true,
+            DedicatedReaderThread = dedicatedReader,
             ReconnectBaseDelay = TimeSpan.Zero,
         });
         RuvioClient client = await connection.GetDefaultDatabaseAsync();
