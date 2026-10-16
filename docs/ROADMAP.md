@@ -329,26 +329,7 @@ slows a command or raises RSS for the same data does not land.
 - [ ] **P1 — Define beta/stable release gates, incident policy, and support
   boundaries.**
 
-## Milestone 9 — AI Prefix Cache
-
-This waits until the stable standalone gates are met. It is not a vector
-database and it does not add a query language. Exact prompt, tool, and
-embedding caches stay `SET` / `GET` with TTL.
-
-Inference repeats the same system prompt, tool schema, and document prefix.
-Those blocks are opaque bytes addressed by their content hash. A block that
-an in-flight request still holds must survive eviction. This is the remote
-tier consulted at the start of a request, not the GPU-resident cache.
-
-- [ ] **P3 — Store a prefix block under its content hash.** The value is
-  opaque bytes on the shard that owns the hash. Memory limits and TTL apply.
-  `memory` is the hot tier. `everysec` keeps hot prefixes across a restart.
-- [ ] **P3 — Pin a block for the life of a request.** Eviction skips a block
-  whose pin count is above zero. Unpin when the request finishes.
-- [ ] **P3 — Split a block that exceeds the configured value limit.** The
-  parts stay one logical prefix. A partial read is not a hit.
-
-## Milestone 10 — Ruvio UI
+## Milestone 9 — Ruvio UI
 
 - [ ] **P3 — Publish host executables.** Build the same binary locally for
   Linux, macOS, and Windows. No shell and no Redis CLI. The server's own
