@@ -927,9 +927,26 @@ fn leak_command_name(name: &str) -> &'static str {
         return known;
     }
 
-    crate::protocol::command_spec(name.as_bytes())
-        .map(|spec| spec.name)
-        .unwrap_or_else(|| Box::leak(name.to_string().into_boxed_str()))
+    if let Some(spec) = crate::protocol::command_spec(name.as_bytes()) {
+        return spec.name;
+    }
+
+    // Other `parent|sub` names live as long as the process. One set holds them, so a name is
+    // allocated once however often ACL rules repeat it, and stays reachable (no leak report).
+    static NAMES: std::sync::Mutex<BTreeSet<&'static str>> = std::sync::Mutex::new(BTreeSet::new());
+
+    let mut names = NAMES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    if let Some(known) = names.get(name) {
+        return known;
+    }
+
+    let leaked: &'static str = Box::leak(name.into());
+
+    names.insert(leaked);
+    leaked
 }
 
 fn all_command_names() -> BTreeSet<&'static str> {
@@ -1418,6 +1435,17 @@ mod tests {
         let user = AclUser::parse("app", "on >pw +georadiusbymember ~*").unwrap();
 
         assert_eq!(user.rules.authorize(&by_member), Ok(()));
+    }
+
+    /// ACL rules name subcommands outside the command table; each name is allocated once,
+    /// however many rules repeat it.
+    #[test]
+    fn a_subcommand_name_is_allocated_once() {
+        let first = leak_command_name("acl|setuser");
+        let again = leak_command_name(&String::from("acl|setuser"));
+
+        assert!(std::ptr::eq(first, again));
+        assert_eq!(first, "acl|setuser");
     }
 
     #[test]
