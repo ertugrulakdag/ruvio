@@ -1473,7 +1473,7 @@ fn dispatch_plain(
     frame: &[u8],
 ) -> io::Result<()> {
     let threshold = state.published_config.slowlog_threshold_micros;
-    let started = (threshold >= 0).then(Instant::now);
+    let started = (threshold >= 0).then(crate::time::Stamp::now);
 
     if !rate.allow() {
         return write_response(output, Response::Error(crate::admission::RATE_LIMIT_ERROR));
@@ -1524,7 +1524,7 @@ fn dispatch_plain(
     flush_key_notices(state);
 
     if let Some(started) = started {
-        let micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let micros = started.elapsed_micros();
 
         if micros >= threshold as u64 {
             clients::SlowSample::plain(frame).record(state, micros, session);
@@ -1553,7 +1553,7 @@ pub(super) async fn dispatch_command<'s>(
     let threshold = state.published_config.slowlog_threshold_micros;
     let sample = (threshold >= 0).then(|| clients::SlowSample::of(&command, frame));
     let identity = clients::is_identity_change(&command);
-    let started = sample.as_ref().map(|_| Instant::now());
+    let started = sample.as_ref().map(|_| crate::time::Stamp::now());
     let result = dispatch_inner(
         state, output, session, auth, permit, rate, command, conn, shutdown, peer, deferred,
     )
@@ -1566,7 +1566,7 @@ pub(super) async fn dispatch_command<'s>(
     if let (Some(sample), Some(started)) = (sample, started)
         && !sample.blocking
     {
-        let micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let micros = started.elapsed_micros();
 
         if micros >= threshold as u64 {
             sample.record(state, micros, session);

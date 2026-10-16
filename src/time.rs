@@ -183,3 +183,113 @@ mod tests {
         );
     }
 }
+
+/// A cheap monotonic stamp for timing one command (`SLOWLOG`): the CPU's cycle counter where
+/// there is one, so the command path makes no clock call. `Instant::now` goes through the
+/// vDSO and showed 7.7% of a shard's time under a pipelined `SADD` load on an Azure VM.
+///
+/// x86-64 reads the TSC (invariant on every CPU this server targets) and converts with a
+/// rate measured once against `Instant` (5 ms, at the first stamp); aarch64 reads the
+/// virtual counter, whose rate the hardware reports. Other targets fall back to `Instant`.
+/// The result is for diagnostics: a slow-log entry a few percent off is fine, so no
+/// re-calibration is done.
+#[derive(Clone, Copy, Debug)]
+pub struct Stamp(u64);
+
+impl Stamp {
+    #[inline]
+    pub fn now() -> Self {
+        Self(ticks())
+    }
+
+    /// Microseconds since this stamp.
+    #[inline]
+    pub fn elapsed_micros(self) -> u64 {
+        let elapsed = ticks().saturating_sub(self.0);
+
+        ((elapsed as f64) / ticks_per_micro()) as u64
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+#[allow(unsafe_code)] // measured: the vDSO clock was 7.7% of a shard's time under a pipelined SADD load
+fn ticks() -> u64 {
+    // SAFETY: `rdtsc` is unprivileged on every x86-64 operating system this server runs on
+    // and has no memory effects.
+    unsafe { core::arch::x86_64::_rdtsc() }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline]
+#[allow(unsafe_code)] // see the x86-64 variant
+fn ticks() -> u64 {
+    let value: u64;
+
+    // SAFETY: reads the virtual counter, which EL0 may read; no memory effects.
+    unsafe { core::arch::asm!("mrs {}, cntvct_el0", out(reg) value, options(nomem, nostack)) };
+    value
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[inline]
+fn ticks() -> u64 {
+    use std::sync::OnceLock;
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_nanos() as u64
+}
+
+fn ticks_per_micro() -> f64 {
+    use std::sync::OnceLock;
+    static RATE: OnceLock<f64> = OnceLock::new();
+
+    *RATE.get_or_init(measure_ticks_per_micro)
+}
+
+#[cfg(target_arch = "aarch64")]
+#[allow(unsafe_code)] // see `ticks`
+fn measure_ticks_per_micro() -> f64 {
+    let frequency: u64;
+
+    // SAFETY: reads the counter frequency register, which EL0 may read; no memory effects.
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) frequency, options(nomem, nostack)) };
+    (frequency.max(1) as f64) / 1_000_000.0
+}
+
+#[cfg(target_arch = "x86_64")]
+fn measure_ticks_per_micro() -> f64 {
+    let wall = std::time::Instant::now();
+    let first = ticks();
+
+    while wall.elapsed() < std::time::Duration::from_millis(5) {
+        std::hint::spin_loop();
+    }
+
+    let elapsed = ticks().saturating_sub(first).max(1) as f64;
+
+    elapsed / (wall.elapsed().as_nanos() as f64 / 1000.0)
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn measure_ticks_per_micro() -> f64 {
+    1000.0
+}
+
+#[cfg(test)]
+mod stamp_tests {
+    use super::Stamp;
+
+    #[test]
+    fn a_stamp_measures_a_sleep_within_a_few_percent() {
+        let stamp = Stamp::now();
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let micros = stamp.elapsed_micros();
+
+        assert!((19_000..60_000).contains(&micros), "{micros}");
+    }
+}

@@ -110,6 +110,13 @@ fn eligible_outside_multi(command: WalGroupCommand<'_, '_>) -> bool {
                 | Command::MSet { .. }
                 | Command::GetSet { .. }
                 | Command::Append { .. }
+                | Command::IncrementFloat(..)
+                | Command::SetRange { .. }
+                | Command::BitField { .. }
+                | Command::Copy { .. }
+                | Command::ListSet { .. }
+                // `BLMOVE` (`block: Some`) retries with an await; plain `LMOVE` does not.
+                | Command::ListMove { block: None, .. }
                 | Command::StrLen { .. }
                 | Command::Exists { .. }
                 | Command::Type { .. }

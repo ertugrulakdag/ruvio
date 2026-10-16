@@ -364,6 +364,42 @@ fn hash_family_fields_compact_representation_and_wrong_type() {
 }
 
 #[test]
+fn sadd_of_members_already_present_logs_nothing() {
+    let mut shard = KvShard::new();
+    let mut sink = RecordingSink::default();
+
+    execute_with_sink(
+        &mut shard,
+        Command::SetAdd(owned(b"s"), vec![owned(b"a"), owned(b"b")]),
+        &mut sink,
+    )
+    .unwrap();
+    assert_eq!(sink.mutations.len(), 1);
+
+    // Nothing changes, so nothing reaches the log; Redis propagates nothing either.
+    let reply = execute_with_sink(
+        &mut shard,
+        Command::SetAdd(owned(b"s"), vec![owned(b"a")]),
+        &mut sink,
+    )
+    .unwrap();
+
+    assert_eq!(reply, Response::Integer(0));
+    assert_eq!(sink.mutations.len(), 1);
+
+    // One new member among known ones is a change and is logged.
+    let reply = execute_with_sink(
+        &mut shard,
+        Command::SetAdd(owned(b"s"), vec![owned(b"a"), owned(b"c")]),
+        &mut sink,
+    )
+    .unwrap();
+
+    assert_eq!(reply, Response::Integer(1));
+    assert_eq!(sink.mutations.len(), 2);
+}
+
+#[test]
 fn sorted_set_family_pairs_scores_rank_and_increments() {
     let mut shard = KvShard::new();
 

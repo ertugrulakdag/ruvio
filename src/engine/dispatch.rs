@@ -744,6 +744,16 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
                 return Ok(wrong_type());
             }
 
+            // Every member is already there: nothing changes, so nothing is logged (Redis
+            // propagates nothing either). Under `everysec` on a saturated disk a logged no-op
+            // measured 0.72x of Redis; a probe per member costs far less than the record.
+            if members
+                .iter()
+                .all(|member| shard.set_contains(&key, member).unwrap_or(false))
+            {
+                return Ok(Response::Integer(0));
+            }
+
             let extra = members.iter().map(|member| member.len()).sum::<usize>()
                 + key.len()
                 + ADMISSION_OVERHEAD_BYTES;
