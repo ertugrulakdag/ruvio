@@ -10,9 +10,8 @@
 // 1. A statement after a `}` that closes a block, and a member after a body that spans several
 //    lines, gets one blank line before it. A `}` followed by `catch`, `finally`, `else` or another
 //    `}` is part of the same statement and is not a separator.
-// 2. An `if`, `for`, `foreach`, `while`, `do` or `switch` statement gets one blank line before it
-//    (except a guard: an `if` with a single unbraced statement and no `else`, which may follow the
-//    line it checks), and the statement after any of them gets one, braces or not.
+// 2. An `if`, `for`, `foreach`, `while`, `do` or `switch` statement gets one blank line before it,
+//    and the statement after it gets one, whether its body has braces or not.
 // 3. A `return` that is not the first statement of its block gets one blank line before it.
 // 4. The body of an `if`, `else`, loop, `using`, `lock` or `fixed` statement starts on its own line.
 // 5. A rule asks for exactly one blank line: several rules never add two, and two or more blank lines
@@ -324,13 +323,9 @@ sealed class BlankLines(string newline) : CSharpSyntaxRewriter
     {
         return EndsWithBrace(previous)
             || IsControl(previous)
-            || (IsControl(current) && !IsGuard(current))
+            || IsControl(current)
             || current is ReturnStatementSyntax;
     }
-
-    // `if (x is null) return;` with no braces and no else: a guard that may follow the line it checks.
-    static bool IsGuard(StatementSyntax statement) =>
-        statement is IfStatementSyntax { Statement: not BlockSyntax, Else: null };
 
     static bool IsControl(StatementSyntax statement) =>
         statement is IfStatementSyntax or ForStatementSyntax or ForEachStatementSyntax or ForEachVariableStatementSyntax

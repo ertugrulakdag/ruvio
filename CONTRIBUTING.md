@@ -39,7 +39,7 @@ scripts/check.sh          # standards tests, matrix drift, zero-cost guards; add
 cargo test --lib
 ```
 
-The C# rules (`scripts/csharp-format/Program.cs` has the full list): a statement after a closing `}` and every `if`, loop or `switch` start after one blank line (an unbraced one-line `if` guard may follow the line it checks); the statement after an `if` or loop and a `return` that is not first in its block get one too; an `if`, `else` or loop body never shares the header's line; there is never more than one blank line.
+The C# rules (`scripts/csharp-format/Program.cs` has the full list): a statement after a closing `}` and every `if`, loop or `switch` start after one blank line; the statement after an `if` or loop and a `return` that is not first in its block get one too; an `if`, `else` or loop body never shares the header's line; there is never more than one blank line.
 
 A behavior change needs a test that fails without the change. Docs that state a number come from a dated measurement record in `docs/evidence/`. Do not write an unmeasured "N times faster" claim.
 
