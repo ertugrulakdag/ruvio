@@ -5,7 +5,8 @@
 html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
 body {
   margin: 0;
-  background: var(--bg);
+  background: var(--ground);
+  background-attachment: fixed;
   color: var(--ink);
   font-family: var(--f-sans);
   font-size: 16px;
@@ -32,7 +33,7 @@ p { text-wrap: pretty; }
 }
 .section { padding-block: var(--section-y); }
 .section + .section { border-top: 1px solid var(--line); }
-.band { background: var(--bg-band); border-block: 1px solid var(--line); }
+.band { background: color-mix(in srgb, var(--bg-band) 72%, transparent); border-block: 1px solid var(--line); }
 .band + .section, .section + .band { border-top: 0; }
 
 .kicker { margin: 0 0 12px; font-size: 14px; font-weight: 600; color: var(--mute); }
@@ -127,9 +128,7 @@ a.card:hover { border-color: color-mix(in srgb, var(--ink) 30%, var(--line)); }
 /* Reading pages: content panels on a quietly shaded ground */
 .reading {
   padding-block: clamp(32px, 5vw, 56px) var(--section-y);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--sky-1) 55%, var(--bg)) 0, var(--bg) 420px),
-    var(--bg);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--sky-1) 45%, transparent) 0, transparent 360px);
 }
 .panel {
   background: var(--paper); border: 1px solid var(--paper-line); border-radius: var(--radius);

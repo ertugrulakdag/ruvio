@@ -17,8 +17,10 @@
   --mute: #959db0;
   --faint: #808a9e;
 
-  /* Reading: long text sits on a lighter "paper" panel in a softer ink than headings */
-  --paper: #121726;
+  /* Reading: long text sits on a slightly lifted "paper" panel in a softer ink than headings.
+     --paper is translucent so the ground below shows through; --paper-solid is for overlays. */
+  --paper: rgba(16, 20, 33, 0.78);
+  --paper-solid: #0f1320;
   --paper-line: #262e44;
   --ink-body: #c9cfdc;
   --leading: 1.75;
@@ -45,6 +47,17 @@
   --sky-2: #20152a;
   --sky-3: #35160f;
   --dusk: 176, 76, 36;
+
+  /* Page ground: the night background with a cool glow up left, a dusk glow down right and a
+     faint dot grid, so long pages are not one flat colour. Fixed to the viewport (see global.css). */
+  --ground-glow-a: rgba(141, 162, 192, 0.09);
+  --ground-glow-b: rgba(var(--dusk), 0.09);
+  --ground-dot: rgba(160, 175, 215, 0.075);
+  --ground:
+    radial-gradient(70vw 60vh at 8% -8%, var(--ground-glow-a), transparent 70%),
+    radial-gradient(60vw 55vh at 100% 105%, var(--ground-glow-b), transparent 70%),
+    radial-gradient(circle, var(--ground-dot) 1px, transparent 1.4px) 0 0 / 24px 24px,
+    var(--bg);
 
   /* Type */
   --f-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;

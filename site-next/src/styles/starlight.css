@@ -11,7 +11,7 @@
   --sl-font-mono: var(--f-mono);
   --sl-nav-height: 4rem;
   --sl-nav-pad-x: max(16px, env(safe-area-inset-left, 0px));
-  --sl-content-width: 48rem;
+  --sl-content-width: 56rem;
   --sl-line-height: 1.7;
 
   /* Grays: Starlight's "white" is the heading color, "black" the page */
@@ -32,7 +32,7 @@
   --sl-color-text: var(--ink-body);
   --sl-color-text-accent: var(--c2);
   --sl-color-text-invert: var(--accent-ink);
-  --sl-color-bg: var(--paper);
+  --sl-color-bg: var(--bg);
   --sl-color-bg-nav: var(--bg);
   --sl-color-bg-sidebar: var(--bg);
   --sl-color-bg-inline-code: var(--surface-2);
@@ -64,8 +64,17 @@
   --ink: #131a2a;
   --mute: #5b6577;
   --faint: #606877;
-  --paper: #ffffff;
+  --paper: rgba(255, 255, 255, 0.82);
+  --paper-solid: #ffffff;
   --paper-line: #dde1e8;
+  --ground-glow-a: rgba(63, 90, 128, 0.08);
+  --ground-glow-b: rgba(168, 70, 31, 0.06);
+  --ground-dot: rgba(19, 26, 42, 0.07);
+  --ground:
+    radial-gradient(70vw 60vh at 8% -8%, var(--ground-glow-a), transparent 70%),
+    radial-gradient(60vw 55vh at 100% 105%, var(--ground-glow-b), transparent 70%),
+    radial-gradient(circle, var(--ground-dot) 1px, transparent 1.4px) 0 0 / 24px 24px,
+    #fbfbfc;
   --ink-body: #2b3343;
 
   --accent: #a8461f;
@@ -91,8 +100,10 @@
   color-scheme: light;
 }
 
+/* The same textured ground as the marketing pages; overlays keep the solid --sl-color-bg */
 body {
-  background: var(--sl-color-bg);
+  background: var(--ground);
+  background-attachment: fixed;
 }
 
 /* Header */
@@ -214,7 +225,7 @@ site-search button[data-open-modal] {
   border-radius: 0 var(--radius-s) var(--radius-s) 0;
 }
 .right-sidebar {
-  background-color: var(--paper);
+  background-color: transparent;
 }
 
 /* "On this page": a fixed 14rem column instead of Starlight's quarter of the spare width,
@@ -233,6 +244,8 @@ site-search button[data-open-modal] {
   }
   [data-has-sidebar][data-has-toc] .main-pane {
     width: calc(100% - var(--toc-width));
+    /* Starlight pushes the article to the right edge; centre it between the two columns */
+    --sl-content-margin-inline: auto;
   }
   .right-sidebar-panel {
     padding-inline: 1rem;
@@ -245,7 +258,7 @@ site-search button[data-open-modal] {
     padding-inline-end: 2.4rem;
   }
   :root[data-toc="closed"] {
-    --sl-content-width: 58rem;
+    --sl-content-width: 64rem;
   }
   :root[data-toc="closed"] .right-sidebar-container {
     width: 0;
@@ -264,10 +277,10 @@ site-search button[data-open-modal] {
 }
 /* The title band of every docs page carries the site's night-to-dusk sky, quietly */
 .main-pane .content-panel:first-child {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--sky-1) 70%, var(--paper)) 0%, var(--paper) 100%);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--sky-1) 60%, transparent) 0%, transparent 100%);
 }
 :root[data-theme="light"] .main-pane .content-panel:first-child {
-  background: linear-gradient(180deg, #eef1f6 0%, var(--paper) 100%);
+  background: linear-gradient(180deg, rgba(63, 90, 128, 0.07) 0%, transparent 100%);
 }
 
 /* Page title */
