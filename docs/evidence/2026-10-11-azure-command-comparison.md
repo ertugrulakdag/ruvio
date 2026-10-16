@@ -1,6 +1,6 @@
 # Command and memory comparison against Redis
 
-Per-command throughput and memory growth for 60 commands and 12 data structures, Ruvio against Redis 8.10.2. The raw data behind the table is [site/data/x86-azure-2026-10-11.json](../site/data/x86-azure-2026-10-11.json); the [performance page](https://salihcantekin.github.io/ruvio/testing-performance.html) shows the same run with all samples.
+Per-command throughput and memory growth for 60 commands and 12 data structures, Ruvio against Redis 8.10.2. The raw data behind the table is [site/data/x86-azure-2026-10-11.json](../../site/data/x86-azure-2026-10-11.json); the [performance page](https://salihcantekin.github.io/ruvio/testing-performance.html) shows the same run with all samples.
 
 ## Conditions (read before quoting any number)
 

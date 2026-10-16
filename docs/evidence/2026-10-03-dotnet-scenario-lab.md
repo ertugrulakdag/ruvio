@@ -704,7 +704,7 @@ Redis's**; storage tails
 also favored Redis. Neither service's maximum throughput was measured.
 
 The bounded persistence-worker/sequence-barrier prototype is now an unchecked
-item in [the roadmap](ROADMAP.md#durable-log), with ownership, failure,
+item in [the roadmap](../ROADMAP.md#durable-log), with ownership, failure,
 observed-read durability, memory bounds and acceptance gates. It was not
 implemented here. Both durable services remain running and API readiness
 returned `ready`/`PONG`; named data volumes were preserved.

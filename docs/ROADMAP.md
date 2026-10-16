@@ -75,7 +75,7 @@ slows a command or raises RSS for the same data does not land.
   acceptance open for representative indexed and tree-fallback mixes, repeated
   structural edits, longer durability/replication trials, and sustained
   slow-replica/disk-retention limits: a lagging replica can prolong primary
-  disk retention without a fixed cap. The [2026-10-07 RedisJSON comparison](BENCHMARK_RESULTS.md#native-json-vs-redisjson-2026-10-07)
+  disk retention without a fixed cap. The [2026-10-07 RedisJSON comparison](evidence/2026-10-07-benchmark-results.md#native-json-vs-redisjson-2026-10-07)
   on build `7aebdaf` confirms that 1 MiB scalar field GET/SET and root GET
   outpace RedisJSON for the tested shape, but 64 KiB field operations trail it
   by roughly 2–3× and 1 MiB structural `JSON.MERGE` is roughly 72× slower
@@ -331,7 +331,7 @@ not mutate shard state or reorder acknowledged writes.
     waits only; append, fallback and rotation remain synchronous. This backlog
     item stays unchecked until the broader safety and measurement gates pass.
     Short repeated local/Linux evidence is recorded in
-    [the scenario results](SCENARIO_LAB_RESULTS.md#experimental-sync-worker-isolated-repeated-linux-probe):
+    [the scenario results](evidence/2026-10-03-dotnet-scenario-lab.md#experimental-sync-worker-isolated-repeated-linux-probe):
     Linux concurrent throughput/tails improved, while macOS p99 regressed.
     Defaults remain unchanged; full client/API and cross-platform gates are open.
   - Use a long-lived persistence worker with explicit file/buffer ownership,
@@ -457,7 +457,7 @@ not mutate shard state or reorder acknowledged writes.
   same keyspace.**
   The Cherry soak of 2026-09-28 has not been repeated. The local Docker probe
   since then is inside the band; the soak is not. Both sets of numbers and the
-  analysis are in `docs/MEMORY_DENSITY.md`. The long-running cache claim stays
+  analysis are in `docs/evidence/2026-09-28-string-memory-density.md`. The long-running cache claim stays
   blocked until the soak key mix is measured again.
 - [ ] **P1 — Next cycle is throughput, then only the memory still outside the
   band.**
@@ -472,7 +472,7 @@ not mutate shard state or reorder acknowledged writes.
   close the separate long-running soak gap. A follow-up paired LRU read probe
   with 100k distinct keys and concurrent random GET/SET PX churn found a
   small improvement after eliminating a redundant live-key lookup; its
-  measurements and limits are in `docs/BENCHMARK_RESULTS.md`.
+  measurements and limits are in `docs/evidence/2026-10-07-benchmark-results.md`.
   Broader key/value distributions, durability modes and longer runs still
   need profiling. A packed record log stays a later option if the repeated
   soak is still above about 1.5× Redis. Docker Desktop numbers are not that soak.
@@ -576,13 +576,13 @@ optimization.
   The process is Tokio `current_thread` on the shard owner. Portable and
   `io_uring` were removed.
   The Docker Desktop Linux-VM sample (2026-09-22) is in
-  `docs/BENCHMARK_RESULTS.md`. That is not Redis parity and not a bare-metal baseline.
+  `docs/evidence/2026-10-07-benchmark-results.md`. That is not Redis parity and not a bare-metal baseline.
 - [ ] **P1 — Profile realistic key/value distributions, churn, TTL, and mixed
   commands, not only fixed-size GET/SET.**
 - [ ] **P1 — Evaluate shard-local open-addressing indexes against `AHashMap`.**
   Do this after the string entry is small. Packing today's `Entry` tighter
   does not remove the `Value` enum or the extra heap blocks. See
-  `docs/MEMORY_DENSITY.md`.
+  `docs/evidence/2026-09-28-string-memory-density.md`.
 - [ ] **P1 — Evaluate arenas/compact handles while preserving deletion and
   snapshot correctness.**
 - [ ] **P1 — Extend bounded pooling to collection elements only when profiles
@@ -779,9 +779,9 @@ slot map; one selected shard pins every screen to that node.
 - [ ] All `P0` standalone, persistence, integrity, expiration, memory, security,
   and packaging items are complete.
   Remaining hardware-only P0s: full-disk and permission fault injection, and a
-  24-hour soak. The string-RSS gap (`docs/MEMORY_DENSITY.md`) is
+  24-hour soak. The string-RSS gap (`docs/evidence/2026-09-28-string-memory-density.md`) is
   an open product P0 in Milestone 3. The Cherry EPYC `kill -9` SET harness and
-  the single-host performance record are in `docs/BARE_METAL.md`. See
+  the single-host performance record are in `docs/evidence/2026-09-28-bare-metal.md`. See
   `docs/RELEASE_EVIDENCE.md`.
 - [ ] No known acknowledged-write loss in crash testing under the documented
   durability contract.

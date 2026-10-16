@@ -2,7 +2,7 @@
 """Bare-metal Ruvio vs Redis on one host. Same client, disjoint CPU pins.
 
 This is the 2026-09-28 Cherry EPYC runner. Paths are absolute on that host
-(`/root/ruvio`, `/usr/local/bin/redis-server-8`). See docs/BARE_METAL.md.
+(`/root/ruvio`, `/usr/local/bin/redis-server-8`). See docs/evidence/2026-09-28-bare-metal.md.
 """
 
 from __future__ import annotations

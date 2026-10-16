@@ -248,7 +248,7 @@ and unchanged between stages.
   set host-side `FAULT_CONTROL_URL=http://127.0.0.1:8474` and
   `K6_FAULT_CONTROL_URL=http://host.docker.internal:8474`. Linux VPS results
   are recorded separately with host and image details in
-  [`docs/SCENARIO_LAB_RESULTS.md`](../../docs/SCENARIO_LAB_RESULTS.md).
+  [`docs/evidence/2026-10-03-dotnet-scenario-lab.md`](../../docs/evidence/2026-10-03-dotnet-scenario-lab.md).
 
 ### Paired Ruvio / Redis trace comparison
 

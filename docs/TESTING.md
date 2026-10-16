@@ -206,7 +206,7 @@ records integration-level storage call counts and durations, API process
 working set/CPU time, Ruvio process RSS, and k6 stage tags. This configured arrival rate is not
 the measured capacity of Ruvio, the SUT, or the load generator. The first
 30-minute two-host VPS result is
-recorded in [`SCENARIO_LAB_RESULTS.md`](SCENARIO_LAB_RESULTS.md) (the raw
+recorded in the [.NET scenario lab record](evidence/2026-10-03-dotnet-scenario-lab.md) (the raw
 k6 summaries are not part of this repository).
 The fault/recovery checks passed, but the run dropped load iterations, had
 four failed checks, and reported inconsistent threshold status; it is
@@ -264,15 +264,13 @@ process-crash tests above.
 ## Performance and memory measurements
 
 Ruvio has dated, reproducible benchmark records rather than a single general
-performance claim:
-
-- [`BENCHMARK_RESULTS.md`](BENCHMARK_RESULTS.md) records native and Docker
-  Desktop runs, workloads, versions, and measurement limitations.
-- [`BARE_METAL.md`](BARE_METAL.md) records a 2026-09-28 Cherry EPYC Linux run,
-  including Redis comparisons, durability profiles, two 15-minute soaks, and
-  `SIGKILL` recovery trials.
-- [`MEMORY_DENSITY.md`](MEMORY_DENSITY.md) records memory-density results and
-  the open RSS gap.
+performance claim. [`evidence/README.md`](evidence/README.md) lists them,
+newest first: the 2026-10-11 Azure command and memory comparison, native and
+Docker Desktop runs from 2026-10-01 to 2026-10-07, the .NET scenario lab, and
+the 2026-09-28 Cherry EPYC Linux run with Redis comparisons, durability
+profiles, two 15-minute soaks and `SIGKILL` recovery trials. Current numbers
+are on the [performance](../site/testing-performance.html) and
+[memory](../site/testing-memory.html) pages.
 
 Laptop and Docker Desktop measurements are useful for repeatable functional
 checks and same-machine regression detection. They are not substitutes for

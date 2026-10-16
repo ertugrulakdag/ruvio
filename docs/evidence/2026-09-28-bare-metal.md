@@ -2,7 +2,7 @@
 
 One Cherry Servers host, billed hourly until it is terminated. These numbers
 are from that machine only. Frequency boost was disabled in `lscpu`. Docker
-and laptop numbers in `BENCHMARK_RESULTS.md` are not this run.
+and laptop numbers in `2026-10-07-benchmark-results.md` are not this run.
 
 ## Machine
 
@@ -108,7 +108,7 @@ The soak keyspace is warm after the first pass, so Redis INCR here (3.12M)
 is higher than the cold matrix INCR (2.53M).
 
 The RSS plateau of this soak, the key mix behind it, and the open P0 are in
-`docs/MEMORY_DENSITY.md`.
+`docs/evidence/2026-09-28-string-memory-density.md`.
 
 ### Hot path after the redundant GET lookup (3 samples, n=1,000,000)
 

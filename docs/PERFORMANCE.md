@@ -30,10 +30,11 @@ higher and the command is not slower. Docker Desktop numbers are relative to
 the Redis container on the same machine. They are not a bare-metal result and
 must not be published as one.
 
-One noisy sample is not a regression and not a win. Repeat it before changing
-the table in `docs/BENCHMARK_RESULTS.md` and `site/testing-performance.html`. Replace
-the existing dated section. Do not add a second one. `README.md` links to
-`docs/BENCHMARK_RESULTS.md` and must not copy the table.
+One noisy sample is not a regression and not a win. Repeat it before
+publishing a number. A new measurement goes in a new dated file in
+`docs/evidence/` (see [its README](evidence/README.md)); older records stay as
+they were. `site/testing-performance.html` shows the current numbers, and
+`README.md` links to them without copying the table.
 
 ## Changes that were measured and rejected
 

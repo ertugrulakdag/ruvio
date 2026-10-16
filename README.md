@@ -232,9 +232,9 @@ Not claimed: a cluster bus, online slot migration, failover, replica acknowledge
 
 ### Docker Desktop and memory density
 
-The capped Docker Desktop comparison (containers limited to 4 CPUs and 2 GiB, 2026-10-01) is in [docs/BENCHMARK_RESULTS.md](docs/BENCHMARK_RESULTS.md#capped-docker-desktop-comparison-2026-10-01).
+The capped Docker Desktop comparison (containers limited to 4 CPUs and 2 GiB, 2026-10-01) is in [the 2026-10-07 benchmark record](docs/evidence/2026-10-07-benchmark-results.md#capped-docker-desktop-comparison-2026-10-01).
 
-Docker RSS is not the bare-metal result; the memory detail is in [docs/MEMORY_DENSITY.md](docs/MEMORY_DENSITY.md) and on the [memory page](https://salihcantekin.github.io/ruvio/testing-memory.html). Natively on this Mac, 1,000,000 `LIMIT` keys added 148.9 MiB against 85.9 MiB for 1,000,000 plain 64-byte strings, about 1.7× per key.
+Docker RSS is not the bare-metal result; the memory detail is in [the string memory density record](docs/evidence/2026-09-28-string-memory-density.md) and on the [memory page](https://salihcantekin.github.io/ruvio/testing-memory.html). Natively on this Mac, 1,000,000 `LIMIT` keys added 148.9 MiB against 85.9 MiB for 1,000,000 plain 64-byte strings, about 1.7× per key.
 
 ## Repository layout
 

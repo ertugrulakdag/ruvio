@@ -1,7 +1,9 @@
 # String memory density
 
-Status: open P0. Recorded from the Cherry EPYC soak on 2026-09-28.
-See `docs/BARE_METAL.md` for the run and `docs/ROADMAP.md`.
+Recorded from the Cherry EPYC soak on 2026-09-28; see
+[the bare-metal record](2026-09-28-bare-metal.md) for the run. The work order
+below was carried out afterwards; later numbers are in
+[the 2026-10-11 comparison](2026-10-11-azure-command-comparison.md#memory).
 
 ## What was compared
 

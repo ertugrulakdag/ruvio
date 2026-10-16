@@ -12,7 +12,7 @@ To repeat one of these measurements, copy the script out, fix its paths, and bui
 
 | Script | What it measured |
 | --- | --- |
-| `baremetal_compare.py`, `durability_rebench.py` | The 2026-09-28 bare-metal comparison in [docs/BARE_METAL.md](../../docs/BARE_METAL.md) |
+| `baremetal_compare.py`, `durability_rebench.py` | The 2026-09-28 bare-metal comparison in [docs/evidence/2026-09-28-bare-metal.md](../../docs/evidence/2026-09-28-bare-metal.md) |
 | `extra_runs.py` | Concurrency and durability scenarios against Redis |
 | `bench_prealloc_ab.py`, `bench_shards_ab.py`, `bench_worker_repl.py`, `bench_always_shards.sh`, `bench_forward_group.sh` | Sync worker and shard-count A/B runs under `always` durability |
 | `bench_get_p16.py`, `bench_rss.py`, `bench_soak.py` | GET pipeline, RSS and soak runs from one benchmark session |
