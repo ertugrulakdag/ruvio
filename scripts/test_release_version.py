@@ -153,6 +153,7 @@ class ReleaseVersionTests(unittest.TestCase):
     def test_preview_versions_and_stamp(self) -> None:
         self.assertEqual(release_version.preview_version("csharp", "0.3.2", 7), "0.3.2-preview.7")
         self.assertEqual(release_version.preview_version("python", "0.3.2", 7), "0.3.2.dev7")
+        self.assertEqual(release_version.preview_version("java", "0.3.2", 7), "0.3.2-rc.7")
         with self.assertRaises(ValueError):
             release_version.preview_version("csharp", "0.3.2-preview.1", 2)
         with tempfile.TemporaryDirectory() as directory:

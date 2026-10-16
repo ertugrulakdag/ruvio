@@ -11,7 +11,8 @@ the release publishes the server binaries).
 
 --preview N prints a preview version instead: the next patch (or --set) with a
 preview suffix, `X.Y.Z-preview.N` (`X.Y.Z.devN` for PyPI, which has no
-pre-release label of that name). --stamp VERSION writes a version into the
+pre-release label of that name, and `X.Y.Z-rc.N` for Maven, which would sort
+`preview` after the release). --stamp VERSION writes a version into the
 package files only, with no CHANGELOG move and no pins; the release workflow
 stamps preview versions this way and never commits them.
 """
@@ -26,7 +27,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
-PREVIEW = re.compile(r"^\d+\.\d+\.\d+(-preview\.\d+|\.dev\d+)$")
+PREVIEW = re.compile(r"^\d+\.\d+\.\d+(-preview\.\d+|-rc\.\d+|\.dev\d+)$")
 
 INTEGRATIONS = ROOT / "integrations" / "dotnet"
 
@@ -164,8 +165,14 @@ def preview_version(package: str, base: str, number: int) -> str:
     if number < 1:
         raise ValueError(f"preview number must be positive: {number}")
 
-    if PACKAGES[package].get("kind") == "python":
+    kind = PACKAGES[package].get("kind")
+
+    if kind == "python":
         return f"{base}.dev{number}"
+
+    # Maven sorts an unknown qualifier such as `preview` after the release; `rc` sorts before it.
+    if kind == "java":
+        return f"{base}-rc.{number}"
 
     return f"{base}-preview.{number}"
 

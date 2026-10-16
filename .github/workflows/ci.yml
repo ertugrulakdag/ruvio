@@ -251,7 +251,8 @@ jobs:
       - name: Build every .NET project
         run: |
           set -euo pipefail
-          git ls-files '*.csproj' | while read -r project; do
+          mapfile -t projects < <(git ls-files '*.csproj')
+          for project in "${projects[@]}"; do
             dotnet build -c Release "$project" --nologo
           done
       - run: cargo build --locked --bin ruvio

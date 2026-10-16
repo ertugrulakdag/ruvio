@@ -30,17 +30,20 @@ Leave a version input empty to bump that package's patch number, or fill it to p
 
 ## Preview releases
 
-Start `release` (or `integration-packages`) from the `dev` branch to publish previews. Every selected package gets its next patch with a preview suffix and the run number, `X.Y.Z-preview.N` (PyPI `X.Y.Z.devN`; a filled version input sets `X.Y.Z`). The versions are written into each job's checkout only: nothing is committed to `dev`, and CHANGELOG notes stay under "Unreleased".
+Start `release` (or `integration-packages`) from the `dev` branch to publish previews. Every selected package gets its next patch with a preview suffix and the run number, `X.Y.Z-preview.N` (PyPI `X.Y.Z.devN`, Maven `X.Y.Z-rc.N`, which Maven sorts before the release; a filled version input sets `X.Y.Z`). The versions are written into each job's checkout only: nothing is committed to `dev`, and CHANGELOG notes stay under "Unreleased".
 
 | Target | Preview |
 | --- | --- |
-| `nuget`, `rust-client`, `maven`, integration packages | a pre-release version (`dotnet add package ... --prerelease`, `cargo add ruvio-client@X.Y.Z-preview.N`) |
+| `nuget`, `rust-client`, integration packages | a pre-release version (`dotnet add package ... --prerelease`, `cargo add ruvio-client@X.Y.Z-preview.N`) |
+| `maven` | `X.Y.Z-rc.N`; Central has no pre-release flag, so depend on that exact version |
 | `npm` | published under the `preview` dist-tag (`npm install ruvio-client@preview`); `latest` is unchanged |
 | `pypi` | a development release (`pip install --pre ruvio-client`) |
 | `docker`, `docker-ui` | the `X.Y.Z-preview.N` and `preview` tags; `latest` and `linux` stay on the last release, and the Docker Hub description is not touched |
 | `server-binaries`, `ui-host` | archives named with the preview version; with `create_github_release` the GitHub Release is marked pre-release |
 
 Started from any other branch, the workflows publish releases as before.
+
+The run number makes the version, so re-running a failed preview publishes the same number again (NuGet skips duplicates; crates.io, npm and PyPI refuse them): start a new run instead. An integration preview depends on the `Ruvio.Client` version in its repository (a project reference), which is the last client release, not a client preview.
 
 ## Changelogs
 

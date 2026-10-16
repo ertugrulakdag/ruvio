@@ -22,8 +22,9 @@ name: release
 # GITHUB_TOKEN — built-in token, not a repository secret. Pushes the version commit and creates the GitHub Release when that option is on.
 #
 # Preview releases: started from the dev branch, the workflow publishes previews. Each package
-# gets the next patch with a preview suffix and the run number (X.Y.Z-preview.N; PyPI X.Y.Z.devN):
-# NuGet, crates.io and Maven Central list it as a pre-release, npm publishes it under the
+# gets the next patch with a preview suffix and the run number (X.Y.Z-preview.N; PyPI X.Y.Z.devN;
+# Maven X.Y.Z-rc.N, a qualifier Maven sorts before the release, as Central has no pre-release flag):
+# NuGet and crates.io list it as a pre-release, npm publishes it under the
 # `preview` dist-tag, Docker pushes the `preview` tag (never `latest`), and the GitHub Release
 # is marked pre-release. Nothing is committed: the versions are stamped into the checkout of
 # each job only, and CHANGELOG notes stay under "Unreleased". Version inputs are ignored
@@ -255,7 +256,7 @@ jobs:
           tags: |
             salihcantekin/ruvio:${{ needs.versions.outputs.server }}
             ${{ needs.versions.outputs.preview == 'true' && 'salihcantekin/ruvio:preview' || 'salihcantekin/ruvio:linux' }}
-            ${{ needs.versions.outputs.preview == 'true' && '' || 'salihcantekin/ruvio:latest' }}
+            ${{ needs.versions.outputs.preview != 'true' && 'salihcantekin/ruvio:latest' || '' }}
           cache-from: type=gha,scope=ruvio-server
           cache-to: type=gha,scope=ruvio-server,mode=max
       - name: Docker Hub description
@@ -299,7 +300,7 @@ jobs:
           tags: |
             salihcantekin/ruvio-ui:${{ needs.versions.outputs.ui }}
             ${{ needs.versions.outputs.preview == 'true' && 'salihcantekin/ruvio-ui:preview' || 'salihcantekin/ruvio-ui:linux' }}
-            ${{ needs.versions.outputs.preview == 'true' && '' || 'salihcantekin/ruvio-ui:latest' }}
+            ${{ needs.versions.outputs.preview != 'true' && 'salihcantekin/ruvio-ui:latest' || '' }}
           cache-from: type=gha,scope=ruvio-ui
           cache-to: type=gha,scope=ruvio-ui,mode=max
       - name: Docker Hub description
@@ -696,6 +697,7 @@ jobs:
           PYTHON: ${{ needs.versions.outputs.python }}
           JAVA: ${{ needs.versions.outputs.java }}
           PREVIEW: ${{ needs.versions.outputs.preview }}
+          SHA: ${{ needs.versions.outputs.sha }}
         run: |
           set -euo pipefail
           tag="$GIT_TAG"
@@ -706,7 +708,8 @@ jobs:
           if [ -z "$tag" ]; then
             tag="ruvio-$SERVER"
           fi
-          gh release create "$tag" "${prerelease[@]}" --title "$tag" --notes "$(cat <<EOF
+          # The tag goes on the commit the assets were built from (a new tag would otherwise land on main).
+          gh release create "$tag" "${prerelease[@]}" --target "$SHA" --title "$tag" --notes "$(cat <<EOF
           Server $SERVER
           Rust client $RUST_CLIENT
           C# $CSHARP
