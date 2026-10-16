@@ -98,3 +98,33 @@ What the day's two runs changed: the first eight-shard run of the same binary me
 | 50,000 small hashes (3 fields) | 27.0 MiB | 3.4 MiB | 28.1 MiB | 1.01× | 0.96× |
 | 50,000 small sets (4 members) | 24.7 MiB | 3.1 MiB | 25.5 MiB | 1.00× | 0.97× |
 | 50,000 small sorted sets (3 members) | 23.7 MiB | 2.8 MiB | 24.5 MiB | 1.07× | 0.97× |
+
+## Follow-up runs the same evening
+
+Data: [x86-azure-2026-10-16-8-shards-everysec.json](../../site/data/x86-azure-2026-10-16-8-shards-everysec.json) and [x86-azure-2026-10-16-8-shards-p64.json](../../site/data/x86-azure-2026-10-16-8-shards-p64.json); same host, same method, Ruvio at `f4920ac` (non-blocking `PUBLISH` fan-out added).
+
+### `PUBLISH` after the non-blocking fan-out
+
+`PUBLISH` is now handed to the other seven shards as a message their loop delivers without any reply: 2.85M/s against 2.19M/s for the Redis Cluster (1.30×) and 0.29M/s before. Per core it stays at 0.56× of one Redis without any fan-out: every publish still costs seven cross-shard messages, which a single process does not pay.
+
+### Pipeline 64: the client was the limit of the hot path
+
+With pipeline 16 one `redis-benchmark` per shard was at its own ceiling for the cheapest commands (one Ruvio shard under `GET` showed 19,000 context switches a second against Redis's 200: it drained its sockets and slept). With pipeline 64 the picture splits in two (59 rows without `PUBLISH`, geometric mean 1.15× against the cluster, median 1.09×, 45 rows at or above 0.97×, 6 below 0.90×):
+
+| Group | Examples | Ruvio / Redis Cluster |
+| --- | --- | ---: |
+| Hot path (`GET`, `SET`, `DEL`, `INCR`, `SETEX`) | `GET` 29.5M against 16.8M, `SET` 30.6M against 13.6M, `DEL` 31.1M against 18.1M | 1.7× to 2.3× |
+| Generic dispatch, cheap commands | `APPEND` 0.88×, `SADD` existing 0.87×, `BITCOUNT` 0.90×, `HDEL` missing 0.87×, `FILLGET` 0.85× | 0.85× to 0.96× |
+
+So Ruvio's hot path is about twice as fast as Redis per core and its generic path about 10% slower. A `perf record` (software clock; the VM exposes no hardware counters) of one shard under `SADD s a` at pipeline 64 shows where the generic path spends its time: 7.7% in the vDSO clock (`Instant::now` for `SLOWLOG` timing, taken twice per command in `dispatch_plain`), 4.8% in `parse_frame_spans`, 2.9% in the command table lookup, 2.7% in `charge_of` (memory accounting), 2.7% in `lookup_ttl`, 9% in the kernel waking the client socket. The `GET` profile has none of the clock cost. Open: time the slow log from a per-turn sample or a cheaper clock, then look at the parse and table steps.
+
+### `everysec` against Redis `appendfsync everysec` (data disk, 300 MB/s)
+
+Geometric mean 1.04× against the cluster (median 1.02×, 48 rows at or above 0.97×, 8 below 0.90×). Writes that log a small record win (`SET` 1.64×, `SETEX` 1.82×, `HSET` 1.58×, `MSET` 1.41×, `GEOADD` 1.31×); `GET` is 0.99×. The rows below 0.90× are of two kinds, both in the WAL layer, not in the shard engine:
+
+| Row | Ruvio / Cluster | Cause (code) |
+| --- | ---: | --- |
+| `LSET` (100 elements) 0.53×, `LSET` (20) 0.52×, `LMOVE` 0.57×, `SETRANGE` 0.48×, `BITFIELD INCRBY` 0.55×, `COPY ... REPLACE` 0.63×, `INCRBYFLOAT` 0.69× | | not in the WAL group list (`wal_group.rs`, `eligible_outside_multi`): each one ends the pipeline's group and pays its own `write()`, under `everysec` before its reply. `LSET`/`LINSERT`/`LREM` also log the whole list as one transaction record |
+| `SADD` (existing member) 0.72× | | the record is written before the member is checked (`dispatch.rs`, `Command::SetAdd`), so a no-op `SADD` logs a record on every call; Redis logs nothing when nothing changed |
+
+Open: extend the WAL group list to the synchronous in-place commands above (each needs the "no await before the reply" review that list demands), and skip the record for a `SADD`/`ZADD` that changes nothing.
