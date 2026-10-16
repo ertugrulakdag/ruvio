@@ -26,7 +26,7 @@ pub fn append_strings(payload: &mut Vec<u8>, arguments: &[&str]) -> Result<(), E
 }
 
 /// Binary-safe form of [`append_strings`]: each argument is raw bytes.
-pub(crate) fn append_bytes(payload: &mut Vec<u8>, arguments: &[&[u8]]) -> Result<(), Error> {
+pub fn append_bytes(payload: &mut Vec<u8>, arguments: &[&[u8]]) -> Result<(), Error> {
     if arguments.is_empty() {
         return Err(Error::Protocol(
             "a command needs at least one argument".to_owned(),
