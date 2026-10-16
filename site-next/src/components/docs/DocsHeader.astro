@@ -2,7 +2,6 @@
 // Starlight header override: the site logo and the same main menu as the marketing pages,
 // then Starlight's search, social icons and theme select. Below 50rem the menu, social icons
 // and theme select move into the sidebar popover (see DocsMobileMenuFooter.astro).
-import config from "virtual:starlight/user-config";
 import Search from "@astrojs/starlight/components/Search.astro";
 import SocialIcons from "@astrojs/starlight/components/SocialIcons.astro";
 import ThemeSelect from "@astrojs/starlight/components/ThemeSelect.astro";
@@ -11,8 +10,6 @@ import { mainNav } from "../../config/site";
 import { currentNavHref } from "./nav";
 
 const current = currentNavHref(Astro.url.pathname);
-const shouldRenderSearch =
-  config.pagefind || config.components.Search !== "@astrojs/starlight/components/Search.astro";
 ---
 
 <div class="docs-header">
@@ -24,7 +21,7 @@ const shouldRenderSearch =
       <a href={item.href} aria-current={item.href === current ? "page" : undefined}>{item.label}</a>
     ))}
   </nav>
-  <div class="search print:hidden">{shouldRenderSearch && <Search />}</div>
+  <div class="search print:hidden"><Search /></div>
   <div class="right-group sl-hidden md:sl-flex print:hidden">
     <div class="social-icons"><SocialIcons /></div>
     <ThemeSelect />

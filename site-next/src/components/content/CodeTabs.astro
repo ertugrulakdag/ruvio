@@ -1,0 +1,105 @@
+---
+// One code example in several languages, as tabs inside a single terminal frame.
+// Every CodeTabs on a page follows the same choice, and the choice is remembered for the next visit,
+// so a reader who picks "Go" once sees Go everywhere. Without JavaScript only the first tab shows.
+import { codeToHtml } from "../../lib/code";
+
+export type CodeTab = { key: string; label: string; code: string };
+interface Props { tabs: CodeTab[]; label: string; id: string }
+const { tabs, label, id } = Astro.props;
+const uid = `${id}-code`;
+---
+
+<figure class="term code-tabs" data-code-tabs>
+  <figcaption class="term-bar">
+    <div class="tl" role="tablist" aria-label={label}>
+      {tabs.map((t, i) => (
+        <button type="button" role="tab" id={`${uid}-t-${t.key}`} aria-controls={`${uid}-p-${t.key}`}
+          aria-selected={i === 0 ? "true" : "false"} tabindex={i === 0 ? 0 : -1} data-key={t.key}>{t.label}</button>
+      ))}
+    </div>
+    <button type="button" class="copy" data-copy hidden>Copy</button>
+  </figcaption>
+  {tabs.map((t, i) => (
+    <pre role="tabpanel" id={`${uid}-p-${t.key}`} aria-labelledby={`${uid}-t-${t.key}`} data-key={t.key} tabindex="0" hidden={i !== 0}><code set:html={codeToHtml(t.code)} /></pre>
+  ))}
+</figure>
+
+<style>
+  .code-tabs { margin: 0; }
+  .code-tabs .term-bar { align-items: center; gap: 12px; padding: 0 10px 0 6px; }
+  .tl { display: flex; gap: 0; overflow-x: auto; scrollbar-width: none; min-width: 0; }
+  .tl::-webkit-scrollbar { display: none; }
+  .tl button {
+    flex: none; font: inherit; font-size: 12.5px; color: var(--code-dim); background: transparent; border: 0;
+    padding: 11px 10px 9px; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap;
+  }
+  .tl button:hover { color: var(--code-ink); }
+  .tl button[aria-selected="true"] { color: var(--code-ink); border-bottom-color: var(--accent); }
+  .tl button:focus-visible { outline: 2px solid var(--c2); outline-offset: -2px; }
+  .code-tabs pre { font-size: 13px; line-height: 1.7; }
+  .code-tabs pre:focus-visible { outline: 2px solid var(--c2); outline-offset: -2px; }
+  .copy {
+    flex: none; font: inherit; font-size: 12px; color: var(--code-dim); background: transparent;
+    border: 1px solid var(--line-soft); border-radius: 4px; padding: 3px 9px; cursor: pointer;
+  }
+  .copy:hover { color: var(--code-ink); }
+  @media (max-width: 600px) { .code-tabs pre { font-size: 12.5px; padding: 14px 16px 16px; } }
+</style>
+
+<script>
+  const KEY = "ruvio-code-lang";
+  const groups = [...document.querySelectorAll<HTMLElement>("[data-code-tabs]")];
+
+  const show = (key: string, remember: boolean) => {
+    for (const g of groups) {
+      const tabs = [...g.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+      if (!tabs.some((t) => t.dataset.key === key)) continue;
+      for (const t of tabs) {
+        const on = t.dataset.key === key;
+        t.setAttribute("aria-selected", String(on));
+        t.tabIndex = on ? 0 : -1;
+      }
+      for (const p of g.querySelectorAll<HTMLElement>('[role="tabpanel"]')) p.hidden = p.dataset.key !== key;
+    }
+    if (remember) {
+      try { localStorage.setItem(KEY, key); } catch { /* storage blocked: the choice lasts for this page only */ }
+    }
+  };
+
+  for (const g of groups) {
+    const tabs = [...g.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    g.querySelector('[role="tablist"]')?.addEventListener("click", (e) => {
+      const tab = (e.target as HTMLElement).closest<HTMLButtonElement>('[role="tab"]');
+      if (!tab?.dataset.key) return;
+      // Keep the clicked frame where it is while frames above it change height.
+      const top = g.getBoundingClientRect().top;
+      show(tab.dataset.key, true);
+      window.scrollBy(0, g.getBoundingClientRect().top - top);
+    });
+    g.querySelector('[role="tablist"]')?.addEventListener("keydown", (e) => {
+      const ev = e as KeyboardEvent;
+      const i = tabs.findIndex((t) => t === document.activeElement);
+      if (i < 0) return;
+      const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[ev.key];
+      if (next === undefined) return;
+      ev.preventDefault();
+      const t = tabs[(next + tabs.length) % tabs.length];
+      show(t.dataset.key!, true);
+      t.focus();
+    });
+    const copy = g.querySelector<HTMLButtonElement>("[data-copy]");
+    if (copy && navigator.clipboard) {
+      copy.hidden = false;
+      copy.addEventListener("click", async () => {
+        const text = g.querySelector<HTMLElement>('[role="tabpanel"]:not([hidden])')?.textContent ?? "";
+        try { await navigator.clipboard.writeText(text); copy.textContent = "Copied"; } catch { copy.textContent = "Copy failed"; }
+        setTimeout(() => (copy.textContent = "Copy"), 1600);
+      });
+    }
+  }
+
+  let saved: string | null = null;
+  try { saved = localStorage.getItem(KEY); } catch { /* storage blocked */ }
+  if (saved) show(saved, false);
+</script>

@@ -97,6 +97,7 @@ a.card:hover { border-color: color-mix(in srgb, var(--ink) 30%, var(--line)); }
 .term pre { margin: 0; padding: 18px 20px 22px; overflow-x: auto; font: inherit; font-family: var(--f-mono); }
 .term .p { color: var(--code-dim); user-select: none; }
 .term .o { color: var(--code-dim); }
+.term .s { color: color-mix(in srgb, var(--c2) 75%, var(--code-ink)); }
 .term .cur { color: var(--c1); }
 
 /* Tables */
@@ -105,6 +106,61 @@ a.card:hover { border-color: color-mix(in srgb, var(--ink) 30%, var(--line)); }
 .table-wrap th { text-align: left; font-weight: 600; font-size: 12.5px; color: var(--mute); background: var(--surface-2); padding: 10px 14px; white-space: nowrap; }
 .table-wrap td { padding: 10px 14px; border-top: 1px solid var(--line); vertical-align: top; }
 .num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+
+/* Inner page intro: the home hero's night-to-dusk sky, shorter */
+.page-intro {
+  position: relative; isolation: isolate; overflow: hidden;
+  padding-block: clamp(48px, 7vw, 88px) clamp(40px, 6vw, 72px);
+  border-bottom: 1px solid var(--line);
+}
+.page-intro::before {
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  background:
+    radial-gradient(60% 70% at 30% 130%, rgba(var(--dusk), 0.3), rgba(var(--dusk), 0) 70%),
+    linear-gradient(180deg, var(--sky-0) 0%, var(--sky-1) 60%, var(--sky-2) 100%);
+}
+.page-intro::after { content: ""; position: absolute; inset: auto 0 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(var(--dusk), 0.6), transparent); }
+.page-intro h1 { margin: 0 0 16px; font-size: clamp(32px, 4.4vw, 52px); line-height: 1.08; max-width: 22ch; }
+.page-intro .lede { font-size: 18px; color: color-mix(in srgb, var(--ink-body) 85%, var(--mute)); }
+.page-intro .lede code { color: var(--ink); }
+
+/* Reading pages: content panels on a quietly shaded ground */
+.reading {
+  padding-block: clamp(32px, 5vw, 56px) var(--section-y);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--sky-1) 55%, var(--bg)) 0, var(--bg) 420px),
+    var(--bg);
+}
+.panel {
+  background: var(--paper); border: 1px solid var(--paper-line); border-radius: var(--radius);
+  padding: clamp(20px, 3vw, 34px); min-width: 0;
+}
+
+/* Prose: body copy for long text */
+.prose { color: var(--ink-body); font-size: 16.5px; line-height: var(--leading); }
+.prose > * { margin: 0; }
+.prose > * + * { margin-top: 14px; }
+.prose p, .prose li { max-width: 68ch; }
+.prose strong, .prose b { color: var(--ink); font-weight: 600; }
+.prose a:not(.btn, .card) {
+  color: var(--ink); text-decoration: underline; text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.prose a:not(.btn, .card):hover { text-decoration-color: var(--ink); }
+.prose :not(pre) > code {
+  color: var(--ink); background: var(--surface-2);
+  border-radius: 4px; padding: 0.1em 0.35em; font-size: 0.88em;
+}
+
+/* Callout: a short aside inside prose */
+.callout {
+  padding: 12px 16px; border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--c2) 7%, var(--paper));
+  border: 1px solid color-mix(in srgb, var(--c2) 22%, var(--paper-line));
+  border-left: 3px solid var(--c2);
+  font-size: 15.5px;
+}
+.callout b:first-child { margin-right: 6px; }
 
 /* Chart tooltip, shared by the chart islands */
 .chart-tip {

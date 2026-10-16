@@ -5,7 +5,7 @@ import RadialSpeed from "../components/charts/RadialSpeed.astro";
 import MemoryDumbbell from "../components/charts/MemoryDumbbell.astro";
 import CommandMosaic from "../components/charts/CommandMosaic.astro";
 import RecoveryScale from "../components/charts/RecoveryScale.astro";
-import { platforms, commands, families, fmtOps, fmtX, pct } from "../data/bench";
+import { platforms, commands, families, fmtOps, fmtX, pct, serverVersion } from "../data/bench";
 import { clients, site } from "../config/site";
 
 const jobs = [
@@ -29,7 +29,7 @@ const steps = [
   <section class="hero">
     <div class="wrap hero-in">
       <div class="hero-copy">
-        <p class="kicker">Redis protocol server, written in Rust · v{site.version}</p>
+        <p class="kicker">Redis protocol server, written in Rust · v{serverVersion}</p>
         <h1>One process instead of a cache, a lock service and a delay queue.</h1>
         <p class="hero-lede">Ruvio speaks RESP, so <code>redis-cli</code> and your existing clients connect. Each shard owns its keys: no lock on the hot path, and the durability you choose at startup.</p>
         <div class="ctas">
@@ -203,7 +203,7 @@ const steps = [
       </div>
       <div class="ctas">
         <a class="btn" href="/get-started/">Get started</a>
-        <a class="btn ghost" href={site.releases}>Download v{site.version}</a>
+        <a class="btn ghost" href={site.releases}>Download v{serverVersion}</a>
       </div>
     </div>
   </section>

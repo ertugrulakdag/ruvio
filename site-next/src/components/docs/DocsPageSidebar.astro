@@ -1,0 +1,101 @@
+---
+// Starlight right-column override: Starlight's own table of contents, in a narrower column
+// (widths in starlight.css), with a button that hides the column so the article gets the
+// full width. The choice is kept in localStorage ("ruvio-toc") and applied before first
+// paint by the inline head script in astro.config.mjs. Below 72rem Starlight shows its
+// own collapsible "On this page" bar instead, so the button is desktop only.
+import Default from "@astrojs/starlight/components/PageSidebar.astro";
+---
+
+{
+  Astro.locals.starlightRoute.toc && (
+    <>
+      <button class="toc-toggle sl-hidden lg:sl-flex print:hidden" type="button" data-toc-toggle aria-expanded="true">
+        <svg class="when-open" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <svg class="when-closed" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path d="M3 4.5h10M3 8h10M3 11.5h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        </svg>
+        <span class="when-closed">On this page</span>
+        <span class="sr-only when-open">Hide the page contents</span>
+      </button>
+      <Default />
+    </>
+  )
+}
+
+<script>
+  const root = document.documentElement;
+  for (const btn of document.querySelectorAll<HTMLButtonElement>("[data-toc-toggle]")) {
+    const sync = () => {
+      const closed = root.dataset.toc === "closed";
+      btn.setAttribute("aria-expanded", String(!closed));
+      btn.title = closed ? "Show the page contents" : "Hide the page contents";
+    };
+    btn.addEventListener("click", () => {
+      const close = root.dataset.toc !== "closed";
+      if (close) root.dataset.toc = "closed";
+      else delete root.dataset.toc;
+      try {
+        localStorage.setItem("ruvio-toc", close ? "closed" : "open");
+      } catch {
+        // Storage can be blocked; the toggle still works for this page.
+      }
+      sync();
+    });
+    sync();
+  }
+</script>
+
+<style>
+  .toc-toggle {
+    position: absolute;
+    top: calc(var(--sl-nav-height) + 0.85rem);
+    inset-inline-end: 0.75rem;
+    z-index: 2;
+    align-items: center;
+    gap: 0.4rem;
+    height: 1.9rem;
+    min-width: 1.9rem;
+    justify-content: center;
+    padding: 0 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-s);
+    background: var(--surface);
+    color: var(--mute);
+    font: 500 var(--sl-text-xs) / 1 var(--f-sans);
+    cursor: pointer;
+  }
+  .toc-toggle:hover {
+    color: var(--ink);
+    border-color: color-mix(in srgb, var(--ink) 30%, var(--line));
+  }
+  .toc-toggle:focus-visible {
+    outline: 2px solid var(--c2);
+    outline-offset: 2px;
+  }
+  .when-closed {
+    display: none;
+  }
+  /* Closed: the same button becomes a small tab pinned to the right edge */
+  :global(:root[data-toc="closed"]) .toc-toggle {
+    position: fixed;
+    inset-inline-end: 1rem;
+    padding: 0 0.65rem;
+  }
+  :global(:root[data-toc="closed"]) .toc-toggle .when-open {
+    display: none;
+  }
+  :global(:root[data-toc="closed"]) .toc-toggle .when-closed {
+    display: inline;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+</style>

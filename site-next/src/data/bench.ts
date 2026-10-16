@@ -110,6 +110,11 @@ export const fmtMiB = (kib: number) => (kib / 1024).toFixed(1);
 export const pct = (v: number) => `${Math.round(v * 100)}%`;
 
 // Durability defaults, read from the example configuration that ships with the server.
+// The server release shown on the site: the version in the root Cargo.toml.
+const cargoVersion = /^version\s*=\s*"([^"]+)"/m.exec(fs.readFileSync(path.join(repo, "Cargo.toml"), "utf8"));
+if (!cargoVersion) throw new Error("Cargo.toml has no version");
+export const serverVersion = cargoVersion[1];
+
 const exampleToml = fs.readFileSync(path.join(repo, "ruvio.example.toml"), "utf8");
 const tomlNumber = (key: string) => {
   const m = exampleToml.match(new RegExp(`^\\s*${key}\\s*=\\s*(\\d+)`, "m"));

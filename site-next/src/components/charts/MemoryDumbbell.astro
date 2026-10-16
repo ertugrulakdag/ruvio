@@ -31,7 +31,7 @@ const savedText = (s: number) => (s > 0.005 ? `−${Math.round(s * 100)}%` : s <
         <span class="lab">{r.label}</span>
         <div class="track">
           {ticks.map((v) => <i class="gl" style={`left:${pos(v).toFixed(2)}%`}></i>)}
-          <span class="seg" style={`left:${at(a)};width:calc(${at(b)} - ${at(a)});animation-delay:${i * 40}ms`}></span>
+          <span class="span-bar" style={`left:${at(a)};width:calc(${at(b)} - ${at(a)});animation-delay:${i * 40}ms`}></span>
           <span class="dot redis" style={`left:${at(r.redisKib)}`}></span>
           <span class="dot ruvio" style={`left:${at(r.ruvioKib)}`}></span>
         </div>
@@ -55,7 +55,7 @@ const savedText = (s: number) => (s > 0.005 ? `−${Math.round(s * 100)}%` : s <
   .lab { font-size: 14px; color: var(--mute); min-width: 0; }
   .track { position: relative; height: 22px; border-radius: 3px; }
   .gl { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); }
-  .seg { position: absolute; top: 50%; height: 4px; margin-top: -2px; border-radius: 2px; background: color-mix(in srgb, var(--c1) 40%, transparent); transform-origin: right; animation: grow 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+  .span-bar { position: absolute; top: 50%; height: 4px; margin-top: -2px; border-radius: 2px; background: color-mix(in srgb, var(--c1) 40%, transparent); transform-origin: right; animation: grow 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
   .dot { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; }
   .dot.ruvio { background: var(--c1); box-shadow: 0 0 0 3px var(--surface); }
   .dot.redis { background: var(--redis); box-shadow: 0 0 0 3px var(--surface); }

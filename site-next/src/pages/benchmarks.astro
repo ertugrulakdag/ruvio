@@ -1,6 +1,7 @@
 ---
 import Page from "../layouts/Page.astro";
 import PlatformSwitch from "../components/PlatformSwitch.astro";
+import PageIntro from "../components/PageIntro.astro";
 import QuadrantScatter from "../components/charts/QuadrantScatter.astro";
 import RatioSwarm from "../components/charts/RatioSwarm.astro";
 import LoadArrows from "../components/charts/LoadArrows.astro";
@@ -19,22 +20,20 @@ const one = at(1);
 ---
 
 <Page title="Benchmarks" description="Ruvio against Redis 8.10.2 on the same machines: throughput for 60 commands, memory for 12 data shapes, and p99 latency under load. Every number comes from a record in the repository.">
-  <section class="intro">
-    <div class="wrap">
-      <p class="kicker">Benchmarks</p>
-      <h1>Measured against Redis, on the same machine, from the records in the repository</h1>
-      <p class="lede">Each run starts both servers on one host, drives them with the same load generator in alternating rounds, and stores the raw numbers in a JSON file next to the site. The charts below are drawn from those files when the site is built.</p>
-      <div class="kpis two">
-        {platforms.map((p) => (
-          <div>
-            <span class="plat">{p.name}</span>
-            <b>{fmtX(p.geomean)}</b>
-            <span>geometric mean over {p.rows.length} commands; {p.atPar} at 0.97× or faster; memory −{pct(p.memSaved)}</span>
-          </div>
-        ))}
-      </div>
+  <PageIntro title="Measured against Redis, on the same machine, from the records in the repository" kicker="Benchmarks">
+    Each run starts both servers on one host, drives them with the same load generator in alternating rounds, and
+    stores the raw numbers in a JSON file next to the site. The charts below are drawn from those files when the
+    site is built.
+    <div class="kpis two" slot="after">
+      {platforms.map((p) => (
+        <div>
+          <span class="plat">{p.name}</span>
+          <b>{fmtX(p.geomean)}</b>
+          <span>geometric mean over {p.rows.length} commands; {p.atPar} at 0.97× or faster; memory −{pct(p.memSaved)}</span>
+        </div>
+      ))}
     </div>
-  </section>
+  </PageIntro>
 
   <section class="section band" id="machines">
     <div class="wrap">
@@ -102,8 +101,8 @@ const one = at(1);
         </div>
         {platforms.map((p, i) => (
           <div data-platform={p.id} hidden={i !== 0}>
-            <div class="table-wrap">
-              <table class="res" data-chart>
+            <div class="chart" data-chart><div class="table-wrap">
+              <table class="res">
                 <thead>
                   <tr><th>Command</th><th class="num">Ruvio ops/s</th><th class="num">Redis ops/s</th><th class="bar-h"><div class="bt"><span>0.5×</span><span style={`left:${one}%`}>1×</span><span>2.5×</span></div></th><th class="num">Ratio</th></tr>
                 </thead>
@@ -127,7 +126,7 @@ const one = at(1);
                   })}
                 </tbody>
               </table>
-            </div>
+            </div></div>
             <p class="source">Source: <a href={blob(p.file)}>{p.file}</a> · {p.date}, commit {p.commit}</p>
           </div>
         ))}
@@ -187,10 +186,7 @@ const one = at(1);
 </script>
 
 <style>
-  .intro { padding-block: 72px 56px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, var(--sky-0), var(--sky-1)); }
-  .intro h1 { font-size: clamp(32px, 4vw, 48px); line-height: 1.1; margin: 0 0 18px; max-width: 24ch; }
-  .intro .lede { margin-bottom: 36px; }
-  .kpis.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpis.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 36px; }
   .plat { font-weight: 600; color: var(--ink) !important; }
   .chart { position: relative; }
   .scroll-x { overflow-x: auto; }

@@ -29,10 +29,10 @@
   --sl-color-accent-low: color-mix(in srgb, var(--accent) 18%, var(--bg));
   --sl-color-accent: var(--accent);
   --sl-color-accent-high: color-mix(in srgb, var(--accent) 40%, var(--ink));
-  --sl-color-text: var(--sl-color-gray-2);
+  --sl-color-text: var(--ink-body);
   --sl-color-text-accent: var(--c2);
   --sl-color-text-invert: var(--accent-ink);
-  --sl-color-bg: var(--bg);
+  --sl-color-bg: var(--paper);
   --sl-color-bg-nav: var(--bg);
   --sl-color-bg-sidebar: var(--bg);
   --sl-color-bg-inline-code: var(--surface-2);
@@ -63,7 +63,10 @@
 
   --ink: #131a2a;
   --mute: #5b6577;
-  --faint: #79818f;
+  --faint: #606877;
+  --paper: #ffffff;
+  --paper-line: #dde1e8;
+  --ink-body: #2b3343;
 
   --accent: #a8461f;
   --accent-hover: #933b19;
@@ -183,6 +186,88 @@ site-search button[data-open-modal] {
 }
 .sl-markdown-content td code:not(:where(.not-content *)) {
   white-space: nowrap;
+}
+
+/* Reading: the article sits on the lighter paper between the darker header and sidebar */
+.sl-markdown-content {
+  font-size: 1.03rem;
+}
+.sl-markdown-content :is(p, li) {
+  line-height: var(--leading);
+}
+.sl-markdown-content h2:not(:where(.not-content *)) {
+  margin-top: 2.6rem;
+  padding-top: 1.6rem;
+  border-top: 1px solid var(--paper-line);
+}
+.sl-markdown-content h3:not(:where(.not-content *)) {
+  margin-top: 2rem;
+}
+.sl-markdown-content code:not(:where(.not-content *, pre *)) {
+  background-color: var(--surface-2);
+  border-color: transparent;
+}
+.sl-markdown-content blockquote:not(:where(.not-content *)) {
+  border-inline-start: 3px solid var(--c2);
+  background: color-mix(in srgb, var(--c2) 7%, var(--paper));
+  padding: 0.6rem 1rem;
+  border-radius: 0 var(--radius-s) var(--radius-s) 0;
+}
+.right-sidebar {
+  background-color: var(--paper);
+}
+
+/* "On this page": a fixed 14rem column instead of Starlight's quarter of the spare width,
+   and hidden entirely when the reader closes it (DocsPageSidebar.astro sets data-toc). */
+@media (min-width: 72rem) {
+  :root {
+    --toc-width: 14rem;
+  }
+  .right-sidebar-container {
+    width: var(--toc-width);
+    flex-shrink: 0;
+  }
+  /* The column is position: fixed, so its own width must be set; 100% would be the viewport */
+  .right-sidebar {
+    width: var(--toc-width);
+  }
+  [data-has-sidebar][data-has-toc] .main-pane {
+    width: calc(100% - var(--toc-width));
+  }
+  .right-sidebar-panel {
+    padding-inline: 1rem;
+  }
+  .right-sidebar-panel .sl-container {
+    width: auto;
+    max-width: none;
+  }
+  .right-sidebar-panel h2 {
+    padding-inline-end: 2.4rem;
+  }
+  :root[data-toc="closed"] {
+    --sl-content-width: 58rem;
+  }
+  :root[data-toc="closed"] .right-sidebar-container {
+    width: 0;
+  }
+  :root[data-toc="closed"] .right-sidebar {
+    width: 0;
+    border: 0;
+    overflow: visible;
+  }
+  :root[data-toc="closed"] .right-sidebar-panel {
+    display: none;
+  }
+  :root[data-toc="closed"][data-has-sidebar][data-has-toc] .main-pane {
+    width: 100%;
+  }
+}
+/* The title band of every docs page carries the site's night-to-dusk sky, quietly */
+.main-pane .content-panel:first-child {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--sky-1) 70%, var(--paper)) 0%, var(--paper) 100%);
+}
+:root[data-theme="light"] .main-pane .content-panel:first-child {
+  background: linear-gradient(180deg, #eef1f6 0%, var(--paper) 100%);
 }
 
 /* Page title */

@@ -5,6 +5,6 @@ import { platforms } from "../data/bench";
 
 <div class="seg" role="group" aria-label="Measurement machine">
   {platforms.map((p, i) => (
-    <button type="button" data-set-platform={p.id} aria-pressed={String(i === 0)}>{p.name}</button>
+    <button type="button" data-set-platform={p.id} aria-pressed={i === 0 ? "true" : "false"}>{p.name}</button>
   ))}
 </div>

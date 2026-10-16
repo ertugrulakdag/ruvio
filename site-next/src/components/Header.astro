@@ -22,7 +22,7 @@ const isCurrent = (href: string) => href !== "/" && !href.startsWith("/#") && pa
       <a class="btn small" href="/get-started/">Get started</a>
       <details class="menu">
         <summary aria-label="Open menu"><span></span><span></span><span></span></summary>
-        <nav class="menu-panel" aria-label="Main">
+        <nav class="menu-panel" aria-label="Menu">
           {mainNav.map((item) => <a href={item.href}>{item.label}</a>)}
           <a href={site.github}>GitHub</a>
         </nav>

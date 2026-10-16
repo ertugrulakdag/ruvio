@@ -1,20 +1,11 @@
 ---
-// A plain code block in the page's terminal style: comment lines are dimmed, nothing else is colored.
-// Comments are whole lines that start with "#" (or "//"), or a trailing "  # ..." after two spaces.
+// A code block in the page's terminal style; src/lib/code.ts dims comments and tints strings.
+import { codeToHtml } from "../../lib/code";
+
 interface Props { code: string; title?: string; copy?: boolean }
 const { code, title, copy = true } = Astro.props;
 
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const text = code.replace(/^\n+|\s+$/g, "");
-const html = text
-  .split("\n")
-  .map((line) => {
-    if (/^\s*(#|\/\/)/.test(line)) return `<span class="o">${esc(line)}</span>`;
-    const m = line.match(/^(.*?\S)(\s{2,}#\s.*)$/);
-    if (m) return `${esc(m[1])}<span class="o">${esc(m[2])}</span>`;
-    return esc(line);
-  })
-  .join("\n");
+const html = codeToHtml(code);
 ---
 
 <figure class="term code-block">

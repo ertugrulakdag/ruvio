@@ -1,5 +1,6 @@
 ---
 import { footerNav, site } from "../config/site";
+import { serverVersion } from "../data/bench";
 import Logo from "./Logo.astro";
 ---
 
@@ -20,7 +21,7 @@ import Logo from "./Logo.astro";
       ))}
     </div>
     <div class="legal">
-      <span>© {new Date().getFullYear()} Ruvio · v{site.version}</span>
+      <span>© {new Date().getFullYear()} Ruvio · v{serverVersion}</span>
       <span>Server AGPL-3.0 · Clients MIT</span>
     </div>
   </div>

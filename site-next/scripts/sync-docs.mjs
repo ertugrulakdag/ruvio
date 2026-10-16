@@ -101,8 +101,16 @@ function rewriteTarget(target, fromSrc) {
   return `${GITHUB}/${kind}/${BRANCH}/${encodeURI(repoPath.replace(/\/$/, ""))}${anchor}`;
 }
 
+/** Page titles by URL, so a link written as a file name ("CONFIGURATION.md") reads as the page title. */
+const titleByUrl = new Map();
+
 function rewriteLinks(part, fromSrc) {
   return part
+    .replace(/\[(`?[\w./-]+\.md(?:#[\w-]+)?`?)\]\((<[^>]+>|[^)\s]+)\)/g, (all, label, target) => {
+      const out = rewriteTarget(target.startsWith("<") ? target.slice(1, -1) : target, fromSrc);
+      const title = titleByUrl.get(out.split("#")[0]);
+      return `[${title ?? label}](${out})`;
+    })
     .replace(/(\]\()(<[^>]+>|[^)\s]+)((?:\s+"[^"]*")?\))/g, (all, open, target, close) => {
       const bare = target.startsWith("<") ? target.slice(1, -1) : target;
       return open + rewriteTarget(bare, fromSrc) + close;
@@ -237,6 +245,11 @@ rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 
 const meta = new Map(); // src -> { title, description, url }
+
+for (const [src, page] of pages) {
+  const title = page.kind === "client" ? page.client.title : splitTitle(readFileSync(path.join(REPO_ROOT, src), "utf8")).title;
+  if (title) titleByUrl.set(urlFor(page.slug), title);
+}
 
 for (const [src, page] of pages) {
   let text = readFileSync(path.join(REPO_ROOT, src), "utf8").replace(/\r\n/g, "\n");
@@ -375,7 +388,7 @@ const matrix = JSON.parse(readFileSync(path.join(REPO_ROOT, "docs/compatibility-
     frontmatter(
       {
         title: "Documentation",
-        description: "Guides and reference for the Ruvio server and its six clients.",
+        description: "Guides and reference for the Ruvio server and its client libraries.",
         editUrl: false,
         tableOfContents: false,
       },

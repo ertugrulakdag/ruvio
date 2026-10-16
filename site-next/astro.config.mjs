@@ -24,11 +24,17 @@ export default defineConfig({
         { tag: "link", attrs: { rel: "preconnect", href: "https://fonts.googleapis.com" } },
         { tag: "link", attrs: { rel: "preconnect", href: "https://fonts.gstatic.com", crossorigin: "" } },
         { tag: "link", attrs: { rel: "stylesheet", href: fonts } },
+        // Apply a hidden "On this page" column before first paint (see DocsPageSidebar.astro).
+        {
+          tag: "script",
+          content: "try{if(localStorage.getItem('ruvio-toc')==='closed')document.documentElement.dataset.toc='closed'}catch(e){}",
+        },
       ],
       components: {
         Header: "./src/components/docs/DocsHeader.astro",
         Footer: "./src/components/docs/DocsFooter.astro",
         MobileMenuFooter: "./src/components/docs/DocsMobileMenuFooter.astro",
+        PageSidebar: "./src/components/docs/DocsPageSidebar.astro",
       },
     }),
   ],

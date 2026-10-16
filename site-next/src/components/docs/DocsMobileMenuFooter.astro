@@ -8,7 +8,7 @@ import { currentNavHref } from "./nav";
 const current = currentNavHref(Astro.url.pathname);
 ---
 
-<nav class="mobile-site-nav" aria-label="Main">
+<nav class="mobile-site-nav" aria-label="Menu">
   {mainNav.map((item) => (
     <a href={item.href} aria-current={item.href === current ? "page" : undefined}>{item.label}</a>
   ))}

@@ -15,23 +15,29 @@
   /* Text */
   --ink: #e9ecf3;
   --mute: #959db0;
-  --faint: #6b7489;
+  --faint: #808a9e;
+
+  /* Reading: long text sits on a lighter "paper" panel in a softer ink than headings */
+  --paper: #121726;
+  --paper-line: #262e44;
+  --ink-body: #c9cfdc;
+  --leading: 1.75;
 
   /* Brand: the rust tone of the logo's beak, kept calm on dark ground */
   --accent: #b4512a;
-  --accent-hover: #c35d34;
+  --accent-hover: #a84b27;
   --accent-ink: #ffffff;
 
   /* Data colors: Ruvio, a cool counterpart, a quiet third, and Redis */
   --c1: #b9603b;
   --c2: #8da2c0;
-  --c3: #4d5875;
-  --redis: #3a4258;
+  --c3: #66739a;
+  --redis: #5f6b8a;
 
   /* Code */
   --code-bg: #080a12;
   --code-ink: #dfe4ee;
-  --code-dim: rgba(220, 228, 240, 0.5);
+  --code-dim: rgba(220, 228, 240, 0.64);
 
   /* Hero sky: night to dusk; --dusk is the horizon glow as an RGB triple */
   --sky-0: #0a0c14;

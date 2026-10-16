@@ -1,17 +1,16 @@
 ---
 // Browser-only sketches of three coordination commands. They simulate the documented replies
 // (see /docs/commands/ and /use-cases/); nothing here talks to a server.
+// Only the reply log is a live region: the state lines count down several times a second.
 import Page from "../layouts/Page.astro";
+import PageIntro from "../components/PageIntro.astro";
 ---
 
 <Page title="Interactive examples" description="Try LIMIT, LEASE and SEMAPHORE in the browser: small simulations of the replies Ruvio gives.">
-  <section class="intro">
-    <div class="wrap">
-      <p class="kicker">Examples</p>
-      <h1>Three coordination commands, one click at a time</h1>
-      <p class="lede">Small simulations that run in your browser and print the reply Ruvio gives for each call. They do not connect to a server; timings are shortened so you can watch a window or a TTL run out.</p>
-    </div>
-  </section>
+  <PageIntro title="Three coordination commands, one click at a time" kicker="Examples">
+    Small simulations that run in your browser and print the reply Ruvio gives for each call. They do not connect to
+    a server; timings are shortened so you can watch a window or a TTL run out.
+  </PageIntro>
 
   <section class="section band" id="limit">
     <div class="wrap ex">
@@ -24,8 +23,8 @@ import Page from "../layouts/Page.astro";
       <div class="demo" data-demo="limit">
         <div class="ctl"><button class="btn small" data-act="send">Send request</button><button class="btn ghost small" data-act="reset">Reset</button></div>
         <div class="meter"><span class="fill"></span></div>
-        <p class="state" aria-live="polite"></p>
-        <pre class="log"></pre>
+        <p class="state"></p>
+        <pre class="log" aria-live="polite"></pre>
       </div>
     </div>
   </section>
@@ -41,8 +40,8 @@ import Page from "../layouts/Page.astro";
       <div class="demo" data-demo="lease">
         <div class="ctl"><button class="btn small" data-act="A">Worker A: LEASE</button><button class="btn small" data-act="B">Worker B: LEASE</button><button class="btn ghost small" data-act="release">Holder: RELEASE</button></div>
         <div class="meter"><span class="fill"></span></div>
-        <p class="state" aria-live="polite"></p>
-        <pre class="log"></pre>
+        <p class="state"></p>
+        <pre class="log" aria-live="polite"></pre>
       </div>
     </div>
   </section>
@@ -58,8 +57,8 @@ import Page from "../layouts/Page.astro";
       <div class="demo" data-demo="semaphore">
         <div class="ctl"><button class="btn small" data-act="take">New worker: SEMAPHORE</button><button class="btn ghost small" data-act="crash">Crash a worker</button></div>
         <div class="slots"></div>
-        <p class="state" aria-live="polite"></p>
-        <pre class="log"></pre>
+        <p class="state"></p>
+        <pre class="log" aria-live="polite"></pre>
       </div>
     </div>
   </section>
@@ -170,10 +169,8 @@ import Page from "../layouts/Page.astro";
 </script>
 
 <style>
-  .intro { padding-block: 72px 48px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, var(--sky-0), var(--sky-1)); }
-  .intro h1 { font-size: clamp(32px, 4vw, 48px); line-height: 1.1; margin: 0 0 18px; max-width: 22ch; }
   .ex { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); gap: 48px; align-items: start; }
-  .copy p { color: var(--mute); }
+  .copy p { color: var(--ink-body); line-height: var(--leading); }
   .copy .more a::after { content: " →"; color: var(--mute); }
   .copy .more { font-weight: 600; }
   .demo { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; display: grid; gap: 14px; min-width: 0; }

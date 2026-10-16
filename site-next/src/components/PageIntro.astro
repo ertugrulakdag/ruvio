@@ -1,0 +1,15 @@
+---
+// Opening band of an inner page: optional kicker, the page's h1 and a lede (default slot).
+// Anything in the "after" slot (KPI tiles, buttons) sits under the lede.
+interface Props { title: string; kicker?: string }
+const { title, kicker } = Astro.props;
+---
+
+<section class="page-intro">
+  <div class="wrap">
+    {kicker && <p class="kicker">{kicker}</p>}
+    <h1>{title}</h1>
+    {Astro.slots.has("default") && <p class="lede"><slot /></p>}
+    <slot name="after" />
+  </div>
+</section>

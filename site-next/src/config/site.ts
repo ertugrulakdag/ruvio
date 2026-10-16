@@ -9,7 +9,6 @@ export const site = {
   releases: "https://github.com/salihcantekin/ruvio/releases/latest",
   discussions: "https://github.com/salihcantekin/ruvio/discussions",
   dockerHub: "https://hub.docker.com/r/salihcantekin/ruvio",
-  version: "0.3.2",
 };
 
 export type NavItem = { label: string; href: string };
@@ -62,4 +61,4 @@ export const clients = [
   { language: "Java", package: "io.github.salihcantekin:ruvio-client", registry: "Maven Central", slug: "java" },
   { language: "Python", package: "ruvio-client", registry: "PyPI", slug: "python" },
   { language: "Node.js", package: "ruvio-client", registry: "npm", slug: "node" },
-];
+] as const;
