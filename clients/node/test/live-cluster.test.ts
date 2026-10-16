@@ -139,35 +139,32 @@ test('cluster: pipelines group by node and keep the caller order', { skip: CSKIP
     const [s0, s1, s2] = spread(3, 'ps:');
     const sp = await c.pipeline().mset({ [s0!]: 'm0', [s1!]: 'm1' }).exists(s0!, s1!, s2!).get(s1!).touch(s0!, s2!).unlink(s0!, s2!).del(s1!, s2!).exec();
     assert.deepEqual(sp, ['OK', 2, 'm1', 1, 1, 1]);
-    // a pipeline over a stale table recovers per command
+    // a pipeline over a stale table still gets every answer: the server forwards a
+    // misrouted key to its owner instead of answering MOVED
     const hot = ks.slice(0, 30);
     _forceStaleTable(c, c.nodes[0]!);
     const q = c.pipeline();
     hot.forEach((k) => q.get(k));
     assert.deepEqual(await q.exec(), hot.map((_, i) => 'x' + i));
-    assert.ok(c.redirectCount > 0);
   } finally {
     await c.quit();
   }
 });
 
-test('cluster: MOVED recovery from a stale slot table', { skip: CSKIP }, async () => {
+test('cluster: a stale slot table still gets the right answers', { skip: CSKIP }, async () => {
+  // Ruvio forwards a misrouted key to its owner instead of answering MOVED, so nothing
+  // below is redirected; MOVED handling itself is covered by the fake-server tests.
   const c = await cluster();
   try {
     const ks = spread(60, 'mv:');
     await Promise.all(ks.map((k, i) => c.set(k, 'v' + i)));
     _forceStaleTable(c, c.nodes[1]!); // every slot now "belongs" to the second shard
     const r0 = c.redirectCount;
-    const f0 = c.refreshCount;
     assert.equal(await c.get(ks[0]!), 'v0');
     const got = await Promise.all(ks.map((k) => c.get(k)));
     assert.deepEqual(got, ks.map((_, i) => 'v' + i));
-    assert.ok(c.redirectCount > r0, 'redirects were followed');
-    assert.equal(c.refreshCount, f0, 'every MOVED named a known node: each slot is patched, no reload');
-    const before = c.redirectCount;
-    for (const k of ks) await c.get(k);
-    assert.equal(c.redirectCount, before, 'table is correct again: no further MOVED');
-    // writes and split commands recover too
+    assert.equal(c.redirectCount, r0, 'nothing was redirected');
+    // writes and split commands work on a stale table too
     _forceStaleTable(c, c.nodes[2]!);
     await Promise.all(ks.map((k) => c.set(k, 'w')));
     _forceStaleTable(c, c.nodes[0]!);
