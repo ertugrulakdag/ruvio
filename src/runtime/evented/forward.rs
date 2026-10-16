@@ -109,6 +109,13 @@ pub(super) enum Message {
         src: usize,
         conn: u64,
     },
+    /// A classic `PUBLISH` another shard received: deliver it to this shard's subscribers.
+    /// Nothing is sent back; the publisher's reply counts its own shard's receivers, as a
+    /// Redis Cluster node answers for the node that took the command.
+    Publish {
+        channel: Vec<u8>,
+        message: Vec<u8>,
+    },
 }
 
 struct Port {
@@ -723,6 +730,10 @@ pub(super) async fn remote_loop(state: Rc<ShardState>, shutdown: ShutdownToken) 
                     state.tracker.borrow_mut().forget(remote_id(src, conn));
                 }
 
+                Message::Publish { channel, message } => {
+                    super::pubsub::publish_classic(&state, &channel, &message);
+                }
+
                 Message::Cancel { src, conn } => {
                     if let Some(cancel) = forwarding.blocked.borrow().get(&(src, conn)) {
                         cancel.cancel();
@@ -1199,11 +1210,27 @@ pub(super) enum Fan {
 }
 
 /// `fan_kind` as this shard applies it: in single-port mode every keyless command in the
-/// list runs on every shard; in per-shard mode cluster clients send `DBSIZE`, `KEYS`,
-/// `FLUSHALL` and the others to each node themselves, so only `PUBLISH` fans out (a
-/// subscriber may sit on any shard, and Redis Cluster broadcasts it too).
+/// list runs on every shard and waits for their answers; in per-shard mode cluster clients
+/// send `DBSIZE`, `KEYS`, `FLUSHALL` and the others to each node themselves. `PUBLISH` is
+/// never fanned this way: the connection loop hands it to the other shards as a
+/// [`Message::Publish`] without waiting (see `publish_everywhere`).
 pub(super) fn fan_for(state: &ShardState, command: &Command<'_>) -> Option<Fan> {
-    fan_kind(command).filter(|_| state.single_port || matches!(command, Command::Publish { .. }))
+    fan_kind(command).filter(|_| state.single_port && !matches!(command, Command::Publish { .. }))
+}
+
+/// Sends a classic `PUBLISH` to every other shard, without waiting for them: a subscriber
+/// may sit on any shard. The caller still runs it locally and replies with the local count.
+pub(super) fn publish_everywhere(forwarding: &Forwarding, channel: &[u8], message: &[u8]) {
+    for dst in (0..forwarding.fabric.shard_count()).filter(|dst| *dst != forwarding.me) {
+        forwarding.fabric.send(
+            forwarding.me,
+            dst,
+            Message::Publish {
+                channel: channel.to_vec(),
+                message: message.to_vec(),
+            },
+        );
+    }
 }
 
 pub(super) fn fan_kind(command: &Command<'_>) -> Option<Fan> {
@@ -1775,9 +1802,10 @@ async fn scan_all(
 mod tests {
     use super::*;
 
-    /// Keyless commands that run on every shard in single-port mode. Each keyless command
-    /// the parser builds is in this list or in `KEYLESS_ON_ONE_SHARD`, so a new one fails
-    /// here until someone decides whether one shard's answer is the right one.
+    /// Keyless commands that run on every shard in single-port mode (`Publish` is delivered
+    /// to every shard without waiting, in both modes). Each keyless command the parser
+    /// builds is in this list or in `KEYLESS_ON_ONE_SHARD`, so a new one fails here until
+    /// someone decides whether one shard's answer is the right one.
     const KEYLESS_FANNED: &[&str] = &[
         "DbSize",
         "FlushAll",

@@ -193,10 +193,18 @@ def pinned(cpus: str, argv: list[str]) -> list[str]:
     return ["taskset", "-c", cpus, *argv]
 
 
+def redis_persistence(args: argparse.Namespace) -> list[str]:
+    if args.durability in ("everysec", "always"):
+        return ["--save", "", "--appendonly", "yes", "--appendfsync", args.durability]
+
+    return ["--save", "", "--appendonly", "no"]
+
+
 def start(args: argparse.Namespace, name: str, workdir: Path) -> System:
     directory = Path(tempfile.mkdtemp(prefix=f"{name}-", dir=workdir))
     server_cpus = cpu_list(args.server_cpus)
     n = args.shards
+    aof = redis_persistence(args)
 
     if name == "ruvio":
         argv = [
@@ -208,7 +216,7 @@ def start(args: argparse.Namespace, name: str, workdir: Path) -> System:
         system = System(name, [proc], ports)
     elif name == "redis1":
         argv = pinned(str(server_cpus[0]), [
-            args.redis_server, "--bind", "127.0.0.1", "--port", str(args.redis1_port), "--save", "", "--appendonly", "no", "--dir", str(directory),
+            args.redis_server, "--bind", "127.0.0.1", "--port", str(args.redis1_port), *aof, "--dir", str(directory),
         ])
         proc = subprocess.Popen(argv, cwd=directory, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         system = System(name, [proc], [args.redis1_port])
@@ -220,7 +228,7 @@ def start(args: argparse.Namespace, name: str, workdir: Path) -> System:
             node_dir = directory / f"node{i}"
             node_dir.mkdir()
             argv = pinned(str(server_cpus[i % len(server_cpus)]), [
-                args.redis_server, "--bind", "127.0.0.1", "--port", str(port), "--save", "", "--appendonly", "no",
+                args.redis_server, "--bind", "127.0.0.1", "--port", str(port), *aof,
                 "--dir", str(node_dir), "--cluster-enabled", "yes", "--cluster-config-file", f"nodes-{port}.conf",
             ])
             procs.append(subprocess.Popen(argv, cwd=node_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
@@ -386,7 +394,8 @@ def main() -> None:
     parser.add_argument("--shards", type=int, default=8)
     parser.add_argument("--server-cpus", default="8-15", help="CPU list for the shards / Redis processes")
     parser.add_argument("--client-cpus", default="0-7", help="CPU list for the redis-benchmark processes")
-    parser.add_argument("--durability", default="memory")
+    parser.add_argument("--durability", default="memory", help="Ruvio durability profile; with everysec/always Redis gets appendonly yes, appendfsync <same>")
+    parser.add_argument("--data-root", type=Path, default=None, help="directory for server data (a real disk for everysec/always); default: a temp dir")
     parser.add_argument("--ruvio-port", type=int, default=7000)
     parser.add_argument("--redis1-port", type=int, default=7100)
     parser.add_argument("--rediscl-port", type=int, default=7200)
@@ -395,13 +404,14 @@ def main() -> None:
     parser.add_argument("--pipeline", type=int, default=16)
     parser.add_argument("--scale", type=float, default=1.0, help="multiply every per-shard request count")
     parser.add_argument("--no-memory", action="store_true")
+    parser.add_argument("--only", default="", help="run only rows whose label contains this text")
     parser.add_argument("--systems", default=",".join(SYSTEMS), help="comma list of ruvio, redis1, rediscl (a Redis Cluster needs at least 3 shards)")
     parser.add_argument("--out", type=Path, default=ROOT / "target/shard-compare")
     args = parser.parse_args()
     SYSTEMS = tuple(args.systems.split(","))
 
     args.out.mkdir(parents=True, exist_ok=True)
-    workdir = Path(tempfile.mkdtemp(prefix="shard-compare-"))
+    workdir = Path(tempfile.mkdtemp(prefix="shard-compare-", dir=args.data_root))
     started = time.monotonic()
     systems = {name: start(args, name, workdir) for name in SYSTEMS}
     rows = []
@@ -412,6 +422,7 @@ def main() -> None:
 
         plan = [(label, argv, argv, reqs, note) for label, argv, reqs, note in FEATURES]
         plan += [(label, ruvio_argv, redis_argv, 300_000, note) for label, ruvio_argv, redis_argv, note in RUVIO_ONLY]
+        plan = [row for row in plan if args.only in row[0]]
 
         for label, ruvio_argv, redis_argv, requests, note in plan:
             requests = max(10_000, int(requests * args.scale))

@@ -883,6 +883,14 @@ pub(super) async fn handle_client(
                                     )
                                     .await?;
 
+                                    if let Command::Publish { channel, message } = &command {
+                                        publish_everywhere(
+                                            forwarding,
+                                            channel.as_ref(),
+                                            message.as_ref(),
+                                        );
+                                    }
+
                                     if let Some(fan) = fan_for(&state, &command) {
                                         let frame = &input[consumed..consumed + frame_length];
                                         let mut local = BoundedOutput::with_capacity(

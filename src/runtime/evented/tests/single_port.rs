@@ -216,13 +216,22 @@ fn keyspace_commands_cover_all_shards_and_publish_reaches_subscribers() {
         b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n",
     );
 
+    // The count is the publisher's own shard's receivers (as a Redis Cluster node answers),
+    // so it is 1 only when the publisher landed on the subscriber's shard; the message
+    // reaches the subscriber either way.
     for _ in 0..4 {
         let mut publisher = connect(address);
 
         publisher
             .write_all(&resp(&[&[b"PUBLISH", b"news", b"hi"]]))
             .unwrap();
-        read_exactly(&mut publisher, b":1\r\n");
+        let count = read_line(&mut publisher);
+
+        assert!(count == ":0" || count == ":1", "{count}");
+        read_exactly(
+            &mut subscriber,
+            &crate::pubsub::encode_message(b"news", b"hi"),
+        );
     }
 
     client.write_all(&resp(&[&[b"FLUSHALL"]])).unwrap();

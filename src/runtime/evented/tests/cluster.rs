@@ -699,13 +699,14 @@ fn evented_shards_keep_keys_scripts_and_subscribers_local() {
 
     subscriber.read_exact(&mut subscribed).unwrap();
     assert_eq!(subscribed, expected);
-    // Classic PUBLISH reaches a subscriber on any shard (Redis Cluster broadcasts it too).
+    // Classic PUBLISH reaches a subscriber on any shard (Redis Cluster broadcasts it too);
+    // the count answers for the publisher's own shard, as a cluster node does.
     let expected = crate::pubsub::encode_message(b"news", b"hello");
     let mut message = vec![0u8; expected.len()];
 
     assert_eq!(
         request(left, &resp(&[&[b"PUBLISH", b"news", b"hello"]])),
-        b":1\r\n"
+        b":0\r\n"
     );
     subscriber.read_exact(&mut message).unwrap();
     assert_eq!(message, expected);
