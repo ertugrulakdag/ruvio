@@ -345,16 +345,16 @@ class ClusterUnitTest {
         RuvioClient<String, String> c = p.client();
         String k = p.key(true, 0);
         int slot = HashSlot.of(k.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        p.a.store.put(k, "settled");
-        p.b.end = slot - 1; // B sends it back to A
+        // A always sends it to B; B sends the first GET back to A, then answers: A -> B -> A -> B.
+        p.a.start = slot + 1;
         p.b.start = 0;
-        // A sends the first two GETs to B, then answers: A -> B -> A -> A.
-        java.util.concurrent.atomic.AtomicInteger gets = new java.util.concurrent.atomic.AtomicInteger();
-        p.a.node.handler = a -> a.get(0).equalsIgnoreCase("GET") && gets.incrementAndGet() <= 2
-                ? FakeNode.error("MOVED " + slot + " " + p.b.node.address()) : p.a.handle(a);
+        p.b.store.put(k, "settled");
+        java.util.concurrent.atomic.AtomicInteger bGets = new java.util.concurrent.atomic.AtomicInteger();
+        p.b.node.handler = a -> a.get(0).equalsIgnoreCase("GET") && bGets.incrementAndGet() == 1
+                ? FakeNode.error("MOVED " + slot + " " + p.a.node.address()) : p.b.handle(a);
         assertEquals("settled", c.get(k));
-        assertEquals(3, p.a.commands("GET").size());
-        assertEquals(1, p.b.commands("GET").size());
+        assertEquals(2, p.a.commands("GET").size());
+        assertEquals(2, p.b.commands("GET").size(), "the third redirect goes to the named node, not the reloaded owner");
         // Initial load, then one reload for the second and one for the third MOVED of this command.
         assertEquals(3, p.a.commands("CLUSTER").size());
     }
@@ -365,14 +365,14 @@ class ClusterUnitTest {
         RuvioClient<String, String> c = p.client();
         String k = p.key(true, 0);
         int slot = HashSlot.of(k.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        // Both nodes claim the other owns the slot: A -> B -> A -> A would loop forever.
+        // Both nodes claim the other owns the slot: A -> B -> A -> B would loop forever.
         p.a.start = slot + 1;
         p.b.end = slot - 1;
         p.b.start = 0;
         RuvioServerException e = assertThrows(RuvioServerException.class, () -> c.get(k));
         assertEquals("MOVED", e.code());
-        assertEquals(4, p.a.commands("GET").size() + p.b.commands("GET").size(), "sent once plus three redirects");
-        assertEquals(1, p.b.commands("GET").size(), "the reloaded table points back at A");
+        assertEquals(2, p.a.commands("GET").size(), "sent once plus three redirects, alternating A, B, A, B");
+        assertEquals(2, p.b.commands("GET").size());
         assertEquals(3, p.a.commands("CLUSTER").size(), "reloads on the second and third MOVED");
     }
 

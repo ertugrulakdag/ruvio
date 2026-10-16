@@ -26,13 +26,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <p>The slot table (16384 entries) is built from {@code CLUSTER SLOTS}. Each node has its own lazily
  * opened multiplexed {@link Link}; a lost node connection only affects commands for that node and is
- * reopened by the next command. A {@code -MOVED} reply points that one slot at the named node and
- * follows the redirect, at most {@link #MAX_REDIRECTS} times per command; the whole table is re-read from
- * the server only when the named node is unknown or on the command's second MOVED.
+ * reopened by the next command. A {@code -MOVED} reply points that one slot at the named node and the
+ * command is sent there, at most {@link #MAX_REDIRECTS} times per command; the whole table is re-read from
+ * the server only when the named node is unknown or from the command's second MOVED on, and the retry still
+ * goes to the named node.
  */
 public final class ClusterRouter implements AutoCloseable {
     public static final int SLOTS = 16384;
-    /** MOVED redirects followed per command before the error is returned. */
+    /** MOVED redirects followed per command (each to the node the reply names) before the error is returned. */
     public static final int MAX_REDIRECTS = 3;
 
     /** Where a routed frame goes: straight onto a connection, or into a pipeline group. */
@@ -469,7 +470,10 @@ public final class ClusterRouter implements AutoCloseable {
         }
     }
 
-    /** Points the slot at the named node; re-reads the whole table when that node is unknown or {@code again}. */
+    /**
+     * Points the slot at the named node and returns that node, which the retry always goes to. Re-reads the
+     * whole table first when that node is unknown or {@code again} (the command's second MOVED or later).
+     */
     private ClusterNode onMoved(int slot, String host, int port, boolean again) {
         ClusterNode n = nodes.get(ClusterNode.address(host, port));
         boolean unknown = n == null;
@@ -484,10 +488,6 @@ public final class ClusterRouter implements AutoCloseable {
                 refresh();
             } catch (RuntimeException ignored) {
                 // keep the patched slot; the next MOVED tries again
-            }
-            ClusterNode fresh = slot >= 0 && slot < SLOTS ? table[slot] : null;
-            if (fresh != null) {
-                n = fresh;
             }
         }
         return n;

@@ -149,8 +149,8 @@ pipelined commands; use `{hashtag}` keys to keep related keys in one slot.
 
 * **MOVED**: that one slot is pointed at the node named in the reply and the command is sent there; a command
   follows at most 3 MOVED redirects, and the 4th MOVED is returned to the caller (no redirect loops). The whole
-  table is re-read with `CLUSTER SLOTS` only when the named node is unknown, or on the second MOVED for the same
-  command. The retry runs on a small background thread, never on a connection reader thread. The router keeps a copy of each
+  table is re-read with `CLUSTER SLOTS` only when the named node is unknown, or from the second MOVED for the same
+  command on; the retry still goes to the node the MOVED named. The retry runs on a small background thread, never on a connection reader thread. The router keeps a copy of each
   command's frame for this (about 100 bytes allocated per routed command: the request object and the copy).
 * **Connection loss**: only commands in flight on that node fail (`RuvioConnectionException`); nothing is
   replayed, the other nodes keep working, and the node's connection reopens with its next command.
