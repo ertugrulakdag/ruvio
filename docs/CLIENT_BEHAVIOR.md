@@ -12,6 +12,7 @@ What the six clients do when a cluster redirects, a command spans slots, or a so
 | `../docs/compatibility-matrix.json` (every command) | each client's coverage test |
 | `testdata/commands.json` (arity, flags and key rule per command) | the server (`src/protocol/client_spec.rs`); `scripts/gen_client_keys.py` turns it into each client's key table |
 | `testdata/key_vectors.json` (commands with the keys the server routes them by) | the server and one test per client (`key_vectors`) |
+| `testdata/command_methods.json` (every matrix command to the method that sends it in each client: `{"commands": {"GET": {"rust": ["get", "get_string"], "csharp": "GetStringAsync", ...}}}`, sorted by command, one row per command; a field is one method name or a list when several methods send the command; a `Type.` prefix (Go `Tx.`/`PubSub.`, Node `Subscriber.`/`Transaction.`, Python `PubSub.`, C# `RuvioConnection.`) or Java `Class#` names a method off the main client) | each client's coverage test |
 
 ## Same in every client
 

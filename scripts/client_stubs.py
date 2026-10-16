@@ -111,34 +111,39 @@ def main():
     java_rest = f"\n        for (V item : rest) a.v(item);" if variable else ""
     cs_params = ", ".join(f"IEnumerable<string> {n}" if n == "rest" else f"string {n}" for n in names)
 
-    print(f"""{word}: arity {arity}, flags {', '.join(entry['flags']) or 'none'}, keys {json.dumps(entry['keys'])}
-Reply shape assumed: {options.reply}. Add each method next to its family, then the coverage line.
+    row = {"rust": method, "csharp": f"{pascal(word)}Async", "go": pascal(word), "java": camel(word),
+           "node": camel(word), "python": method}
 
---- Rust: clients/ruvio-client/src/commands.rs; tests/coverage.rs TABLE ("{word}", &["{method}"]) and methods_exist()
+    print(f"""{word}: arity {arity}, flags {', '.join(entry['flags']) or 'none'}, keys {json.dumps(entry['keys'])}
+Reply shape assumed: {options.reply}. Add each method next to its family, then this one row to
+clients/testdata/command_methods.json (keep it sorted by command), which every client's coverage test reads:
+    {json.dumps(word)}: {json.dumps(row)},
+
+--- Rust: clients/ruvio-client/src/commands.rs; tests/coverage.rs methods_exist()
     pub fn {method}(&mut self, {rust_params}) -> Result<{rust_t}, Error> {{
         {rust_body}
     }}
 
---- Go: clients/go/cmds_<family>.go; tokens.go c{token} = preEnc("{word}"); coverage_test.go "{word}": "{pascal(word)}"
+--- Go: clients/go/cmds_<family>.go; tokens.go c{token} = preEnc("{word}")
 func (c *cmds) {pascal(word)}(ctx context.Context, {go_params}) {go_ret} {{
 	r := newCmd({go_size}, c{token}){go_chain}{go_rest}
 	return c.{go_h}(ctx, r)
 }}
 
---- Python: clients/python/ruvio/_commands.py; tests/test_coverage.py "{word}": "{method}"; a live test
+--- Python: clients/python/ruvio/_commands.py; a live test
     def {method}(self, {py_params}) -> Any:
         return self._c({py_conv}, "{word}", {py_args})
 
---- Node: clients/node/src/commands.ts; src/command-names.ts {token}: cmd('{word}'); test/coverage.test.ts ['{word}', 'client', '{camel(word)}']
+--- Node: clients/node/src/commands.ts; src/command-names.ts {token}: cmd('{word}')
   {camel(word)}({node_params}): R<unknown> {{ return this._v({node_tf}, C.{token}, [{node_args}]); }}
 
---- Java: clients/java/src/main/java/.../commands/<Family>Commands.java, then python3 clients/java/tools/generate.py; CoverageTest m.put("{word}", "{camel(word)}")
+--- Java: clients/java/src/main/java/.../commands/<Family>Commands.java, then python3 clients/java/tools/generate.py
     public CompletableFuture<{java_t}> {camel(word)}({java_params}) {{
         Args a = args().w(Cmd.{token}){java_chain};{java_rest}
         return send(a, {java_r});
     }}
 
---- C#: clients/csharp/Ruvio.Client/Commands/Commands.cs and IRuvioClient.cs; MatrixCoverageTests Methods["{word}"] = "{pascal(word)}Async"
+--- C#: clients/csharp/Ruvio.Client/Commands/Commands.cs and IRuvioClient.cs
     public {cs_ret} {pascal(word)}Async({cs_params}{', ' if names else ''}CancellationToken cancellationToken = default)
         => {cs_h}(new RespCommand("{word}"{', ' if names else ''}{', '.join(n for n in names)}), cancellationToken);
 """)
