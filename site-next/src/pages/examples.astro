@@ -1,0 +1,192 @@
+---
+// Browser-only sketches of three coordination commands. They simulate the documented replies
+// (see /docs/commands/ and /use-cases/); nothing here talks to a server.
+import Page from "../layouts/Page.astro";
+---
+
+<Page title="Interactive examples" description="Try LIMIT, LEASE and SEMAPHORE in the browser: small simulations of the replies Ruvio gives.">
+  <section class="intro">
+    <div class="wrap">
+      <p class="kicker">Examples</p>
+      <h1>Three coordination commands, one click at a time</h1>
+      <p class="lede">Small simulations that run in your browser and print the reply Ruvio gives for each call. They do not connect to a server; timings are shortened so you can watch a window or a TTL run out.</p>
+    </div>
+  </section>
+
+  <section class="section band" id="limit">
+    <div class="wrap ex">
+      <div class="copy">
+        <p class="kicker">Rate limit</p>
+        <h2 class="title"><code>LIMIT</code> in one call</h2>
+        <p>Five calls per 10 second window on one key. Each accepted call returns what is left; a full window returns a null reply and is not counted. The window is the key's deadline, so it resets by itself.</p>
+        <p class="more"><a href="/use-cases/#rate-limits">Rate limits use case</a></p>
+      </div>
+      <div class="demo" data-demo="limit">
+        <div class="ctl"><button class="btn small" data-act="send">Send request</button><button class="btn ghost small" data-act="reset">Reset</button></div>
+        <div class="meter"><span class="fill"></span></div>
+        <p class="state" aria-live="polite"></p>
+        <pre class="log"></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="lease">
+    <div class="wrap ex">
+      <div class="copy">
+        <p class="kicker">Locks</p>
+        <h2 class="title"><code>LEASE</code> with a fencing token</h2>
+        <p>Two workers compete for <code>job:7</code>. A grant returns a token that grows with every grant; while the lease is held the other worker gets a null reply. <code>RELEASE</code> only frees the lease when the token matches.</p>
+        <p class="more"><a href="/use-cases/#locks">Locks use case</a></p>
+      </div>
+      <div class="demo" data-demo="lease">
+        <div class="ctl"><button class="btn small" data-act="A">Worker A: LEASE</button><button class="btn small" data-act="B">Worker B: LEASE</button><button class="btn ghost small" data-act="release">Holder: RELEASE</button></div>
+        <div class="meter"><span class="fill"></span></div>
+        <p class="state" aria-live="polite"></p>
+        <pre class="log"></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="section band" id="semaphore">
+    <div class="wrap ex">
+      <div class="copy">
+        <p class="kicker">Concurrency</p>
+        <h2 class="title"><code>SEMAPHORE</code> that heals itself</h2>
+        <p>At most three holders, each with its own 6 second TTL. A worker that finishes calls <code>RELEASE</code>; a worker that crashes never does, and its slot frees when its TTL ends, so the others are never blocked for good.</p>
+        <p class="more"><a href="/use-cases/#workers">Worker concurrency use case</a></p>
+      </div>
+      <div class="demo" data-demo="semaphore">
+        <div class="ctl"><button class="btn small" data-act="take">New worker: SEMAPHORE</button><button class="btn ghost small" data-act="crash">Crash a worker</button></div>
+        <div class="slots"></div>
+        <p class="state" aria-live="polite"></p>
+        <pre class="log"></pre>
+      </div>
+    </div>
+  </section>
+</Page>
+
+<script>
+  type El = HTMLElement;
+  const q = (root: El, s: string) => root.querySelector(s) as El;
+  const logger = (root: El, first: string) => {
+    const pre = q(root, ".log");
+    pre.textContent = first;
+    return (cmd: string, reply: string) => {
+      pre.textContent = `${pre.textContent}\n${cmd.startsWith("#") ? "" : "> "}${cmd}\n${reply}`.split("\n").slice(-40).join("\n");
+      pre.scrollTop = pre.scrollHeight;
+    };
+  };
+
+  // LIMIT key max window_ms: remaining allowance, or (nil) when the window is full.
+  for (const root of document.querySelectorAll<El>('[data-demo="limit"]')) {
+    const MAX = 5, WIN = 10_000;
+    let used = 0, deadline = 0;
+    const log = logger(root, "# LIMIT api:key-7 5 10000");
+    const render = () => {
+      const now = Date.now();
+      if (deadline && now >= deadline) { used = 0; deadline = 0; }
+      q(root, ".fill").style.width = `${(used / MAX) * 100}%`;
+      q(root, ".state").textContent = deadline ? `${used} of ${MAX} used · window ends in ${Math.ceil((deadline - now) / 1000)} s` : `${MAX} of ${MAX} left · no window open`;
+    };
+    root.addEventListener("click", (e) => {
+      const act = (e.target as El).closest<El>("[data-act]")?.dataset.act;
+      if (act === "send") {
+        render();
+        if (!deadline) deadline = Date.now() + WIN;
+        if (used < MAX) { used++; log("LIMIT api:key-7 5 10000", `(integer) ${MAX - used}`); }
+        else log("LIMIT api:key-7 5 10000", "(nil)");
+      } else if (act === "reset") { used = 0; deadline = 0; logger(root, "# LIMIT api:key-7 5 10000"); }
+      render();
+    });
+    render();
+    setInterval(render, 250);
+  }
+
+  // LEASE key ttl_ms: a growing token, or (nil) while held. RELEASE key token: 1 or 0.
+  for (const root of document.querySelectorAll<El>('[data-demo="lease"]')) {
+    const TTL = 8_000;
+    let holder = "", token = 0, until = 0;
+    const log = logger(root, "# LEASE job:7 8000");
+    const live = () => holder !== "" && Date.now() < until;
+    const render = () => {
+      if (holder && !live()) { log(`# lease of worker ${holder} expired`, "(token stays, the next grant gets a higher one)"); holder = ""; }
+      const left = live() ? until - Date.now() : 0;
+      q(root, ".fill").style.width = `${(left / TTL) * 100}%`;
+      q(root, ".state").textContent = live() ? `Held by worker ${holder} · token ${token} · ${(left / 1000).toFixed(1)} s left` : `Free · last token ${token || "none"}`;
+    };
+    root.addEventListener("click", (e) => {
+      const act = (e.target as El).closest<El>("[data-act]")?.dataset.act;
+      if (act === "A" || act === "B") {
+        if (live()) log("LEASE job:7 8000", `(nil)   # worker ${act} waits, ${holder} holds it`);
+        else { holder = act; token++; until = Date.now() + TTL; log("LEASE job:7 8000", `(integer) ${token}   # worker ${act} holds it`); }
+      } else if (act === "release") {
+        if (live()) { log(`RELEASE job:7 ${token}`, "(integer) 1"); holder = ""; }
+        else log(`RELEASE job:7 ${token}`, "(integer) 0   # nothing held");
+      }
+      render();
+    });
+    render();
+    setInterval(render, 100);
+  }
+
+  // SEMAPHORE key max ttl_ms: a token per holder, or (nil) when all slots are taken.
+  for (const root of document.querySelectorAll<El>('[data-demo="semaphore"]')) {
+    const MAX = 3, TTL = 6_000;
+    type Slot = { id: number; token: number; until: number; done: number; crashed: boolean } | null;
+    const slots: Slot[] = Array(MAX).fill(null);
+    let seq = 0, clock = 1_700_000_000_000;
+    const log = logger(root, "# SEMAPHORE upstream 3 6000");
+    const render = () => {
+      const now = Date.now();
+      slots.forEach((s, i) => {
+        if (!s) return;
+        if (!s.crashed && now >= s.done) { log(`RELEASE upstream ${s.token}`, `(integer) 1   # worker ${s.id} finished`); slots[i] = null; }
+        else if (now >= s.until) { log(`# worker ${s.id}'s TTL ended`, "(slot freed without a RELEASE)"); slots[i] = null; }
+      });
+      q(root, ".slots").innerHTML = slots.map((s) => s
+        ? `<div class="slot ${s.crashed ? "dead" : "on"}"><b>worker ${s.id}</b><small>${s.crashed ? `crashed · frees in ${((s.until - now) / 1000).toFixed(1)} s` : "working"}</small></div>`
+        : `<div class="slot"><b>free</b><small>&nbsp;</small></div>`).join("");
+      q(root, ".state").textContent = `${slots.filter(Boolean).length} of ${MAX} slots held`;
+    };
+    root.addEventListener("click", (e) => {
+      const act = (e.target as El).closest<El>("[data-act]")?.dataset.act;
+      if (act === "take") {
+        const i = slots.indexOf(null);
+        if (i < 0) log("SEMAPHORE upstream 3 6000", "(nil)   # all 3 slots are taken");
+        else {
+          const now = Date.now(), token = (clock += 1 + Math.floor(Math.random() * 900));
+          slots[i] = { id: ++seq, token, until: now + TTL, done: now + 2_500 + Math.random() * 2_500, crashed: false };
+          log("SEMAPHORE upstream 3 6000", `(integer) ${token}   # worker ${seq}`);
+        }
+      } else if (act === "crash") {
+        const s = slots.find((x) => x && !x.crashed);
+        if (s) { s.crashed = true; log(`# worker ${s.id} crashed`, "(it will never call RELEASE)"); }
+      }
+      render();
+    });
+    render();
+    setInterval(render, 200);
+  }
+</script>
+
+<style>
+  .intro { padding-block: 72px 48px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, var(--sky-0), var(--sky-1)); }
+  .intro h1 { font-size: clamp(32px, 4vw, 48px); line-height: 1.1; margin: 0 0 18px; max-width: 22ch; }
+  .ex { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); gap: 48px; align-items: start; }
+  .copy p { color: var(--mute); }
+  .copy .more a::after { content: " →"; color: var(--mute); }
+  .copy .more { font-weight: 600; }
+  .demo { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; display: grid; gap: 14px; min-width: 0; }
+  .ctl { display: flex; flex-wrap: wrap; gap: 8px; }
+  .meter { height: 10px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+  .fill { display: block; height: 100%; width: 0; background: var(--c1); transition: width 0.2s linear; }
+  .state { margin: 0; font-family: var(--f-mono); font-size: 13px; color: var(--ink); }
+  .log { margin: 0; min-height: 15.5em; max-height: 15.5em; overflow-y: auto; background: var(--code-bg); color: var(--code-ink); border: 1px solid var(--line); border-radius: var(--radius-s); padding: 12px 14px; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; }
+  .slots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .slots :global(.slot) { border: 1px solid var(--line); border-radius: var(--radius-s); padding: 12px; display: grid; gap: 2px; text-align: center; color: var(--faint); }
+  .slots :global(.slot b) { font-size: 14px; font-weight: 600; }
+  .slots :global(.slot small) { font-size: 12px; }
+  .slots :global(.slot.on) { border-color: color-mix(in srgb, var(--c1) 60%, var(--line)); color: var(--ink); }
+  .slots :global(.slot.dead) { border-style: dashed; border-color: var(--c2); color: var(--mute); }
+  @media (max-width: 900px) { .ex { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
+</style>
