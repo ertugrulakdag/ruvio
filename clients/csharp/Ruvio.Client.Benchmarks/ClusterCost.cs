@@ -31,6 +31,10 @@ internal static class ClusterCost
                 ("plain", 64), ("cluster", 64), ("one-node", 64),
             })
             {
+                // RUVIO_COST_ONLY=plain:4 runs one row (GET only), for quick experiments.
+                if (Environment.GetEnvironmentVariable("RUVIO_COST_ONLY") is { } only && (only != $"{mode}:{depth}" || op != "GET"))
+                    continue;
+
                 string tag = mode == "one-node" ? "{t}" : "";
                 string[] keys = Enumerable.Range(0, KeyCount).Select(i => $"{tag}key:{i}").ToArray();
                 IReadOnlyList<string>[] commands = keys
