@@ -138,6 +138,29 @@ The script:
 
 Matching Redis on Docker Desktop is not a bare-metal result.
 
+## Whole machine: shards against a Redis Cluster
+
+`scripts/shard_compare.py` runs the 60-command comparison with the whole machine: Ruvio with N shards
+in one process (`port_mode = "per-shard"`), a Redis Cluster of N masters on the same N cores, and one
+Redis process on one core. One `redis-benchmark` per shard, pinned to its own client core, sends the
+row's command to that shard's port with the keys inside a hash tag the shard owns, so no command
+crosses shards and no client routes; rates are summed over the shards. The memory table loads N
+copies of each shape into the N-shard systems, routed by slot, so a shard holds what the single
+process holds.
+
+```bash
+python3 scripts/shard_compare.py --ruvio target/release/ruvio --redis-server redis-server \
+    --redis-cli redis-cli --redis-benchmark redis-benchmark --shards 8 \
+    --server-cpus 8-15 --client-cpus 0-7 --rounds 3 --out target/shard-compare
+# --durability everysec --data-root /mnt/data   Ruvio everysec against Redis appendfsync everysec on a real disk
+# --pipeline 64                                 when one client core per shard is the limit (it is for GET/SET)
+# --only PUBLISH --no-memory                    one row, no memory table
+```
+
+Raise the open-file limit first (`ulimit -n 65536`): eight shards times fifty clients exceed 1024.
+Linux only (`taskset`). The record of the first run, with a one-shard control run and the profiles
+that explained the rows below 1×, is `docs/evidence/2026-10-16-azure-8-shards.md`.
+
 ## Single-core ceiling
 
 The Mac alignment run (`-c 50 -P 16`, combined `set,get,incr`) and

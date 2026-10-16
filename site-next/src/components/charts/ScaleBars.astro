@@ -1,0 +1,72 @@
+---
+// One machine, three servers: Ruvio with N shards, a Redis Cluster of N nodes on the same cores,
+// and one Redis process on one core. Three bars per command on a log axis of requests per second.
+import type { Scale } from "../../data/bench";
+import { fmtOps, fmtX } from "../../data/bench";
+
+interface Props { scale: Scale; names: string[] }
+const { scale, names } = Astro.props;
+
+const rows = names.map((n) => scale.row(n));
+const all = rows.flatMap((r) => [r.ruvio, r.cluster, r.redis1]);
+const lo = Math.min(...all) / 1.4, hi = Math.max(...all) * 1.15;
+const at = (v: number) => (Math.log(v / lo) / Math.log(hi / lo)) * 100;
+const NICE = [1e5, 2e5, 5e5, 1e6, 2e6, 5e6, 1e7, 2e7, 5e7];
+const ticks = NICE.filter((v) => v >= lo && v <= hi);
+---
+
+<div class="scale" data-chart>
+  <div class="axis">
+    <span>Command</span>
+    <div class="ticks">{ticks.map((v) => <span style={`left:${at(v).toFixed(2)}%`}>{fmtOps(v)}</span>)}</div>
+    <span class="r">vs cluster</span>
+  </div>
+  {rows.map((r, i) => (
+    <div class="row" tabindex="0" data-tip={r.label}
+      data-tip-sub={`Ruvio ${scale.shards} shards ${fmtOps(r.ruvio)} req/s · Redis Cluster ${fmtOps(r.cluster)} req/s`}
+      data-tip-sub2={`one Redis process ${fmtOps(r.redis1)} req/s · per core Ruvio is ${fmtX(r.perCore)} of it`}>
+      <span class="lab">{r.label}</span>
+      <div class="bars" style={`animation-delay:${i * 40}ms`}>
+        {ticks.map((v) => <i class="gl" style={`left:${at(v).toFixed(2)}%`}></i>)}
+        <span class="bar ruvio" style={`width:${at(r.ruvio).toFixed(2)}%`}></span>
+        <span class="bar cluster" style={`width:${at(r.cluster).toFixed(2)}%`}></span>
+        <span class="bar one" style={`width:${at(r.redis1).toFixed(2)}%`}></span>
+      </div>
+      <span class={`x ${r.vsCluster >= 1 ? "up" : r.vsCluster >= 0.97 ? "par" : "down"}`}>{fmtX(r.vsCluster)}</span>
+    </div>
+  ))}
+  <div class="legend">
+    <span><i style="background:var(--c1)"></i>Ruvio, {scale.shards} shards, one process</span>
+    <span><i style="background:var(--redis)"></i>Redis Cluster, {scale.shards} nodes, same cores</span>
+    <span><i class="hollow"></i>one Redis process, one core</span>
+  </div>
+</div>
+
+<style>
+  .scale { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 26px 16px; }
+  .axis, .row { display: grid; grid-template-columns: minmax(0, 11rem) minmax(0, 1fr) 4.5rem; gap: 20px; align-items: center; }
+  .axis { font-family: var(--f-mono); font-size: 11.5px; color: var(--faint); padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+  .axis .r { text-align: right; }
+  .ticks { position: relative; height: 14px; }
+  .ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  .row { padding: 7px 0; outline: none; }
+  .row.is-on .lab { color: var(--ink); }
+  .lab { font-size: 14px; color: var(--mute); overflow-wrap: anywhere; }
+  .bars { position: relative; display: grid; gap: 3px; }
+  .gl { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); }
+  .bar { position: relative; display: block; height: 7px; border-radius: 2px; transform-origin: left; }
+  .bar.ruvio { background: var(--c1); }
+  .bar.cluster { background: var(--redis); }
+  .bar.one { background: transparent; border: 1.5px solid var(--c2); height: 5px; }
+  .x { font-family: var(--f-mono); font-size: 12.5px; font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
+  .x.down { color: var(--mute); }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 14px; font-size: 12.5px; color: var(--mute); }
+  .legend i { display: inline-block; width: 12px; height: 7px; border-radius: 2px; margin-right: 7px; vertical-align: 1px; }
+  .legend i.hollow { border: 1.5px solid var(--c2); height: 5px; }
+  @media (max-width: 760px) {
+    .scale { padding: 14px 14px 12px; }
+    .axis { display: none; }
+    .row { grid-template-columns: minmax(0, 1fr) 4rem; }
+    .lab { grid-column: 1 / -1; }
+  }
+</style>

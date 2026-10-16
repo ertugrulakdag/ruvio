@@ -125,3 +125,53 @@ export const durabilityDefaults = {
   syncIntervalMs: tomlNumber("sync_interval_ms"),
   snapshotIntervalMs: tomlNumber("snapshot_interval_ms"),
 };
+
+// Whole machine: Ruvio with N shards in one process against one Redis process on one core and a
+// Redis Cluster of N nodes on the same N cores (scripts/shard_compare.py). Rates are the sum over
+// the shards; "perCore" divides Ruvio's total by N and compares it with the single Redis.
+export type ScaleRow = { label: string; ruvio: number; redis1: number; cluster: number; vsCluster: number; perCore: number };
+export type ScaleMem = { label: string; ruvioKib: number; redis1Kib: number; clusterKib: number; perShardVsOne: number; vsCluster: number };
+export type Scale = {
+  file: string; date: string; shards: number; pipeline: number; clients: number; rounds: number; durability: string;
+  machine: string; commit: string; redisVersion: string;
+  rows: ScaleRow[]; memory: ScaleMem[];
+  geomeanCluster: number; geomeanPerCore: number; atParCluster: number; fasterThanCluster: number;
+  memGeomeanPerShard: number; memGeomeanCluster: number;
+  row: (name: string) => ScaleRow;
+};
+
+function loadScale(file: string): Scale {
+  const d = readJson(file);
+  const n: number = d.config.shards;
+  const rows: ScaleRow[] = d.rows
+    .filter((r: any) => r.ruvio && r.redis1 && r.rediscl)
+    .map((r: any) => ({
+      label: cleanLabel(r.label), ruvio: r.ruvio, redis1: r.redis1, cluster: r.rediscl,
+      vsCluster: r.ruvio / r.rediscl, perCore: r.ruvio / n / r.redis1,
+    }));
+  const memory: ScaleMem[] = (d.memory ?? []).map((m: any) => ({
+    label: m.label, ruvioKib: m.ruvio.delta_kib, redis1Kib: m.redis1.delta_kib, clusterKib: m.rediscl.delta_kib,
+    perShardVsOne: m.ruvio.delta_kib / (m.ruvio.copies ?? n) / m.redis1.delta_kib,
+    vsCluster: m.ruvio.delta_kib / m.rediscl.delta_kib,
+  }));
+  const gm = (xs: number[]) => (xs.length ? Math.exp(xs.reduce((a, x) => a + Math.log(x), 0) / xs.length) : 1);
+  const steady = rows.filter((r) => !/PUBLISH/.test(r.label));
+  const redisVersion = (String(d.redis_version).match(/v=([\d.]+)/) || [])[1] ?? "";
+  return {
+    file, date: d.date, shards: n, pipeline: d.config.pipeline, clients: d.config.clients, rounds: d.config.rounds,
+    durability: d.config.durability, machine: d.host?.description ?? d.host?.cpu ?? "", commit: d.build?.ruvio_commit ?? "", redisVersion,
+    rows, memory,
+    geomeanCluster: gm(steady.map((r) => r.vsCluster)), geomeanPerCore: gm(steady.map((r) => r.perCore)),
+    atParCluster: rows.filter((r) => r.vsCluster >= 0.97).length, fasterThanCluster: rows.filter((r) => r.vsCluster >= 1).length,
+    memGeomeanPerShard: gm(memory.map((m) => m.perShardVsOne)), memGeomeanCluster: gm(memory.map((m) => m.vsCluster)),
+    row: (name: string) => {
+      const found = rows.find((r) => r.label === name);
+      if (!found) throw new Error(`${file} has no row ${name}`);
+      return found;
+    },
+  };
+}
+
+export const scale = loadScale("site/data/x86-azure-2026-10-16-8-shards-final.json");
+export const scaleDeep = loadScale("site/data/x86-azure-2026-10-16-8-shards-p64-after.json");
+export const scaleEverysec = loadScale("site/data/x86-azure-2026-10-16-8-shards-everysec-after.json");

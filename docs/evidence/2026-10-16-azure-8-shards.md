@@ -139,3 +139,7 @@ Data: [x86-azure-2026-10-16-8-shards-everysec-after.json](../../site/data/x86-az
 | memory, pipeline 64 | 1.15× | **1.23×** | 6 → 1 | 45 → 55 |
 
 The rows the fixes aimed at, `everysec`: `LSET` 0.53× → 1.09×, `SETRANGE` 0.48× → 1.47×, `BITFIELD INCRBY` 0.55× → 1.37×, `COPY REPLACE` 0.63× → 1.68×, `LMOVE` 0.57× → 1.23×, `INCRBYFLOAT` 0.69× → 1.30×, `SADD` existing 0.72× → 1.04×. Memory mode, pipeline 64: `SADD` existing 0.87× → 1.12×, `APPEND` 0.88× → 0.95×, `BITCOUNT` 0.90× → 0.93×, `LSET` 0.93× → 1.06×; the generic path gained 5.8% (geometric mean over all rows, min 0.94×, max 1.23×). Hot-path rows did not move (`GET` 1.75×, `SET` 2.21×). The one row still below 0.90× is `HDEL` of a missing field on a 10-field hash (0.89×); `FILLGET` against plain `GET` is 0.91×. Both are open.
+
+## Final grid with the fixed binary (pipeline 16, memory table included)
+
+[x86-azure-2026-10-16-8-shards-final.json](../../site/data/x86-azure-2026-10-16-8-shards-final.json), the run the site shows: same method as the first table, Ruvio at `7376885`. Against the eight-node Redis Cluster the geometric mean over the 59 rows without `PUBLISH` is 1.13× (median 1.05×, 55 rows at or above 0.97×, none below 0.90×); per core against one Redis 1.09×; memory per shard against one Redis, geometric mean over the twelve shapes, 0.96×. `PUBLISH` 2.98M/s against 2.19M/s (1.36×). `GET` stays 0.96× at this pipeline depth, where one client core per shard is the limit (see the pipeline-64 grid above).

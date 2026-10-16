@@ -6,12 +6,19 @@ import QuadrantScatter from "../components/charts/QuadrantScatter.astro";
 import RatioSwarm from "../components/charts/RatioSwarm.astro";
 import LoadArrows from "../components/charts/LoadArrows.astro";
 import MemoryDumbbell from "../components/charts/MemoryDumbbell.astro";
-import { platforms, loadRun, fmtOps, fmtX, fmtMiB, pct } from "../data/bench";
+import ScaleBars from "../components/charts/ScaleBars.astro";
+import { platforms, loadRun, fmtOps, fmtX, fmtMiB, pct, scale, scaleDeep, scaleEverysec } from "../data/bench";
 import { site } from "../config/site";
 import { clamp } from "../lib/geom";
 
 const [mac, linux] = platforms;
 const blob = (f: string) => `${site.github}/blob/main/${f}`;
+const popular = ["GET", "SET", "DEL (missing key)", "SETEX", "HSET (existing field)", "HGET", "LPUSH", "ZADD (existing member, same score)", "EXPIRE (key with TTL)", "PUBLISH (no subscribers)"];
+const grids = [
+  { name: `In-memory, pipeline ${scale.pipeline}`, s: scale },
+  { name: `In-memory, pipeline ${scaleDeep.pipeline}`, s: scaleDeep },
+  { name: `everysec against Redis AOF everysec`, s: scaleEverysec },
+];
 
 // Ratio bar in the table: log2 scale from 0.5× to 2.5×, centred on Redis = 1×.
 const LO = 0.5, HI = 2.5;
@@ -88,8 +95,51 @@ const one = at(1);
     </div>
   </section>
 
+  <section class="section" id="scale">
+    <div class="wrap">
+      <div class="head-row">
+        <div>
+          <p class="kicker">Whole machine</p>
+          <h2 class="title">{scale.shards} shards against a Redis Cluster of {scale.shards} and a single Redis</h2>
+          <p class="lede">One <code>redis-benchmark</code> per shard, pinned to its own core, sends each command to that shard's port with the keys inside a hash tag the shard owns, so nothing crosses shards. The same load goes to each node of a Redis Cluster on the same {scale.shards} cores, and to one Redis process on one core. Rates are summed over the shards.</p>
+        </div>
+      </div>
+      <div class="kpis">
+        {grids.map((g) => (
+          <div><span class="plat">{g.name}</span><b>{fmtX(g.s.geomeanCluster)}</b><span>geometric mean against the cluster over {g.s.rows.length - 1} commands; {g.s.atParCluster} of {g.s.rows.length} at 0.97× or faster; per core {fmtX(g.s.geomeanPerCore)} of one Redis</span></div>
+        ))}
+        <div><span class="plat">Memory</span><b>{fmtX(scale.memGeomeanPerShard)}</b><span>per shard against one Redis over {scale.memory.length} data shapes ({fmtX(scale.memGeomeanCluster)} against the cluster's total)</span></div>
+      </div>
+      <div class="scale-chart"><ScaleBars scale={scale} names={popular} /></div>
+      <div class="table-wrap scale-table">
+        <table class="res">
+          <thead><tr><th>Command</th><th class="num">Ruvio {scale.shards} shards</th><th class="num">Redis Cluster {scale.shards}</th><th class="num">One Redis</th><th class="num">vs cluster</th><th class="num">per core vs one Redis</th></tr></thead>
+          <tbody>
+            {[...scale.rows].sort((a, b) => b.vsCluster - a.vsCluster).map((r) => {
+              const k = r.vsCluster >= 1 ? "up" : r.vsCluster >= 0.97 ? "par" : "down";
+              return (
+                <tr><td>{r.label}</td><td class="num">{fmtOps(r.ruvio)}</td><td class="num dim">{fmtOps(r.cluster)}</td><td class="num dim">{fmtOps(r.redis1)}</td><td class={`num x ${k}`}>{fmtX(r.vsCluster)}</td><td class="num dim">{fmtX(r.perCore)}</td></tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap scale-table">
+        <table class="res">
+          <thead><tr><th>Data shape ({scale.shards} copies on the {scale.shards}-shard systems)</th><th class="num">Ruvio {scale.shards} shards</th><th class="num">Redis Cluster {scale.shards}</th><th class="num">One Redis, one copy</th><th class="num">per shard vs one Redis</th></tr></thead>
+          <tbody>
+            {scale.memory.map((m) => (
+              <tr><td>{m.label}</td><td class="num">{fmtMiB(m.ruvioKib)} MiB</td><td class="num dim">{fmtMiB(m.clusterKib)} MiB</td><td class="num dim">{fmtMiB(m.redis1Kib)} MiB</td><td class={`num x ${m.perShardVsOne <= 1 ? "up" : "down"}`}>{fmtX(m.perShardVsOne)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class="source">Sources: {grids.map((g, i) => <span>{i ? " · " : ""}<a href={blob(g.s.file)}>{g.s.file}</a></span>)} · Azure F16as_v6, AMD EPYC 9V74 (virtualized), 16 cores without SMT; servers on cpus 8-15, load generators on cpus 0-7, loopback · {scale.date}, Ruvio {scale.commit} · the record with the one-shard control run and the profiles is <a href="/docs/evidence/2026-10-16-azure-8-shards/">in the docs</a>.</p>
+    </div>
+  </section>
+
   <div data-platform-scope>
-    <section class="section" id="results">
+    <section class="section band" id="results">
       <div class="wrap">
         <div class="head-row">
           <div>
@@ -133,7 +183,7 @@ const one = at(1);
       </div>
     </section>
 
-    <section class="section band" id="memory">
+    <section class="section" id="memory">
       <div class="wrap">
         <div class="head-row">
           <div>
@@ -153,7 +203,7 @@ const one = at(1);
     </section>
   </div>
 
-  <section class="section" id="method">
+  <section class="section band" id="method">
     <div class="wrap">
       <div class="head-row">
         <div>
@@ -173,7 +223,8 @@ const one = at(1);
           </dl>
         ))}
         <div class="how">
-          <p>The rows come from <code>scripts/redis_compare_features.py</code>, which runs <code>redis-benchmark</code> against each server in turn. Absolute numbers describe one host; the ratio between the two servers is the result. Shared cloud machines vary from run to run, so a row within a few percent of 1× is a tie.</p>
+          <p>The whole-machine grids come from <code>scripts/shard_compare.py</code>: {scale.shards} shards in one Ruvio process (<code>port_mode = "per-shard"</code>), a Redis Cluster of {scale.shards} masters created with <code>redis-cli --cluster create</code>, and one Redis process, each driven by one <code>redis-benchmark</code> per shard with hash-tagged keys. The {scale.shards}-shard systems hold {scale.shards} copies of each data shape, so a shard holds what the single process holds.</p>
+          <p>The single-machine rows come from <code>scripts/redis_compare_features.py</code>, which runs <code>redis-benchmark</code> against each server in turn. Absolute numbers describe one host; the ratio between the two servers is the result. Shared cloud machines vary from run to run, so a row within a few percent of 1× is a tie.</p>
           <p><a class="btn ghost small" href="/docs/benchmarking/">Benchmarking guide</a> <a class="btn ghost small" href={`${site.github}/tree/main/site/data`}>All records</a></p>
         </div>
       </div>
@@ -188,6 +239,8 @@ const one = at(1);
 <style>
   .kpis.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 36px; }
   .plat { font-weight: 600; color: var(--ink) !important; }
+  .scale-chart { margin-top: 32px; }
+  .scale-table { margin-top: 28px; }
   .chart { position: relative; }
   .scroll-x { overflow-x: auto; }
   .swarm-box { min-width: 640px; }
