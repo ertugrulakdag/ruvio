@@ -6,6 +6,7 @@ mod args;
 mod client;
 mod cluster;
 mod codec;
+mod command_keys;
 mod commands;
 mod error;
 mod extra;

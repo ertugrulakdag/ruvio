@@ -4,6 +4,12 @@ Notable changes to the Rust client crate `ruvio-client`. New entries go under "U
 
 ## Unreleased
 
+- The cluster client now takes each command's key positions from the server's command table
+  (`src/command_keys.rs`, generated from `clients/testdata/commands.json`) instead of its own
+  hand-kept lists, and is checked against `clients/testdata/key_vectors.json`. This fixes routing
+  for `GEORADIUS` and `GEORADIUSBYMEMBER` with `STORE`/`STOREDIST` (the destination key was
+  ignored) and `GEOSEARCHSTORE` (the source key was ignored).
+
 ## 0.2.6 to 0.3.1
 
 These notes were recorded together and shipped over these versions.

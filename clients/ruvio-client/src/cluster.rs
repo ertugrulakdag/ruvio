@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::client::ClientOptions;
 use crate::codec::read_value;
+use crate::command_keys::{COMMAND_KEY_RULES, KeyRule};
 
 use crate::error::Error;
 use crate::value::RespValue;
@@ -16,87 +17,6 @@ use crate::value::RespValue;
 pub const SLOT_COUNT: u16 = 16_384;
 
 const MAX_REDIRECTS: usize = 3;
-
-const KEYLESS: &[&str] = &[
-    "ACL",
-    "AUTH",
-    "BGSAVE",
-    "CHANGES",
-    "CLIENT",
-    "CLUSTER",
-    "COMMAND",
-    "CONFIG",
-    "DBSIZE",
-    "DISCARD",
-    "ECHO",
-    "EXEC",
-    "FLUSHALL",
-    "FLUSHDB",
-    "FUNCTION",
-    "HELLO",
-    "INFO",
-    // JSON.INDEX and JSON.FIND name an index, not a key; the server fans them out to every shard.
-    "JSON.FIND",
-    "JSON.INDEX",
-    "KEYS",
-    "LASTSAVE",
-    // LATENCY subcommands (e.g. LATENCY LATEST) have no key; without this entry the
-    // fallback arm would take the subcommand name as the routing key.
-    "LATENCY",
-    "MULTI",
-    "PING",
-    "PSUBSCRIBE",
-    "PUBLISH",
-    "PUNSUBSCRIBE",
-    "QUIT",
-    "RANDOMKEY",
-    "READONLY",
-    "READWRITE",
-    "RESET",
-    // RUVIO's optional argument is a word (OWNER, HOTKEYS), not a key.
-    "RUVIO",
-    "SAVE",
-    "SCAN",
-    "SCRIPT",
-    "SELECT",
-    "SLOWLOG",
-    "SUBSCRIBE",
-    "SWAPDB",
-    "TIME",
-    "UNSUBSCRIBE",
-    "UNWATCH",
-    "WAIT",
-];
-
-const EVERY_ARGUMENT: &[&str] = &[
-    "DEL",
-    "EXISTS",
-    "MGET",
-    "PFCOUNT",
-    "PFMERGE",
-    "SDIFF",
-    "SDIFFSTORE",
-    "SINTER",
-    "SINTERSTORE",
-    "SSUBSCRIBE",
-    "SUNION",
-    "SUNIONSTORE",
-    "SUNSUBSCRIBE",
-    "TOUCH",
-    "UNLINK",
-    "WATCH",
-];
-
-const TWO_KEYS: &[&str] = &[
-    "BLMOVE",
-    "BRPOPLPUSH",
-    "COPY",
-    "LMOVE",
-    "RENAME",
-    "RENAMENX",
-    "RPOPLPUSH",
-    "SMOVE",
-];
 
 const SPLIT: &[&str] = &["DEL", "EXISTS", "MGET", "MSET", "TOUCH", "UNLINK"];
 
@@ -254,77 +174,105 @@ fn listed(list: &[&str], name: &str) -> bool {
 
 /// The keys of a command, in argument order. Empty for keyless commands.
 pub(crate) fn command_keys<'a>(name: &str, arguments: &[&'a str]) -> Vec<&'a str> {
-    if arguments.len() < 2 || listed(KEYLESS, name) {
+    if arguments.len() < 2 {
         return Vec::new();
-    }
-
-    if listed(EVERY_ARGUMENT, name) {
-        return arguments[1..].to_vec();
-    }
-
-    if listed(TWO_KEYS, name) {
-        return arguments[1..].iter().take(2).copied().collect();
     }
 
     match name {
-        "MSET" | "MSETNX" => arguments[1..].iter().step_by(2).copied().collect(),
-        "BLPOP" | "BRPOP" | "BZPOPMIN" | "BZPOPMAX" => {
-            arguments[1..arguments.len().saturating_sub(1)].to_vec()
-        }
-        "EVAL" | "EVALSHA" | "EVAL_RO" | "EVALSHA_RO" | "FCALL" | "FCALL_RO" => {
-            counted(arguments, 2)
-        }
-        // LMPOP has numkeys at index 1; BLMPOP puts its timeout first, so numkeys is at index 2.
-        "ZUNION" | "ZINTER" | "ZDIFF" | "LMPOP" => counted(arguments, 1),
-        "BLMPOP" => counted(arguments, 2),
-        "ZUNIONSTORE" | "ZINTERSTORE" | "ZDIFFSTORE" => {
-            let mut keys = vec![arguments[1]];
-
-            keys.extend(counted(arguments, 2));
-
-            keys
-        }
-        "XREAD" | "XREADGROUP" => streams(arguments),
-        // BITOP op destination source...: the operation word is not a key.
-        "BITOP" => arguments.get(2..).unwrap_or(&[]).to_vec(),
-        "SINTERCARD" => counted(arguments, 1),
-        // JSON.MGET key... path: every argument but the trailing path.
-        "JSON.MGET" => arguments[1..arguments.len() - 1].to_vec(),
-        // XGROUP / XINFO put the subcommand first and the key second.
-        "XGROUP" | "XINFO" if arguments.len() > 2 => vec![arguments[2]],
-        "OBJECT" | "MEMORY" if arguments.len() > 2 => vec![arguments[2]],
-        _ => vec![arguments[1]],
+        // Sharded Pub/Sub has no keys in the command table, but routes by channel.
+        "SPUBLISH" => vec![arguments[1]],
+        "SSUBSCRIBE" | "SUNSUBSCRIBE" => arguments[1..].to_vec(),
+        _ => match key_rule(name) {
+            Some(rule) => rule_keys(rule, arguments),
+            // A command the table does not know is routed by its first argument.
+            None => vec![arguments[1]],
+        },
     }
 }
 
-fn counted<'a>(arguments: &[&'a str], count_index: usize) -> Vec<&'a str> {
-    let Some(count) = arguments
-        .get(count_index)
-        .and_then(|value| value.parse().ok())
-    else {
-        return Vec::new();
-    };
-
-    arguments
-        .get(count_index + 1..)
-        .unwrap_or(&[])
-        .iter()
-        .take(count)
-        .copied()
-        .collect()
+/// The command table's key rule for an upper-case command name.
+fn key_rule(name: &str) -> Option<KeyRule> {
+    COMMAND_KEY_RULES
+        .binary_search_by(|(entry, ..)| (*entry).cmp(name))
+        .ok()
+        .map(|index| COMMAND_KEY_RULES[index].1)
 }
 
-fn streams<'a>(arguments: &[&'a str]) -> Vec<&'a str> {
-    let Some(index) = arguments
-        .iter()
-        .position(|argument| argument.eq_ignore_ascii_case("STREAMS"))
-    else {
-        return Vec::new();
-    };
+fn keyless(name: &str) -> bool {
+    key_rule(name) == Some(KeyRule::None)
+}
 
-    let rest = arguments.len().saturating_sub(index + 1);
+fn rule_keys<'a>(rule: KeyRule, arguments: &[&'a str]) -> Vec<&'a str> {
+    let len = arguments.len();
 
-    arguments[index + 1..index + 1 + rest / 2].to_vec()
+    match rule {
+        KeyRule::None => Vec::new(),
+        KeyRule::Range { first, last, step } => {
+            // A negative last counts from the end: -1 is the last argument.
+            let last = if last < 0 {
+                len as isize + isize::from(last)
+            } else {
+                isize::from(last)
+            };
+            let end = (last + 1).clamp(0, len as isize) as usize;
+
+            arguments
+                .get(first as usize..end)
+                .unwrap_or(&[])
+                .iter()
+                .step_by(step as usize)
+                .copied()
+                .collect()
+        }
+        // The count promises more keys than there are: take what is there. A count that is not
+        // a number means no counted keys.
+        KeyRule::NumKeys { count_at, before } => {
+            let count_at = usize::from(count_at);
+            let count = arguments
+                .get(count_at)
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0);
+            let mut keys = Vec::new();
+
+            if before > 0 {
+                keys.extend(arguments.get(usize::from(before)).copied());
+            }
+
+            keys.extend(arguments.iter().skip(count_at + 1).take(count).copied());
+
+            keys
+        }
+        KeyRule::KeywordHalf { keyword } => {
+            let Some(index) = arguments[1..]
+                .iter()
+                .position(|argument| argument.eq_ignore_ascii_case(keyword))
+            else {
+                return Vec::new();
+            };
+            let rest = &arguments[index + 2..];
+
+            rest[..rest.len() / 2].to_vec()
+        }
+        KeyRule::KeyAndStore { first, keywords } => {
+            let first = usize::from(first);
+            let mut keys: Vec<&str> = arguments.get(first).copied().into_iter().collect();
+            let mut index = first + 1;
+
+            while index + 1 < len {
+                if keywords
+                    .iter()
+                    .any(|keyword| arguments[index].eq_ignore_ascii_case(keyword))
+                {
+                    keys.push(arguments[index + 1]);
+                    index += 1;
+                }
+
+                index += 1;
+            }
+
+            keys
+        }
+    }
 }
 
 pub(crate) struct Connection {
@@ -784,7 +732,7 @@ impl ClusterRouter {
             .map(|name| String::from_utf8_lossy(name).to_ascii_uppercase())
             .unwrap_or_default();
         let mut current = match arguments.get(1) {
-            Some(key) if !listed(KEYLESS, &name) => self.for_slot(hash_slot_bytes(key))?,
+            Some(key) if !keyless(&name) => self.for_slot(hash_slot_bytes(key))?,
             _ => self.seed_target()?,
         };
 
@@ -1871,6 +1819,64 @@ mod tests {
             ["chan"]
         );
     }
+
+    /// The keys in `clients/testdata/key_vectors.json` are the ones the server routes by.
+    /// SPUBLISH, SSUBSCRIBE and SUNSUBSCRIBE are skipped: they have no keys there, but this
+    /// client routes them by channel through the same function.
+    #[test]
+    fn command_keys_match_the_shared_vectors() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../testdata/key_vectors.json");
+        let text = std::fs::read_to_string(&path).expect("key_vectors.json");
+        let vectors: serde_json::Value =
+            serde_json::from_str(&text).expect("key_vectors.json is JSON");
+        let mut failures = std::collections::BTreeMap::new();
+        let mut checked = 0;
+
+        for entry in vectors["vectors"].as_array().expect("vectors") {
+            let arguments: Vec<&str> = entry["args"]
+                .as_array()
+                .expect("args")
+                .iter()
+                .map(|argument| argument.as_str().expect("argument"))
+                .collect();
+            let name = super::command_name(&arguments);
+
+            if matches!(name.as_str(), "SPUBLISH" | "SSUBSCRIBE" | "SUNSUBSCRIBE") {
+                continue;
+            }
+
+            let mut expected: Vec<&str> = entry["keys"]
+                .as_array()
+                .expect("keys")
+                .iter()
+                .map(|key| key.as_str().expect("key"))
+                .collect();
+            let mut actual = command_keys(&name, &arguments);
+
+            expected.sort_unstable();
+            actual.sort_unstable();
+            checked += 1;
+
+            if actual != expected {
+                failures
+                    .entry(name)
+                    .or_insert(format!("{arguments:?}: got {actual:?}, want {expected:?}"));
+            }
+        }
+
+        assert!(checked > 1_000, "only {checked} vectors");
+        assert!(
+            failures.is_empty(),
+            "{} commands route by the wrong keys:\n{}",
+            failures.len(),
+            failures
+                .iter()
+                .map(|(name, example)| format!("{name}: {example}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2024,7 +2030,7 @@ mod more_tests {
             ["k"]
         );
         assert_eq!(
-            command_keys("FCALL_RO", &["FCALL_RO", "fn", "2", "a", "b", "x"]),
+            command_keys("FCALL", &["FCALL", "fn", "2", "a", "b", "x"]),
             ["a", "b"]
         );
         // The count promises more keys than there are: take what is there.
@@ -2076,18 +2082,34 @@ mod more_tests {
         assert!(command_keys("XREAD", &["XREAD", "STREAMS"]).is_empty());
         assert_eq!(command_keys("OBJECT", &["OBJECT", "ENCODING", "k"]), ["k"]);
         assert_eq!(command_keys("MEMORY", &["MEMORY", "USAGE", "k"]), ["k"]);
-        assert_eq!(command_keys("OBJECT", &["OBJECT", "HELP"]), ["HELP"]);
-        assert_eq!(command_keys("XGROUP", &["XGROUP", "HELP"]), ["HELP"]);
+        // The key is the third argument; without one there is no key.
+        assert!(command_keys("OBJECT", &["OBJECT", "HELP"]).is_empty());
+        assert!(command_keys("XGROUP", &["XGROUP", "HELP"]).is_empty());
         assert!(command_keys("BITOP", &["BITOP", "NOT"]).is_empty());
         assert_eq!(command_keys("BITOP", &["BITOP", "AND", "d"]), ["d"]);
+    }
+
+    #[test]
+    fn command_key_rules_are_sorted_for_binary_search() {
+        assert!(
+            COMMAND_KEY_RULES
+                .windows(2)
+                .all(|pair| pair[0].0 < pair[1].0)
+        );
+        // Not in the table: routed by the first argument.
+        assert_eq!(
+            command_keys("NOT-A-COMMAND", &["NOT-A-COMMAND", "k"]),
+            ["k"]
+        );
     }
 
     #[test]
     fn small_helpers() {
         assert_eq!(command_name(&[]), "");
         assert_eq!(command_name(&["get", "k"]), "GET");
-        assert!(listed(KEYLESS, "PING"));
-        assert!(!listed(KEYLESS, "GET"));
+        assert!(keyless("PING"));
+        assert!(!keyless("GET"));
+        assert!(!keyless("NOT-A-COMMAND"));
         assert!(spreads_to_every_node(&["SCRIPT", "flush"]));
         assert!(spreads_to_every_node(&["FUNCTION", "Delete"]));
         assert!(spreads_to_every_node(&["SCRIPT", "load"]));
