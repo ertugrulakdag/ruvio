@@ -161,6 +161,21 @@ Raise the open-file limit first (`ulimit -n 65536`): eight shards times fifty cl
 Linux only (`taskset`). The record of the first run, with a one-shard control run and the profiles
 that explained the rows below 1×, is `docs/evidence/2026-10-16-azure-8-shards.md`.
 
+## Client routing cost
+
+Each client has the same tool for the CPU a request costs on the cluster path. Point it at a per-shard server (`shards = 4`, `port_mode = "per-shard"`); every tool prints `plain`, `cluster` and `one-node` rows (user and system CPU nanoseconds per request, allocation where the runtime reports it) at pipeline depths 16 and 64, plus plain depth 4, in about a minute. Run the clients one after another, never at the same time.
+
+| Client | Command |
+| --- | --- |
+| Rust | `cargo run --release --example cluster_cost -- --port 7000` (in `clients/ruvio-client`) |
+| C# | `DOTNET_ThreadPool_UnfairSemaphoreSpinLimit=0 dotnet run -c Release --project clients/csharp/Ruvio.Client.Benchmarks -- --cluster-cost 7000` (`RUVIO_DEDICATED_READER=1` measures `DedicatedReaderThread`) |
+| Go | `RUVIO_COST_ADDR=127.0.0.1:7000 go test -run TestClusterCost -v -count=1` (in `clients/go`) |
+| Java | `mvn -q test-compile`, then `java -cp target/classes:target/test-classes io.github.salihcantekin.ruvio.RoutingCostBench 127.0.0.1:7000` (in `clients/java`) |
+| Node | `RUVIO_BENCH_ADDR=127.0.0.1:7000 npm run bench:cluster-cost` (in `clients/node`) |
+| Python | `python benchmarks/bench.py --cluster-cost 7000` (in `clients/python`) |
+
+`one-node` against `plain` is the routing code's own cost; `cluster` adds the writes and reads of the extra shards. The routing rules are in [CLIENT_BEHAVIOR.md](CLIENT_BEHAVIOR.md#routing-cost) and the latest numbers in [evidence/2026-10-16-client-cluster-routing.md](evidence/2026-10-16-client-cluster-routing.md).
+
 ## Single-core ceiling
 
 The Mac alignment run (`-c 50 -P 16`, combined `set,get,incr`) and

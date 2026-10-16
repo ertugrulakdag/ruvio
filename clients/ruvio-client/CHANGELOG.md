@@ -4,6 +4,7 @@ Notable changes to the Rust client crate `ruvio-client`. New entries go under "U
 
 ## Unreleased
 
+- `Client::sharded_subscriber(channel)`: a Pub/Sub socket to the shard that owns a sharded channel, for `ssubscribe` on a cluster (a `subscriber()` socket reaches one shard only, so `SSUBSCRIBE` of a channel on another shard got `MOVED`).
 - Cluster routing is cheaper: commands no longer allocate on the way to their node (no upper-cased name, key list or `host:port` string per command), connections are found by node index, and a pipeline spread over several nodes writes every node before reading any, so it costs one round trip instead of one per node. A node that fails mid-pipeline no longer leaves the other nodes' sockets out of step. On a 4-shard local server cluster user CPU per pipelined request fell 3.6-21×; see `docs/evidence/2026-10-16-client-cluster-routing.md`.
 - **Behaviour change:** `RENAME` / `RENAMENX` whose keys hash to different slots now fail with
   `Error::Server("CROSSSLOT Keys in request do not hash to the same slot")` before anything is

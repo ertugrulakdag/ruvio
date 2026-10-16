@@ -99,7 +99,7 @@ external effects; see [the native contract](../../docs/IDEM.md).
 | Streams | `xadd`, `xadd_maxlen`, `xadd_delay`, `xadd_nomkstream`, `xlen`, `xrange`, `xrevrange`, `xdel`, `xtrim_maxlen`, `xtrim_minid`, `xsetid`, `xread`, `xgroup_create`, `xgroup_create_consumer`, `xreadgroup`, `xgroup_destroy`, `xgroup_setid`, `xgroup_delconsumer`, `xack`, `xpending_summary`, `xpending`, `xclaim`, `xclaim_ids`, `xautoclaim`, `xinfo_stream`, `xinfo_groups`, `xinfo_consumers` |
 | Transactions | `multi`, `exec`, `discard`, `watch`, `watch_key`, `unwatch` |
 | Scripts and functions | `eval`, `evalsha`, `script_load`, `script_exists`, `script_flush`, `script_kill`, `fcall`, `function_load`, `function_list`, `function_delete` |
-| Pub/Sub | `publish`, `spublish`, `subscribe`, `unsubscribe`, `psubscribe`, `punsubscribe`, `ssubscribe`, `sunsubscribe`, `next_message`, `read_message`, `subscriber`, `listen` |
+| Pub/Sub | `publish`, `spublish`, `subscribe`, `unsubscribe`, `psubscribe`, `punsubscribe`, `ssubscribe`, `sunsubscribe`, `next_message`, `read_message`, `subscriber`, `sharded_subscriber`, `listen` |
 | Server | `ping`, `ping_message`, `echo`, `auth`, `auth_user`, `info`, `config_get`, `save`, `bgsave`, `wait`, `select`, `flushdb`, `flushall`, `swapdb`, `move_key`, `hello`, `command_list`, `command_count`, `command_info`, `command_docs`, `latency_latest`, `slowlog_get`, `slowlog_len`, `slowlog_reset`, `client_id`, `client_info`, `client_list`, `client_kill_id`, `client_kill_addr`, `client_getname`, `client_setname`, `client_tracking`, `cluster_slots`, `cluster_nodes`, `cluster_shards`, `cluster_info`, `cluster_myid`, `cluster_keyslot`, `readonly`, `readwrite` |
 | ACL | `acl_whoami`, `acl_users`, `acl_list`, `acl_getuser`, `acl_cat`, `acl_setuser`, `acl_load`, `acl_save` |
 
@@ -115,7 +115,7 @@ db.execute(&["GET", "balance"])?;
 let replies = db.exec()?; // None when a watched key changed
 ```
 
-`subscribe` opens a second socket, the same way `Ruvio.Client` does. Keep `publish`, `GET`, and `PING` on the same client. `listen` (callback) or `next_message` reads that subscriber socket. `subscriber()` still returns the extra socket if you want it separately. `set_read_timeout` bounds the wait.
+`subscribe` opens a second socket, the same way `Ruvio.Client` does. Keep `publish`, `GET`, and `PING` on the same client. `listen` (callback) or `next_message` reads that subscriber socket. `subscriber()` still returns the extra socket if you want it separately. `set_read_timeout` bounds the wait. On a cluster that socket reaches one shard; `sharded_subscriber(channel)` opens one to the shard that owns a sharded channel, for `ssubscribe`.
 
 A dropped socket is opened again before the next command, including a shard socket. The command that discovers the drop returns an error. `on_connection_lost` and `on_connection_restored` report the change. Set `ClientOptions::reconnect` to false and call `reconnect` yourself, or `set_reconnect_delay` to own the wait. Returning `None` stops the retry.
 

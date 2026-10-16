@@ -569,10 +569,14 @@ fn pubsub(host: &str, port: u16) -> Result<(), ruvio_client::Error> {
     println!("pmessage {:?}", pattern.pattern);
     listener.unsubscribe(&["{tour}:news"])?;
     listener.punsubscribe(&["{tour}:n*"])?;
-    listener.ssubscribe(&["{tour}:shard"])?;
+    // Sharded channels live on the shard that owns their slot: subscribe on a socket to that shard.
+    let mut sharded = commands.sharded_subscriber("{tour}:shard")?;
+
+    sharded.set_read_timeout(Some(Duration::from_secs(2)))?;
+    sharded.ssubscribe(&["{tour}:shard"])?;
     println!("spublish {}", commands.spublish("{tour}:shard", "sharded")?);
-    println!("smessage {}", listener.next_message()?.kind);
-    listener.sunsubscribe(&["{tour}:shard"])?;
+    println!("smessage {}", sharded.next_message()?.kind);
+    sharded.sunsubscribe(&["{tour}:shard"])?;
     println!("ping after subscribe {}", commands.ping()?);
 
     Ok(())

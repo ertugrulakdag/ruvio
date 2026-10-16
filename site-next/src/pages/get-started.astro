@@ -169,6 +169,14 @@ cd ruvio-$v-linux-x64
           from one seed address. The Go module is released by git tag and served by the Go module proxy; the others are
           published to their registries.
         </p>
+        <p>
+          Against a sharded server each client sends a command straight to the shard that owns its key. A pipeline
+          whose keys land on several shards is written to every shard before any reply is read, so it still costs one
+          round trip. The rules and
+          the measured cost per client are in <a href="/docs/client-behavior/#routing-cost">Client behavior</a>; the
+          C# client also has an opt-in reader thread per socket (<code>DedicatedReaderThread</code>) for the lowest CPU
+          per round trip.
+        </p>
         <ul class="client-list">
           {clients.map((c) => {
             const i = install[c.slug];

@@ -216,6 +216,13 @@ impl Client {
         self.open_pubsub(&["SUBSCRIBE"])
     }
 
+    /// A separate Pub/Sub socket for sharded channels: on a cluster it connects to the shard that
+    /// owns `channel`'s slot, so `ssubscribe` of channels in that slot (one hash tag) works there.
+    /// A [`Self::subscriber`] socket reaches one shard only.
+    pub fn sharded_subscriber(&self, channel: &str) -> Result<Self, Error> {
+        self.open_pubsub(&["SSUBSCRIBE", channel])
+    }
+
     /// Sends `SELECT`. Indexes run from 0 to the server's `databases` setting minus one (16 by default).
     pub fn select(&mut self, database: u32) -> Result<(), Error> {
         let index = Num::uint(u64::from(database));
