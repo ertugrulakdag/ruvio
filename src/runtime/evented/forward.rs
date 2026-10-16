@@ -266,7 +266,8 @@ impl Fabric {
     pub(super) fn release_publish(&self, me: usize, delivery: &PublishDelivery) {
         let port = &self.ports[me];
 
-        port.publish_bytes.fetch_sub(delivery.cost(), Ordering::AcqRel);
+        port.publish_bytes
+            .fetch_sub(delivery.cost(), Ordering::AcqRel);
         port.publish_queued.fetch_sub(1, Ordering::AcqRel);
     }
 

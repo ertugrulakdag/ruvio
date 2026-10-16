@@ -610,7 +610,9 @@ pub(super) async fn wait_for_durable_replicas(
     let shards = match state.forwarding.as_ref() {
         Some(forwarding) if state.single_port => forwarding.fabric.durability(),
         Some(forwarding) if forwarded_shards != 0 => {
-            let mut shards = forwarding.fabric.durability_of(forwarded_shards & !(1 << forwarding.me));
+            let mut shards = forwarding
+                .fabric
+                .durability_of(forwarded_shards & !(1 << forwarding.me));
 
             shards.push(ShardDurability {
                 wal: Arc::clone(&state.persistence),

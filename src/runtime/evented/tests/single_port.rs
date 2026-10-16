@@ -1754,19 +1754,25 @@ fn per_shard_wait_counts_the_shards_a_connection_forwarded_to() {
     let mut local = connect(address);
 
     local
-        .write_all(&resp(&[&[b"SET", key_on_shard(0, "wait-local").as_bytes(), b"v"]]))
+        .write_all(&resp(&[&[
+            b"SET",
+            key_on_shard(0, "wait-local").as_bytes(),
+            b"v",
+        ]]))
         .unwrap();
     read_exactly(&mut local, b"+OK\r\n");
-    local
-        .write_all(&resp(&[&[b"WAIT", b"1", b"300"]]))
-        .unwrap();
+    local.write_all(&resp(&[&[b"WAIT", b"1", b"300"]])).unwrap();
     read_exactly(&mut local, b":1\r\n");
 
     // The same port, a write forwarded to shard 1, which has no replica.
     let mut forwarded = connect(address);
 
     forwarded
-        .write_all(&resp(&[&[b"SET", key_on_shard(1, "wait-forwarded").as_bytes(), b"v"]]))
+        .write_all(&resp(&[&[
+            b"SET",
+            key_on_shard(1, "wait-forwarded").as_bytes(),
+            b"v",
+        ]]))
         .unwrap();
     read_exactly(&mut forwarded, b"+OK\r\n");
     forwarded

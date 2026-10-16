@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Salih Cantekin")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+66e5317a0b0bab77836a98a4a07c5cdf9ab0dc45")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+37c598a0a8f8d1d24056cc53c3508b31bc2ee14c")]
 [assembly: System.Reflection.AssemblyProductAttribute("CSharpFormat")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CSharpFormat")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
