@@ -182,7 +182,7 @@ fn keys_on_different_shards_are_rejected_until_cross_shard_support_lands() {
     let mut reply = [0u8; 14];
 
     client.read_exact(&mut reply).unwrap();
-    assert!(reply.starts_with(b"-ERR keys span"), "{reply:?}");
+    assert!(reply.starts_with(b"-CROSSSLOT"), "{reply:?}");
 
     stop.request();
     server.join().unwrap();

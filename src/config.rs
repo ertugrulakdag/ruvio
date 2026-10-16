@@ -55,14 +55,16 @@ impl Default for ReplicationConfig {
     }
 }
 
-/// How `shards > 1` exposes its listeners.
+/// How `shards > 1` exposes its listeners. In both modes a command whose key another shard
+/// owns is forwarded to that shard.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PortMode {
-    /// One port per shard (`port + i`), `MOVED` redirects and cluster discovery.
-    PerShard,
-    /// One port; connections are spread over shards and commands are forwarded
-    /// to the shard that owns the key.
+    /// One port per shard (`port + i`) and cluster discovery: a cluster client connects to
+    /// the owner of each slot and no command pays a hop; any other client works on any port.
+    /// The default.
     #[default]
+    PerShard,
+    /// One port; connections are spread over shards. Keyless commands run on every shard.
     Single,
 }
 
@@ -306,7 +308,7 @@ impl AppConfig {
             self.persistence.sync_worker = value.parse().map_err(str::to_owned)?;
         }
         if let Some(value) = get("RUVIO_WAL_PREFILL") {
-            self.persistence.wal_prefill = parse_bool(&value, "RUVIO_WAL_PREFILL")?;
+            self.persistence.wal_prefill = value.parse().map_err(str::to_owned)?;
         }
         apply_u64(
             &get,
@@ -926,7 +928,7 @@ impl AppConfig {
             ),
             (
                 "wal-prefill".into(),
-                yes_no(self.persistence.wal_prefill),
+                self.persistence.wal_prefill.to_string(),
             ),
             ("write-timeout-ms".into(), millis(self.timeouts.write)),
             (

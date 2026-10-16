@@ -43,4 +43,4 @@ CI runs the same tests on macOS, Linux, and Windows.
 
 Windows uses the same evented process, through IOCP. It is a supported host, not a separate adapter.
 
-Multi-shard mode uses consecutive ports and `MOVED` redirects rather than silently placing independent keyspaces behind `SO_REUSEPORT`. This preserves deterministic ownership. Static `CLUSTER SLOTS` and `CLUSTER NODES` discovery and separate, asynchronous per-shard WAL-tail replication (including checkpoint resync for a covered gap) are implemented. Cluster membership changes, automatic failover, and online slot migration are not.
+Multi-shard mode uses consecutive ports with cluster discovery, and forwards a misrouted command to its owner, rather than silently placing independent keyspaces behind `SO_REUSEPORT`. This preserves deterministic ownership. Static `CLUSTER SLOTS` and `CLUSTER NODES` discovery and separate, asynchronous per-shard WAL-tail replication (including checkpoint resync for a covered gap) are implemented. Cluster membership changes, automatic failover, and online slot migration are not.

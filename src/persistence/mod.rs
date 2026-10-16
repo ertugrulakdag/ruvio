@@ -220,6 +220,53 @@ impl fmt::Display for SyncWorkerMode {
     }
 }
 
+/// Whether a WAL segment is extended ahead of the cursor and zero-filled on a helper thread
+/// (Linux only). `Auto` does it for `always`, where a sync of unwritten extents was measured
+/// at 2.0 ms against 0.8 ms; `everysec` syncs once a second and the zero-fill only doubled
+/// the bytes a throughput-capped disk saw (SET 2.1M/s against 4.1M/s without it), so `Auto`
+/// skips it there.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WalPrefill {
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+impl WalPrefill {
+    pub fn enabled_for(self, profile: DurabilityProfile) -> bool {
+        match self {
+            Self::Auto => profile == DurabilityProfile::Always,
+            Self::On => true,
+            Self::Off => false,
+        }
+    }
+}
+
+impl fmt::Display for WalPrefill {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+            Self::Off => "off",
+        })
+    }
+}
+
+impl FromStr for WalPrefill {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "on" | "true" | "yes" | "1" => Ok(Self::On),
+            "off" | "false" | "no" | "0" => Ok(Self::Off),
+            _ => Err("wal_prefill must be auto, on, or off"),
+        }
+    }
+}
+
 impl FromStr for SyncWorkerMode {
     type Err = &'static str;
 
@@ -251,12 +298,8 @@ pub struct PersistenceConfig {
     /// Most WAL a connected replica may hold back from compaction; past it the hold is
     /// dropped and the replica resyncs from a snapshot. `0` means no limit.
     pub replica_retain_max_bytes: u64,
-    /// Linux only: extend each WAL segment ahead of the write cursor and fill the new
-    /// space with zeros on a helper thread, so a sync never waits for an extent
-    /// conversion. Every logged byte then reaches the disk twice (zeros, then the record),
-    /// which halves the WAL bandwidth a throughput-capped disk leaves. `false` writes as
-    /// the file grows. Env `RUVIO_WAL_PREFILL`; a measurement knob, not a file key.
-    pub wal_prefill: bool,
+    /// See [`WalPrefill`]. Env `RUVIO_WAL_PREFILL`; not a file key.
+    pub wal_prefill: WalPrefill,
 }
 
 impl PersistenceConfig {
@@ -304,7 +347,7 @@ impl Default for PersistenceConfig {
             snapshot_min_mutations: 0,
             cdc_retain_bytes: 0,
             replica_retain_max_bytes: 1 << 30,
-            wal_prefill: true,
+            wal_prefill: WalPrefill::Auto,
         }
     }
 }

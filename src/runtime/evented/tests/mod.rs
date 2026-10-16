@@ -265,13 +265,16 @@ fn serve_two_shards_with(
     let cluster1 = cluster;
     let hot0 = hot_store.clone();
     let hot1 = hot_store;
+    let fabric = Fabric::new(2);
+    let fabric0 = Some(fabric.clone());
+    let fabric1 = Some(fabric);
     let t0 = thread::spawn(move || {
         serve_unlocked(
             Some(first),
             cfg0,
             stop0,
             Some(route0),
-            None,
+            fabric0,
             cluster0,
             hot0,
             false,
@@ -285,7 +288,7 @@ fn serve_two_shards_with(
             cfg1,
             stop1,
             Some(route1),
-            None,
+            fabric1,
             cluster1,
             hot1,
             false,

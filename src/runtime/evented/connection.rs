@@ -717,13 +717,6 @@ pub(super) async fn handle_client(
                         continue;
                     }
 
-                    if state.cluster_view().is_some()
-                        && let Some(slot) = hot_command_slot(&command)
-                        && redirect_if_remote(&mut output, state.cluster_view(), slot)?
-                    {
-                        continue;
-                    }
-
                     if hot_command_mutates_store(&command) {
                         bump_mutations(&state);
                     }
@@ -801,14 +794,14 @@ pub(super) async fn handle_client(
                             {
                                 let simple =
                                     wal_group_eligible(WalGroupCommand::Parsed(&command), &session);
-                                let owner = command_owner(forwarding, &command);
-                                let fan = fan_kind(&command).is_some();
+                                let owner = command_owner(&state, forwarding, &command);
+                                let fan = fan_for(&state, &command).is_some();
                                 // Commands that leave this shard (or that SCAN answers for
                                 // every shard) are checked here: `gate` never sees them. Fan
                                 // commands also run locally through `gate`, which counts the
                                 // rate there; inside MULTI the command is queued locally.
                                 let leaves = !matches!(owner, Owner::Local)
-                                    || matches!(command, Command::Scan { .. });
+                                    || (state.single_port && matches!(command, Command::Scan { .. }));
 
                                 if leaves || fan {
                                     let counted = !session.is_multi();
@@ -889,7 +882,7 @@ pub(super) async fn handle_client(
                                     )
                                     .await?;
 
-                                    if let Some(fan) = fan_kind(&command) {
+                                    if let Some(fan) = fan_for(&state, &command) {
                                         let frame = &input[consumed..consumed + frame_length];
                                         let mut local = BoundedOutput::with_capacity(
                                             0,
@@ -1903,7 +1896,17 @@ async fn dispatch_inner<'s>(
                 return Ok(());
             }
 
-            Ok(Some(slot)) if redirect_if_remote(output, state.cluster_view(), slot)? => {
+            // A key of another shard is forwarded there, never redirected. Only a sharded
+            // channel keeps `MOVED`: a subscription cannot be forwarded, so a cluster client
+            // subscribes on the owner, as with Redis Cluster.
+            Ok(Some(slot))
+                if matches!(
+                    command,
+                    Command::ShardPublish { .. }
+                        | Command::ShardSubscribe(_)
+                        | Command::ShardUnsubscribe(_)
+                ) && redirect_if_remote(output, state.cluster_view(), slot)? =>
+            {
                 session.mark_queue_error();
 
                 return Ok(());

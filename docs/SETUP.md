@@ -186,7 +186,7 @@ RUVIO_ADVERTISE_HOST=127.0.0.1 \
 cargo run --release --bin ruvio
 ```
 
-Use `redis-cli -c` so the client follows `MOVED` responses. Multi-core mode is cluster-inspired rather than a complete Redis Cluster implementation.
+Any port serves every key: a misrouted command is forwarded to its owner. `redis-cli -c` or a cluster-aware client connects to each shard directly and skips that hop. Multi-core mode is cluster-inspired rather than a complete Redis Cluster implementation.
 
 `cargo build` is the evented server. `--no-default-features` drops mimalloc and keeps the same runtime.
 

@@ -13,8 +13,8 @@ listener is opened. Unknown TOML fields are rejected.
 ```toml
 address = "127.0.0.1:6379"
 shards = 1
-port_mode = "single"   # shards > 1: "single" = one port, commands forwarded to the owning shard; "per-shard" = port + i per shard with MOVED and cluster discovery
-advertised_host = "127.0.0.1"  # host in CLUSTER SLOTS/SHARDS/NODES and MOVED
+port_mode = "per-shard"  # shards > 1: "per-shard" (default) = port + i per shard and cluster discovery; "single" = one port only. Both forward a key's command to its owning shard
+advertised_host = "127.0.0.1"  # host in CLUSTER SLOTS/SHARDS/NODES
 # advertised_port = 6379       # shard 0's announced port; omitted = bind port
 hot_keys = []          # Redis globs; empty keeps every key on its shard
 shutdown_grace_ms = 30000
@@ -148,7 +148,7 @@ Each variable overrides one file setting, and a command-line flag, where there i
 | `RUVIO_WAL_SYNC_INTERVAL_MS` | `--wal-sync-interval-ms` | `persistence.sync_interval_ms` | |
 | `RUVIO_EXPERIMENTAL_SYNC_WORKER` | | `persistence.sync_worker` | Older boolean form (`true` = `on`); `RUVIO_SYNC_WORKER` wins |
 | `RUVIO_SYNC_WORKER` | | `persistence.sync_worker` | |
-| `RUVIO_WAL_PREFILL` | | | Linux only, default `true`: zero-fill WAL segments ahead of the cursor on a helper thread. `false` is a measurement knob for throughput-capped disks (every logged byte otherwise reaches the disk twice); `CONFIG GET wal-prefill` shows it |
+| `RUVIO_WAL_PREFILL` | | | `auto` (default), `on` or `off`. Linux only: zero-fill WAL segments ahead of the cursor on a helper thread. `auto` does it for `always` only; under `everysec` the zero-fill doubled the bytes a throughput-capped disk saw and halved SET throughput. `CONFIG GET wal-prefill` shows the mode |
 | `RUVIO_SNAPSHOT_MAX_BYTES` | `--snapshot-max-bytes` | `persistence.snapshot_max_bytes` | |
 | `RUVIO_SNAPSHOT_JOURNAL_BYTES` | `--snapshot-journal-bytes` | `persistence.snapshot_journal_bytes` | |
 | `RUVIO_SNAPSHOT_INTERVAL_MS` | `--snapshot-interval-ms` | `persistence.snapshot_interval_ms` | |
@@ -585,13 +585,21 @@ collect events from every shard. The Operator Pub/Sub screen has matching
 expired/evicted listeners; choose the database and shard to monitor there.
 
 `shards` (environment `RUVIO_SHARDS`, flag `--shards`) starts that many
-shard owners in one process. Shard `i` listens on the bind port plus `i`, owns
-slots `i * 16384 / shards` up to the next shard's first slot, and answers
-`MOVED` for a key it does not own. Cluster-aware clients find the other shards
-from `CLUSTER SLOTS`, `CLUSTER SHARDS`, or `CLUSTER NODES`, so an application
-only needs the first address. `advertised_host` (`RUVIO_ADVERTISE_HOST`,
-`--advertised-host`, default `127.0.0.1`) is the host those replies and `MOVED`
-name. `advertised_port` (`RUVIO_ADVERTISE_PORT`, `--advertised-port`) is the
+shard owners in one process. With the default `port_mode = "per-shard"` shard
+`i` listens on the bind port plus `i` and owns slots `i * 16384 / shards` up to
+the next shard's first slot. A command for a key another shard owns is forwarded
+to that shard and answered on the connection it came in on; the server never
+sends `MOVED` (sharded Pub/Sub channels are the exception: `SSUBSCRIBE` on the
+wrong shard is redirected, as a subscription cannot be forwarded). Cluster-aware
+clients find the other shards from `CLUSTER SLOTS`, `CLUSTER SHARDS`, or
+`CLUSTER NODES`, connect to each owner and pay no hop; any other client works on
+any one port, with the hop. `port_mode = "single"` opens one port only, spreads
+connections over the shards, runs keyless commands (`DBSIZE`, `KEYS`, `FLUSHALL`,
+`SCAN`) across every shard and lets `WAIT` cover every shard; in `per-shard`
+those stay per shard, as in Redis Cluster, and cluster clients fan them out
+themselves. Classic `PUBLISH` reaches subscribers on every shard in both modes.
+`advertised_host` (`RUVIO_ADVERTISE_HOST`, `--advertised-host`, default
+`127.0.0.1`) is the host the cluster replies name. `advertised_port` (`RUVIO_ADVERTISE_PORT`, `--advertised-port`) is the
 port they name for shard 0; shard `i` is that port plus `i`. Leave it unset
 when clients reach the bind ports directly. Set both when a container or load
 balancer publishes the shards elsewhere, for example `-p 7000-7003:6379-6382`

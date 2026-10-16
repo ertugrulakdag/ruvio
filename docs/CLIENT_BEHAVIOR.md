@@ -22,7 +22,7 @@ What the six clients do when a cluster redirects, a command spans slots, or a so
 | Commands split across slots | `MGET`, `MSET`, `DEL`, `EXISTS`, `UNLINK` and `TOUCH` with keys in several slots are sent per slot and the replies merged (`MGET` keeps key order, counts are summed, `MSET` answers `OK`). Not atomic |
 | Split commands inside a pipeline | Split the same way; the merged reply sits at the command's index and the other replies keep their order. A transaction must stay in one slot |
 | Other commands across slots | `RENAME`, `RENAMENX`, `COPY`, `LMOVE`, `SMOVE`, `SINTERSTORE`, `BITOP`, `EVAL` and every other command that is not split fail with `CROSSSLOT` before anything is sent; nothing is emulated |
-| `MOVED` | The slot is pointed at the named node and the command is sent there, at most 3 times; a fourth `MOVED` is returned. The whole slot map is reloaded only when the named node is unknown, or from the command's second `MOVED` on |
+| `MOVED` | The slot is pointed at the named node and the command is sent there, at most 3 times; a fourth `MOVED` is returned. The whole slot map is reloaded only when the named node is unknown, or from the command's second `MOVED` on. Ruvio forwards a misrouted key instead of answering `MOVED` (only a sharded Pub/Sub channel is redirected), so against Ruvio this path is exercised by the clients' scripted fake-server tests, not live |
 | `ASK` | Not followed; no client sends `ASKING`. Ruvio has no online slot migration, so the server does not send `ASK` |
 | Socket dropped before any reply byte | The command fails and is never sent again, reads included. The socket is opened again for the next command |
 | Pipelines in a cluster | Grouped per node, replies returned in the original order |

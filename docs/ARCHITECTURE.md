@@ -24,7 +24,7 @@ Redis-compatible key hashing selects a slot and its static shard owner. Online r
 
 Linux, macOS, and Windows run the same evented runtime. The command engine does not depend on epoll, kqueue, or IOCP. See [PORTABILITY](PORTABILITY.md).
 
-Multi-shard mode divides the Redis-compatible 16,384 hash slots across shard owners. Each executor listens on a consecutive port and owns its shard exclusively. Requests arriving at the wrong shard receive `MOVED`, while multi-key requests spanning slots receive `CROSSSLOT`. `CLUSTER SLOTS` / `SHARDS` / `NODES` / `INFO` / `MYID` / `KEYSLOT` describe that static map. Official clients take one seed address and route by slot. There is no cluster bus, slot migration, or failover.
+Multi-shard mode divides the Redis-compatible 16,384 hash slots across shard owners. Each executor listens on a consecutive port and owns its shard exclusively. A request arriving at a shard that does not own its key is forwarded to the owner (raw frame in, reply bytes back, data still touched by one thread), while multi-key requests spanning slots receive `CROSSSLOT`; `MOVED` is only sent for a sharded Pub/Sub channel, since a subscription cannot be forwarded. `CLUSTER SLOTS` / `SHARDS` / `NODES` / `INFO` / `MYID` / `KEYSLOT` describe that static map. Official clients take one seed address and route by slot. There is no cluster bus, slot migration, or failover.
 
 ## Network I/O
 

@@ -225,11 +225,11 @@ The differences are about ownership, the durability contract, and how much of th
 | Runtime | C | C++ | .NET, Tsavorite | Rust, in-memory shard + WAL |
 | Wire | RESP2/3, full surface | Redis and Memcached | Redis-compatible | RESP2 subset, listed in CI |
 | Hot path | Shared engine, I/O threads | Single-node throughput | Separate string and object stores | One owner per shard, no lock on apply |
-| Cluster | Bus, migration, failover | Its own scale story | Cluster-capable store | Static 16,384 slots, `MOVED`, no election |
+| Cluster | Bus, migration, failover | Its own scale story | Cluster-capable store | Static 16,384 slots, misrouted keys forwarded, no election |
 | Durability | RDB, AOF, combinations | Snapshots | Tsavorite on disk | `memory`, `snapshot`, `everysec`, `always` |
 | Keep the other when | You need Sentinel, modules, or a command Ruvio does not list | You want that single-node scale claim | You want a .NET stack and Tsavorite as the store | The written subset and the shard contract are enough |
 
-Not claimed: a cluster bus, online slot migration, failover, replica acknowledgement, or a hardware latency number. Replication copies a WAL tail to a bounded set of replicas. Classic Pub/Sub stays on the shard that accepted the connection.
+Not claimed: a cluster bus, online slot migration, failover, replica acknowledgement, or a hardware latency number. Replication copies a WAL tail to a bounded set of replicas. Classic `PUBLISH` reaches subscribers on every shard of one process, not other processes.
 
 ### Docker Desktop and memory density
 

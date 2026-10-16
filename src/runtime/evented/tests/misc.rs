@@ -115,7 +115,7 @@ fn evented_cluster_mode_keeps_database_zero_only() {
                     &[b"SWAPDB", b"0", b"1"],
                 ])
             ),
-            b"+OK\r\n-ERR SELECT is not allowed in cluster mode\r\n-ERR SWAPDB is not allowed in cluster mode\r\n"
+            b"+OK\r\n-ERR SELECT is not allowed in cluster mode\r\n-ERR SWAPDB is not supported with more than one shard\r\n"
         );
     stop.request();
     left_server.join().unwrap();

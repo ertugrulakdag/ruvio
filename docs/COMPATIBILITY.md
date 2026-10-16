@@ -288,7 +288,7 @@ CI runs the first-party `ruvio-client` and `Ruvio.Client` tests. See
 
 - Slots use the Redis CRC16 algorithm over 16,384 slots.
 - Redis hash tags such as `{account42}` are supported.
-- A request sent to the wrong shard receives `MOVED`.
+- A request sent to the wrong shard is forwarded to the owner and answered on the same connection; only `SSUBSCRIBE`/`SPUBLISH` on the wrong shard receive `MOVED`.
 - A multi-key request spanning slots receives `CROSSSLOT`.
 - Topology is static. Membership, migration, and failover are not implemented.
   Asynchronous WAL tail replication is a separate primary and its replicas, not

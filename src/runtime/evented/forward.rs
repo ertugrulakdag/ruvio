@@ -1105,12 +1105,23 @@ pub(super) const SWAPDB_SHARDS_REPLY: &[u8] =
     b"-ERR SWAPDB is not supported with more than one shard\r\n";
 pub(super) const FAN_IN_MULTI_REPLY: &[u8] =
     b"-ERR this command runs on every shard and cannot be queued in MULTI with more than one shard\r\n";
-pub(super) const SPLIT_REPLY: &[u8] =
-    b"-ERR keys span shards; cross-shard multi-key commands are not supported yet\r\n";
-pub(super) fn command_owner(forwarding: &Forwarding, command: &Command<'_>) -> Owner {
+/// Keys of one command on different shards: the Redis Cluster answer, which every client
+/// recognises (a client that routes itself refuses the same command before sending it).
+pub(super) const SPLIT_REPLY: &[u8] = CROSSSLOT_REPLY;
+/// Which shard runs `command`. A hot key lives in the process-wide hot store, so it never
+/// decides the owner: a command on hot keys alone runs here, in order with the hot path.
+pub(super) fn command_owner(
+    state: &ShardState,
+    forwarding: &Forwarding,
+    command: &Command<'_>,
+) -> Owner {
     let mut owner = None;
+    let hot = state.hot_store.is_some() && !state.published_config.hot_keys.is_empty();
 
     for key in crate::routing::command_keys(command) {
+        if hot && crate::hot_store::matches_hot_key(&state.published_config.hot_keys, key) {
+            continue;
+        }
         let found = forwarding.fabric.owner_of(key);
 
         match owner {
@@ -1185,6 +1196,14 @@ pub(super) enum Fan {
     AnyKey,
     /// `JSON.FIND`: the shards' ascending key pages merged, cut to `COUNT`.
     SortedKeys(usize),
+}
+
+/// `fan_kind` as this shard applies it: in single-port mode every keyless command in the
+/// list runs on every shard; in per-shard mode cluster clients send `DBSIZE`, `KEYS`,
+/// `FLUSHALL` and the others to each node themselves, so only `PUBLISH` fans out (a
+/// subscriber may sit on any shard, and Redis Cluster broadcasts it too).
+pub(super) fn fan_for(state: &ShardState, command: &Command<'_>) -> Option<Fan> {
+    fan_kind(command).filter(|_| state.single_port || matches!(command, Command::Publish { .. }))
 }
 
 pub(super) fn fan_kind(command: &Command<'_>) -> Option<Fan> {
@@ -1573,7 +1592,7 @@ pub(super) async fn forward_special(
             pattern,
             count,
             type_name,
-        } => {
+        } if state.single_port => {
             scan_all(
                 state,
                 forwarder,

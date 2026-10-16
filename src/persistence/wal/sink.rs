@@ -123,7 +123,8 @@ impl WalSink {
         let backlog_floor = Arc::new(AtomicU64::new(u64::MAX));
         let replica_count = Arc::new(AtomicU64::new(0));
         let sync_error = Arc::new(Mutex::new(None));
-        let prefill_enabled = cfg!(target_os = "linux") && config.wal_prefill;
+        let prefill_enabled =
+            cfg!(target_os = "linux") && config.wal_prefill.enabled_for(config.profile);
         let sync_worker = if config.sync_worker_active {
             Some(super::sync_worker::SyncWorker::new(
                 Arc::clone(&durable),

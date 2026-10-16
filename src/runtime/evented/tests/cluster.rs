@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn evented_two_shards_redirect_and_reject_cross_slot_keys() {
+fn evented_two_shards_forward_and_reject_cross_slot_keys() {
     use crate::routing::hash_slot;
 
     let (left_addr, right_addr, stop, left_server, right_server) = serve_two_shards();
@@ -51,15 +51,10 @@ fn evented_two_shards_redirect_and_reject_cross_slot_keys() {
         request(owner, b"*2\r\n$3\r\nGET\r\n$12\r\n{left}:value\r\n"),
         b"$6\r\nstored\r\n"
     );
-    let moved = String::from_utf8(request(
-        other,
-        b"*2\r\n$3\r\nGET\r\n$12\r\n{left}:value\r\n",
-    ))
-    .unwrap();
-
-    assert!(
-        moved.starts_with(&format!("-MOVED {slot} 127.0.0.1:{}", owner.port())),
-        "{moved}"
+    // The other shard forwards the key to its owner instead of answering MOVED.
+    assert_eq!(
+        request(other, b"*2\r\n$3\r\nGET\r\n$12\r\n{left}:value\r\n"),
+        b"$6\r\nstored\r\n"
     );
 
     let cross = String::from_utf8(request(
@@ -113,10 +108,11 @@ fn evented_cluster_discovery_reports_shards_and_the_advertised_port() {
 
     assert!(slots.contains("127.0.0.1\r\n:17001\r\n"), "{slots}");
 
-    let moved =
-        String::from_utf8(request(left_addr, b"*2\r\n$3\r\nGET\r\n$7\r\nsomekey\r\n")).unwrap();
-
-    assert_eq!(moved, "-MOVED 11058 127.0.0.1:17001\r\n");
+    // Slot 11058 belongs to the other shard; the command is forwarded there, not redirected.
+    assert_eq!(
+        request(left_addr, b"*2\r\n$3\r\nGET\r\n$7\r\nsomekey\r\n"),
+        b"$-1\r\n"
+    );
 
     let server = String::from_utf8(request(left_addr, &resp(&[&[b"INFO"]]))).unwrap();
 
@@ -490,7 +486,7 @@ fn evented_hot_keys_save_publishes_after_hot_partition() {
 }
 
 #[test]
-fn evented_hot_keys_off_still_moves_prefixed_keys() {
+fn evented_hot_keys_off_still_shards_prefixed_keys() {
     use crate::routing::hash_slot;
 
     let (left_addr, right_addr, stop, left_server, right_server) = serve_two_shards();
@@ -506,12 +502,10 @@ fn evented_hot_keys_off_still_moves_prefixed_keys() {
         ),
         b"+OK\r\n"
     );
-    let moved =
-        String::from_utf8(request(other, b"*2\r\n$3\r\nGET\r\n$8\r\nlock:foo\r\n")).unwrap();
-
-    assert!(
-        moved.starts_with(&format!("-MOVED {slot} 127.0.0.1:{}", owner.port())),
-        "{moved}"
+    // Without `hot_keys` the prefix is an ordinary key: owned by one shard, forwarded by the other.
+    assert_eq!(
+        request(other, b"*2\r\n$3\r\nGET\r\n$8\r\nlock:foo\r\n"),
+        b"$4\r\nheld\r\n"
     );
     stop.request();
     left_server.join().unwrap();
@@ -650,7 +644,10 @@ fn evented_shards_keep_keys_scripts_and_subscribers_local() {
             .windows(right_key.len())
             .any(|window| window == right_key.as_bytes())
     );
-    assert!(request(left, &resp(&[&[b"GET", right_key.as_bytes()]])).starts_with(b"-MOVED"),);
+    assert_eq!(
+        request(left, &resp(&[&[b"GET", right_key.as_bytes()]])),
+        b"$1\r\nv\r\n"
+    );
     assert!(
         request(
             left,
@@ -702,32 +699,23 @@ fn evented_shards_keep_keys_scripts_and_subscribers_local() {
 
     subscriber.read_exact(&mut subscribed).unwrap();
     assert_eq!(subscribed, expected);
+    // Classic PUBLISH reaches a subscriber on any shard (Redis Cluster broadcasts it too).
+    let expected = crate::pubsub::encode_message(b"news", b"hello");
+    let mut message = vec![0u8; expected.len()];
+
     assert_eq!(
         request(left, &resp(&[&[b"PUBLISH", b"news", b"hello"]])),
-        b":0\r\n"
+        b":1\r\n"
     );
-    subscriber
-        .set_read_timeout(Some(Duration::from_millis(150)))
-        .unwrap();
-    let mut quiet = [0u8; 1];
-    let missed = subscriber.read(&mut quiet).unwrap_err();
-
-    assert!(
-        matches!(missed.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock),
-        "{missed}"
-    );
+    subscriber.read_exact(&mut message).unwrap();
+    assert_eq!(message, expected);
     assert_eq!(
         request(right, &resp(&[&[b"PUBLISH", b"news", b"hello"]])),
         b":1\r\n"
     );
-    subscriber
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .unwrap();
-    let expected = crate::pubsub::encode_message(b"news", b"hello");
-    let mut message = vec![0u8; expected.len()];
-
     subscriber.read_exact(&mut message).unwrap();
     assert_eq!(message, expected);
+    let _ = ErrorKind::TimedOut;
     let info = String::from_utf8(request(right, &resp(&[&[b"INFO"]]))).unwrap();
     let queued_peak = info
         .lines()
@@ -763,7 +751,7 @@ fn evented_shards_flush_locally_and_share_one_acl_directory() {
         ]),
     );
 
-    assert!(mixed.starts_with(b"$1\r\nv\r\n-MOVED"), "{mixed:?}");
+    assert_eq!(mixed, b"$1\r\nv\r\n$1\r\nv\r\n", "{mixed:?}");
     assert_eq!(
         request(left, &resp(&[&[b"MOVE", left_key.as_bytes(), b"1"]])),
         b"-ERR MOVE is not allowed in cluster mode\r\n"
@@ -873,7 +861,10 @@ fn evented_shards_run_same_slot_work_and_route_sharded_channels() {
         )
         .starts_with(b"-CROSSSLOT")
     );
-    assert!(request(right, &resp(&[&[b"GET", alpha.as_bytes()]])).starts_with(b"-MOVED"));
+    assert_eq!(
+        request(right, &resp(&[&[b"GET", alpha.as_bytes()]])),
+        b"$2\r\nva\r\n"
+    );
     assert_eq!(
         request(
             left,
@@ -1490,7 +1481,7 @@ fn evented_two_shards_back_to_back_saves_do_not_wait_out_the_retry_throttle() {
 }
 
 #[test]
-fn evented_exec_aborts_after_a_queued_command_was_redirected() {
+fn evented_exec_fails_when_queued_keys_span_shards() {
     let (left_addr, _right_addr, stop, left_server, right_server) = serve_two_shards();
     let local = key_on_shard(0, "tx");
     let remote = key_on_shard(1, "tx");
@@ -1507,14 +1498,12 @@ fn evented_exec_aborts_after_a_queued_command_was_redirected() {
     .unwrap();
     let replies: Vec<&str> = text.split_terminator("\r\n").collect();
 
-    assert_eq!(replies[..2], ["+OK", "+QUEUED"], "{text}");
-    assert!(replies[2].starts_with("-MOVED"), "{text}");
+    // Both SETs queue; EXEC refuses the transaction because its keys hash to different
+    // slots, and nothing ran.
+    assert_eq!(replies[..3], ["+OK", "+QUEUED", "+QUEUED"], "{text}");
     assert_eq!(
         replies[3..],
-        [
-            "-EXECABORT Transaction discarded because of previous errors.",
-            ":0"
-        ],
+        ["-CROSSSLOT Keys in request do not hash to the same slot", ":0"],
         "{text}"
     );
     stop.request();

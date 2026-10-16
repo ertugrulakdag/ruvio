@@ -327,7 +327,10 @@ async def test_watch_transaction_helper(cc):
 # --------------------------------------------------------------------------- MOVED recovery
 
 
-async def test_moved_recovery_from_a_fully_stale_table(cc, shards):
+async def test_stale_table_still_gets_the_right_answers(cc, shards):
+    # Ruvio forwards a misrouted key to its owner instead of answering MOVED, so every
+    # command below succeeds on a wrong table; MOVED handling itself is covered by the
+    # fake-server unit tests.
     keys = spread_keys("mv", 30)
     for k in keys:
         await cc.set(k, k)
@@ -335,7 +338,7 @@ async def test_moved_recovery_from_a_fully_stale_table(cc, shards):
     truth = list(st.slots)
     st.slots[:] = [(s + 1) % 3 for s in truth]  # every slot now points at a wrong node
     for k in keys[:15]:
-        assert await cc.get(k) == k  # MOVED -> patch / refresh -> follow (at most 3)
+        assert await cc.get(k) == k
     st.slots[:] = [(s + 2) % 3 for s in truth]
     p = pipe(cc)
     for k in keys:
@@ -349,10 +352,7 @@ async def test_moved_recovery_from_a_fully_stale_table(cc, shards):
     assert await maybe(t.execute()) == [True, "1"]
     st.slots[:] = [(s + 1) % 3 for s in truth]
     assert await cc.delete(*keys) == 30
-    # one more write after the storm proves the table converged
-    assert st.slots[cl.key_slot(keys[0])] == truth[cl.key_slot(keys[0])] or await cc.set(keys[0], 1)
-    await cc.set(keys[0], 1)
-    assert shard_of(shards, keys[0]) == state(cc).slots[cl.key_slot(keys[0])]
+    st.slots[:] = truth
 
 
 # --------------------------------------------------------------------------- helpers on the cluster client

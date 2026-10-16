@@ -155,6 +155,10 @@ struct ShardState {
     tls: Option<TlsAcceptor>,
     route: Option<ClusterRoute>,
     forwarding: Option<Forwarding>,
+    /// `port_mode = "single"`: one port, connections spread over the shards, keyless commands
+    /// fanned to every shard and `SCAN` walked across all of them. Off in `per-shard` mode,
+    /// where every shard has its own port and cluster clients do that themselves.
+    single_port: bool,
     cluster: Option<Arc<ClusterCheckpointCoordinator>>,
     last_submitted_sequence: Cell<u64>,
     compacted_generation: Cell<u64>,
@@ -174,7 +178,7 @@ impl ShardState {
 
     /// The route as cluster clients see it: absent in single-port mode.
     fn cluster_view(&self) -> Option<&ClusterRoute> {
-        if self.forwarding.is_some() {
+        if self.single_port {
             None
         } else {
             self.route.as_ref()
@@ -527,11 +531,14 @@ fn run_cluster(config: &AppConfig, shutdown: ShutdownToken, force: bool) -> io::
     }
     let mut joins = Vec::with_capacity(config.shards);
     let single = config.port_mode == crate::config::PortMode::Single;
-    let fabric = single.then(|| Fabric::new(config.shards));
+    // Both modes forward a command to the shard that owns its key; `single` also spreads
+    // connections over the shards from one port, `per-shard` lets cluster clients connect
+    // to the owner directly and never sends `MOVED`.
+    let fabric = Some(Fabric::new(config.shards));
 
     // One acceptor hands each std TcpStream to a shard. SO_REUSEPORT does not balance
     // connections on macOS and needs socket2.
-    if let Some(fabric) = &fabric {
+    if single && let Some(fabric) = &fabric {
         let acceptor = bind_listener(base)?;
         let fabric = fabric.clone();
         let limiter = ConnectionLimiter::new(config.connections);
@@ -929,6 +936,7 @@ async fn serve_async(
         peak_pubsub_queue_frames: Rc::new(Cell::new(0)),
         peak_pubsub_queue_bytes: Rc::new(Cell::new(0)),
         tls,
+        single_port: std_listener.is_none() && fabric.is_some(),
         forwarding: fabric.map(|fabric| Forwarding::new(fabric, shard_id as usize)),
         route,
         cluster,

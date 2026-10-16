@@ -23,8 +23,9 @@ two clients, each opened with its own address.
 
 `shards` (default 1) starts that many shard owners in one process. Shard `i`
 listens on the bind port plus `i` and owns a range of the 16,384 hash slots.
-A shard answers `MOVED` for a key it does not own and `CROSSSLOT` for a
-multi-key command that spans slots.
+A command for a key another shard owns is forwarded to that shard and
+answered on the same connection; a multi-key command that spans slots gets
+`CROSSSLOT`. The server does not send `MOVED` for keys.
 
 The application does not pick a shard. It gives the client one address. On
 connect, the client sends `CLUSTER SLOTS`, learns every shard, opens a socket
