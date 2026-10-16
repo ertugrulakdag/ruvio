@@ -2489,7 +2489,50 @@ fn peer_shut_down(peer: &TcpStream) -> bool {
     ready > 0 && poll.revents & (libc::POLLRDHUP | libc::POLLHUP | libc::POLLERR) != 0
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS has no `POLLRDHUP`; the TCP state says whether the peer's FIN (or a reset) arrived,
+/// whatever is still unread.
+#[cfg(target_vendor = "apple")]
+fn peer_shut_down(peer: &TcpStream) -> bool {
+    use std::os::fd::AsRawFd;
+
+    // netinet/tcp_fsm.h: CLOSED, and the states reached after the peer's FIN.
+    const TCPS_CLOSED: u8 = 0;
+    const TCPS_CLOSE_WAIT: u8 = 5;
+    const TCPS_CLOSING: u8 = 7;
+    const TCPS_LAST_ACK: u8 = 8;
+    const TCPS_TIME_WAIT: u8 = 10;
+
+    let mut info = std::mem::MaybeUninit::<libc::tcp_connection_info>::zeroed();
+    let mut length = std::mem::size_of::<libc::tcp_connection_info>() as libc::socklen_t;
+
+    // SAFETY: `info` is a writable buffer of `length` bytes that lives across the call, and
+    // `length` is its exact size; the kernel writes at most that much.
+    #[allow(unsafe_code)]
+    let result = unsafe {
+        libc::getsockopt(
+            peer.as_raw_fd(),
+            libc::IPPROTO_TCP,
+            libc::TCP_CONNECTION_INFO,
+            info.as_mut_ptr().cast(),
+            &mut length,
+        )
+    };
+
+    if result != 0 {
+        return false;
+    }
+
+    // SAFETY: zero-initialised, then filled by the kernel: every field is a plain integer.
+    #[allow(unsafe_code)]
+    let state = unsafe { info.assume_init() }.tcpi_state;
+
+    matches!(
+        state,
+        TCPS_CLOSED | TCPS_CLOSE_WAIT | TCPS_CLOSING | TCPS_LAST_ACK | TCPS_TIME_WAIT
+    )
+}
+
+#[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
 fn peer_shut_down(_peer: &TcpStream) -> bool {
     false
 }

@@ -24,6 +24,8 @@ fn park_over_tls_and_leave(address: SocketAddr, cert: &std::path::Path, clean_cl
     }
 }
 
+// A hang-up behind unread bytes is seen only where the OS reports the FIN (Linux, macOS).
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 #[test]
 fn a_tls_client_that_hangs_up_while_blocked_gives_up_its_waiter() {
     let directory = tempfile::tempdir().unwrap();

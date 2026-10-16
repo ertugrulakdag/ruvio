@@ -931,6 +931,8 @@ fn evented_blocked_client_that_hangs_up_gives_up_its_waiter() {
     server.join().unwrap();
 }
 
+// A hang-up behind unread bytes is seen only where the OS reports the FIN (Linux, macOS).
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 #[test]
 fn evented_blocked_client_that_hangs_up_with_unread_input_gives_up_its_waiter() {
     // Bytes the parked connection has not read yet (pipelined input, or a TLS

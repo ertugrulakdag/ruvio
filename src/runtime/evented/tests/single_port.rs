@@ -429,8 +429,9 @@ fn an_expired_key_is_invalidated_for_a_tracking_client() {
     let mut tracker = connect(address);
     let mut writer = connect(address);
 
+    // Long enough that a slow machine still reads it before it expires.
     writer
-        .write_all(&resp(&[&[b"SET", b"short", b"v", b"PX", b"100"]]))
+        .write_all(&resp(&[&[b"SET", b"short", b"v", b"PX", b"1000"]]))
         .unwrap();
     read_exactly(&mut writer, b"+OK\r\n");
 
@@ -453,7 +454,7 @@ fn an_expired_key_is_invalidated_for_a_tracking_client() {
     read_exactly(&mut tracker, b"+OK\r\n$1\r\nv\r\n");
 
     // The writer's read finds the key past its deadline and removes it.
-    thread::sleep(Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(1100));
     writer.write_all(&resp(&[&[b"GET", b"short"]])).unwrap();
     read_exactly(&mut writer, b"$-1\r\n");
 
@@ -992,13 +993,14 @@ fn swapdb_and_queued_fan_commands_are_refused_with_several_shards() {
 #[test]
 fn wait_counts_replicas_that_reached_every_shard() {
     let directory = tempfile::tempdir().unwrap();
+    // Each shard's replication listener takes `replication_port + shard`: hold both of them
+    // while the data port is picked, or the OS may hand out one of them again.
     let (first, second, replication_port) = bind_consecutive_pair();
-
-    drop((first, second));
     let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = probe.local_addr().unwrap();
 
     drop(probe);
+    drop((first, second));
     let mut config = AppConfig {
         address: address.to_string(),
         shards: 2,

@@ -342,7 +342,9 @@ fn group_bytes_reset_per_group_while_worker_owns_dirty_bytes() {
         assert_eq!(sink.group_bytes(), 0);
         drop(sink.prepare_sync_barrier().unwrap().unwrap());
     }
-    assert!(sink.dirty_bytes() >= 64 * 1024);
+    // The worker may already have synced the first group before the second barrier (then only
+    // the second group is still dirty), never the second: its barrier was prepared just now.
+    assert!(sink.dirty_bytes() >= 40 * 1024);
 }
 
 #[test]

@@ -291,11 +291,19 @@ mod stamp_tests {
 
     #[test]
     fn a_stamp_measures_a_sleep_within_a_few_percent() {
+        // Compared with the wall clock over the same interval: a loaded machine may oversleep
+        // a lot, but both clocks see the same oversleep.
+        let wall = std::time::Instant::now();
         let stamp = Stamp::now();
 
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let micros = stamp.elapsed_micros();
+        let micros = stamp.elapsed_micros() as f64;
+        let expected = wall.elapsed().as_micros() as f64;
 
-        assert!((19_000..60_000).contains(&micros), "{micros}");
+        assert!(micros >= 19_000.0, "{micros}");
+        assert!(
+            (micros - expected).abs() <= expected * 0.1 + 500.0,
+            "stamp {micros} us, wall {expected} us"
+        );
     }
 }
