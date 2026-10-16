@@ -35,6 +35,10 @@ run() {
 
 run python3 scripts/check_compatibility_matrix.py
 run python3 scripts/gen_client_keys.py --check
+# C# layout rules (blank lines, bodies on their own line); skipped where .NET is not installed.
+if command -v dotnet >/dev/null; then
+	run dotnet run -c Release --project scripts/csharp-format -- --check
+fi
 # The model checker's mutation test applies these; one that no longer applies tests nothing.
 for patch in scripts/model_check_mutants/*.patch; do
 	git apply --check "$patch" || { echo "$patch no longer applies; redo it on the current code" >&2; exit 1; }
