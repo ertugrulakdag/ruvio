@@ -246,6 +246,29 @@ async def test_pipeline_across_shards_keeps_caller_order(cc):
         await maybe(p.execute())
 
 
+async def test_pipeline_splits_cross_slot_commands(cc, shards):
+    keys = spread_keys("ps:" + u(), 12)
+    assert len({cl.key_slot(k) for k in keys}) > 1
+    p = pipe(cc)
+    p.mset({k: f"v{i}" for i, k in enumerate(keys)}).ping().mget(*reversed(keys), "ps:nokey").exists(*keys, "ps:nokey")
+    p.touch(*keys).get(keys[0]).unlink(*keys[:4]).delete(*keys)
+    res = await maybe(p.execute())
+    assert res == [True, "PONG", [f"v{i}" for i in reversed(range(12))] + [None], 12, 12, "v0", 4, 8]
+    assert sum(s.dbsize() for s in shards) == 0
+    # a split command's error stays at its own index
+    assert cl.key_slot(keys[1]) != cl.key_slot(keys[2])
+    await cc.set(keys[1], "x")
+    await cc.lpush(keys[2], "l")
+    p = pipe(cc)
+    p.get(keys[1]).mget(keys[1], keys[2]).incr(keys[1]).delete(keys[1], keys[2])
+    res = await maybe(p.execute(raise_on_error=False))
+    assert res[0] == "x" and res[1] == ["x", None] and isinstance(res[2], ruvio.ResponseError) and res[3] == 2
+    t = pipe(cc, transaction=True)
+    t.mget(keys[0], keys[1])
+    with pytest.raises(ruvio.CrossSlotError):
+        await maybe(t.execute())
+
+
 async def test_transaction_single_slot_ok_and_cross_slot_errors(cc, shards):
     t = pipe(cc, transaction=True)
     t.set("{tx}a", 1).incr("{tx}a").get("{tx}a")
@@ -312,7 +335,7 @@ async def test_moved_recovery_from_a_fully_stale_table(cc, shards):
     truth = list(st.slots)
     st.slots[:] = [(s + 1) % 3 for s in truth]  # every slot now points at a wrong node
     for k in keys[:15]:
-        assert await cc.get(k) == k  # MOVED -> patch / refresh -> retry once
+        assert await cc.get(k) == k  # MOVED -> patch / refresh -> follow (at most 3)
     st.slots[:] = [(s + 2) % 3 for s in truth]
     p = pipe(cc)
     for k in keys:

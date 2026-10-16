@@ -304,12 +304,16 @@ async def test_cross_slot_fails_fast_and_sends_nothing(make, cluster):
             await call
         assert ei.value.code == "CROSSSLOT"
     p = pipe(c)
-    p.set(a, 1).mget(a, b)
+    p.set(a, 1).sinter(a, b)
     with pytest.raises(ruvio.CrossSlotError):
         await (_maybe(p.execute()))
     t = pipe(c, transaction=True)
     t.set(a, 1).set(b, 2)
     with pytest.raises(ruvio.CrossSlotError):
+        await _maybe(t.execute())
+    t = pipe(c, transaction=True)
+    t.mget(a, b)  # split in a plain pipeline, refused in a transaction
+    with pytest.raises(ruvio.CrossSlotError, match="one slot"):
         await _maybe(t.execute())
     with pytest.raises(ruvio.RuvioError):
         await c.multi()
@@ -340,7 +344,7 @@ async def test_split_commands_reassemble_in_caller_order(make, cluster):
     await c.aclose()
 
 
-async def test_moved_patches_one_slot_and_retries_once(make, cluster):
+async def test_moved_patches_one_slot_and_retries(make, cluster):
     # stale map: node0 is believed to own up to slot 12000, node1 from 12001
     cluster.advertised = [(0, 12000), (12001, 16383)]
     c = make(cluster.nodes[0].addr)
@@ -356,24 +360,51 @@ async def test_moved_patches_one_slot_and_retries_once(make, cluster):
     await c.aclose()
 
 
-async def test_second_moved_refreshes_the_whole_table(make, cluster):
+async def test_moved_for_another_command_patches_again_without_a_reload(make, cluster):
     cluster.advertised = [(0, 12000), (12001, 16383)]
     c = make(cluster.nodes[0].addr)
-    k1, k2 = key_in(8192, 12000, "m"), key_in(8192, 12000, "n")
+    k1 = key_in(8192, 12000, "m")
+    k2 = next(k for k in (key_in(8192, 12000, f"n{i}") for i in range(50)) if cl.key_slot(k) != cl.key_slot(k1))
     await c.set(k1, "1")
+    await c.set(k2, "2")  # a first MOVED for this command too: one more slot patched, no reload
     assert len(cluster.nodes[0].commands("CLUSTER")) == 1
-    cluster.advertised = list(cluster.owner_ranges)  # the servers now report the truth
-    await c.set(k2, "2")  # second MOVED -> CLUSTER SLOTS again
-    assert len(cluster.nodes[0].commands("CLUSTER")) == 2
-    assert st(c).slots[cl.key_slot(k1)] == 1 and st(c).slots[8192] == 1 and st(c).slots[12001] == 1
+    assert st(c).slots[cl.key_slot(k1)] == 1 and st(c).slots[cl.key_slot(k2)] == 1
+    assert st(c).slots[8192] == 0  # the rest of the stale range is untouched
     await c.aclose()
 
 
-async def test_moved_is_retried_only_once(make, cluster):
+async def test_second_moved_for_one_command_reloads_the_whole_table(make, cluster):
     c = make(cluster.nodes[0].addr)
     k = key_in(0, 8191)
     await c.ping()
-    # both nodes now claim the other owns the slot: ping-pong must stop after one retry
+    n0, n1 = cluster.nodes
+    orig = cluster._handle
+    sent = []
+
+    def handle(node, args):
+        if args[0].upper() == "GET":
+            sent.append(node)
+            if len(sent) == 1:  # node0 sends it to node1, node1 sends it back
+                return err(f"MOVED {cl.key_slot(k)} {n1.addr}")
+            if len(sent) == 2:
+                return err(f"MOVED {cl.key_slot(k)} {n0.addr}")
+            return bulk("here")
+        return orig(node, args)
+
+    n0.handler = n1.handler = handle
+    assert await c.get(k) == "here"
+    assert sent == [n0, n1, n0]
+    # first MOVED: the slot was patched only; second MOVED: CLUSTER SLOTS was read again
+    assert len(n0.commands("CLUSTER")) == 2 and not n1.commands("CLUSTER")
+    assert st(c).slots[cl.key_slot(k)] == 0
+    await c.aclose()
+
+
+async def test_moved_is_followed_at_most_three_times(make, cluster):
+    c = make(cluster.nodes[0].addr)
+    k = key_in(0, 8191)
+    await c.ping()
+    # both nodes now claim the other owns the slot: ping-pong must stop after three redirects
     cluster.owner_ranges = [(5000, 6000), (0, 4999)]
     cluster.owner_ranges = [(0, 8191), (8192, 16383)]
     n0, n1 = cluster.nodes
@@ -388,7 +419,7 @@ async def test_moved_is_retried_only_once(make, cluster):
     n0.handler = n1.handler = pingpong
     with pytest.raises(ruvio.MovedError):
         await c.get(k)
-    assert len(n0.commands("GET")) + len(n1.commands("GET")) == 2
+    assert len(n0.commands("GET")) + len(n1.commands("GET")) == 1 + cl.MAX_REDIRECTS == 4
     await c.aclose()
 
 
@@ -434,6 +465,34 @@ async def test_pipeline_recovers_from_stale_slots(make, cluster):
     for k in ks:
         p.get(k)
     assert await _maybe(p.execute()) == [True] * 4 + ["0", "1", "2", "3"]
+    await c.aclose()
+
+
+async def test_pipeline_splits_cross_slot_commands_like_the_plain_command(make, cluster):
+    c = make(cluster.nodes[0].addr)
+    a, b, a2 = key_in(0, 8191, "a"), key_in(8192, 16383, "b"), key_in(0, 8191, "c")
+    p = pipe(c)
+    p.mset({a: "1", b: "2", a2: "3"}).get(b).mget(b, "nokey", a, a2).exists(a, b, "nokey").ping()
+    p.touch(a, b).unlink(a2, b).delete(a, b)
+    res = await _maybe(p.execute())
+    assert res == [True, "2", ["2", None, "1", "3"], 2, "PONG", 2, 2, 1]
+    # no sub-command ever mixed slots (the fake node answers CROSSSLOT otherwise), none was sent whole
+    for n in cluster.nodes:
+        for x in n.commands("MGET") + n.commands("MSET") + n.commands("DEL"):
+            assert len({cl.key_slot(k) for k in (x[1::2] if x[0] == "MSET" else x[1:])}) == 1
+    await c.aclose()
+
+
+async def test_pipeline_split_command_follows_moved_per_sub_command(make, cluster):
+    cluster.advertised = [(0, 12000), (12001, 16383)]
+    c = make(cluster.nodes[0].addr)
+    stale, near = key_in(8192, 12000, "s"), key_in(0, 8191, "n")  # both believed on node0
+    cluster.nodes[1].store[stale] = "far"
+    cluster.nodes[0].store[near] = "near"
+    p = pipe(c)
+    p.mget(stale, near).get(near)
+    assert await _maybe(p.execute()) == [["far", "near"], "near"]
+    assert [x[1:] for x in cluster.nodes[1].commands("MGET")] == [[stale]]  # only the moved part was re-sent
     await c.aclose()
 
 

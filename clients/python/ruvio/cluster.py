@@ -36,7 +36,7 @@ class _Node:
 class _State:
     """Routing state, shared by a client and its ``raw`` view."""
 
-    __slots__ = ("mode", "slots", "nodes", "by_addr", "seed", "moved", "watch")
+    __slots__ = ("mode", "slots", "nodes", "by_addr", "seed", "watch")
 
     def __init__(self, seed: _Node) -> None:
         self.mode = 0  # 0 = not discovered yet, 1 = cluster, 2 = standalone fallback
@@ -44,7 +44,6 @@ class _State:
         self.nodes: List[_Node] = []
         self.by_addr: Dict[Tuple[str, int], _Node] = {(seed.host, seed.port): seed}
         self.seed = seed
-        self.moved = 0  # MOVED replies since the last full refresh
         self.watch: Optional[_Node] = None
 
 
@@ -66,7 +65,7 @@ class ClusterRuvio(Ruvio):
     * MGET/MSET/DEL/UNLINK/EXISTS/TOUCH over several nodes are split per node, sent to all nodes
       before any reply is read, and re-assembled in the caller's order;
     * any other command whose keys span slots raises :class:`CrossSlotError` before sending;
-    * ``-MOVED`` patches/refreshes the slot table and retries the command once;
+    * ``-MOVED`` patches/refreshes the slot table and is followed up to 3 times per command;
     * a failed node socket is closed and reopened by the next command for that node; a command
       that hit a transport failure is never replayed;
     * ``scan()`` walks the nodes one after the other (cursor = server_cursor * nodes + node).
@@ -176,7 +175,6 @@ class ClusterRuvio(Ruvio):
         c.nodes = nodes
         c.by_addr = by
         c.slots = topo.slots
-        c.moved = 0
 
     def _refresh(self) -> bool:
         c = self._cl
@@ -252,16 +250,26 @@ class ClusterRuvio(Ruvio):
         return reply if conv is None else conv(reply)
 
     def _redirect(self, err: MovedError, data: bytes, dec: bool) -> Any:
-        """``-MOVED``: patch one slot, or refresh the table when more than one slot moved or the
-        node is unknown, then retry the command once on the node named by the reply."""
-        mv = cl.parse_moved(err)
-        if mv is None:
-            return err
+        """``-MOVED``: re-sends the command to the node the reply names, at most
+        ``MAX_REDIRECTS`` times; the last ``MovedError`` is returned when they run out."""
+        reply: Any = err
+        for hop in range(cl.MAX_REDIRECTS):
+            mv = cl.parse_moved(reply)
+            if mv is None:
+                return reply
+            reply = self._rt(self._moved_to(mv, hop).conn, data, dec)
+            if reply.__class__ is not MovedError:
+                return reply
+        return reply
+
+    def _moved_to(self, mv: Tuple[int, str, int], hop: int) -> _Node:
+        """The node a ``MOVED`` names. The command's first ``MOVED`` to a node in the table points
+        that one slot at it; an unknown node, or a second ``MOVED`` for the same command, reloads
+        the whole table."""
         slot, host, port = mv
         c = self._cl
-        c.moved += 1
         node = c.by_addr.get((host, port))
-        if node is None or node.idx < 0 or c.moved > 1:
+        if node is None or node.idx < 0 or hop:
             self._refresh()
             node = c.by_addr.get((host, port))
             if node is None:
@@ -269,7 +277,7 @@ class ClusterRuvio(Ruvio):
                 c.by_addr[(host, port)] = node
         else:
             c.slots[slot] = node.idx
-        return self._rt(node.conn, data, dec)
+        return node
 
     def _single(self, slot: Optional[int], data: bytes, dec: bool) -> Any:
         reply = self._rt(self._owner(slot).conn, data, dec)
@@ -361,10 +369,11 @@ class ClusterRuvio(Ruvio):
         if tx:
             return self._batch_tx(payload, dec)
         # group by node, one pipelined write per node, replies back in the caller's order
-        groups = cl.pipeline_groups(payload, c.slots)  # raises before anything is sent
+        groups, subs = cl.pipeline_groups(payload, c.slots)  # raises before anything is sent
         order = [((c.nodes[ni] if ni >= 0 else c.seed), pos, frames) for ni, (pos, frames) in groups.items()]
         results = self._scatter([(node.conn, b"".join(frames), len(frames)) for node, _, frames in order], dec)
-        replies: List[Any] = [None] * len(payload)
+        n = len(payload)
+        replies: List[Any] = [None] * (n if subs is None else n + len(subs))
         failure: Optional[BaseException] = None
         for (node, pos, frames), r in zip(order, results):
             if isinstance(r, BaseException):
@@ -376,8 +385,8 @@ class ClusterRuvio(Ruvio):
             raise failure
         for i, v in enumerate(replies):
             if v.__class__ is MovedError:
-                replies[i] = self._redirect(v, payload[i], dec)
-        return replies
+                replies[i] = self._redirect(v, payload[i] if i < n else subs[i - n][4], dec)  # type: ignore[index]
+        return replies if subs is None else cl.merge_pipeline(replies, n, subs)
 
     def _batch_tx(self, payload: List[bytes], dec: bool) -> List[Any]:
         c = self._cl
@@ -396,17 +405,14 @@ class ClusterRuvio(Ruvio):
             raise CrossSlotError("CROSSSLOT the watched keys and the transaction keys live on different nodes")
         c.watch = None
         data = b"".join(payload)
-        for attempt in (0, 1):
+        for hop in range(cl.MAX_REDIRECTS + 1):
             replies = self._read_after_write(node.conn, data, len(payload), dec)
             moved = next((r for r in replies if r.__class__ is MovedError), None)
-            if moved is None or attempt:
+            mv = None if moved is None or hop == cl.MAX_REDIRECTS else cl.parse_moved(moved)
+            if mv is None:
                 return replies
-            # nothing ran (MOVED commands are refused at queue time): redirect the whole transaction once
-            mv = cl.parse_moved(moved)
-            self._cl.moved = 2
-            self._refresh()
-            target = c.by_addr.get((mv[1], mv[2])) if mv else None
-            node = target or self._owner(mv[0] if mv else slot)
+            # nothing ran (MOVED commands are refused at queue time): the whole transaction follows
+            node = self._moved_to(mv, hop)
         return replies
 
     def _read_after_write(self, conn: _Conn, data: bytes, n: int, dec: bool) -> List[Any]:

@@ -24,6 +24,9 @@ from .errors import CrossSlotError, ResponseError, RuvioError
 
 SLOT_COUNT = 16384
 
+#: ``-MOVED`` redirects followed per command before the error is returned
+MAX_REDIRECTS = 3
+
 _crc16 = binascii.crc_hqx  # CRC-CCITT with poly 0x1021 and init 0 == CRC16/XMODEM, in C
 
 
@@ -211,7 +214,8 @@ def plan(name: bytes, args: List[bytes]) -> Tuple[Any, ...]:
 
 
 def pipeline_slot(frame: bytes) -> Optional[int]:
-    """Slot of one pipelined command (None = keyless). Fan-out and cross-slot commands are refused."""
+    """Slot of one command inside a transaction (None = keyless). Fan-out and cross-slot commands
+    are refused: a transaction runs on one node."""
     name, key = frame_head(frame)
     name = name.upper()
     kind = SPEC.get(name)
@@ -222,26 +226,52 @@ def pipeline_slot(frame: bytes) -> Optional[int]:
         return p[1]
     if p[0] == PLAN_SPLIT:
         raise CrossSlotError(
-            f"CROSSSLOT {name.decode()} keys don't hash to the same slot; split it or call it outside the pipeline"
+            f"CROSSSLOT {name.decode()} keys don't hash to the same slot; a transaction must use keys in one slot"
         )
     raise RuvioError(f"{name.decode()} fans out to every node and cannot be pipelined on a cluster client")
 
 
+#: one sub-command of a split command inside a pipeline:
+#: ``(pipeline index, command name, key count, key positions, frame)``
+Sub = Tuple[int, bytes, int, List[int], bytes]
+
+
 def pipeline_groups(
     frames: List[bytes], table: List[int]
-) -> Dict[int, Tuple[List[int], List[bytes]]]:
+) -> Tuple[Dict[int, Tuple[List[int], List[bytes]]], Optional[List[Sub]]]:
     """Groups pipelined frames by node index (``-1`` = keyless: the seed), in one pass.
 
-    ``table`` is the slot -> node index list. Raises before anything is sent if a command
-    cannot be routed (cross-slot multi-key command, fan-out command)."""
+    ``table`` is the slot -> node index list. A cross-slot MGET/MSET/DEL/... is split per slot like
+    the plain command: its sub-commands get positions ``len(frames) + j`` where ``j`` indexes the
+    returned sub list (None when nothing was split); :func:`merge_pipeline` puts the merged reply
+    back at the command's own index. Raises before anything is sent if a command cannot be routed
+    (other cross-slot multi-key command, fan-out command)."""
     groups: Dict[int, Tuple[List[int], List[bytes]]] = {}
+    subs: Optional[List[Sub]] = None
     spec = SPEC
     for i, f in enumerate(frames):
         name, key = frame_head(f)
         if not name.isupper():
             name = name.upper()
         if name in spec:
-            slot = pipeline_slot(f)
+            args = split_frame(f)
+            p = plan(name, args)
+            if p[0] == PLAN_SPLIT:
+                if subs is None:
+                    subs = []
+                keys = p[1]
+                for ni, parts in split_groups(name, args, keys, table.__getitem__).items():
+                    g = groups.get(ni)
+                    if g is None:
+                        g = groups[ni] = ([], [])
+                    for pos, sub in parts:
+                        g[0].append(len(frames) + len(subs))
+                        g[1].append(sub)
+                        subs.append((i, name, len(keys), pos, sub))
+                continue
+            if p[0] != PLAN_SLOT:
+                raise RuvioError(f"{name.decode()} fans out to every node and cannot be pipelined on a cluster client")
+            slot = p[1]
         else:
             slot = None if key is None else key_slot(key)
         ni = -1 if slot is None else table[slot]
@@ -250,7 +280,21 @@ def pipeline_groups(
             g = groups[ni] = ([], [])
         g[0].append(i)
         g[1].append(f)
-    return groups
+    return groups, subs
+
+
+def merge_pipeline(replies: List[Any], n: int, subs: List[Sub]) -> List[Any]:
+    """Merges the replies of split sub-commands (``replies[n:]``) into one reply per command."""
+    out = replies[:n]
+    j = 0
+    while j < len(subs):
+        i, name, nkeys = subs[j][0], subs[j][1], subs[j][2]
+        parts: List[Tuple[List[int], Any]] = []
+        while j < len(subs) and subs[j][0] == i:
+            parts.append((subs[j][3], replies[n + j]))
+            j += 1
+        out[i] = merge_split(name, nkeys, parts)
+    return out
 
 
 # --------------------------------------------------------------------------- split commands
