@@ -739,6 +739,8 @@ fn expired_replica_snapshot_json_delta_requests_snapshot_without_appending() {
     assert!(mutations.is_empty());
 }
 
+// Arms a WAL I/O fault, which exists only outside Miri.
+#[cfg(not(miri))]
 #[test]
 fn apply_frame_appends_then_applies_and_stops_on_a_bad_frame() {
     use std::sync::atomic::Ordering;
