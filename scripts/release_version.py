@@ -29,7 +29,7 @@ PACKAGES = {
         "locks": [(ROOT / "Cargo.lock", "ruvio")],
         "csproj": [],
         "changelog": ROOT / "CHANGELOG.md",
-        "pins": [ROOT / "README.md", ROOT / "site" / "start.html", ROOT / "site" / "packages.html"],
+        "pins": [ROOT / "README.md", ROOT / "docs" / "SETUP.md", ROOT / "site" / "start.html", ROOT / "site" / "packages.html"],
     },
     "rust-client": {
         "cargo": [ROOT / "clients" / "ruvio-client" / "Cargo.toml"],

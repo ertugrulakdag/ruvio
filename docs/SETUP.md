@@ -1,5 +1,66 @@
 # Setup
 
+## Linux: prebuilt binaries
+
+Each [GitHub Release](https://github.com/salihcantekin/ruvio/releases/latest) carries ready-to-run archives for
+Linux x64 and Linux arm64 (plus macOS arm64 and Windows x64). An archive holds two programs, `ruvio.example.toml`,
+the README and the license; `SHA256SUMS` lists the checksum of every archive. No Rust toolchain is needed.
+
+| Program | What it does |
+| --- | --- |
+| `ruvio` | The server. Speaks RESP2 on `127.0.0.1:6379` by default. `ruvio --help` lists every flag. |
+| `ruvio-ctl` | Offline tool for a data directory: `check`, `inspect`, `backup`, `restore`, and `import` from a running Redis. |
+
+Download, verify and unpack (use `linux-arm64` on an arm64 host):
+
+```bash
+v=0.3.2
+curl -LO https://github.com/salihcantekin/ruvio/releases/download/ruvio-$v/ruvio-$v-linux-x64.tar.gz
+curl -LO https://github.com/salihcantekin/ruvio/releases/download/ruvio-$v/SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+tar xzf ruvio-$v-linux-x64.tar.gz
+cd ruvio-$v-linux-x64
+```
+
+Run the server. Pick the durability profile at startup; `memory` keeps nothing on disk, `everysec` and `always`
+write a log under `--data-dir` (see [CONFIGURATION.md](CONFIGURATION.md) and [RECOVERY.md](RECOVERY.md)):
+
+```bash
+./ruvio --requirepass change-me --data-dir ./data --durability everysec
+redis-cli -a change-me PING
+```
+
+Settings can also come from a TOML file: copy `ruvio.example.toml` to `ruvio.toml` next to the binary, or pass
+`--config /path/to/ruvio.toml`. Command-line flags and `RUVIO_*` environment variables override the file.
+
+`ruvio-ctl` works on a data directory. `check` and `inspect` only read it and take no lock. `backup` and
+`restore` lock the directory, so stop the server that owns it first:
+
+```bash
+./ruvio-ctl check   --data-dir ./data      # validate checkpoints and the WAL, change nothing
+./ruvio-ctl inspect --data-dir ./data      # same checks, with clock, checkpoint and per-shard detail
+./ruvio-ctl backup  --data-dir ./data --dest ./backup
+./ruvio-ctl restore --source ./backup --data-dir ./data
+```
+
+A backup can be signed with a key file (`--sign-key`, or `RUVIO_BACKUP_KEY`); restoring a signed backup needs the
+same key.
+
+`ruvio-ctl import` copies keys with their TTLs from a running Redis (or Ruvio) into a running Ruvio and can read
+them back to verify; see [IMPORT.md](IMPORT.md):
+
+```bash
+./ruvio-ctl import --from redis://127.0.0.1:6379/0 --to ruvio://127.0.0.1:6380/0 --verify
+```
+
+Before raising connection counts, raise the file descriptor limit with `ulimit -n`. The process uses epoll, and
+pinning a shard to a core works best when the machine is not heavily oversubscribed.
+
+On macOS, a binary downloaded by a browser is quarantined; `xattr -d com.apple.quarantine ruvio ruvio-ctl` clears
+it (downloads with `curl` are not). On Windows, unzip `ruvio-<version>-windows-x64.zip` and run `ruvio.exe`.
+
+The sections below build Ruvio from source.
+
 ## Common Requirements
 
 - Install the Rust toolchain with `rustup`.
@@ -128,11 +189,6 @@ cargo run --release --bin ruvio
 Use `redis-cli -c` so the client follows `MOVED` responses. Multi-core mode is cluster-inspired rather than a complete Redis Cluster implementation.
 
 `cargo build` is the evented server. `--no-default-features` drops mimalloc and keeps the same runtime.
-
-## Linux Notes
-
-- The process uses epoll. Raise the file descriptor limit with `ulimit -n` before raising connection counts.
-- Pinning a shard to a core works best when the machine is not heavily oversubscribed.
 
 ## Docker
 
