@@ -19,10 +19,12 @@ enum Reply {
     Close,
 }
 
+/// `(connection index, command)` in arrival order.
+type Log = Arc<Mutex<Vec<(usize, Vec<String>)>>>;
+
 struct Server {
     port: u16,
-    /// `(connection index, command)` in arrival order.
-    log: Arc<Mutex<Vec<(usize, Vec<String>)>>>,
+    log: Log,
     connections: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
 }

@@ -22,7 +22,7 @@
 
 ---
 
-Blocking RESP2 client for [Ruvio](https://salihcantekin.github.io/ruvio/). Connecting does not send `CLIENT SETINFO` or `HELLO`. Give the client one address; it sends `CLUSTER SLOTS` and, on a sharded server, opens one socket per shard and routes by hash slot. `MOVED` refreshes the map. `MGET` / `MSET` / `DEL` split across shards. Methods take `&mut self` and are named after the command they send. They cover every command in [`docs/compatibility-matrix.json`](../../docs/compatibility-matrix.json) (287/287, checked by `tests/coverage.rs`) plus the options that change what Ruvio does. `execute` and `execute_many` send any argument list, as `redis-cli` would; `execute_binary` does the same with raw byte arguments.
+Blocking RESP2 client for [Ruvio](https://salihcantekin.github.io/ruvio/). Connecting does not send `CLIENT SETINFO` or `HELLO`. Give the client one address; it sends `CLUSTER SLOTS` and, on a sharded server, opens one socket per shard and routes by hash slot. `MOVED` is followed up to three times per command. `MGET` / `MSET` / `DEL` / `EXISTS` / `UNLINK` / `TOUCH` split across slots; other commands whose keys span slots fail with `CROSSSLOT` before anything is sent. Methods take `&mut self` and are named after the command they send. They cover every command in [`docs/compatibility-matrix.json`](../../docs/compatibility-matrix.json) (287/287, checked by `tests/coverage.rs`) plus the options that change what Ruvio does. `execute` and `execute_many` send any argument list, as `redis-cli` would; `execute_binary` does the same with raw byte arguments.
 
 ```rust
 use std::time::Duration;
@@ -40,7 +40,15 @@ let top = db.zrevrange_with_scores("leaderboard", 0, 9)?;
 
 ## Connecting
 
-`hash_slot(key)` is the same 0–16383 slot Ruvio uses, including `{hash tags}`. Set `ClientOptions::discover_cluster` to `false` to stay on the seed socket. An incomplete, overlapping, or malformed `CLUSTER SLOTS` map fails discovery instead of silently using an ambiguous owner. A disconnected stale owner triggers a refresh from another connected node before sending the command; a dropped in-flight command is not replayed automatically. Cross-slot `MSET` / `DEL` and `RENAME` are client-side operations, not atomic transactions: an error may leave some keys changed. Use a shared hash tag for atomic multi-key writes.
+`hash_slot(key)` is the same 0–16383 slot Ruvio uses, including `{hash tags}`. Set `ClientOptions::discover_cluster` to `false` to stay on the seed socket. An incomplete, overlapping, or malformed `CLUSTER SLOTS` map fails discovery instead of silently using an ambiguous owner. A disconnected stale owner triggers a refresh from another connected node before sending the command; a dropped in-flight command is not replayed automatically. Cross-slot `MSET` / `DEL` are client-side operations, not atomic transactions: an error may leave some keys changed. Use a shared hash tag for atomic multi-key writes.
+
+| In a cluster | What the client does |
+| --- | --- |
+| `MOVED` | Followed up to 3 times per command; the 4th `MOVED` is returned. Every `MOVED` points that slot at the named node and the command is sent again there. The whole slot map is reloaded first when that node is unknown to the client, and on the command's second and third `MOVED`; the slot still points at the named node afterwards. |
+| `MGET`, `MSET`, `DEL`, `EXISTS`, `UNLINK`, `TOUCH` across slots | Sent once per slot and merged: `MGET` keeps key order, counts are summed, `MSET` returns `OK`. |
+| `RENAME`, `RENAMENX`, `COPY`, `LMOVE`, `SMOVE`, `SINTERSTORE`, `BITOP`, `EVAL`, ... across slots | Not sent: `Error::Server("CROSSSLOT Keys in request do not hash to the same slot")`, the server's own reply. Put the keys under one hash tag. |
+| `execute_many` (a pipeline) | Commands are grouped per node and replies come back in command order. A cross-slot split command is split as above and its merged reply sits at its index; any other cross-slot command gets the `CROSSSLOT` error at its index and the rest of the pipeline still runs. A pipeline holding `MULTI` goes to one node and must stay in one slot. |
+| `execute_binary` | Routed by the second argument; no splitting or cross-slot check. |
 
 A standalone client is bound to one logical database. Database 0 sends nothing after discovery. Any other index sends `SELECT` before the connect call returns. Cluster mode has only database 0.
 

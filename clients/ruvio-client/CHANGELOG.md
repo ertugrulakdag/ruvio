@@ -4,6 +4,22 @@ Notable changes to the Rust client crate `ruvio-client`. New entries go under "U
 
 ## Unreleased
 
+- **Behaviour change:** `RENAME` / `RENAMENX` whose keys hash to different slots now fail with
+  `Error::Server("CROSSSLOT Keys in request do not hash to the same slot")` before anything is
+  sent, instead of being emulated with `TYPE`, a copy, `PEXPIRE` and `DEL`. Put both keys under one
+  hash tag.
+- **Behaviour change:** any other command whose keys span slots and that is not split (`COPY`,
+  `LMOVE`, `SMOVE`, `SINTERSTORE`, `BITOP`, `EVAL`, ...) now fails with the same `CROSSSLOT` error
+  before sending, instead of going to the first key's shard.
+- **Behaviour change:** in `execute_many`, `MGET` / `MSET` / `DEL` / `EXISTS` / `UNLINK` / `TOUCH`
+  with keys in several slots are split per slot like the plain command, and the merged reply sits
+  at the command's index (they used to go whole to the first key's shard). Any other cross-slot
+  command gets the `CROSSSLOT` error at its index; the rest of the pipeline still runs.
+- A `MOVED` reply now points that slot at the named node and sends the command again there. The
+  whole slot map is reloaded only when the node is unknown to the client, or on the command's
+  second and third `MOVED` (it used to be reloaded on every `MOVED`). The slot keeps pointing at the
+  named node even when the reloaded map names another owner. Still at most 3 redirects per
+  command; the 4th `MOVED` is returned.
 - The cluster client now takes each command's key positions from the server's command table
   (`src/command_keys.rs`, generated from `clients/testdata/commands.json`) instead of its own
   hand-kept lists, and is checked against `clients/testdata/key_vectors.json`. This fixes routing
