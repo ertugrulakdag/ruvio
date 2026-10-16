@@ -8,6 +8,12 @@ With --write and a new version, the package's CHANGELOG.md "Unreleased"
 section becomes the section of that version. --install-pins also rewrites the
 `v=x.y.z` download line in the README and the site (server only; pass it when
 the release publishes the server binaries).
+
+--preview N prints a preview version instead: the next patch (or --set) with a
+preview suffix, `X.Y.Z-preview.N` (`X.Y.Z.devN` for PyPI, which has no
+pre-release label of that name). --stamp VERSION writes a version into the
+package files only, with no CHANGELOG move and no pins; the release workflow
+stamps preview versions this way and never commits them.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+PREVIEW = re.compile(r"^\d+\.\d+\.\d+(-preview\.\d+|\.dev\d+)$")
 
 INTEGRATIONS = ROOT / "integrations" / "dotnet"
 
@@ -146,6 +153,42 @@ def write_install_pins(paths: list[Path], version: str) -> None:
             raise ValueError(f"{path} has no v=x.y.z line")
 
         path.write_text(text, encoding="utf-8")
+
+
+def preview_version(package: str, base: str, number: int) -> str:
+    """The preview version of `package` built on `base` (`X.Y.Z`): SemVer pre-release, or a
+    PEP 440 development release for PyPI."""
+    if SEMVER.fullmatch(base) is None:
+        raise ValueError(f"not a major.minor.patch version: {base}")
+
+    if number < 1:
+        raise ValueError(f"preview number must be positive: {number}")
+
+    if PACKAGES[package].get("kind") == "python":
+        return f"{base}.dev{number}"
+
+    return f"{base}-preview.{number}"
+
+
+def stamp_version(package: str, version: str) -> None:
+    """Writes `version` into the package's manifests (and lock files) only."""
+    if PREVIEW.fullmatch(version) is None and SEMVER.fullmatch(version) is None:
+        raise ValueError(f"not a release or preview version: {version}")
+
+    spec = PACKAGES[package]
+
+    if "kind" in spec:
+        write_other_version(spec, version)
+        return
+
+    for path in spec["cargo"]:
+        write_cargo_version(path, version)
+
+    for path, name in spec["locks"]:
+        write_lock_version(path, name, version)
+
+    for path in spec["csproj"]:
+        write_csproj_version(path, version)
 
 
 def bump_patch(version: str) -> str:
@@ -349,7 +392,30 @@ def main() -> None:
         action="store_true",
         help="With --write, also point the README and site download lines at the version.",
     )
+    parser.add_argument(
+        "--preview",
+        type=int,
+        metavar="N",
+        help="Print the preview version N of the next patch (or of --set); writes nothing.",
+    )
+    parser.add_argument(
+        "--stamp",
+        metavar="VERSION",
+        help="Write VERSION into the package files only (no CHANGELOG, no pins).",
+    )
     args = parser.parse_args()
+
+    if args.stamp:
+        stamp_version(args.package, args.stamp)
+        print(args.stamp)
+        return
+
+    if args.preview is not None:
+        current = current_version(args.package)
+        base = normalize(args.set) if args.set.strip() else bump_patch(current)
+        print(preview_version(args.package, base, args.preview))
+        return
+
     print(apply_version(args.package, args.set, args.write, args.install_pins))
 
 

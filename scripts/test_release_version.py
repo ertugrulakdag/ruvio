@@ -150,6 +150,34 @@ class ReleaseVersionTests(unittest.TestCase):
 
             self.assertIn("\nv=0.3.2\n", readme.read_text(encoding="utf-8"))
 
+    def test_preview_versions_and_stamp(self) -> None:
+        self.assertEqual(release_version.preview_version("csharp", "0.3.2", 7), "0.3.2-preview.7")
+        self.assertEqual(release_version.preview_version("python", "0.3.2", 7), "0.3.2.dev7")
+        with self.assertRaises(ValueError):
+            release_version.preview_version("csharp", "0.3.2-preview.1", 2)
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "Demo.csproj"
+            changelog = Path(directory) / "CHANGELOG.md"
+            project.write_text("<Project><Version>0.2.7</Version></Project>\n", encoding="utf-8")
+            changelog.write_text("# Changelog\n\n## Unreleased\n\n- note\n", encoding="utf-8")
+            release_version.PACKAGES["demo-stamp"] = {
+                "cargo": [],
+                "locks": [],
+                "csproj": [project],
+                "changelog": changelog,
+            }
+
+            try:
+                release_version.stamp_version("demo-stamp", "0.2.8-preview.3")
+                with self.assertRaises(ValueError):
+                    release_version.stamp_version("demo-stamp", "0.2.8-beta")
+            finally:
+                del release_version.PACKAGES["demo-stamp"]
+
+            self.assertIn("<Version>0.2.8-preview.3</Version>", project.read_text(encoding="utf-8"))
+            # A preview never moves the release notes.
+            self.assertIn("## Unreleased\n\n- note", changelog.read_text(encoding="utf-8"))
+
     def test_every_package_file_exists(self) -> None:
         for name, spec in release_version.PACKAGES.items():
             paths = [*spec.get("cargo", []), *spec.get("csproj", []), *spec.get("pins", [])]

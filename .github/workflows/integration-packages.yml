@@ -1,6 +1,8 @@
 name: integration-packages
 
 # Publish uses NuGet trusted publishing. The package job has id-token: write and exchanges that token through NuGet/login. There is no NUGET_API_KEY secret.
+# Started from the dev branch, it builds previews: each package gets its next patch with a preview suffix and the
+# run number (X.Y.Z-preview.N), stamped into the checkout only and never committed; NuGet lists them as pre-releases.
 
 on:
   workflow_dispatch:
@@ -40,6 +42,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.97.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --bin ruvio --locked
+      - name: Stamp preview versions
+        if: github.ref_name == 'dev'
+        env:
+          PACKAGE: ${{ inputs.package }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          if [ "$PACKAGE" = "all" ]; then
+            packages=(Ruvio.Extensions.Caching Ruvio.AspNetCore.RateLimiting Ruvio.AspNetCore.Idempotency Ruvio.AspNetCore.OutputCaching Ruvio.AspNetCore.DataProtection Ruvio.AspNetCore.DistributedLock)
+          else
+            packages=("$PACKAGE")
+          fi
+          for name in "${packages[@]}"; do
+            version=$(python3 scripts/release_version.py "$name" --preview "$RUN_NUMBER")
+            python3 scripts/release_version.py "$name" --stamp "$version"
+            echo "$name $version"
+          done
       - name: Refuse a version NuGet already has
         if: inputs.publish
         env:

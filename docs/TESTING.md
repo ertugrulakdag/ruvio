@@ -32,16 +32,18 @@ defines these additional checks:
 | --- | --- |
 | Rust and portability | Formatting, Clippy with default and all features, all-target Rust tests, and a store smoke example on macOS, Linux, and Windows |
 | Protocol and compatibility | RESP conformance, Redis differential behavior for the supported command subset, compatibility-matrix drift, and multi-shard routing smoke |
-| Clients | Live-server test suites for the first-party Rust and .NET clients |
+| Clients | Live-server test suites of all six clients (Rust, C# with the .NET integrations, Go with `-race`, Java, Node, Python), each against a standalone server and a 3-shard per-shard cluster |
+| Applications | The C# layout check, a build of every .NET project, the C# and Rust tours against both servers, the site (`site-next`) and the operator UI (web build and host binary) |
 | .NET integration packages | Package-specific tests and package builds, using a separate manually dispatched workflow; only the first-party .NET client and ASP.NET Core client tests are in the automatic gate |
 | Persistence and recovery | WAL recovery, snapshots, checksums and corruption handling, missing-segment detection, TTL restart behavior, backup/restore, and frozen-format compatibility tests |
 | Supply chain | `cargo-deny`, release-version checks, SBOM generation, and security-policy checks |
 | Runtime safety | RESP parser fuzzing, AddressSanitizer library tests, and selected Miri tests |
 
 When dispatching it, the `jobs` input picks jobs (`all`, or a comma list of
-`test`, `supply-chain`, `container`, `clients`, `fuzz`, `asan`, `miri`) and `os`
+`test`, `supply-chain`, `container`, `clients`, `apps`, `fuzz`, `asan`, `miri`) and `os`
 picks the system for the `test` job, so a change can be checked by the jobs that
-cover it without paying for the rest.
+cover it without paying for the rest. Pick `dev` as the branch in the Actions tab to check
+the development branch before it goes to `main`.
 
 See the workflow file for the exact commands and job boundaries. A local
 re-run of the principal Rust suite is:

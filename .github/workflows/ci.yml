@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       jobs:
-        description: "Jobs to run: all, or a comma list of test, supply-chain, container, clients, fuzz, asan, miri, instruction-baseline (not part of all)"
+        description: "Jobs to run: all, or a comma list of test, supply-chain, container, clients, apps, fuzz, asan, miri, instruction-baseline (not part of all)"
         type: string
         default: all
       os:
@@ -165,7 +165,7 @@ jobs:
   clients:
     if: inputs.jobs == 'all' || contains(format(',{0},', inputs.jobs), ',clients,')
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.97.0
@@ -175,6 +175,21 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "8.0.x"
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: clients/go/go.mod
+          # The module has no dependencies (no go.sum) to cache.
+          cache: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: clients/node/package-lock.json
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
@@ -186,24 +201,78 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('clients/csharp/**/*.csproj', 'integrations/dotnet/**/*.csproj') }}
           restore-keys: nuget-${{ runner.os }}-
       - run: python3 scripts/check_compatibility_matrix.py
-      - run: cargo build --bin ruvio
-      - name: Start Ruvio
+      - run: cargo build --locked --bin ruvio
+      # Each step starts a standalone server and a 3-shard per-shard cluster (RUVIO_TEST_ADDR,
+      # RUVIO_CLUSTER_ADDR), so every client's live and cluster tests run, and stops them after.
+      - name: Rust client
+        run: scripts/run_with_servers.sh "$PWD/target/debug/ruvio" 17400 -- cargo test --locked --manifest-path clients/ruvio-client/Cargo.toml
+      - name: C# client and .NET integrations
         run: |
-          mkdir -p /tmp/ruvio-clients
-          RUVIO_ADDR=127.0.0.1:16382 RUVIO_DATA_DIR=/tmp/ruvio-clients \
-            ./target/debug/ruvio &
-          echo $! > /tmp/ruvio-clients.pid
-          python3 -c "import socket,time
-          for _ in range(50):
-              try:
-                  socket.create_connection(('127.0.0.1', 16382), timeout=1).close()
-                  raise SystemExit(0)
-              except OSError:
-                  time.sleep(0.1)
-          raise SystemExit('ruvio did not start')"
-      - run: python3 scripts/run_client_suites.py --port 16382 --require-all
-      - if: always()
-        run: kill "$(cat /tmp/ruvio-clients.pid)" || true
+          # shellcheck disable=SC2016 # the inner script expands its own variables
+          scripts/run_with_servers.sh "$PWD/target/debug/ruvio" 17420 -- bash -c '
+            set -euo pipefail
+            for project in clients/csharp/Ruvio.Client.Tests clients/csharp/Ruvio.Client.AspNetCore.Tests integrations/dotnet/*.Tests; do
+              dotnet test "$project" --nologo
+            done'
+      - name: Go client
+        run: scripts/run_with_servers.sh "$PWD/target/debug/ruvio" 17440 -- bash -c 'cd clients/go && go test -race -count=1 ./...'
+      - name: Java client
+        run: scripts/run_with_servers.sh "$PWD/target/debug/ruvio" 17460 -- mvn -B -f clients/java/pom.xml verify
+      - name: Node client
+        run: |
+          npm ci --prefix clients/node
+          scripts/run_with_servers.sh "$PWD/target/debug/ruvio" 17480 -- npm test --prefix clients/node
+      - name: Python client
+        run: |
+          python -m pip install "./clients/python[test]"
+          scripts/run_with_servers.sh "$PWD/target/debug/ruvio" 17500 -- python -m pytest -q clients/python
+
+  apps:
+    if: inputs.jobs == 'all' || contains(format(',{0},', inputs.jobs), ',apps,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            clients/ruvio-client
+            clients/ruvio-ui
+      - name: C# layout rules
+        run: dotnet run -c Release --project scripts/csharp-format -- --check
+      - name: Build every .NET project
+        run: |
+          set -euo pipefail
+          git ls-files '*.csproj' | while read -r project; do
+            dotnet build -c Release "$project" --nologo
+          done
+      - run: cargo build --locked --bin ruvio
+      # The tours call nearly every client method, against a standalone server and a 3-shard cluster.
+      - name: C# and Rust tours
+        run: |
+          # shellcheck disable=SC2016 # the inner script expands its own variables
+          scripts/run_with_servers.sh "$PWD/target/debug/ruvio" 17400 -- bash -c '
+            set -euo pipefail
+            for address in "$RUVIO_TEST_ADDR" "$RUVIO_CLUSTER_ADDR"; do
+              dotnet run -c Release --project clients/csharp/Ruvio.Client.Tour -- 127.0.0.1 "${address##*:}"
+              cargo run --locked --manifest-path clients/ruvio-client/Cargo.toml --example tour -- 127.0.0.1 "${address##*:}"
+            done'
+      - name: Site
+        working-directory: site-next
+        run: npm ci && npm run build
+      - name: Operator UI
+        run: |
+          npm ci --prefix clients/ruvio-ui/web
+          npm run build --prefix clients/ruvio-ui/web
+          cargo build --locked --manifest-path clients/ruvio-ui/Cargo.toml
 
   fuzz:
     if: inputs.jobs == 'all' || contains(format(',{0},', inputs.jobs), ',fuzz,')

@@ -5,7 +5,7 @@ No release runs on its own. Every workflow in `.github/workflows/` is started by
 | Workflow | What it does |
 | --- | --- |
 | `pr-gate` | Format, tests, client suites, package metadata check |
-| `ci` | Wider checks: three operating systems, clippy, supply chain, fuzz, container and fault tests |
+| `ci` | Wider checks: three operating systems, clippy, supply chain, every client against a standalone and a cluster server, the applications (tours, site, UI), fuzz, container and fault tests |
 | `release` | Publishes the packages below; choose one target or `all` |
 | `integration-packages` | Builds and optionally publishes the .NET integration packages |
 | `site-azure` | Builds `site-next/` and publishes it to Azure Static Web Apps (ruviodb.com) |
@@ -27,6 +27,20 @@ The Go client has no registry; Go modules are versions of a git tag. The server 
 Binary archives are workflow artifacts. Turn on `create_github_release` to attach them, with a `SHA256SUMS` file, to a GitHub Release. The binaries use the release profile (fat LTO, no profile-guided optimization). Performance numbers come from the builds described on each results page, so check those before quoting one for a downloaded binary.
 
 Leave a version input empty to bump that package's patch number, or fill it to publish that exact version. `docker` and `server-binaries` share the server version, and `docker-ui` and `ui-host` share the UI version; run alone, these four targets refuse an empty version, so the two halves of a pair cannot ship under different numbers. The site shows the current published versions by asking the registries when a page loads. `server-binaries` (and `all`) also point the `v=x.y.z` download line in `README.md` at the server version, and the version commit carries it.
+
+## Preview releases
+
+Start `release` (or `integration-packages`) from the `dev` branch to publish previews. Every selected package gets its next patch with a preview suffix and the run number, `X.Y.Z-preview.N` (PyPI `X.Y.Z.devN`; a filled version input sets `X.Y.Z`). The versions are written into each job's checkout only: nothing is committed to `dev`, and CHANGELOG notes stay under "Unreleased".
+
+| Target | Preview |
+| --- | --- |
+| `nuget`, `rust-client`, `maven`, integration packages | a pre-release version (`dotnet add package ... --prerelease`, `cargo add ruvio-client@X.Y.Z-preview.N`) |
+| `npm` | published under the `preview` dist-tag (`npm install ruvio-client@preview`); `latest` is unchanged |
+| `pypi` | a development release (`pip install --pre ruvio-client`) |
+| `docker`, `docker-ui` | the `X.Y.Z-preview.N` and `preview` tags; `latest` and `linux` stay on the last release, and the Docker Hub description is not touched |
+| `server-binaries`, `ui-host` | archives named with the preview version; with `create_github_release` the GitHub Release is marked pre-release |
+
+Started from any other branch, the workflows publish releases as before.
 
 ## Changelogs
 

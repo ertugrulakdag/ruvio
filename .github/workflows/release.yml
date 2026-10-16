@@ -21,6 +21,14 @@ name: release
 # Go has no registry; its client is not part of this workflow yet.
 # GITHUB_TOKEN — built-in token, not a repository secret. Pushes the version commit and creates the GitHub Release when that option is on.
 #
+# Preview releases: started from the dev branch, the workflow publishes previews. Each package
+# gets the next patch with a preview suffix and the run number (X.Y.Z-preview.N; PyPI X.Y.Z.devN):
+# NuGet, crates.io and Maven Central list it as a pre-release, npm publishes it under the
+# `preview` dist-tag, Docker pushes the `preview` tag (never `latest`), and the GitHub Release
+# is marked pre-release. Nothing is committed: the versions are stamped into the checkout of
+# each job only, and CHANGELOG notes stay under "Unreleased". Version inputs are ignored
+# except as the base (X.Y.Z) when filled.
+#
 # Leave a version input empty to bump that package's patch number. Exception: docker, server-binaries,
 # docker-ui and ui-host run alone need their version filled in, because each pair shares one version.
 # Fill it (1.2.3 or v1.2.3) to publish that exact version. A new version also moves the package's CHANGELOG.md
@@ -120,6 +128,7 @@ jobs:
       node: ${{ steps.publish.outputs.node }}
       python: ${{ steps.publish.outputs.python }}
       java: ${{ steps.publish.outputs.java }}
+      preview: ${{ steps.publish.outputs.preview }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -137,9 +146,28 @@ jobs:
           NODE_VERSION: ${{ inputs.node_version }}
           PYTHON_VERSION: ${{ inputs.python_version }}
           JAVA_VERSION: ${{ inputs.java_version }}
+          # A run from dev publishes previews; see the header.
+          PREVIEW: ${{ github.ref_name == 'dev' }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
           target="$TARGET"
+          if [ "$PREVIEW" = "true" ]; then
+            preview() { python3 scripts/release_version.py "$1" --set "$2" --preview "$RUN_NUMBER"; }
+            {
+              echo "preview=true"
+              echo "server=$(preview server "$SERVER_VERSION")"
+              echo "rust_client=$(preview rust-client "$RUST_CLIENT_VERSION")"
+              echo "csharp=$(preview csharp "$CSHARP_VERSION")"
+              echo "ui=$(preview ui "$UI_VERSION")"
+              echo "node=$(preview node "$NODE_VERSION")"
+              echo "python=$(preview python "$PYTHON_VERSION")"
+              echo "java=$(preview java "$JAVA_VERSION")"
+              echo "sha=${GITHUB_SHA}"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "preview=false" >> "$GITHUB_OUTPUT"
           # docker and server-binaries share the server version, docker-ui and ui-host the UI version.
           # An empty version bumps the patch, so publishing one half of a pair and then the other
           # with empty inputs would ship two different versions. Outside `all`, ask for it explicitly.
@@ -214,19 +242,24 @@ jobs:
         with:
           username: salihcantekin
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Stamp the preview version
+        if: needs.versions.outputs.preview == 'true'
+        run: python3 scripts/release_version.py server --stamp "${{ needs.versions.outputs.server }}"
       - uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.linux
           platforms: linux/amd64
           push: true
+          # A preview moves only the `preview` tag; `linux` and `latest` stay on the last release.
           tags: |
-            salihcantekin/ruvio:linux
             salihcantekin/ruvio:${{ needs.versions.outputs.server }}
-            salihcantekin/ruvio:latest
+            ${{ needs.versions.outputs.preview == 'true' && 'salihcantekin/ruvio:preview' || 'salihcantekin/ruvio:linux' }}
+            ${{ needs.versions.outputs.preview == 'true' && '' || 'salihcantekin/ruvio:latest' }}
           cache-from: type=gha,scope=ruvio-server
           cache-to: type=gha,scope=ruvio-server,mode=max
       - name: Docker Hub description
+        if: needs.versions.outputs.preview != 'true'
         uses: peter-evans/dockerhub-description@v5
         with:
           username: salihcantekin
@@ -235,6 +268,7 @@ jobs:
           short-description: Memory-first key-value server that speaks the Redis protocol (RESP2).
           readme-filepath: docker/hub/ruvio.md
       - name: Verify the Docker Hub page
+        if: needs.versions.outputs.preview != 'true'
         run: |
           set -euo pipefail
           curl -fsS https://hub.docker.com/v2/repositories/salihcantekin/ruvio/ | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["description"] and "AGPL" in d["full_description"], "Docker Hub description is missing"'
@@ -253,6 +287,9 @@ jobs:
         with:
           username: salihcantekin
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Stamp the preview version
+        if: needs.versions.outputs.preview == 'true'
+        run: python3 scripts/release_version.py ui --stamp "${{ needs.versions.outputs.ui }}"
       - uses: docker/build-push-action@v7
         with:
           context: clients
@@ -260,12 +297,13 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            salihcantekin/ruvio-ui:linux
             salihcantekin/ruvio-ui:${{ needs.versions.outputs.ui }}
-            salihcantekin/ruvio-ui:latest
+            ${{ needs.versions.outputs.preview == 'true' && 'salihcantekin/ruvio-ui:preview' || 'salihcantekin/ruvio-ui:linux' }}
+            ${{ needs.versions.outputs.preview == 'true' && '' || 'salihcantekin/ruvio-ui:latest' }}
           cache-from: type=gha,scope=ruvio-ui
           cache-to: type=gha,scope=ruvio-ui,mode=max
       - name: Docker Hub description
+        if: needs.versions.outputs.preview != 'true'
         uses: peter-evans/dockerhub-description@v5
         with:
           username: salihcantekin
@@ -274,6 +312,7 @@ jobs:
           short-description: Browser operator console for a Ruvio server.
           readme-filepath: docker/hub/ruvio-ui.md
       - name: Verify the Docker Hub page
+        if: needs.versions.outputs.preview != 'true'
         run: |
           set -euo pipefail
           curl -fsS https://hub.docker.com/v2/repositories/salihcantekin/ruvio-ui/ | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["description"] and "AGPL" in d["full_description"], "Docker Hub description is missing"'
@@ -291,8 +330,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: clients/ruvio-client
+      - name: Stamp the preview version
+        if: needs.versions.outputs.preview == 'true'
+        run: python3 scripts/release_version.py rust-client --stamp "${{ needs.versions.outputs.rust_client }}"
       - run: cargo test --manifest-path clients/ruvio-client/Cargo.toml --locked
-      - run: cargo publish --locked --manifest-path clients/ruvio-client/Cargo.toml
+      # A stamped preview leaves the manifest changed in the checkout: --allow-dirty.
+      - run: cargo publish --locked --manifest-path clients/ruvio-client/Cargo.toml ${{ needs.versions.outputs.preview == 'true' && '--allow-dirty' || '' }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
@@ -311,6 +354,9 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
+      - name: Stamp the preview version
+        if: needs.versions.outputs.preview == 'true'
+        run: python3 scripts/release_version.py csharp --stamp "${{ needs.versions.outputs.csharp }}"
       - run: dotnet test clients/csharp/Ruvio.Client.Tests/Ruvio.Client.Tests.csproj
       - run: dotnet test clients/csharp/Ruvio.Client.AspNetCore.Tests/Ruvio.Client.AspNetCore.Tests.csproj
       - run: dotnet pack clients/csharp/Ruvio.Client/Ruvio.Client.csproj -c Release -o dist
@@ -364,6 +410,9 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
       - run: chmod +x server-bin/ruvio
+      - name: Stamp the preview version
+        if: needs.versions.outputs.preview == 'true'
+        run: python3 scripts/release_version.py node --stamp "${{ needs.versions.outputs.node }}"
       - name: Trusted publishing needs npm 11.5.1 or newer
         run: npm install -g npm@^11.5.1 && npm --version
       - run: npm ci
@@ -372,7 +421,8 @@ jobs:
         run: scripts/run_with_servers.sh "$PWD/server-bin/ruvio" 17400 -- npm test --prefix clients/node
       - name: Publish (OIDC, no token)
         working-directory: clients/node
-        run: npm publish --access public
+        # A preview goes under the `preview` dist-tag, so `npm install ruvio-client` keeps the release.
+        run: npm publish --access public ${{ needs.versions.outputs.preview == 'true' && '--tag preview' || '' }}
 
   pypi:
     needs: [versions, server-binary]
@@ -395,6 +445,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: chmod +x server-bin/ruvio
+      - name: Stamp the preview version
+        if: needs.versions.outputs.preview == 'true'
+        run: python3 scripts/release_version.py python --stamp "${{ needs.versions.outputs.python }}"
       - run: python -m pip install "./clients/python[test]" build twine
       - name: Test against a live server
         run: scripts/run_with_servers.sh "$PWD/server-bin/ruvio" 17400 -- python -m pytest -q clients/python
@@ -434,6 +487,9 @@ jobs:
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
       - run: chmod +x server-bin/ruvio
+      - name: Stamp the preview version
+        if: needs.versions.outputs.preview == 'true'
+        run: python3 scripts/release_version.py java --stamp "${{ needs.versions.outputs.java }}"
       - name: Test against a live server
         run: scripts/run_with_servers.sh "$PWD/server-bin/ruvio" 17400 -- mvn -B -f clients/java/pom.xml verify
       - name: Build and sign the Maven artifacts
@@ -480,6 +536,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: server-binaries-${{ matrix.platform }}
+      - name: Stamp the preview version
+        if: needs.versions.outputs.preview == 'true'
+        # Windows runners name the interpreter python.
+        run: '"$(command -v python3 || command -v python)" scripts/release_version.py server --stamp "${{ needs.versions.outputs.server }}"'
       - name: Build
         run: cargo build --locked --release --bin ruvio --bin ruvio-ctl
       - name: Smoke test the binary
@@ -559,6 +619,10 @@ jobs:
       - name: Build the screens
         working-directory: clients/ruvio-ui/web
         run: npm ci && npm run build
+      - name: Stamp the preview version
+        if: needs.versions.outputs.preview == 'true'
+        shell: bash
+        run: '"$(command -v python3 || command -v python)" scripts/release_version.py ui --stamp "${{ needs.versions.outputs.ui }}"'
       - name: Build the host binary
         run: cargo build --locked --release --manifest-path clients/ruvio-ui/Cargo.toml
       - name: Package
@@ -631,13 +695,18 @@ jobs:
           NODE: ${{ needs.versions.outputs.node }}
           PYTHON: ${{ needs.versions.outputs.python }}
           JAVA: ${{ needs.versions.outputs.java }}
+          PREVIEW: ${{ needs.versions.outputs.preview }}
         run: |
           set -euo pipefail
           tag="$GIT_TAG"
+          prerelease=()
+          if [ "$PREVIEW" = "true" ]; then
+            prerelease=(--prerelease)
+          fi
           if [ -z "$tag" ]; then
             tag="ruvio-$SERVER"
           fi
-          gh release create "$tag" --title "$tag" --notes "$(cat <<EOF
+          gh release create "$tag" "${prerelease[@]}" --title "$tag" --notes "$(cat <<EOF
           Server $SERVER
           Rust client $RUST_CLIENT
           C# $CSHARP
