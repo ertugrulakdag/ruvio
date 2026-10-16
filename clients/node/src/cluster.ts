@@ -271,6 +271,9 @@ const T_CROSS = 2;
 const T_FANOUT = 3;
 const T_NOSLOT = 4;
 
+/** MOVED redirects followed per command before the MOVED error is returned. */
+const MAX_REDIRECTS = 3;
+
 // ---- nodes ----------------------------------------------------------------------------------
 
 /** One shard: its address and its own multiplexed client. */
@@ -316,7 +319,6 @@ class Router {
   private nChunks = 0;
   private loading: Promise<void> | null = null;
   private refreshing: Promise<void> | null = null;
-  private movedSeen = 0;
   /** Number of CLUSTER SLOTS refreshes done after the first load. */
   refreshes = 0;
   /** Number of MOVED redirects followed. */
@@ -431,7 +433,6 @@ class Router {
     this.slots = slots;
     this.nodes = fresh;
     if (!fresh.has(this.home.addr)) this.home = fresh.values().next().value!;
-    this.movedSeen = 0;
     this.ready = true;
     for (const [addr, n] of old) if (!fresh.has(addr)) this.drop(n);
   }
@@ -507,7 +508,7 @@ class Router {
     }
   }
 
-  /** Sends one frame to a node; a `-MOVED` reply is followed once. */
+  /** Sends one frame to a node; `-MOVED` replies are followed up to `MAX_REDIRECTS` times. */
   sendTo(node: ClusterNode, frame: Buffer, tf: Tf | null, fl: number, blocking: boolean): Promise<any> {
     if (blocking) return this.sendBlocking(node, frame, tf, fl);
     const conn = node.conn;
@@ -552,29 +553,35 @@ class Router {
     return Promise.reject(e);
   }
 
-  /** `MOVED slot host:port`: fix the table, then send the command once more. */
-  async moved(e: RuvioError, frame: Buffer, tf: Tf | null, fl: number): Promise<any> {
+  /**
+   * `MOVED slot host:port`: point that slot at the named node and send the command there. The
+   * whole table is reloaded only for an unknown node or a second MOVED for the same command; the
+   * MOVED after `MAX_REDIRECTS` redirects is returned as the error.
+   */
+  async moved(e: RuvioError, frame: Buffer, tf: Tf | null, fl: number, hop = 1): Promise<any> {
     const parts = e.message.split(' ');
     const slot = Number(parts[1]);
     const addr = parts[2];
-    if (addr === undefined || !(slot >= 0 && slot < SLOT_COUNT)) throw e;
+    if (hop > MAX_REDIRECTS || addr === undefined || !(slot >= 0 && slot < SLOT_COUNT)) throw e;
     this.redirects++;
     let node = this.nodes.get(addr);
-    if (node === undefined || this.movedSeen > 0) {
+    if (node === undefined || hop > 1) {
       try {
         await this.refresh();
       } catch {
         /* keep the redirect target below */
       }
       node = this.nodeAt(addr);
-      this.slots[slot] = node;
-    } else {
-      this.slots[slot] = node;
-      this.movedSeen++;
     }
+    this.slots[slot] = node;
     const conn = node.conn;
     conn.writeFrames(frame);
-    return conn.track(tf, fl);
+    try {
+      return await conn.track(tf, fl);
+    } catch (e2) {
+      if (e2 instanceof RuvioError && e2.code === 'MOVED') return this.moved(e2, frame, tf, fl, hop + 1);
+      throw e2;
+    }
   }
 
   /** MGET / MSET / DEL / UNLINK / EXISTS / TOUCH across slots: one sub-command per node, merged in caller order. */
@@ -711,7 +718,7 @@ class Router {
   }
 }
 
-/** Receives one node's share of a pipeline and follows MOVED once per command. */
+/** Receives one node's share of a pipeline and follows MOVED per command. */
 class GroupSink implements BatchSink {
   readonly frames: Buffer[] = [];
   readonly idx: number[] = [];

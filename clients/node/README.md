@@ -114,8 +114,8 @@ only for a possible `MOVED` retry.
 | `DBSIZE`, `KEYS`, `FLUSHDB`, `FLUSHALL` | sent to every node and merged (sum / concatenation / first reply) |
 | other keyless commands (`PING`, `INFO`, `CLIENT`, `CONFIG`, `PUBLISH`, `SCRIPT`, `FUNCTION`, `ACL`, ..., `EVAL` with 0 keys) | the seed node |
 
-- **`-MOVED`**: the slot is repointed to the named node and the command is retried **once**; a second `MOVED` is returned as the error.
-  The table is re-read with `CLUSTER SLOTS` when the node is unknown or when more than one slot has moved since the last read (one request is shared by all callers).
+- **`-MOVED`**: the slot is repointed to the named node and the command is sent there; up to **3** redirects are followed per command, a fourth `MOVED` is returned as the error.
+  The whole table is re-read with `CLUSTER SLOTS` only when the named node is unknown or on the second `MOVED` for the same command (one request is shared by all callers).
   Transport failures are never replayed: the affected calls reject with `ConnectionError`, only that node reconnects (lazily), other nodes are untouched.
 - **Pipelines** are grouped per node: frames are written to each node's connection in call order (one coalesced write per node), replies come back in call order.
   A cross-slot `MGET`-style command inside a pipeline is split, an unsplittable cross-slot one leaves a `CROSSSLOT` error in its own slot, and `MOVED` is followed per command.
@@ -135,7 +135,7 @@ only for a possible `MOVED` retry.
 ```sh
 npm test                                                     # codec unit tests + coverage; live tests skip
 RUVIO_TEST_ADDR=127.0.0.1:17106 npm test                     # + live tests per command family and the cluster client's standalone fallback
-RUVIO_TEST_ADDR=127.0.0.1:17343 RUVIO_CLUSTER_ADDR=127.0.0.1:17340 npm test   # + live cluster tests (63 tests in total)
+RUVIO_TEST_ADDR=127.0.0.1:17343 RUVIO_CLUSTER_ADDR=127.0.0.1:17340 npm test   # + live cluster tests
 RUVIO_TEST_ADDR=127.0.0.1:17106 npm run bench                # codec ns/B per op, live GET/SET ops/s, ioredis comparison
 RUVIO_CLUSTER_ADDR=127.0.0.1:17340 RUVIO_TEST_ADDR=127.0.0.1:17343 npm run bench   # + cluster GET/SET next to standalone
 ```
