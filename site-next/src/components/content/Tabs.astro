@@ -1,0 +1,75 @@
+---
+// Accessible tabs with a small script. Children are the panels, in the same order as `labels`,
+// each a direct child element. Without JavaScript every panel stays visible, one after another.
+interface Props { labels: string[]; id: string; label: string }
+const { labels, id, label } = Astro.props;
+---
+
+<div class="tabs" data-tabs id={id}>
+  <div class="tablist" role="tablist" aria-label={label} hidden>
+    {labels.map((text, i) => (
+      <button
+        type="button"
+        role="tab"
+        id={`${id}-tab-${i}`}
+        aria-controls={`${id}-panel-${i}`}
+        aria-selected={i === 0 ? "true" : "false"}
+        tabindex={i === 0 ? 0 : -1}
+      >{text}</button>
+    ))}
+  </div>
+  <div class="panels">
+    <slot />
+  </div>
+</div>
+
+<style>
+  .tablist { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 20px; overflow-x: auto; scrollbar-width: none; }
+  .tablist::-webkit-scrollbar { display: none; }
+  .tablist button {
+    flex: none; font: inherit; font-size: 14.5px; color: var(--mute); background: transparent; border: 0;
+    border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 10px 14px; cursor: pointer;
+  }
+  .tablist button:hover { color: var(--ink); }
+  .tablist button[aria-selected="true"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
+  .tablist button:focus-visible { outline: 2px solid var(--c2); outline-offset: -2px; }
+  .panels > :global(*) { display: grid; gap: 16px; min-width: 0; }
+  .panels > :global(* + *) { margin-top: 28px; }
+  .tabs.ready .panels > :global(* + *) { margin-top: 0; }
+</style>
+
+<script>
+  for (const root of document.querySelectorAll<HTMLElement>("[data-tabs]")) {
+    const list = root.querySelector<HTMLElement>("[role=tablist]")!;
+    const tabs = [...list.querySelectorAll<HTMLButtonElement>("[role=tab]")];
+    const panels = [...root.querySelector(".panels")!.children] as HTMLElement[];
+    if (panels.length !== tabs.length) continue;
+    panels.forEach((p, i) => {
+      p.id = `${root.id}-panel-${i}`;
+      p.setAttribute("role", "tabpanel");
+      p.setAttribute("aria-labelledby", tabs[i].id);
+      p.tabIndex = 0;
+    });
+    const select = (i: number, focus = false) => {
+      tabs.forEach((t, j) => {
+        t.setAttribute("aria-selected", String(i === j));
+        t.tabIndex = i === j ? 0 : -1;
+        panels[j].hidden = i !== j;
+      });
+      if (focus) tabs[i].focus();
+    };
+    tabs.forEach((t, i) => {
+      t.addEventListener("click", () => select(i));
+      t.addEventListener("keydown", (e) => {
+        const n = tabs.length;
+        const next = { ArrowRight: (i + 1) % n, ArrowLeft: (i - 1 + n) % n, Home: 0, End: n - 1 }[e.key];
+        if (next === undefined) return;
+        e.preventDefault();
+        select(next, true);
+      });
+    });
+    list.hidden = false;
+    root.classList.add("ready");
+    select(0);
+  }
+</script>

@@ -1,0 +1,70 @@
+---
+import Page from "../layouts/Page.astro";
+import { site } from "../config/site";
+
+const routes = [
+  {
+    title: "Questions and ideas",
+    text: "How to run, configure or use Ruvio, ideas that are not a feature request yet, and what you built with it.",
+    where: "GitHub Discussions",
+    href: site.discussions,
+    action: "Open Discussions",
+  },
+  {
+    title: "Bug reports",
+    text: "Ruvio does something it should not, or fails to do something it should. Include the version, the component, your operating system and a short reproduction.",
+    where: "GitHub Issues",
+    href: `${site.github}/issues/new/choose`,
+    action: "Open an issue",
+  },
+  {
+    title: "Security reports",
+    text: "Do not open a public issue, pull request or discussion for a security defect. Report it privately through GitHub Security Advisories.",
+    where: "Private advisory",
+    href: `${site.github}/security/advisories/new`,
+    action: "Report privately",
+    extra: { label: "Security policy", href: `${site.github}/blob/main/SECURITY.md` },
+  },
+];
+---
+
+<Page title="Contact" description="Where to ask questions, report bugs and send security reports for Ruvio.">
+  <section class="section">
+    <div class="wrap">
+      <h1 class="title">Contact</h1>
+      <p class="lede">
+        Ruvio is developed in the open on GitHub. Pick the route that fits what you have; each one reaches the
+        people who work on the server and the clients.
+      </p>
+
+      <div class="grid grid-3 routes">
+        {routes.map((r) => (
+          <article class="card route">
+            <p class="where">{r.where}</p>
+            <h2>{r.title}</h2>
+            <p>{r.text}</p>
+            <div class="route-actions">
+              <a class="btn ghost small" href={r.href}>{r.action}</a>
+              {r.extra && <a class="extra" href={r.extra.href}>{r.extra.label}</a>}
+            </div>
+          </article>
+        ))}
+      </div>
+
+      <p class="later">A contact form will come later. Until then, GitHub is the way to reach us.</p>
+    </div>
+  </section>
+</Page>
+
+<style>
+  .title { max-width: none; }
+  .routes { margin-top: 40px; }
+  .route { padding: 24px; }
+  .route h2 { margin: 0; font-size: 20px; }
+  .route p { margin: 0; color: var(--mute); font-size: 15px; }
+  .route .where { font-size: 13px; color: var(--faint); font-weight: 500; }
+  .route-actions { margin-top: auto; padding-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; }
+  .extra { font-size: 14px; color: var(--mute); text-decoration: underline; text-decoration-color: var(--line-soft); text-underline-offset: 3px; }
+  .extra:hover { color: var(--ink); }
+  .later { margin: 32px 0 0; color: var(--faint); font-size: 14px; }
+</style>

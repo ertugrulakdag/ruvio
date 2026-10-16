@@ -1,0 +1,263 @@
+---
+import Page from "../layouts/Page.astro";
+import CodeBlock from "../components/content/CodeBlock.astro";
+import SideNav from "../components/content/SideNav.astro";
+
+type Ref = { label: string; href: string };
+type UseCase = { id: string; nav: string; title: string; problem: string; code: string; body: string; note?: string; refs: Ref[] };
+
+const commands = "/docs/commands/";
+
+const cases: UseCase[] = [
+  {
+    id: "rate-limits",
+    nav: "Rate limits",
+    title: "Rate limits and quotas",
+    problem: "A fixed window per API key, per user, or per tenant, in one command on the shard that owns the key.",
+    code: `LIMIT api:key-7 100 60000
+# 99    -> 99 calls left in this 60 s window
+# (nil) -> window is full, nothing was counted`,
+    body: "<code>LIMIT key max window_ms</code> returns the remaining allowance, or a null bulk when the window is full. A rejected call is not counted. The window is the key's deadline, so a quiet key disappears by itself. In WAL-backed modes the accepted call is a log record.",
+    note: "Fixed window, not sliding. If you need per-second smoothing on top, keep a short second window next to the long one.",
+    refs: [{ label: "LIMIT", href: commands }],
+  },
+  {
+    id: "locks",
+    nav: "Locks and fencing",
+    title: "Locks, leader election and fencing",
+    problem: "One worker at a time holds a named resource; others get a null reply until it frees or expires.",
+    code: `LEASE job:nightly-report 30000
+# 17    -> you hold it, token 17
+# (nil) -> someone else holds it
+RELEASE job:nightly-report 17
+# 1     -> released (0 if the token no longer matches)`,
+    body: "Each grant returns a token that grows. Send it with writes to the thing you protect and have that side reject older tokens. Expiry and <code>RELEASE</code> keep the sequence while the key exists.",
+    note: "Deleting the key restarts the token at 1, and data loss can do the same. A token alone does not fence an external system after that.",
+    refs: [{ label: "LEASE and RELEASE", href: commands }],
+  },
+  {
+    id: "workers",
+    nav: "Worker concurrency",
+    title: "Concurrency limits for workers",
+    problem: "At most N holders at once: image resizers, export jobs, calls to a slow upstream.",
+    code: `SEMAPHORE upstream:billing 8 15000
+# 1700000000123 -> a slot, this is your token
+# (nil)         -> all 8 slots are taken
+RELEASE upstream:billing 1700000000123`,
+    body: "Every holder has its own TTL, so a crashed worker frees its slot when the TTL ends. The key is removed when the last holder leaves.",
+    note: "Pick a TTL longer than the longest normal job, and release as soon as you finish.",
+    refs: [{ label: "SEMAPHORE", href: commands }],
+  },
+  {
+    id: "inventory",
+    nav: "Inventory and seats",
+    title: "Inventory, tickets and seat counts",
+    problem: "Sell from a counter without overselling, with no script and no read-then-write race.",
+    code: `SET stock:ticket-42 500
+TAKE stock:ticket-42 2
+# 498   -> took 2, 498 left
+# (nil) -> not enough, the key is unchanged
+
+INCRBY seats:room-9 1 MAX 120
+# 57    -> joined
+# (nil) -> room is full, nothing was written`,
+    body: "<code>TAKE</code> subtracts only when the key holds enough. <code>INCRBY … MAX</code> adds only while the result stays at or below the cap. Both answer with a null bulk and write nothing when they refuse.",
+    note: "A refused call writes nothing, neither to the key nor to the WAL.",
+    refs: [{ label: "TAKE", href: commands }, { label: "INCRBY MAX", href: commands }],
+  },
+  {
+    id: "idempotency",
+    nav: "Idempotent APIs",
+    title: "Idempotent APIs and payments",
+    problem: "A retry of the same request replays the stored answer instead of running the handler again.",
+    code: `IDEM order:42 BEGIN request-digest attempt-1 60000
+# ["acquired"]                 -> run the handler once
+IDEM order:42 COMPLETE request-digest attempt-1 saved-result
+# 1
+IDEM order:42 BEGIN request-digest attempt-2 60000
+# ["completed","saved-result"]`,
+    body: "<code>BEGIN</code> answers <code>acquired</code>, <code>pending</code>, <code>conflict</code> (same key, different fingerprint), or <code>completed</code> with the saved result. For plain once-only work such as a webhook delivery id, <code>ONCE key ttl_ms</code> is the lighter tool: 1 the first time, 0 until the deadline.",
+    note: "This does not make an outside effect exactly-once. A handler can crash before <code>COMPLETE</code>, so the payment provider still needs its own idempotency key.",
+    refs: [{ label: "IDEM", href: "/docs/idem/" }, { label: "ONCE", href: commands }],
+  },
+  {
+    id: "versions",
+    nav: "Lost-update protection",
+    title: "Lost-update protection",
+    problem: "Two editors open the same record; only the one holding the current version may save.",
+    code: `SETV profile:ada "{...}"
+# 1     -> version 1 created
+SETV profile:ada "{...}" 1
+# 2     -> accepted, now version 2
+SETV profile:ada "{...}" 1
+# error -> stale version, value unchanged`,
+    body: "Optimistic concurrency without <code>WATCH</code> or a script. Only keys written with <code>SETV</code> carry a version.",
+    note: "A plain <code>SET</code> replaces a versioned string.",
+    refs: [{ label: "SETV", href: commands }],
+  },
+  {
+    id: "sessions",
+    nav: "Sessions",
+    title: "Sessions and sliding expiry",
+    problem: "Reading a session keeps it alive; an idle one expires on its own.",
+    code: `SET session:9f3 "{...}" PX 1800000
+GETEX session:9f3 1800000
+# "{...}" and the deadline is now 30 min from now`,
+    body: "<code>GETEX</code> returns the string and moves its deadline in one step, so there is no separate <code>EXPIRE</code> call. <code>GET</code> does not move a deadline.",
+    refs: [{ label: "GETEX", href: commands }],
+  },
+  {
+    id: "cache",
+    nav: "Cache fills",
+    title: "Cache fills without stampedes",
+    problem: "When a hot key expires, one caller refills it and the others wait or serve the stale copy.",
+    code: `FILLGET product:42 5000 WAIT 200
+# [HIT, value]          -> served from memory
+# [FILL, token]         -> you refill it
+# [BUSY, nil]           -> someone else is filling
+# [STALE, value, token] -> inside a stale-while-revalidate window
+FILLSET product:42 "{...}" 60000 <token> SWR 30000
+# 1 -> stored (0 if the token is no longer live)`,
+    body: "One round trip decides who loads from the database. <code>WAIT</code> holds a caller that would get <code>BUSY</code> until the filler writes, so there is no retry loop in the client.",
+    note: "Fill markers live in memory only and lapse after <code>fill_ms</code>. <code>WAIT</code> is refused inside <code>MULTI</code> and scripts.",
+    refs: [{ label: "FILLGET and FILLSET", href: commands }],
+  },
+  {
+    id: "delayed",
+    nav: "Delayed jobs",
+    title: "Delayed jobs and queues",
+    problem: "Schedule work for later with a stream and a consumer group, without a separate scheduler.",
+    code: `XGROUP CREATE jobs workers $ MKSTREAM
+XADD jobs DELAY 30000 * kind send-reminder user 42
+XREADGROUP GROUP workers w1 COUNT 10 BLOCK 5000 STREAMS jobs >
+# the entry appears here after 30 s
+XACK jobs workers <id>`,
+    body: "The entry is stored right away. <code>XREADGROUP</code> skips it until the delay passes, and <code>XREAD</code> can still see it. Pending entries, <code>XCLAIM</code> and <code>XAUTOCLAIM</code> work as in Redis streams.",
+    note: "The hold is a WAL record and is written only when a delay is set.",
+    refs: [{ label: "XADD DELAY", href: commands }],
+  },
+  {
+    id: "changes",
+    nav: "Change feeds",
+    title: "Change feeds",
+    problem: "React to writes (cache invalidation, search indexing, audit) by reading a feed instead of polling.",
+    code: `CHANGES SUBSCRIBE FROM NOW MATCH user:* TYPES put,del
+# a durable stream of changes, resumable with FROM <shard>:<seq>`,
+    body: "The durable feed is built from the WAL and can resume from a saved position, with optional key patterns, types and values. <code>CHANGES START</code> is the lighter in-memory feed of up to 1024 notes per shard.",
+    note: "Limits and retention are under <em>Change stream</em> in the configuration reference.",
+    refs: [{ label: "CHANGES", href: commands }, { label: "Change stream settings", href: "/docs/configuration/#change-stream" }],
+  },
+  {
+    id: "data",
+    nav: "Leaderboards, geo, JSON",
+    title: "Leaderboards, geo and documents",
+    problem: "The data types you already use, plus JSON documents with an exact-match index.",
+    code: `ZADD leaderboard 1200 ada 980 grace
+ZRANGE leaderboard 0 9 REV WITHSCORES
+GEOSEARCH cities FROMLONLAT 13.36 38.11 BYRADIUS 50 km COUNT 10
+JSON.SET user:7 $ '{"plan":"pro","country":"TR"}'
+JSON.INDEX CREATE by_plan PREFIX user: PATH $.plan TYPE string
+JSON.FIND by_plan VALUE pro COUNT 20`,
+    body: "Strings, lists, sets, hashes, sorted sets, streams, geo, Bloom filters and JSON are covered. <code>JSON.INDEX</code> is an exact-equality index on one scalar field; it works on database 0 and keeps its postings in memory.",
+    refs: [{ label: "Data types", href: "/docs/data-types/" }, { label: "Commands", href: commands }],
+  },
+];
+---
+
+<Page title="Use cases" description="Coordination jobs Ruvio finishes in one command on the shard that owns the key: rate limits, locks, idempotency, cache fills, delayed jobs and change feeds.">
+  <section class="section intro">
+    <div class="wrap">
+      <h1 class="title">Use cases</h1>
+      <p class="lede">
+        Ruvio speaks RESP, so any Redis client can talk to it. What sets it apart is a set of commands that
+        finish a coordination job on the shard that owns the key, in one call. Below are the jobs people reach
+        for, with the commands as you would type them in <code>redis-cli</code> and a link to the reference.
+      </p>
+    </div>
+  </section>
+
+  <div class="wrap body">
+    <SideNav items={[...cases.map((c) => ({ id: c.id, label: c.nav })), { id: "from-redis", label: "Moving from Redis" }]} label="Use cases">
+      {cases.map((c) => (
+        <section class="case" id={c.id} aria-labelledby={`${c.id}-h`}>
+          <h2 id={`${c.id}-h`}>{c.title}</h2>
+          <p class="problem">{c.problem}</p>
+          <CodeBlock code={c.code} title="redis-cli" />
+          <p class="body-text" set:html={c.body} />
+          {c.note && <p class="note"><span class="note-label">Keep in mind</span> <span set:html={c.note} /></p>}
+          <p class="refs">
+            <span>Reference</span>
+            {c.refs.map((r) => <a href={r.href}>{r.label}</a>)}
+          </p>
+        </section>
+      ))}
+
+      <section class="case" id="from-redis" aria-labelledby="from-redis-h">
+        <h2 id="from-redis-h">Moving from Redis</h2>
+        <p class="problem">
+          Ruvio is not a full Redis clone. It speaks RESP2 and covers the commands listed in the{" "}
+          <a href="/docs/commands/">command reference</a>. Check that the commands you use are there before you switch.
+        </p>
+        <p class="body-text">
+          <code>ruvio-ctl import</code> copies keys with their TTLs from a running Redis and can verify the copy.
+          It does not move consumer groups, Lua scripts, ACL users or module types.
+        </p>
+        <p class="body-text">
+          Start with <a href="/get-started/">Get started</a>, then pick a <a href="/docs/clients/">client</a>.
+          For durability modes and what each one promises, see <a href="/docs/configuration/">Configuration</a>{" "}
+          and <a href="/docs/recovery/">Recovery</a>.
+        </p>
+        <p class="refs">
+          <span>Reference</span>
+          <a href="/docs/import/">Import</a>
+          <a href="/docs/compatibility/">Compatibility</a>
+          <a href="/docs/commands/">Commands</a>
+        </p>
+      </section>
+    </SideNav>
+  </div>
+
+  <section class="section band next">
+    <div class="wrap next-row">
+      <div>
+        <h2 class="title">Try it on your machine</h2>
+        <p class="lede">One Docker command or a prebuilt binary, then <code>redis-cli</code>.</p>
+      </div>
+      <div class="next-actions">
+        <a class="btn" href="/get-started/">Get started</a>
+        <a class="btn ghost" href="/docs/commands/">Command reference</a>
+      </div>
+    </div>
+  </section>
+</Page>
+
+<style>
+  .intro { padding-bottom: 40px; }
+  .intro .title { max-width: none; }
+  .lede code, .body-text code, .problem code, .note code { color: var(--ink); }
+  .body { padding-bottom: var(--section-y); }
+  .case { padding-block: 40px; border-top: 1px solid var(--line); scroll-margin-top: 80px; }
+  .case:first-child { border-top: 0; padding-top: 0; }
+  .case h2 { margin: 0 0 8px; font-size: 24px; line-height: 1.25; }
+  .problem { margin: 0 0 20px; color: var(--ink); font-size: 17px; max-width: 64ch; }
+  .body-text { margin: 18px 0 0; color: var(--mute); max-width: 68ch; }
+  .case a:not(.btn) { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line-soft); text-underline-offset: 3px; }
+  .case a:not(.btn):hover { text-decoration-color: var(--mute); }
+  .note {
+    margin: 18px 0 0; padding: 12px 16px; max-width: 68ch;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-s);
+    color: var(--mute); font-size: 15px;
+  }
+  .note-label { font-weight: 600; color: var(--ink); margin-right: 4px; }
+  .refs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin: 18px 0 0; font-size: 14px; }
+  .refs span { color: var(--faint); }
+  .next-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 24px 40px; }
+  .next-row .title { font-size: clamp(24px, 3vw, 32px); }
+  .next-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+  @media (max-width: 900px) {
+    .intro { padding-bottom: 24px; }
+    .case { scroll-margin-top: 124px; }
+    .case:first-child { padding-top: 28px; }
+    .case h2 { font-size: 21px; }
+  }
+</style>

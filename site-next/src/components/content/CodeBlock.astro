@@ -1,0 +1,60 @@
+---
+// A plain code block in the page's terminal style: comment lines are dimmed, nothing else is colored.
+// Comments are whole lines that start with "#" (or "//"), or a trailing "  # ..." after two spaces.
+interface Props { code: string; title?: string; copy?: boolean }
+const { code, title, copy = true } = Astro.props;
+
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const text = code.replace(/^\n+|\s+$/g, "");
+const html = text
+  .split("\n")
+  .map((line) => {
+    if (/^\s*(#|\/\/)/.test(line)) return `<span class="o">${esc(line)}</span>`;
+    const m = line.match(/^(.*?\S)(\s{2,}#\s.*)$/);
+    if (m) return `${esc(m[1])}<span class="o">${esc(m[2])}</span>`;
+    return esc(line);
+  })
+  .join("\n");
+---
+
+<figure class="term code-block">
+  {(title || copy) && (
+    <figcaption class="term-bar">
+      <span>{title}</span>
+      {copy && <button type="button" class="copy" data-copy hidden>Copy</button>}
+    </figcaption>
+  )}
+  <pre tabindex="0"><code set:html={html} /></pre>
+</figure>
+
+<style>
+  .code-block { margin: 0; }
+  .code-block .term-bar { align-items: center; min-height: 40px; padding-block: 6px; }
+  .code-block pre { font-size: 13.5px; line-height: 1.7; }
+  .code-block pre:focus-visible { outline: 2px solid var(--c2); outline-offset: -2px; }
+  @media (max-width: 600px) {
+    .code-block pre { font-size: 12.5px; padding: 14px 16px 16px; }
+  }
+  .copy {
+    font: inherit; font-size: 12px; color: var(--code-dim); background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; padding: 3px 9px; cursor: pointer;
+  }
+  .copy:hover { color: var(--code-ink); border-color: rgba(255, 255, 255, 0.22); }
+</style>
+
+<script>
+  for (const btn of document.querySelectorAll<HTMLButtonElement>(".code-block [data-copy]")) {
+    if (!navigator.clipboard) continue;
+    btn.hidden = false;
+    btn.addEventListener("click", async () => {
+      const code = btn.closest(".code-block")?.querySelector("code")?.textContent ?? "";
+      try {
+        await navigator.clipboard.writeText(code);
+        btn.textContent = "Copied";
+      } catch {
+        btn.textContent = "Copy failed";
+      }
+      setTimeout(() => (btn.textContent = "Copy"), 1600);
+    });
+  }
+</script>
