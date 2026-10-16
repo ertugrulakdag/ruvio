@@ -148,6 +148,7 @@ Each variable overrides one file setting, and a command-line flag, where there i
 | `RUVIO_WAL_SYNC_INTERVAL_MS` | `--wal-sync-interval-ms` | `persistence.sync_interval_ms` | |
 | `RUVIO_EXPERIMENTAL_SYNC_WORKER` | | `persistence.sync_worker` | Older boolean form (`true` = `on`); `RUVIO_SYNC_WORKER` wins |
 | `RUVIO_SYNC_WORKER` | | `persistence.sync_worker` | |
+| `RUVIO_WAL_PREFILL` | | | Linux only, default `true`: zero-fill WAL segments ahead of the cursor on a helper thread. `false` is a measurement knob for throughput-capped disks (every logged byte otherwise reaches the disk twice); `CONFIG GET wal-prefill` shows it |
 | `RUVIO_SNAPSHOT_MAX_BYTES` | `--snapshot-max-bytes` | `persistence.snapshot_max_bytes` | |
 | `RUVIO_SNAPSHOT_JOURNAL_BYTES` | `--snapshot-journal-bytes` | `persistence.snapshot_journal_bytes` | |
 | `RUVIO_SNAPSHOT_INTERVAL_MS` | `--snapshot-interval-ms` | `persistence.snapshot_interval_ms` | |

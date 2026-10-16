@@ -305,6 +305,9 @@ impl AppConfig {
         if let Some(value) = get("RUVIO_SYNC_WORKER") {
             self.persistence.sync_worker = value.parse().map_err(str::to_owned)?;
         }
+        if let Some(value) = get("RUVIO_WAL_PREFILL") {
+            self.persistence.wal_prefill = parse_bool(&value, "RUVIO_WAL_PREFILL")?;
+        }
         apply_u64(
             &get,
             "RUVIO_SNAPSHOT_MAX_BYTES",
@@ -920,6 +923,10 @@ impl AppConfig {
             (
                 "sync-worker-active".into(),
                 yes_no(self.persistence.sync_worker_active),
+            ),
+            (
+                "wal-prefill".into(),
+                yes_no(self.persistence.wal_prefill),
             ),
             ("write-timeout-ms".into(), millis(self.timeouts.write)),
             (

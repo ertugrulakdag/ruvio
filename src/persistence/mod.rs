@@ -251,6 +251,12 @@ pub struct PersistenceConfig {
     /// Most WAL a connected replica may hold back from compaction; past it the hold is
     /// dropped and the replica resyncs from a snapshot. `0` means no limit.
     pub replica_retain_max_bytes: u64,
+    /// Linux only: extend each WAL segment ahead of the write cursor and fill the new
+    /// space with zeros on a helper thread, so a sync never waits for an extent
+    /// conversion. Every logged byte then reaches the disk twice (zeros, then the record),
+    /// which halves the WAL bandwidth a throughput-capped disk leaves. `false` writes as
+    /// the file grows. Env `RUVIO_WAL_PREFILL`; a measurement knob, not a file key.
+    pub wal_prefill: bool,
 }
 
 impl PersistenceConfig {
@@ -298,6 +304,7 @@ impl Default for PersistenceConfig {
             snapshot_min_mutations: 0,
             cdc_retain_bytes: 0,
             replica_retain_max_bytes: 1 << 30,
+            wal_prefill: true,
         }
     }
 }

@@ -123,6 +123,7 @@ impl WalSink {
         let backlog_floor = Arc::new(AtomicU64::new(u64::MAX));
         let replica_count = Arc::new(AtomicU64::new(0));
         let sync_error = Arc::new(Mutex::new(None));
+        let prefill_enabled = cfg!(target_os = "linux") && config.wal_prefill;
         let sync_worker = if config.sync_worker_active {
             Some(super::sync_worker::SyncWorker::new(
                 Arc::clone(&durable),
@@ -146,7 +147,7 @@ impl WalSink {
                 write_pos: file_length,
                 synced_pos: file_length,
                 prealloc_end: file_length,
-                prealloc: cfg!(target_os = "linux"),
+                prealloc: prefill_enabled,
                 prefill: Prefill::reporting_to(Arc::clone(&sync_error)),
                 dirty_bytes: 0,
                 barrier_mark: (0, 0),
