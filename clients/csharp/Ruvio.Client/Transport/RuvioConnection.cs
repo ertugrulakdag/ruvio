@@ -236,6 +236,7 @@ public sealed class RuvioConnection : IRuvioConnection
         Database = database,
         ConnectTimeout = options.ConnectTimeout,
         MaxInFlightRequests = options.MaxInFlightRequests,
+        DedicatedReaderThread = options.DedicatedReaderThread,
         DiscoverCluster = options.DiscoverCluster,
         Reconnect = options.Reconnect,
         MaxReconnectAttempts = options.MaxReconnectAttempts,

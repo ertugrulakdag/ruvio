@@ -50,6 +50,16 @@ public sealed class RuvioClientOptions
     public int MaxInFlightRequests { get; set; } = 256;
 
     /// <summary>
+    /// When true, each command socket keeps blocking I/O and gets its own reader thread: callers
+    /// write their frames synchronously and the thread reads the replies, instead of going through
+    /// the runtime's async socket engine and thread pool on every round trip. It costs one thread
+    /// per socket (one per shard in a cluster) and cuts CPU per round trip, which matters most for
+    /// small pipelines and for pipelines split over many shards. Pub/Sub sockets are not affected.
+    /// Off by default.
+    /// </summary>
+    public bool DedicatedReaderThread { get; set; }
+
+    /// <summary>
     /// When true (the default), connect sends <c>CLUSTER SLOTS</c>. A map with two or
     /// more shards turns the client into a router: later commands go to the shard that
     /// owns the key. A disabled-cluster error, or a single shard, keeps one socket.

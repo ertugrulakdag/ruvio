@@ -869,7 +869,7 @@ public sealed partial class RuvioClient : IRuvioClient
             }
         }
 
-        RuvioSocket connection = await RuvioSocket.OpenAsync(host, port, _options, cancellationToken);
+        RuvioSocket connection = await RuvioSocket.OpenAsync(host, port, _options, cancellationToken, subscriber: true);
         var link = new PubSubLink(connection, DispatchMessage, FailSubscriber);
 
         lock (_pubsubGate)

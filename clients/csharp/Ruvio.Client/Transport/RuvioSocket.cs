@@ -16,7 +16,8 @@ internal sealed class RuvioSocket : IDisposable
     private static readonly Counter<long> SocketWrittenBytes = Meter.CreateCounter<long>(
         "ruvio_client_socket_written_bytes", "By");
     private readonly TcpClient _tcp;
-    private readonly NetworkStream _stream;
+    private readonly Stream _stream;
+    private readonly bool _dedicatedReader;
     private readonly RespReader _reader;
     private readonly SemaphoreSlim _write = new(1, 1);
     private readonly SemaphoreSlim _read = new(1, 1);
@@ -29,10 +30,11 @@ internal sealed class RuvioSocket : IDisposable
     private volatile bool _broken;
     private volatile bool _disposed;
 
-    private RuvioSocket(TcpClient tcp, string host, int port, int maxInFlight)
+    private RuvioSocket(TcpClient tcp, string host, int port, int maxInFlight, bool dedicatedReader)
     {
         _tcp = tcp;
-        _stream = tcp.GetStream();
+        _dedicatedReader = dedicatedReader;
+        _stream = dedicatedReader ? new BlockingSocketStream(tcp.Client) : tcp.GetStream();
         _reader = new RespReader(_stream);
         Host = host;
         Port = port;
@@ -46,21 +48,40 @@ internal sealed class RuvioSocket : IDisposable
     public bool IsBroken => _broken || _disposed || _multiplexer?.IsBroken == true;
 
     /// <summary>Connects, then sends <c>AUTH</c> when the options ask for it. <c>SELECT</c> is left to the caller.</summary>
+    // subscriber: a Pub/Sub socket, which keeps async I/O whatever the options say.
     public static async Task<RuvioSocket> OpenAsync(
         string host,
         int port,
         RuvioClientOptions options,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool subscriber = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.MaxInFlightRequests);
         
         var tcp = new TcpClient { NoDelay = true };
+        bool dedicatedReader = options.DedicatedReaderThread && !subscriber;
         using var connect = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         connect.CancelAfter(options.ConnectTimeout);
 
         try
         {
-            await tcp.ConnectAsync(host, port, connect.Token);
+            if (dedicatedReader)
+            {
+                // A blocking connect keeps the socket in blocking mode; it runs on a pool thread so
+                // the timeout and the caller's token still apply (disposing the client aborts it).
+                using CancellationTokenRegistration abort = connect.Token.Register(tcp.Dispose);
+                await Task.Run(() => tcp.Connect(host, port), CancellationToken.None).ConfigureAwait(false);
+                connect.Token.ThrowIfCancellationRequested();
+            }
+            else
+            {
+                await tcp.ConnectAsync(host, port, connect.Token);
+            }
+        }
+        catch (Exception error) when (dedicatedReader && connect.Token.IsCancellationRequested && error is not OperationCanceledException)
+        {
+            tcp.Dispose();
+            throw new OperationCanceledException(connect.Token);
         }
         catch
         {
@@ -68,7 +89,7 @@ internal sealed class RuvioSocket : IDisposable
             throw;
         }
 
-        var connection = new RuvioSocket(tcp, host, port, options.MaxInFlightRequests);
+        var connection = new RuvioSocket(tcp, host, port, options.MaxInFlightRequests, dedicatedReader);
 
         if (options.Password is null)
         {
@@ -331,7 +352,7 @@ internal sealed class RuvioSocket : IDisposable
                 ThrowIfClosed();
                 existing = _multiplexer;
                 if (existing is not null) return existing;
-                existing = new CommandMultiplexer(_stream, _reader, _maxInFlight, coalesceWrites: true);
+                existing = new CommandMultiplexer(_stream, _reader, _maxInFlight, coalesceWrites: true, dedicatedReader: _dedicatedReader);
                 Volatile.Write(ref _multiplexer, existing);
                 return existing;
             }

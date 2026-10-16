@@ -504,9 +504,20 @@ by the writer into pooled buffers that are returned after writing, not after the
 server replies. Raw frames and cancellable binary/string argument lists are copied
 after admission so caller-owned memory can be reused after cancellation.
 
+`RuvioClientOptions.DedicatedReaderThread` (off by default) gives each command socket
+blocking I/O and a reader thread of its own: the caller that owns the writer writes its
+frames synchronously, and the thread reads the replies and completes the callers, who
+resume on the thread pool. This skips the runtime's async socket engine and one thread-pool
+hand-off per round trip. On a 4-shard local server (Apple M4 Pro) it cut user CPU per
+request by about 45% for 16-command pipelines on one socket and by 25-35% for pipelines
+split over the shards; Linux was not measured. The cost is one thread per socket (one per
+shard in a cluster), and a write that fills the socket buffer blocks its caller until the
+server reads. Pub/Sub sockets keep async I/O.
+
 The queues use bounded `Channel<T>` and admission uses `SemaphoreSlim`; this design
 is not lock-free. There is no per-request socket write lock, linked
-`CancellationTokenSource`, timer, dedicated thread, or `Task.Run`.
+`CancellationTokenSource`, timer, dedicated thread (unless `DedicatedReaderThread` is
+on), or `Task.Run`.
 Caller continuations run asynchronously rather than inside the reply reader.
 The `socket.queue` trace/histogram covers admission, writer queueing and encoding.
 `socket.write` covers the socket write. `socket.reply` covers publication to the

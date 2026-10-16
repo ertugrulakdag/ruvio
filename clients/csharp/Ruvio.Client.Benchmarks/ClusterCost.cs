@@ -13,6 +13,9 @@ internal static class ClusterCost
     private const int KeyCount = 4096;
     private const double Warmup = 0.5;
 
+    // RUVIO_DEDICATED_READER=1 measures RuvioClientOptions.DedicatedReaderThread.
+    private static readonly bool DedicatedReader = Environment.GetEnvironmentVariable("RUVIO_DEDICATED_READER") == "1";
+
     public static async Task RunAsync(string[] args)
     {
         int port = int.Parse(args[0]);
@@ -49,7 +52,13 @@ internal static class ClusterCost
         for (int worker = 0; worker < workers; worker++)
         {
             RuvioConnection connection = await RuvioConnection.ConnectAsync(
-                new RuvioClientOptions { Host = "127.0.0.1", Port = port, DiscoverCluster = mode != "plain" });
+                new RuvioClientOptions
+                {
+                    Host = "127.0.0.1",
+                    Port = port,
+                    DiscoverCluster = mode != "plain",
+                    DedicatedReaderThread = DedicatedReader,
+                });
 
             connections.Add(connection);
             clients[worker] = await connection.GetDefaultDatabaseAsync();

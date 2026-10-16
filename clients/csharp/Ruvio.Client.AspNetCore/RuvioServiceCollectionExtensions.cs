@@ -81,6 +81,7 @@ public static class RuvioServiceCollectionExtensions
         if (Number(configuration, "Database") is { } database) options.Database = database;
         if (Span(configuration, "ConnectTimeout") is { } connectTimeout) options.ConnectTimeout = connectTimeout;
         if (Number(configuration, "MaxInFlightRequests") is { } inFlight) options.MaxInFlightRequests = inFlight;
+        if (Flag(configuration, "DedicatedReaderThread") is { } dedicatedReader) options.DedicatedReaderThread = dedicatedReader;
         if (Flag(configuration, "DiscoverCluster") is { } discover) options.DiscoverCluster = discover;
         if (Flag(configuration, "Reconnect") is { } reconnect) options.Reconnect = reconnect;
         if (Number(configuration, "MaxReconnectAttempts") is { } attempts) options.MaxReconnectAttempts = attempts;

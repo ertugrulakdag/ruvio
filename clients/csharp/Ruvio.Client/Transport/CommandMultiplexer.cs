@@ -21,7 +21,9 @@ internal sealed class CommandMultiplexer
     private TaskCompletionSource? _writerStopped;
     private Exception? _failure;
 
-    internal CommandMultiplexer(Stream stream, RespReader reader, int capacity, bool coalesceWrites = true)
+    // dedicatedReader: the stream blocks (BlockingSocketStream); replies are read by a thread of
+    // this multiplexer's own, and writes complete in the caller.
+    internal CommandMultiplexer(Stream stream, RespReader reader, int capacity, bool coalesceWrites = true, bool dedicatedReader = false)
     {
         _stream = stream;
         _coalesceWrites = coalesceWrites;
@@ -42,7 +44,7 @@ internal sealed class CommandMultiplexer
             AllowSynchronousContinuations = true,
         });
 
-        _receiver = ReadLoopAsync();
+        _receiver = dedicatedReader ? StartReaderThread() : ReadLoopAsync();
     }
 
     internal bool IsBroken => Volatile.Read(ref _failure) is not null;
@@ -466,6 +468,119 @@ internal sealed class CommandMultiplexer
             }
         }
     }
+
+    private Task StartReaderThread()
+    {
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                ReadLoopBlocking();
+            }
+            finally
+            {
+                stopped.TrySetResult();
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "Ruvio reader",
+        };
+
+        thread.Start();
+
+        return stopped.Task;
+    }
+
+    /// <summary>
+    /// The reader thread: blocks in the socket read until a reply arrives, then completes the
+    /// oldest pending request, which the writer queued before its frame went out. Callers resume
+    /// on the thread pool, so a caller never runs on this thread.
+    /// </summary>
+    private void ReadLoopBlocking()
+    {
+        Request? current = null;
+        bool replyStarted = false;
+
+        try
+        {
+            while (true)
+            {
+                _reader.PrepareReply();
+                replyStarted = false;
+                RespValue first = Wait(_reader.ReadAsync(CancellationToken.None));
+
+                replyStarted = true;
+                ThrowIfBroken();
+
+                // The writer queues a request before its frame goes out, so it is normally here
+                // already; a peer that answers early waits for it.
+                while (!_pending.Reader.TryRead(out current))
+                {
+                    if (!_pending.Reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult())
+                        throw Failure();
+                }
+
+                try
+                {
+                    if (current.Replies == 1)
+                    {
+                        current.TrySetResult(first);
+                    }
+                    else
+                    {
+                        var values = new RespValue[current.Replies];
+
+                        values[0] = first;
+
+                        for (int i = 1; i < values.Length; i++)
+                            values[i] = Wait(_reader.ReadAsync(CancellationToken.None));
+
+                        current.TrySetResult(values);
+                    }
+                }
+                finally
+                {
+                    RuvioSocket.RecordSocketPhase("reply", current.SentAt);
+                }
+
+                Finish(current);
+                current = null;
+            }
+        }
+        catch (Exception error)
+        {
+            // A failure before the next reply's first byte belongs to the oldest pending request.
+            if (current is null && _pending.Reader.TryRead(out Request? oldest))
+            {
+                current = oldest;
+                replyStarted = false;
+            }
+
+            bool closedBeforeReply = current is not null && !replyStarted && !_reader.ReplyStarted;
+            Fail(error);
+
+            if (current is not null)
+            {
+                current.TryFail(new RuvioException(
+                    error.Message, false, error, closedBeforeReply));
+                Finish(current);
+            }
+        }
+        finally
+        {
+            while (_pending.Reader.TryRead(out Request? request))
+            {
+                request.TryFail(Failure(closedBeforeReply: true));
+                Finish(request);
+            }
+        }
+    }
+
+    // The blocking stream completes every read synchronously; anything else waits here.
+    private static RespValue Wait(ValueTask<RespValue> pending) =>
+        pending.IsCompletedSuccessfully ? pending.Result : pending.AsTask().GetAwaiter().GetResult();
 
     private void Finish(Request request)
     {
