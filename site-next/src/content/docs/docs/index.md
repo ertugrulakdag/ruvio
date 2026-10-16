@@ -1,5 +1,0 @@
----
-title: Ruvio documentation
----
-
-Placeholder.
