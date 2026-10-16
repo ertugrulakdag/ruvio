@@ -225,7 +225,7 @@ await using var securedConnection = await RuvioConnection.ConnectAsync(new Ruvio
 });
 IRuvioClient secured = await securedConnection.GetDefaultDatabaseAsync();</pre>
       <p><code>FlushDatabaseAsync</code>, <code>FlushAllDatabasesAsync</code>, <code>SwapDatabasesAsync</code>, and <code>MoveKeyAsync</code> send <code>FLUSHDB</code>, <code>FLUSHALL</code>, <code>SWAPDB</code>, and <code>MOVE</code>. Typed options cover <code>SET PXAT/KEEPTTL/GET</code>, <code>ZADD NX/XX/GT/LT/CH/INCR</code>, <code>XADD MAXLEN</code>, <code>XREAD</code>/<code>XREADGROUP COUNT/BLOCK/NOACK</code>, <code>XGROUP CREATE MKSTREAM</code>, extended <code>XPENDING</code>, and <code>XCLAIM</code> options.</p>
-      <p>A server error reply leaves the next command usable. A dropped command or shard socket fails that call; the next command opens it again. A single <code>GET</code>, <code>MGET</code>, <code>EXISTS</code>, <code>HGET</code>, <code>TTL</code>, or <code>PTTL</code> is sent once more when no reply byte arrived.</p>
+      <p>A server error reply leaves the next command usable. A dropped command or shard socket fails that call; the next command opens it again. No command is sent again automatically.</p>
       <p>A pipeline is not retried. <code>ConnectionLost</code> and <code>ConnectionRestored</code> carry host, port, and whether the socket is Pub/Sub; these events and reconnect control belong to the connection owner.</p>
 </section>
 

@@ -95,8 +95,8 @@
       <p>The same behaviors, in the idiom of each language:</p>
       <ul>
         <li>One seed address. The client asks <code>CLUSTER SLOTS</code>, opens one connection per shard and routes by slot. A standalone server answers "cluster mode is disabled" and the client then works as a plain client.</li>
-        <li><code>MGET</code>, <code>MSET</code>, <code>DEL</code>, <code>UNLINK</code>, <code>EXISTS</code> and <code>TOUCH</code> across slots are split per slot, sent in parallel, and the replies come back in your order. Other cross-slot calls fail before anything is sent.</li>
-        <li><code>MOVED</code> repairs the slot table and the command is retried once. A command is never replayed after a transport failure.</li>
+        <li><code>MGET</code>, <code>MSET</code>, <code>DEL</code>, <code>UNLINK</code>, <code>EXISTS</code> and <code>TOUCH</code> across slots are split per slot, sent in parallel, and the replies come back in your order, inside a pipeline too. Other cross-slot calls, <code>RENAME</code> included, fail before anything is sent.</li>
+        <li><code>MOVED</code> repairs that slot and the command is sent to the named node, up to three times; the whole table is reloaded only for an unknown node or the command's second <code>MOVED</code>. A command is never replayed after a transport failure.</li>
         <li>Pipelines, <code>MULTI</code>/<code>EXEC</code> with <code>WATCH</code>, Pub/Sub on its own connection, blocking commands that do not stall the shared connection, and a generic <code>execute</code> for anything else.</li>
         <li>Binary-safe values, server errors as typed errors, and nil replies as null, <code>None</code>, <code>Optional</code> or a second return value.</li>
       </ul>

@@ -2,7 +2,7 @@
 
 # Client behavior
 
-What the six clients do when a cluster redirects, a command spans slots, or a socket drops. They agree on most of it; the rows marked **differs** are known differences, kept as they are until someone decides to align them. Update this page in the same change as the client code. File references are relative to `clients/`.
+What the six clients do when a cluster redirects, a command spans slots, or a socket drops. They agree on most of it; the rows marked **differs** are the known differences left. Update this page in the same change as the client code. File references are relative to `clients/`.
 
 ## Shared test data
 
@@ -17,21 +17,20 @@ What the six clients do when a cluster redirects, a command spans slots, or a so
 
 | Topic | Behavior |
 | --- | --- |
-| Commands split across slots | `MGET`, `MSET`, `DEL`, `EXISTS`, `UNLINK` and `TOUCH` with keys in several slots are sent per slot and the replies merged (`MGET` keeps key order, counts are summed) |
+| Commands split across slots | `MGET`, `MSET`, `DEL`, `EXISTS`, `UNLINK` and `TOUCH` with keys in several slots are sent per slot and the replies merged (`MGET` keeps key order, counts are summed, `MSET` answers `OK`). Not atomic |
+| Split commands inside a pipeline | Split the same way; the merged reply sits at the command's index and the other replies keep their order. A transaction must stay in one slot |
+| Other commands across slots | `RENAME`, `RENAMENX`, `COPY`, `LMOVE`, `SMOVE`, `SINTERSTORE`, `BITOP`, `EVAL` and every other command that is not split fail with `CROSSSLOT` before anything is sent; nothing is emulated |
+| `MOVED` | The slot is pointed at the named node and the command is sent there, at most 3 times; a fourth `MOVED` is returned. The whole slot map is reloaded only when the named node is unknown, or from the command's second `MOVED` on |
 | `ASK` | Not followed; no client sends `ASKING`. Ruvio has no online slot migration, so the server does not send `ASK` |
-| Reconnect | A dropped socket is opened again on the next command |
-| Pipelines in a cluster | Split per node, replies returned in the original order; a transaction must stay in one slot |
+| Socket dropped before any reply byte | The command fails and is never sent again, reads included. The socket is opened again for the next command |
+| Pipelines in a cluster | Grouped per node, replies returned in the original order |
 
 ## Differences
 
 | Topic | Rust | C# | Go | Java | Node | Python |
 | --- | --- | --- | --- | --- | --- | --- |
-| **differs**: `MOVED` redirects followed per command | 3 | 3 | 1 | 1 | 1 | 1 |
-| **differs**: what a `MOVED` reloads | the whole slot map, every time | the whole slot map, every time | that slot; the whole map only for an unknown node or a second `MOVED` | same as Go | same as Go | same as Go |
-| **differs**: `RENAME`/`RENAMENX` across slots | emulated (`TYPE`, copy, `PEXPIRE`, `DEL`); fails for value types it cannot copy | emulated, same as Rust | refused before sending (`ErrCrossSlot`) | refused before sending (`RuvioServerException` "CROSSSLOT ... checked by the client") | refused before sending (`RuvioError`, code `CROSSSLOT`) | refused before sending (`CrossSlotError`) |
-| **differs**: other two-key commands across slots (`COPY`, `LMOVE`, `SMOVE`, ...) | sent to the first key's shard; the server answers | same as Rust | refused before sending | refused before sending | refused before sending | refused before sending |
-| **differs**: cross-slot `MGET`/`DEL` inside a pipeline | sent whole to the first key's shard | same as Rust | the whole pipeline is refused | split like a plain command | error at that index only | the pipeline is refused before sending |
-| **differs**: a command whose socket dropped before any reply byte | never sent again | sent once more for `GET`, `MGET`, `EXISTS`, `HGET`, `TTL`, `PTTL` when `Reconnect` is on; never for pipelines or the binary API | never | never | never | never |
+| **differs**: a non-split command whose keys span slots, inside a pipeline | `CROSSSLOT` error at its index; the rest runs | sent to the first key's shard; the server answers | the whole pipeline fails with `ErrCrossSlot` before sending | `CROSSSLOT` error at its index; the rest runs | `CROSSSLOT` error at its index; the rest runs | the pipeline is refused before sending |
+| **differs**: the `CROSSSLOT` error | `Error::Server` with the server's text | `RuvioException`, text ends "(checked by the client, nothing was sent)" | `ErrCrossSlot` | `RuvioServerException`, text ends "(checked by the client, nothing was sent)" | `RuvioError`, code `CROSSSLOT` | `CrossSlotError` |
 | **differs**: reconnect option | `ClientOptions::reconnect` (default on), attempts and backoff settings | `RuvioClientOptions.Reconnect` (default on), attempts and backoff settings | always on, no option | always on, no option | `reconnect` (default on) | always on, no option |
 
 ## Where it lives
