@@ -4,10 +4,9 @@ Notable changes to the NuGet package `Ruvio.Extensions.Caching`. New entries go 
 
 ## Unreleased
 
+## 0.1.2 - 2026-10-17
+
 - `IDistributedCache` helpers beyond `byte[]`: `GetOrCreateStringAsync`, `SetJsonAsync`/`GetJsonAsync`/`GetOrCreateJsonAsync` (and sync `SetJson`/`GetJson`) taking `JsonSerializerOptions` or a source-generated `JsonTypeInfo<T>`. On `RuvioDistributedCache` they write straight into the stored record and read straight from the reply, with no intermediate `byte[]`; the class also gets `GetStringAsync`/`SetStringAsync`/`GetJsonAsync`/`SetJsonAsync` instance methods.
-
-## 0.1.2 - 2026-10-16
-
 - Built against Ruvio.Client 0.3.3 (cheaper cluster routing, on-demand reply reading, opt-in `DedicatedReaderThread`). No change to this package's own API.
 
 ## 0.1.1
