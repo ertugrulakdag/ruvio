@@ -4,6 +4,8 @@ Notable changes to the Go client `github.com/salihcantekin/ruvio/clients/go`. A 
 
 ## Unreleased
 
+- Typed keyword constants (string types, so string literals still compile): `GeoUnit`, `GeoOrder`, `ListSide`, `ListPosition`, `ScanType`, `BitOperation`, `BitUnit`, `Aggregate`, `BitFieldOpName`, plus `BitSigned`/`BitUnsigned` helpers. They encode through pre-built RESP fragments (no per-call allocation). New `LInsertAt` and `BitCountUnit`; `LInsert(bool)` and `BitCountRange(bool)` are unchanged. Callers that pass a plain `string` variable to `GeoDist`, `LMove`, `BLMove`, `LMPop`, `BLMPop` or `BitOp`, or assign one to `GeoSearchQuery.Unit/Sort`, `GeoRadiusQuery.Unit/Sort`, `ZStore.Aggregate`, `ScanOptions.Type` or `BitFieldOp.Op`, need a conversion such as `ruvio.GeoUnit(s)`.
+
 ## v0.1.1 - 2026-10-17
 
 - A cluster pipeline spread over several nodes no longer allocates a map, per-node slices and a goroutine per node: commands are routed once into pooled scratch, every node is written before any reply is awaited, the calling goroutine reads the replies itself instead of handing them to each node's background reader, and only the reply slice is allocated (2.6-3.0× less CPU per request on a 4-shard local server). See `docs/evidence/2026-10-16-client-cluster-routing.md`.

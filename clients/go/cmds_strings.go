@@ -638,6 +638,13 @@ func (c *cmds) BitCountRange(ctx context.Context, key string, start, end int64, 
 	return c.intR(ctx, newCmd(4, cBITCOUNT).s(key).i(start).i(end))
 }
 
+// BitCountUnit counts set bits in [start, end] using unit BitUnitByte or BitUnitBit.
+//
+//	n, err := c.BitCountUnit(ctx, "k", 0, 15, ruvio.BitUnitBit)
+func (c *cmds) BitCountUnit(ctx context.Context, key string, start, end int64, unit BitUnit) (int64, error) {
+	return c.intR(ctx, newCmd(5, cBITCOUNT).s(key).i(start).i(end).kw(unit.token(), string(unit)))
+}
+
 // BitPos returns the position of the first bit equal to bit (0 or 1) (BITPOS). The
 // optional startEnd are byte offsets: one value is the start, two values are start and
 // end (inclusive; negative counts from the end); more are a syntax error. The bit-unit
@@ -655,27 +662,27 @@ func (c *cmds) BitPos(ctx context.Context, key string, bit int, startEnd ...int6
 }
 
 // BitOp combines source strings bitwise into dest and returns the length of the result
-// in bytes (BITOP). op is "AND", "OR", "XOR" or "NOT" (NOT takes exactly one key).
+// in bytes (BITOP). op is BitAnd, BitOr, BitXor or BitNot (NOT takes exactly one key).
 // Shorter sources are padded with zero bytes; missing keys count as empty. An empty
 // result deletes dest. The result is limited to 16 MiB. All keys must share a hash slot
 // in cluster mode (otherwise ErrCrossSlot).
-func (c *cmds) BitOp(ctx context.Context, op, dest string, keys ...string) (int64, error) {
-	return c.intR(ctx, newCmd(3+len(keys), cBITOP).s(op).s(dest).ss(keys))
+func (c *cmds) BitOp(ctx context.Context, op BitOperation, dest string, keys ...string) (int64, error) {
+	return c.intR(ctx, newCmd(3+len(keys), cBITOP).kw(op.token(), string(op)).s(dest).ss(keys))
 }
 
 // BitFieldOp is one sub-command of BITFIELD.
 //
-// Op is "GET", "SET", "INCRBY" or "OVERFLOW" (case-insensitive). Type is the field type:
+// Op is BitFieldGet, BitFieldSet, BitFieldIncrBy or BitFieldOverflow (case-insensitive). Type is the field type:
 // i1 to i64 (signed) or u1 to u63 (unsigned), for example "u8". Offset is a bit offset
 // such as "0" or "100", or "#n" to mean n times the field width. Value is the operand of
 // SET and INCRBY and is ignored for GET. For OVERFLOW only Type is used and holds the
 // policy: "WRAP", "SAT" or "FAIL"; it applies to the INCRBY and SET operations that
 // follow it.
 type BitFieldOp struct {
-	Op     string // GET, SET, INCRBY or OVERFLOW
-	Type   string // i1..i64 or u1..u63; the policy for OVERFLOW
-	Offset string // bit offset, or "#n" for n times the field width
-	Value  int64  // operand of SET and INCRBY
+	Op     BitFieldOpName // GET, SET, INCRBY or OVERFLOW
+	Type   string         // i1..i64 or u1..u63; the policy for OVERFLOW
+	Offset string         // bit offset, or "#n" for n times the field width
+	Value  int64          // operand of SET and INCRBY
 }
 
 func bitfieldReq(name []byte, key string, ops []BitFieldOp) *request {
@@ -694,11 +701,11 @@ func bitfieldReq(name []byte, key string, ops []BitFieldOp) *request {
 	for _, o := range ops {
 		switch o.Op {
 		case "OVERFLOW", "overflow":
-			r.s(o.Op).s(o.Type)
+			r.kw(o.Op.token(), string(o.Op)).kw(overflowToken(o.Type), o.Type)
 		case "GET", "get":
-			r.s(o.Op).s(o.Type).s(o.Offset)
+			r.kw(o.Op.token(), string(o.Op)).s(o.Type).s(o.Offset)
 		default:
-			r.s(o.Op).s(o.Type).s(o.Offset).i(o.Value)
+			r.kw(o.Op.token(), string(o.Op)).s(o.Type).s(o.Offset).i(o.Value)
 		}
 	}
 	return r

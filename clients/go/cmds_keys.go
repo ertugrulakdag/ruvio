@@ -83,8 +83,9 @@ type ScanOptions struct {
 	// Count is the page size hint (the server default is 10). Zero or less sends
 	// no COUNT.
 	Count int64
-	// Type keeps only keys of this type (SCAN only; names as returned by Type).
-	Type string
+	// Type keeps only keys of this type (SCAN only; names as returned by Type; see
+	// ScanType for the constants).
+	Type ScanType
 }
 
 func (o *ScanOptions) n() int {
@@ -109,7 +110,7 @@ func (o *ScanOptions) append(r *request) {
 		r.t(tCOUNT).i(o.Count)
 	}
 	if o.Type != "" {
-		r.t(tTYPE).s(o.Type)
+		r.t(tTYPE).kw(o.Type.token(), string(o.Type))
 	}
 }
 

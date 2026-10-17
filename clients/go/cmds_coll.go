@@ -114,6 +114,13 @@ func (c *cmds) LInsert(ctx context.Context, key string, before bool, pivot, valu
 	return c.intR(ctx, newCmd(5, cLINSERT).s(key).t(where).s(pivot).s(value))
 }
 
+// LInsertAt is LInsert with a typed position: InsertBefore or InsertAfter.
+//
+//	n, err := c.LInsertAt(ctx, "k", ruvio.InsertAfter, "pivot", "value")
+func (c *cmds) LInsertAt(ctx context.Context, key string, pos ListPosition, pivot, value string) (int64, error) {
+	return c.intR(ctx, newCmd(5, cLINSERT).s(key).kw(pos.token(), string(pos)).s(pivot).s(value))
+}
+
 // LSet sets the element at index (LSET); negative indexes count from the end. A missing
 // key or an index out of range returns a server error. The list is rewritten, O(N).
 func (c *cmds) LSet(ctx context.Context, key string, index int64, value string) error {
@@ -176,14 +183,14 @@ func (c *cmds) LPosCount(ctx context.Context, key, elem string, count int64, o L
 }
 
 // LMove atomically pops an element from one end of src and pushes it to one end of dst,
-// and returns it (LMOVE). from and to are "LEFT" or "RIGHT" (case-insensitive; anything
-// else is a syntax error). src and dst may be the same list (a rotation). ok is false
+// and returns it (LMOVE). from and to are ListLeft or ListRight ("LEFT" or "RIGHT",
+// case-insensitive; anything else is a syntax error). src and dst may be the same list (a rotation). ok is false
 // and nothing moves when src is missing or empty. In cluster mode both keys must share a
 // slot (ErrCrossSlot).
 //
-//	v, ok, err := c.LMove(ctx, "pending", "working", "LEFT", "RIGHT")
-func (c *cmds) LMove(ctx context.Context, src, dst, from, to string) (string, bool, error) {
-	return c.strNil(ctx, newCmd(5, cLMOVE).s(src).s(dst).s(from).s(to))
+//	v, ok, err := c.LMove(ctx, "pending", "working", ruvio.ListLeft, ruvio.ListRight)
+func (c *cmds) LMove(ctx context.Context, src, dst string, from, to ListSide) (string, bool, error) {
+	return c.strNil(ctx, newCmd(5, cLMOVE).s(src).s(dst).kw(from.token(), string(from)).kw(to.token(), string(to)))
 }
 
 // RPopLPush moves the last element of src to the head of dst and returns it (RPOPLPUSH,
@@ -198,8 +205,8 @@ func (c *cmds) RPopLPush(ctx context.Context, src, dst string) (string, bool, er
 // the wait timed out. It runs on a dedicated connection, so it does not delay other
 // calls. The server does not park a waiter: it retries every 5 ms; it is refused inside
 // MULTI and scripts. Both keys must share a slot in cluster mode.
-func (c *cmds) BLMove(ctx context.Context, src, dst, from, to string, timeout time.Duration) (string, bool, error) {
-	v, err := c.ex.execBlocking(ctx, newCmd(6, cBLMOVE).s(src).s(dst).s(from).s(to).f(secs(timeout)))
+func (c *cmds) BLMove(ctx context.Context, src, dst string, from, to ListSide, timeout time.Duration) (string, bool, error) {
+	v, err := c.ex.execBlocking(ctx, newCmd(6, cBLMOVE).s(src).s(dst).kw(from.token(), string(from)).kw(to.token(), string(to)).f(secs(timeout)))
 	if err != nil || v.Kind == KindNil {
 		return "", false, err
 	}
@@ -249,7 +256,7 @@ type KeyValues struct {
 	Values []string // popped elements, in pop order
 }
 
-func mpopReq(name []byte, timeout *time.Duration, dir string, count int64, keys []string) *request {
+func mpopReq(name []byte, timeout *time.Duration, dir ListSide, count int64, keys []string) *request {
 	n := 3 + len(keys)
 	if timeout != nil {
 		n++
@@ -261,7 +268,7 @@ func mpopReq(name []byte, timeout *time.Duration, dir string, count int64, keys 
 	if timeout != nil {
 		r.f(secs(*timeout))
 	}
-	r.i(int64(len(keys))).ss(keys).s(dir)
+	r.i(int64(len(keys))).ss(keys).kw(dir.token(), string(dir))
 	if count > 0 {
 		r.t(tCOUNT).i(count)
 	}
@@ -280,10 +287,10 @@ func toKeyValues(v Value) (KeyValues, bool, error) {
 }
 
 // LMPop pops elements from the first non-empty list among keys (LMPOP numkeys key ...
-// LEFT|RIGHT [COUNT n]). dir is "LEFT" or "RIGHT"; count is how many to pop (0 sends no
+// LEFT|RIGHT [COUNT n]). dir is ListLeft or ListRight; count is how many to pop (0 sends no
 // COUNT, meaning 1; negative counts are ignored the same way). ok is false when all
 // lists are empty or missing. Keys must share a slot in cluster mode.
-func (c *cmds) LMPop(ctx context.Context, dir string, count int64, keys ...string) (KeyValues, bool, error) {
+func (c *cmds) LMPop(ctx context.Context, dir ListSide, count int64, keys ...string) (KeyValues, bool, error) {
 	v, err := c.value(ctx, mpopReq(cLMPOP, nil, dir, count, keys))
 	if err != nil {
 		return KeyValues{}, false, err
@@ -294,7 +301,7 @@ func (c *cmds) LMPop(ctx context.Context, dir string, count int64, keys ...strin
 // BLMPop is LMPop that waits up to timeout for one of the lists to get an element
 // (BLMPOP). timeout 0 waits forever; ok is false on timeout. Runs on a dedicated
 // connection; the server retries every 5 ms and refuses it inside MULTI and scripts.
-func (c *cmds) BLMPop(ctx context.Context, timeout time.Duration, dir string, count int64, keys ...string) (KeyValues, bool, error) {
+func (c *cmds) BLMPop(ctx context.Context, timeout time.Duration, dir ListSide, count int64, keys ...string) (KeyValues, bool, error) {
 	v, err := c.ex.execBlocking(ctx, mpopReq(cBLMPOP, &timeout, dir, count, keys))
 	if err != nil {
 		return KeyValues{}, false, err

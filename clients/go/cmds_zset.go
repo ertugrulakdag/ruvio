@@ -372,12 +372,12 @@ func (c *cmds) ZRemRangeByLex(ctx context.Context, key, min, max string) (int64,
 // ZStore describes the inputs of ZUNION, ZINTER and their STORE forms. Keys are the
 // source sorted sets. Weights is empty, or has exactly one factor per key that
 // multiplies that set's scores first. Aggregate says how scores of a member present in
-// several sets are combined: "SUM" (the default when empty), "MIN" or "MAX". Aggregate
+// several sets are combined: AggSum (the default when empty), AggMin or AggMax. Aggregate
 // and Weights are not used by the difference commands.
 type ZStore struct {
 	Keys      []string  // source sorted sets
 	Weights   []float64 // empty, or one multiplier per key
-	Aggregate string    // "", "SUM", "MIN" or "MAX"
+	Aggregate Aggregate // "", AggSum, AggMin or AggMax
 }
 
 func zsetOpReq(name []byte, dst string, z *ZStore, withScores bool) *request {
@@ -406,7 +406,7 @@ func zsetOpReq(name []byte, dst string, z *ZStore, withScores bool) *request {
 		}
 	}
 	if z.Aggregate != "" {
-		r.t(tAGGREGATE).s(z.Aggregate)
+		r.t(tAGGREGATE).kw(z.Aggregate.token(), string(z.Aggregate))
 	}
 	if withScores {
 		r.t(tWITHSCORES)
@@ -544,15 +544,15 @@ func (c *cmds) GeoAdd(ctx context.Context, key string, o GeoAddOptions, locs ...
 	return c.intR(ctx, r)
 }
 
-// GeoDist returns the distance between two members (GEODIST). unit is "m" (meters, also
-// the default when empty), "km", "ft" or "mi"; any other unit returns "unsupported unit
+// GeoDist returns the distance between two members (GEODIST). unit is GeoMeters (also
+// the default when empty), GeoKilometers, GeoFeet or GeoMiles; any other unit returns "unsupported unit
 // provided. please use M, KM, FT, MI". ok is false when either member or the key is
 // missing. Distances are great-circle estimates.
-func (c *cmds) GeoDist(ctx context.Context, key, m1, m2, unit string) (float64, bool, error) {
+func (c *cmds) GeoDist(ctx context.Context, key, m1, m2 string, unit GeoUnit) (float64, bool, error) {
 	if unit == "" {
 		return c.floatNil(ctx, newCmd(4, cGEODIST).s(key).s(m1).s(m2))
 	}
-	return c.floatNil(ctx, newCmd(5, cGEODIST).s(key).s(m1).s(m2).s(unit))
+	return c.floatNil(ctx, newCmd(5, cGEODIST).s(key).s(m1).s(m2).kw(unit.token(), string(unit)))
 }
 
 // GeoHash returns the standard 11-character geohash string of each member (GEOHASH); an
@@ -599,24 +599,21 @@ func (c *cmds) GeoPosition(ctx context.Context, key string, members ...string) (
 // WithCoord add the distance, raw geohash integer and coordinates to each result (they
 // are not allowed for the store form).
 type GeoSearchQuery struct {
-	Member              string  // FROMMEMBER center; empty means use Longitude/Latitude
-	Longitude, Latitude float64 // FROMLONLAT center
-	Radius              float64 // BYRADIUS when > 0
-	Width, Height       float64 // BYBOX when Radius is 0
-	Unit                string  // "m" (default), "km", "ft" or "mi"
-	Sort                string  // "", "ASC" or "DESC"
-	Count               int64   // max results when > 0
-	Any                 bool    // with Count: return the first matches found
-	WithDist            bool    // fill GeoLocation.Dist
-	WithHash            bool    // fill GeoLocation.GeoHash
-	WithCoord           bool    // fill GeoLocation.Longitude and Latitude
+	Member              string   // FROMMEMBER center; empty means use Longitude/Latitude
+	Longitude, Latitude float64  // FROMLONLAT center
+	Radius              float64  // BYRADIUS when > 0
+	Width, Height       float64  // BYBOX when Radius is 0
+	Unit                GeoUnit  // GeoMeters (default), GeoKilometers, GeoFeet or GeoMiles
+	Sort                GeoOrder // "", GeoAsc or GeoDesc
+	Count               int64    // max results when > 0
+	Any                 bool     // with Count: return the first matches found
+	WithDist            bool     // fill GeoLocation.Dist
+	WithHash            bool     // fill GeoLocation.GeoHash
+	WithCoord           bool     // fill GeoLocation.Longitude and Latitude
 }
 
-func (q *GeoSearchQuery) unit() string {
-	if q.Unit == "" {
-		return "m"
-	}
-	return q.Unit
+func (q *GeoSearchQuery) unit(r *request) {
+	r.kw(q.Unit.token(), string(q.Unit))
 }
 
 func (q *GeoSearchQuery) n(store bool) int {
@@ -655,12 +652,14 @@ func (q *GeoSearchQuery) append(r *request, store bool) {
 		r.t(tFROMLONLAT).f(q.Longitude).f(q.Latitude)
 	}
 	if q.Radius > 0 {
-		r.t(tBYRADIUS).f(q.Radius).s(q.unit())
+		r.t(tBYRADIUS).f(q.Radius)
+		q.unit(r)
 	} else {
-		r.t(tBYBOX).f(q.Width).f(q.Height).s(q.unit())
+		r.t(tBYBOX).f(q.Width).f(q.Height)
+		q.unit(r)
 	}
 	if q.Sort != "" {
-		r.s(q.Sort)
+		r.kw(q.Sort.token(), string(q.Sort))
 	}
 	if q.Count > 0 {
 		r.t(tCOUNT).i(q.Count)
@@ -757,22 +756,18 @@ func (c *cmds) GeoSearchStore(ctx context.Context, dst, src string, q GeoSearchQ
 // set); Any needs Count. WithDist, WithHash and WithCoord add details to each result and
 // cannot be used with the store forms.
 type GeoRadiusQuery struct {
-	Radius    float64 // search distance, >= 0
-	Unit      string  // "m" (default), "km", "ft" or "mi"
-	Sort      string  // "", "ASC" or "DESC"
-	Count     int64   // max results when > 0
-	Any       bool    // with Count: return the first matches found
-	WithDist  bool    // fill GeoLocation.Dist
-	WithHash  bool    // fill GeoLocation.GeoHash
-	WithCoord bool    // fill GeoLocation.Longitude and Latitude
+	Radius    float64  // search distance, >= 0
+	Unit      GeoUnit  // GeoMeters (default), GeoKilometers, GeoFeet or GeoMiles
+	Sort      GeoOrder // "", GeoAsc or GeoDesc
+	Count     int64    // max results when > 0
+	Any       bool     // with Count: return the first matches found
+	WithDist  bool     // fill GeoLocation.Dist
+	WithHash  bool     // fill GeoLocation.GeoHash
+	WithCoord bool     // fill GeoLocation.Longitude and Latitude
 }
 
 func (q *GeoRadiusQuery) build(r *request, store, storeDist string) {
-	u := q.Unit
-	if u == "" {
-		u = "m"
-	}
-	r.f(q.Radius).s(u)
+	r.f(q.Radius).kw(q.Unit.token(), string(q.Unit))
 	if store == "" {
 		if q.WithDist {
 			r.t(tWITHDIST)
@@ -791,7 +786,7 @@ func (q *GeoRadiusQuery) build(r *request, store, storeDist string) {
 		}
 	}
 	if q.Sort != "" {
-		r.s(q.Sort)
+		r.kw(q.Sort.token(), string(q.Sort))
 	}
 	if store != "" {
 		r.t(tSTORE).s(store)
