@@ -1,5 +1,22 @@
 # MIT License - Copyright (c) 2026 Salih Cantekin. See LICENSE.
-"""Synchronous Ruvio client: one socket, a reusable ``recv_into`` buffer, no threads."""
+"""Synchronous Ruvio client: one socket, a reusable ``recv_into`` buffer, no threads.
+
+Main entry points:
+
+* :class:`Ruvio` - the client; every server command is a method (see :class:`ruvio._commands.Commands`).
+* :class:`Pipeline` - batches commands into one write, optionally as ``MULTI``/``EXEC``.
+* :class:`PubSub` - a Pub/Sub session on its own socket.
+* :class:`Lock` - a distributed lock built on ``SET NX PX`` / ``DELEX``.
+* :func:`parse_url` - turns a ``ruvio://`` URL into constructor arguments.
+
+Example:
+    from ruvio import Ruvio
+
+    client = Ruvio("127.0.0.1", 6379)
+    client.set("greeting", "hello")
+    print(client.get("greeting"))   # hello
+    client.close()
+"""
 
 from __future__ import annotations
 
@@ -19,7 +36,26 @@ __all__ = ["Ruvio", "Pipeline", "PubSub", "Lock", "parse_url"]
 
 
 def parse_url(url: str) -> Dict[str, Any]:
-    """``ruvio://[user:pass@]host[:port][/db]`` (``redis://`` and ``unix://path`` accepted)."""
+    """Turns a connection URL into keyword arguments for :class:`Ruvio`.
+
+    Accepted forms: ``ruvio://[user:pass@]host[:port][/db]`` (``redis://`` and ``tcp://`` are the
+    same), and ``unix:///path/to/socket``. The port defaults to 6379, the database to 0. User and
+    password are percent-decoded. TLS URLs (``rediss://``) are not supported.
+
+    Args:
+        url: The URL.
+
+    Returns:
+        A dict with some of ``host``, ``port``, ``db``, ``username``, ``password`` and
+        ``unix_socket_path``.
+
+    Raises:
+        ValueError: Unsupported scheme, or a database part that is not an integer.
+
+    Example:
+        parse_url("ruvio://app:s3cret@cache.local:6380/2")
+        # -> {"host": "cache.local", "port": 6380, "db": 2, "username": "app", "password": "s3cret"}
+    """
     u = urlparse(url)
     opts: Dict[str, Any] = {}
     if u.scheme == "unix":
@@ -141,18 +177,52 @@ class _Conn:
 
 
 class Ruvio(Commands):
-    """Synchronous client. Not thread-safe: use one client per thread (or a lock).
+    """Synchronous Ruvio client over one TCP (or Unix) socket.
 
-    Commands return converted Python values; server errors raise :class:`ResponseError`.
-    A dropped socket is reopened before the next command (the failing command raises).
-    ``cluster=True`` routes by key over one socket per node (see :class:`ruvio.cluster.ClusterRuvio`);
-    a standalone server is detected on the first command and used as usual.
+    Every server command is a method (see :class:`ruvio._commands.Commands` for the full list, with
+    arguments, replies and examples). Replies are converted to Python values; error replies raise
+    :class:`ruvio.RuvioError` subclasses. A dropped socket is reopened before the next command; the
+    command that found it dropped raises and is never sent twice.
+
+    The client is **not thread-safe**: use one client per thread, or guard it with a lock.
+
+    Args:
+        host: Server host (default ``127.0.0.1``). On a multi-shard server this is the seed
+            address; with ``cluster=True`` the client finds the other shards itself.
+        port: Server port (default 6379).
+        db: Logical database selected on connect (default 0). Multi-shard servers have only database 0.
+        password: Password for ``AUTH``, sent on every (re)connect.
+        username: ACL user for ``AUTH``; omit for the default user.
+        client_name: Name sent with ``CLIENT SETNAME`` on connect.
+        socket_timeout: Seconds a send or receive may take; ``None`` (default) waits forever. On expiry
+            the socket is closed and :class:`ruvio.TimeoutError` is raised. Blocking commands such as
+            ``blpop`` need a timeout longer than their own.
+        connect_timeout: Seconds allowed to open the socket (default 5.0, ``None`` for no limit).
+        decode_responses: ``True`` (default) returns ``str``; ``False`` returns ``bytes``. ``client.raw``
+            gives the opposite view of the same connection.
+        unix_socket_path: Connect to this Unix socket instead of ``host``/``port``.
+        parser: ``"auto"`` (default: hiredis if installed, else the built-in parser), ``"python"`` or
+            ``"hiredis"``.
+        on_push: Callback for RESP3 out-of-band push messages (for example client-tracking
+            ``invalidate``), called with the push as a list.
+        lazy: ``True`` (default) connects on the first command; ``False`` connects now and raises
+            :class:`ruvio.ConnectionError` if the server is unreachable.
+        cluster: ``True`` returns a :class:`ruvio.ClusterRuvio`, which routes each key to its shard.
+            A standalone server is detected on the first command and used as usual.
+
+    Example:
+        from ruvio import Ruvio
+
+        with Ruvio("127.0.0.1", 6379, decode_responses=True) as client:
+            client.set("k", "v", ex=60)
+            client.get("k")   # -> "v"
     """
 
     __slots__ = ("_conn", "_decode")
 
     def __new__(cls, *args: Any, cluster: bool = False, **kwargs: Any) -> "Ruvio":
         # ``Ruvio(..., cluster=True)`` builds the cluster-routing subclass; the plain class is untouched.
+        """Builds the cluster-routing subclass when ``cluster=True`` is passed, a plain client otherwise."""
         if cluster and cls is Ruvio:
             from .cluster import ClusterRuvio
 
@@ -176,6 +246,27 @@ class Ruvio(Commands):
         lazy: bool = True,
         cluster: bool = False,
     ) -> None:
+        """Creates the client. See the class docstring for the meaning of every argument.
+
+        Args:
+            host: Server host.
+            port: Server port.
+            db: Database selected on connect.
+            password: Password for ``AUTH``.
+            username: ACL user for ``AUTH``.
+            client_name: Connection name set on connect.
+            socket_timeout: Seconds for a send/receive; ``None`` waits forever.
+            connect_timeout: Seconds to open the socket; ``None`` for no limit.
+            decode_responses: Return ``str`` (``True``) or ``bytes`` (``False``).
+            unix_socket_path: Unix socket to use instead of host/port.
+            parser: ``"auto"``, ``"python"`` or ``"hiredis"``.
+            on_push: Callback for RESP3 push messages.
+            lazy: Connect on first use (``True``) or immediately (``False``).
+            cluster: Route by key over several shards (see :class:`ruvio.ClusterRuvio`).
+
+        Raises:
+            ConnectionError: ``lazy=False`` and the server cannot be reached or rejects the handshake.
+        """
         opts = _Options(
             host=host,
             port=port,
@@ -196,6 +287,21 @@ class Ruvio(Commands):
 
     @classmethod
     def from_url(cls, url: str, **kwargs: Any) -> "Ruvio":
+        """Creates a client from a URL, see :func:`parse_url` for the accepted forms.
+
+        Args:
+            url: For example ``"ruvio://:secret@localhost:6379/1"`` or ``"unix:///tmp/ruvio.sock"``.
+            **kwargs: Any other constructor argument; these override values taken from the URL.
+
+        Returns:
+            The new client (not yet connected unless ``lazy=False`` is passed).
+
+        Raises:
+            ValueError: Unsupported URL scheme.
+
+        Example:
+            client = Ruvio.from_url("ruvio://localhost:6379/0", decode_responses=False)
+        """
         opts = parse_url(url)
         opts.update(kwargs)
         return cls(**opts)
@@ -254,17 +360,49 @@ class Ruvio(Commands):
             raise
 
     def select(self, db: int) -> Any:
-        """``SELECT`` - also remembered so a reconnect selects the same database."""
+        """``SELECT db`` - switches the logical database of this client.
+
+        The number is remembered, so a reconnect selects it again. See :meth:`Commands.select`.
+
+        Args:
+            db: Database number, ``0`` to ``databases - 1``.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: ``db`` is out of range, or the server has several shards (only database 0).
+        """
         ok = super().select(db)
         self._conn.opts.db = db
         return ok
 
     def client_setname(self, name: str) -> Any:
+        """``CLIENT SETNAME name`` - names this connection; remembered for reconnects.
+
+        Args:
+            name: The name (empty clears it).
+
+        Returns:
+            ``True``.
+        """
         ok = super().client_setname(name)
         self._conn.opts.client_name = name
         return ok
 
     def auth(self, password: str, username: Optional[str] = None) -> Any:
+        """``AUTH [username] password`` - authenticates; the credentials are remembered for reconnects.
+
+        Args:
+            password: The password.
+            username: ACL user; omit for the default user.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: Wrong credentials.
+        """
         ok = super().auth(password, username)
         self._conn.opts.password = password
         self._conn.opts.username = username
@@ -272,38 +410,107 @@ class Ruvio(Commands):
 
     @property
     def raw(self) -> "Ruvio":
-        """A view on the same connection whose replies are ``bytes`` (binary-safe)."""
+        r"""A view on the same connection whose replies are ``bytes`` (binary safe).
+
+        Use it for values that are not valid UTF-8. The view shares the socket, so commands from both
+        objects are ordered on one connection.
+
+        Example:
+            client.raw.get("blob")   # -> b"\x00\xff..."
+        """
         view = Ruvio.__new__(Ruvio)
         view._conn = self._conn
         view._decode = False
         return view
 
     def connect(self) -> "Ruvio":
+        """Opens the socket now if it is not open (commands also do this lazily).
+
+        Returns:
+            The client itself.
+
+        Raises:
+            ConnectionError: The server is unreachable or rejects ``AUTH``/``SELECT``.
+            TimeoutError: ``connect_timeout`` elapsed.
+        """
         if self._conn.sock is None:
             self._conn.open()
         return self
 
     def close(self) -> None:
+        """Closes the socket. The client can be used again; the next command reconnects."""
         self._conn.close()
 
     def __enter__(self) -> "Ruvio":
+        """Returns the client, so ``with Ruvio(...) as client:`` closes the socket on exit."""
         return self
 
     def __exit__(self, *exc: Any) -> None:
+        """Closes the socket."""
         self.close()
 
     def dedicated(self) -> "Ruvio":
-        """A new client (own socket) with the same options, e.g. for WATCH or blocking commands."""
+        """Creates a new client with its own socket and the same options.
+
+        Use it for ``WATCH`` and for blocking commands (``blpop``, ``xread`` with ``block`` ...) so they do not hold up
+        other work. The options include the database, name and credentials last set on this client.
+
+        Returns:
+            A new, not yet connected client (a cluster client for a cluster client). Close it when done.
+
+        Example:
+            with client.dedicated() as worker:
+                item = worker.blpop("jobs", timeout=30)
+        """
         opts = self._conn.opts.as_dict()
         return Ruvio(decode_responses=self._decode, **opts)
 
     def pipeline(self, transaction: bool = False) -> "Pipeline":
-        """Batches commands into one write. ``transaction=True`` wraps them in MULTI/EXEC."""
+        """Creates a pipeline: commands are queued locally and sent in one write.
+
+        Every command method on the pipeline returns the pipeline, so calls chain. ``execute()`` sends
+        the batch and returns one converted result per command. Use ``transaction=True`` to wrap the batch
+        in ``MULTI``/``EXEC`` (atomic; keys must share a slot, and a ``WATCH`` made earlier on this client
+        applies).
+
+        Args:
+            transaction: ``True`` to run the batch as ``MULTI``/``EXEC``.
+
+        Returns:
+            A :class:`Pipeline`.
+
+        Example:
+            results = client.pipeline().set("a", 1).incr("a").get("a").execute()
+            # -> [True, 2, "2"]
+        """
         return Pipeline(self, transaction)
 
     def transaction(self, fn: Callable[["Pipeline"], Any], *watch: KeyT, retries: int = 16) -> List[Any]:
-        """Optimistic transaction: WATCH keys, call ``fn(pipe)`` (reads go through ``self``),
-        EXEC, and retry on :class:`WatchError`."""
+        """Optimistic transaction: ``WATCH`` keys, build commands, ``EXEC``, retry if a watched key changed.
+
+        ``fn`` receives a transaction pipeline. Read current values through this client (``self``,
+        the same connection that holds the ``WATCH``), then queue the writes on the pipeline. If a watched
+        key changed before ``EXEC`` the whole function runs again.
+
+        Args:
+            fn: Callable taking the pipeline; queue commands on it. Its return value is ignored.
+            *watch: Keys to ``WATCH`` (all in one slot on a cluster).
+            retries: Maximum attempts (default 16).
+
+        Returns:
+            The results of the executed pipeline, one per queued command.
+
+        Raises:
+            RuvioError: Retries exhausted.
+            ExecAbortError: A queued command was refused.
+
+        Example:
+            def add_credit(pipe):
+                balance = int(client.get("balance") or 0)
+                pipe.set("balance", balance + 10)
+
+            client.transaction(add_credit, "balance")
+        """
         from .errors import WatchError
 
         for _ in range(retries):
@@ -324,22 +531,83 @@ class Ruvio(Commands):
         raise RuvioError("transaction retries exhausted")
 
     def pubsub(self, ignore_subscribe_messages: bool = False) -> "PubSub":
-        """A Pub/Sub session on its own socket."""
+        """Creates a Pub/Sub session on its own socket (the client's socket is not used).
+
+        Args:
+            ignore_subscribe_messages: Hide the ``subscribe``/``unsubscribe`` confirmation messages.
+
+        Returns:
+            A :class:`PubSub`.
+
+        Example:
+            with client.pubsub() as ps:
+                ps.subscribe("news")
+                msg = ps.get_message(timeout=1.0)
+        """
         return PubSub(self._conn.opts, self._decode, ignore_subscribe_messages)
 
     # ---------------------------------------------------------------- helpers
     def lock(
         self, name: KeyT, ttl_ms: int = 30000, blocking: bool = True, timeout: Optional[float] = None, retry_ms: int = 50
     ) -> "Lock":
-        """Distributed lock (``SET NX PX`` / renew ``SET IFEQ PX`` / release ``DELEX IFEQ``)."""
+        """Creates a distributed lock on key ``name`` (``SET NX PX``, renew with ``SET IFEQ PX``, release with ``DELEX IFEQ``).
+
+        The lock holds a random token, so releasing never deletes another holder's lock. Use it as a
+        context manager (``with client.lock("job"):``) or call :meth:`Lock.acquire` and :meth:`Lock.release`.
+
+        Args:
+            name: Lock key.
+            ttl_ms: Lifetime in milliseconds if never released (default 30000). Renew with :meth:`Lock.renew`.
+            blocking: Wait for the lock when it is held (default ``True``).
+            timeout: Seconds to wait when blocking; ``None`` waits forever.
+            retry_ms: Milliseconds between attempts (default 50).
+
+        Returns:
+            A :class:`Lock` (not yet acquired).
+
+        Example:
+            with client.lock("report", ttl_ms=10000, timeout=5):
+                build_report()
+        """
         return Lock(self, name, ttl_ms, blocking, timeout, retry_ms)
 
     def lease_scope(self, key: KeyT, ttl_ms: int) -> "_Scope":
-        """``with client.lease_scope(k, 5000) as fencing_token:`` - LEASE, then RELEASE on exit."""
+        """Context manager around ``LEASE``: takes the lease on enter and ``RELEASE`` on exit.
+
+        Args:
+            key: Lease key.
+            ttl_ms: Lease duration in milliseconds.
+
+        Returns:
+            A context manager whose ``as`` value is the fencing token (``int``).
+
+        Raises:
+            LockError: (on enter) the lease is held by someone else.
+
+        Example:
+            with client.lease_scope("job:nightly", 30000) as token:
+                run_job(token)
+        """
         return _Scope(self, key, lambda: self.lease(key, ttl_ms), "lease")
 
     def semaphore_scope(self, key: KeyT, max: int, ttl_ms: int) -> "_Scope":  # noqa: A002
-        """``with client.semaphore_scope(k, 3, 5000) as token:`` - SEMAPHORE, then RELEASE on exit."""
+        """Context manager around ``SEMAPHORE``: takes a slot on enter and ``RELEASE`` on exit.
+
+        Args:
+            key: Semaphore key.
+            max: Number of concurrent holders allowed.
+            ttl_ms: Hold time of the slot in milliseconds.
+
+        Returns:
+            A context manager whose ``as`` value is the holder token (``int``).
+
+        Raises:
+            LockError: (on enter) all slots are taken.
+
+        Example:
+            with client.semaphore_scope("uploads", 3, 60000):
+                upload()
+        """
         return _Scope(self, key, lambda: self.semaphore(key, max, ttl_ms), "semaphore")
 
     def get_or_create(
@@ -352,10 +620,32 @@ class Ruvio(Commands):
         timeout: float = 10.0,
         poll_ms: float = 5.0,
     ) -> Any:
-        """Cache-aside with stampede protection on ``FILLGET``/``FILLSET``.
+        """Cache-aside with stampede protection, built on ``FILLGET``/``FILLSET``.
 
-        Exactly one caller runs ``factory`` per miss; others poll plain ``FILLGET`` with a short
-        backoff (``FILLGET ... WAIT`` would park the connection) until the value appears."""
+        On a miss exactly one caller (across all processes) runs ``factory``; the others poll plain
+        ``FILLGET`` with a short growing delay (``FILLGET ... WAIT`` would park the connection) until the
+        value appears. If the winner crashes, its marker lapses after ``fill_ms`` and another caller takes over.
+        If ``factory`` raises, the exception propagates and others wait until the marker lapses.
+
+        Args:
+            key: Cache key.
+            factory: Zero-argument callable returning the value (``str`` or ``bytes``).
+            ttl_ms: Fresh lifetime of the cached value in milliseconds.
+            fill_ms: How long the winner may take to build the value (default 10000).
+            swr_ms: Optional stale-while-revalidate window in milliseconds; a stale value is returned at once
+                while one caller refreshes it.
+            timeout: Seconds to wait for another caller's value (default 10.0).
+            poll_ms: First polling delay in milliseconds (default 5; doubles up to 100).
+
+        Returns:
+            The cached or newly built value.
+
+        Raises:
+            TimeoutError: Another caller still holds the fill after ``timeout`` seconds.
+
+        Example:
+            page = client.get_or_create("page:home", lambda: render_home(), ttl_ms=60000)
+        """
         deadline = time.monotonic() + timeout
         delay = poll_ms / 1000.0
         while True:
@@ -377,10 +667,26 @@ class Ruvio(Commands):
     def idempotent(
         self, key: KeyT, fingerprint: str, ttl_ms: int, fn: Callable[[], Union[str, bytes]], owner: Optional[str] = None
     ) -> Tuple[str, Any]:
-        """Runs ``fn`` at most once per key (``IDEM BEGIN``/``COMPLETE``).
+        """Runs ``fn`` at most once per key, using ``IDEM BEGIN``/``COMPLETE``.
 
-        Returns ``("executed", result)``, ``("completed", stored_result)``, ``("pending", None)``
-        while another owner runs it, or ``("conflict", None)`` for a different fingerprint."""
+        If ``fn`` raises, the record stays pending until ``ttl_ms`` and retries report ``"pending"``; use a
+        retention that matches your retry horizon. This is not exactly-once for external side effects.
+
+        Args:
+            key: Operation key, scoped to the tenant and operation (for example ``"order:42"``).
+            fingerprint: Digest of the request inputs. The same key with another fingerprint is a conflict.
+            ttl_ms: Retention in milliseconds, 1 to 604800000 (7 days).
+            fn: Zero-argument callable returning the result (``str`` or ``bytes``) to store.
+            owner: Attempt token; a random one is generated when omitted.
+
+        Returns:
+            ``("executed", result)`` when ``fn`` ran now, ``("completed", stored_result)`` when an earlier run
+            finished, ``("pending", None)`` while another owner runs it, or ``("conflict", None)`` for a
+            different fingerprint.
+
+        Example:
+            state, result = client.idempotent("pay:77", digest, 3600000, lambda: charge_card())
+        """
         owner = owner or uuid.uuid4().hex
         r = self.idem_begin(key, fingerprint, owner, ttl_ms)
         if r.state == "acquired":
@@ -390,6 +696,20 @@ class Ruvio(Commands):
         return r.state, r.result
 
     def scan_iter(self, match: Optional[str] = None, count: Optional[int] = None, type: Optional[str] = None) -> Iterator[Any]:  # noqa: A002
+        """Iterates over all keys by calling :meth:`scan` page by page.
+
+        Args:
+            match: Glob pattern for key names.
+            count: Work hint per page.
+            type: Only keys of this type, as ``TYPE`` reports it.
+
+        Yields:
+            Key names. A key may be yielded twice if the table was rebuilt during the walk.
+
+        Example:
+            for key in client.scan_iter(match="user:*", count=500):
+                ...
+        """
         cursor = 0
         while True:
             cursor, keys = self.scan(cursor, match, count, type)
@@ -398,6 +718,16 @@ class Ruvio(Commands):
                 return
 
     def hscan_iter(self, key: KeyT, match: Optional[str] = None, count: Optional[int] = None) -> Iterator[Tuple[Any, Any]]:
+        """Iterates over the fields of a hash by calling :meth:`hscan` page by page.
+
+        Args:
+            key: The hash key.
+            match: Glob pattern for field names.
+            count: Work hint per page.
+
+        Yields:
+            ``(field, value)`` tuples.
+        """
         cursor = 0
         while True:
             cursor, page = self.hscan(key, cursor, match, count)
@@ -406,6 +736,16 @@ class Ruvio(Commands):
                 return
 
     def sscan_iter(self, key: KeyT, match: Optional[str] = None, count: Optional[int] = None) -> Iterator[Any]:
+        """Iterates over the members of a set by calling :meth:`sscan` page by page.
+
+        Args:
+            key: The set key.
+            match: Glob pattern for members.
+            count: Work hint per page.
+
+        Yields:
+            Members.
+        """
         cursor = 0
         while True:
             cursor, page = self.sscan(key, cursor, match, count)
@@ -414,6 +754,16 @@ class Ruvio(Commands):
                 return
 
     def zscan_iter(self, key: KeyT, match: Optional[str] = None, count: Optional[int] = None) -> Iterator[Tuple[Any, float]]:
+        """Iterates over a sorted set by calling :meth:`zscan` page by page.
+
+        Args:
+            key: The sorted-set key.
+            match: Glob pattern for members.
+            count: Work hint per page.
+
+        Yields:
+            ``(member, score)`` tuples.
+        """
         cursor = 0
         while True:
             cursor, page = self.zscan(key, cursor, match, count)
@@ -423,11 +773,38 @@ class Ruvio(Commands):
 
 
 class Pipeline(PipelineBase):
-    """``pipe = client.pipeline(); pipe.set(k, v).get(k); results = pipe.execute()``."""
+    """A batch of queued commands sent in one write; created by :meth:`Ruvio.pipeline`.
+
+    Every command method (``set``, ``get`` ...) queues the command and returns the pipeline. Nothing
+    is sent until :meth:`execute`. After ``execute`` (or on leaving a ``with`` block) the queue is cleared.
+    ``len(pipe)`` is the number of queued commands.
+
+    Example:
+        with client.pipeline(transaction=True) as pipe:
+            pipe.incr("a").incr("b")
+            a, b = pipe.execute()
+    """
 
     __slots__ = ()
 
     def execute(self, raise_on_error: bool = True) -> List[Any]:
+        """Sends the queued commands and returns their results.
+
+        Args:
+            raise_on_error: ``True`` (default) raises the first error after all replies were read. ``False``
+                returns exception objects in place of failed results.
+
+        Returns:
+            One converted result per command, in order ([] for an empty pipeline). In a transaction, the
+            results of the commands between ``MULTI`` and ``EXEC``.
+
+        Raises:
+            WatchError: Transaction only - a watched key changed, nothing ran.
+            ExecAbortError: Transaction only - a queued command was refused, nothing ran.
+            ResponseError: A command failed (``raise_on_error=True``).
+            CrossSlotError: Cluster client - a command's keys, or a transaction's keys, span several slots
+                (checked before sending).
+        """
         if not self._cmds:
             return []
         payload = self._payload()
@@ -438,20 +815,45 @@ class Pipeline(PipelineBase):
             self.reset()
 
     def __enter__(self) -> "Pipeline":
+        """Returns the pipeline for use in a ``with`` block."""
         return self
 
     def __exit__(self, *exc: Any) -> None:
+        """Clears queued commands that were not executed."""
         self.reset()
 
 
 class Lock:
-    """Distributed lock with a random token. Release never deletes another holder's lock."""
+    """Distributed lock with a random token; created by :meth:`Ruvio.lock`.
+
+    Acquire with ``SET key token NX PX ttl``; renew with ``SET ... IFEQ``; release with ``DELEX ... IFEQ``,
+    so a holder never deletes another holder's lock. If the TTL runs out while the work is still running,
+    the lock is lost: renew it periodically, and treat :meth:`owned` as a hint, not a guarantee.
+
+    Example:
+        lock = client.lock("report", ttl_ms=10000)
+        if lock.acquire(blocking=False):
+            try:
+                build_report()
+            finally:
+                lock.release()
+    """
 
     __slots__ = ("client", "name", "ttl_ms", "blocking", "timeout", "retry_ms", "token")
 
     def __init__(
         self, client: Ruvio, name: KeyT, ttl_ms: int, blocking: bool = True, timeout: Optional[float] = None, retry_ms: int = 50
     ) -> None:
+        """Creates a lock object (does not acquire).
+
+        Args:
+            client: The client to use.
+            name: Lock key.
+            ttl_ms: Lifetime in milliseconds if never released.
+            blocking: Default for :meth:`acquire`.
+            timeout: Default maximum seconds to wait.
+            retry_ms: Milliseconds between attempts.
+        """
         self.client = client
         self.name = name
         self.ttl_ms = ttl_ms
@@ -461,6 +863,15 @@ class Lock:
         self.token: Optional[str] = None
 
     def acquire(self, blocking: Optional[bool] = None, timeout: Optional[float] = None) -> bool:
+        """Tries to take the lock.
+
+        Args:
+            blocking: Wait until the lock is free; defaults to the value given at creation.
+            timeout: Maximum seconds to wait; defaults to the value given at creation (``None`` waits forever).
+
+        Returns:
+            ``True`` when acquired, ``False`` when not (non-blocking or timed out).
+        """
         blocking = self.blocking if blocking is None else blocking
         timeout = self.timeout if timeout is None else timeout
         token = uuid.uuid4().hex
@@ -474,27 +885,49 @@ class Lock:
             time.sleep(self.retry_ms / 1000.0)
 
     def renew(self, ttl_ms: Optional[int] = None) -> bool:
-        """Extends the TTL only while this token still holds the lock."""
+        """Extends the TTL, only while this token still holds the lock.
+
+        Args:
+            ttl_ms: New lifetime in milliseconds (default: the lock's ``ttl_ms``).
+
+        Returns:
+            ``True`` when extended, ``False`` when the lock is not held by this token.
+        """
         if self.token is None:
             return False
         return bool(self.client.set(self.name, self.token, ifeq=self.token, px=ttl_ms or self.ttl_ms))
 
     def release(self) -> bool:
-        """``DELEX name IFEQ token`` - False when the lock expired or another holder owns it."""
+        """``DELEX name IFEQ token`` - releases the lock.
+
+        Returns:
+            ``True`` when released, ``False`` when the lock expired, belongs to another holder, or was never acquired.
+        """
         token, self.token = self.token, None
         if token is None:
             return False
         return bool(self.client.delex(self.name, token))
 
     def owned(self) -> bool:
+        """Tells whether the key still holds this lock's token (one ``GET``).
+
+        Returns:
+            ``True`` if this lock object still owns the key.
+        """
         return self.token is not None and self.client.get(self.name) == self.token
 
     def __enter__(self) -> "Lock":
+        """Acquires the lock (blocking) for a ``with`` block.
+
+        Raises:
+            LockError: The lock could not be acquired within ``timeout``.
+        """
         if not self.acquire():
             raise LockError(f"could not acquire lock {self.name!r}")
         return self
 
     def __exit__(self, *exc: Any) -> None:
+        """Releases the lock."""
         self.release()
 
 
@@ -536,9 +969,33 @@ _SUB_KINDS = frozenset(("subscribe", "unsubscribe", "psubscribe", "punsubscribe"
 
 
 class PubSub:
-    """Pub/Sub on a dedicated socket. Subscriptions are re-sent after a reconnect."""
+    """Pub/Sub session on a dedicated socket; created by :meth:`Ruvio.pubsub`.
+
+    After a reconnect the subscriptions in :attr:`channels`, :attr:`patterns` and :attr:`shard_channels` are
+    sent again. Messages are not stored: a subscriber that is away misses them. A subscriber that cannot keep
+    up is disconnected by the server. Patterns use ``*`` and ``?``.
+
+    Attributes:
+        channels: Channels subscribed with :meth:`subscribe` (a dict used as an ordered set).
+        patterns: Patterns subscribed with :meth:`psubscribe`.
+        shard_channels: Channels subscribed with :meth:`ssubscribe`.
+        ignore_subscribe_messages: When ``True``, confirmation messages are skipped.
+
+    Example:
+        with client.pubsub() as ps:
+            ps.subscribe("news")
+            for msg in ps.listen():
+                print(msg.channel, msg.data)
+    """
 
     def __init__(self, opts: _Options, decode: bool, ignore_subscribe_messages: bool = False) -> None:
+        """Creates a session. Use :meth:`Ruvio.pubsub` instead of calling this directly.
+
+        Args:
+            opts: Connection options of the client.
+            decode: Return ``str`` (``True``) or ``bytes``.
+            ignore_subscribe_messages: Skip subscribe/unsubscribe confirmations.
+        """
         o = _Options(**opts.as_dict())
         o.socket_timeout = None
         self._conn = _Conn(o)
@@ -566,37 +1023,86 @@ class PubSub:
             raise ConnectionError(str(exc)) from exc
 
     def subscribe(self, *channels: Any) -> None:
+        """``SUBSCRIBE channel [channel ...]`` - listens to exact channels.
+
+        Args:
+            *channels: Channel names. Confirmations arrive as ``subscribe`` messages.
+        """
         self._send("SUBSCRIBE", channels)
         self.channels.update(dict.fromkeys(channels))
 
     def unsubscribe(self, *channels: Any) -> None:
+        """``UNSUBSCRIBE [channel ...]`` - stops listening to channels.
+
+        Args:
+            *channels: Channel names; none means every exact channel (patterns stay).
+        """
         for c in channels or list(self.channels):
             self.channels.pop(c, None)
         self._send("UNSUBSCRIBE", channels)
 
     def psubscribe(self, *patterns: Any) -> None:
+        """``PSUBSCRIBE pattern [pattern ...]`` - listens to channels matching glob patterns (``*``, ``?``).
+
+        Args:
+            *patterns: Patterns. Matches arrive as ``pmessage`` messages with ``pattern`` set.
+        """
         self._send("PSUBSCRIBE", patterns)
         self.patterns.update(dict.fromkeys(patterns))
 
     def punsubscribe(self, *patterns: Any) -> None:
+        """``PUNSUBSCRIBE [pattern ...]`` - stops pattern subscriptions.
+
+        Args:
+            *patterns: Patterns; none means every pattern (exact channels stay).
+        """
         for p in patterns or list(self.patterns):
             self.patterns.pop(p, None)
         self._send("PUNSUBSCRIBE", patterns)
 
     def ssubscribe(self, *channels: Any) -> None:
+        """``SSUBSCRIBE channel [channel ...]`` - listens to sharded channels (sent with ``spublish``).
+
+        All channels of one call must hash to the same slot. Messages arrive as ``smessage``. Keyspace
+        notifications (``__keyspace@<db>__:<key>``) are also received this way.
+
+        Args:
+            *channels: Channel names.
+        """
         self._send("SSUBSCRIBE", channels)
         self.shard_channels.update(dict.fromkeys(channels))
 
     def sunsubscribe(self, *channels: Any) -> None:
+        """``SUNSUBSCRIBE [channel ...]`` - stops sharded subscriptions.
+
+        Args:
+            *channels: Channel names; none means all sharded channels.
+        """
         for c in channels or list(self.shard_channels):
             self.shard_channels.pop(c, None)
         self._send("SUNSUBSCRIBE", channels)
 
     def ping(self, message: Optional[str] = None) -> None:
+        """``PING [message]`` - sends a ping on the subscription socket.
+
+        Args:
+            message: Optional text echoed back. The answer arrives as a ``pong`` message.
+        """
         self._send("PING", () if message is None else (message,))
 
     def get_message(self, timeout: Optional[float] = 0.0) -> Optional[Message]:
-        """Next message, or None after ``timeout`` seconds (None waits forever)."""
+        """Returns the next message, or ``None`` if none arrives in time.
+
+        Args:
+            timeout: Seconds to wait. ``0.0`` (default) only checks what has already arrived, ``None`` waits forever.
+
+        Returns:
+            A :class:`Message` ``(kind, channel, data, pattern)`` or ``None``. ``kind`` is ``message``,
+            ``pmessage``, ``smessage``, ``pong`` or a subscription confirmation.
+
+        Raises:
+            ConnectionError: The connection closed.
+        """
         self._ensure()
         c = self._conn
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -626,16 +1132,27 @@ class PubSub:
             return m
 
     def listen(self) -> Iterator[Message]:
+        """Blocking generator over messages; never ends unless the connection fails or you stop iterating.
+
+        Yields:
+            :class:`Message` objects.
+
+        Raises:
+            ConnectionError: The connection closed.
+        """
         while True:
             m = self.get_message(timeout=None)
             if m is not None:
                 yield m
 
     def close(self) -> None:
+        """Closes the subscription socket."""
         self._conn.close()
 
     def __enter__(self) -> "PubSub":
+        """Returns the session for a ``with`` block."""
         return self
 
     def __exit__(self, *exc: Any) -> None:
+        """Closes the session."""
         self.close()
