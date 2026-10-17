@@ -133,6 +133,12 @@ public sealed partial class RuvioClient
         return Integer(new RespCommand("LINSERT", key, before ? "BEFORE" : "AFTER", pivot, value), cancellationToken);
     }
 
+    /// <summary>Sends <c>LINSERT</c> with a typed position, sent as a pre-encoded token. Example: <c>InsertListAsync("queue", InsertPosition.After, "b", "c")</c>.</summary>
+    public ValueTask<long> InsertListAsync(string key, InsertPosition position, string pivot, string value, CancellationToken cancellationToken = default)
+    {
+        return Integer(new RespCommand("LINSERT", key, Keywords.Arg(position), pivot, value), cancellationToken);
+    }
+
     /// <summary>Sends <c>LSET</c>.</summary>
     public ValueTask SetListItemAsync(string key, long index, string value, CancellationToken cancellationToken = default)
     {
@@ -174,6 +180,17 @@ public sealed partial class RuvioClient
         return BulkOrNull(new RespCommand("LMOVE", source, destination, Side(fromLeft), Side(toLeft)), cancellationToken);
     }
 
+    /// <summary>Sends <c>LMOVE</c> with typed sides, sent as pre-encoded tokens. Example: <c>MoveListItemAsync("a", "b", ListSide.Right, ListSide.Left)</c>.</summary>
+    public ValueTask<string?> MoveListItemAsync(
+        string source,
+        string destination,
+        ListSide from,
+        ListSide to,
+        CancellationToken cancellationToken = default)
+    {
+        return BulkOrNull(new RespCommand("LMOVE", source, destination, Keywords.Arg(from), Keywords.Arg(to)), cancellationToken);
+    }
+
     /// <summary>Sends <c>RPOPLPUSH</c>. Null when the source is empty.</summary>
     public ValueTask<string?> PopListRightPushLeftAsync(string source, string destination, CancellationToken cancellationToken = default)
     {
@@ -191,6 +208,20 @@ public sealed partial class RuvioClient
     {
         return BulkOrNull(
             new RespCommand("BLMOVE", source, destination, Side(fromLeft), Side(toLeft), Number((long)Math.Ceiling(timeout.TotalSeconds))),
+            cancellationToken);
+    }
+
+    /// <summary>Sends <c>BLMOVE</c> with typed sides, sent as pre-encoded tokens. Null when <paramref name="timeout"/> passes; <see cref="TimeSpan.Zero"/> waits forever.</summary>
+    public ValueTask<string?> MoveListItemBlockingAsync(
+        string source,
+        string destination,
+        ListSide from,
+        ListSide to,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        return BulkOrNull(
+            new RespCommand("BLMOVE", source, destination, Keywords.Arg(from), Keywords.Arg(to), Number((long)Math.Ceiling(timeout.TotalSeconds))),
             cancellationToken);
     }
 
@@ -229,6 +260,32 @@ public sealed partial class RuvioClient
         }
 
         return new KeyValuePair<string, IReadOnlyList<string>>(items[0].AsString() ?? "", values);
+    }
+
+    /// <summary>Sends <c>LMPOP</c> with a typed side. Example: <c>PopListManyAsync(keys, ListSide.Left, 2)</c>.</summary>
+    public ValueTask<KeyValuePair<string, IReadOnlyList<string>>?> PopListManyAsync(
+        IReadOnlyList<string> keys,
+        ListSide side,
+        long count = 1,
+        CancellationToken cancellationToken = default)
+    {
+        return PopListManyAsync(keys, side == ListSide.Left, count, cancellationToken);
+    }
+
+    /// <summary>
+    /// Sends <c>BITFIELD</c> from typed steps. Example:
+    /// <c>BitFieldAsync("k", BitFieldStep.IncrBy(BitFieldType.Unsigned(8), 0, 1))</c>. Each result is a number, or null when
+    /// <c>OVERFLOW FAIL</c> refused the write.
+    /// </summary>
+    public ValueTask<IReadOnlyList<long?>> BitFieldAsync(string key, BitFieldStep first, params BitFieldStep[] rest)
+    {
+        return BitField("BITFIELD", key, BitFieldStep.Words(first, rest));
+    }
+
+    /// <summary>Sends <c>BITFIELD_RO</c> from typed <see cref="BitFieldStep.Get"/> steps.</summary>
+    public ValueTask<IReadOnlyList<long?>> BitFieldReadOnlyAsync(string key, BitFieldStep first, params BitFieldStep[] rest)
+    {
+        return BitField("BITFIELD_RO", key, BitFieldStep.Words(first, rest));
     }
 
     /// <summary>

@@ -1050,6 +1050,20 @@ public sealed partial class RuvioClient
         return text is null ? null : ParseDouble(text);
     }
 
+    /// <summary>Sends <c>GEODIST</c> with a typed unit, sent as a pre-encoded token. Example: <c>GeoDistanceAsync("cities", "a", "b", GeoUnit.Kilometers)</c>.</summary>
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    public async ValueTask<double?> GeoDistanceAsync(
+        string key,
+        string from,
+        string to,
+        GeoUnit unit,
+        CancellationToken cancellationToken = default)
+    {
+        string? text = await BulkOrNull(new RespCommand("GEODIST", key, from, to, Keywords.Arg(unit)), cancellationToken);
+
+        return text is null ? null : ParseDouble(text);
+    }
+
     /// <summary>Sends <c>GEOHASH</c>. A missing member is null.</summary>
     public ValueTask<IReadOnlyList<string?>> GeoHashAsync(
         string key,
@@ -1149,6 +1163,60 @@ public sealed partial class RuvioClient
     {
         return ArrayOfBulks(
             new string[] { "GEORADIUS", key, Number(longitude), Number(latitude), Number(radius), unit, "ASC" },
+            CancellationToken.None);
+    }
+
+    /// <summary>Sends <c>GEOSEARCH</c> from a longitude and latitude with a typed unit and result order. Example: <c>GeoSearchAsync("cities", 32.8, 39.9, 100, GeoUnit.Kilometers)</c>.</summary>
+    public ValueTask<IReadOnlyList<string>> GeoSearchAsync(
+        string key,
+        double longitude,
+        double latitude,
+        double radius,
+        GeoUnit unit,
+        GeoOrder order = GeoOrder.Ascending)
+    {
+        return ArrayOfBulks(
+            new string[] { "GEOSEARCH", key, "FROMLONLAT", Number(longitude), Number(latitude), "BYRADIUS", Number(radius), Keywords.Word(unit), Keywords.Word(order) },
+            CancellationToken.None);
+    }
+
+    /// <summary>Sends <c>GEOSEARCHSTORE</c> from a member and a radius with a typed unit.</summary>
+    public ValueTask<long> GeoSearchStoreAsync(
+        string destination,
+        string source,
+        string member,
+        double radius,
+        GeoUnit unit)
+    {
+        return Integer(
+            new string[] { "GEOSEARCHSTORE", destination, source, "FROMMEMBER", member, "BYRADIUS", Number(radius), Keywords.Word(unit) },
+            CancellationToken.None);
+    }
+
+    /// <summary>Sends <c>GEORADIUSBYMEMBER</c> with a typed unit and result order, both sent as pre-encoded tokens.</summary>
+    public ValueTask<IReadOnlyList<string>> GeoRadiusByMemberAsync(
+        string key,
+        string member,
+        double radius,
+        GeoUnit unit,
+        GeoOrder order = GeoOrder.Ascending)
+    {
+        return ArrayOfBulks(
+            new RespCommand("GEORADIUSBYMEMBER", key, member, Number(radius), Keywords.Arg(unit), Keywords.Arg(order)),
+            CancellationToken.None);
+    }
+
+    /// <summary>Sends <c>GEORADIUS</c> with a typed unit and result order.</summary>
+    public ValueTask<IReadOnlyList<string>> GeoRadiusAsync(
+        string key,
+        double longitude,
+        double latitude,
+        double radius,
+        GeoUnit unit,
+        GeoOrder order = GeoOrder.Ascending)
+    {
+        return ArrayOfBulks(
+            new string[] { "GEORADIUS", key, Number(longitude), Number(latitude), Number(radius), Keywords.Word(unit), Keywords.Word(order) },
             CancellationToken.None);
     }
 

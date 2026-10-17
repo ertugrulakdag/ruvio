@@ -49,6 +49,39 @@ internal static class RespRead
     internal static async ValueTask<string> RequiredText(ValueTask<RespValue> pending, string name) =>
         (await pending.ConfigureAwait(false)).AsString() ?? throw new RuvioException($"{name} returned a null reply");
 
+    internal static async ValueTask<double?> OptionalDouble(ValueTask<RespValue> pending, string name)
+    {
+        RespValue reply = await pending.ConfigureAwait(false);
+
+        return reply.Kind is RespKind.Null
+            ? null
+            : ParseDouble(reply.AsString() ?? throw new RuvioException($"{name} returned a null reply"));
+    }
+
+    internal static async ValueTask<IReadOnlyList<long?>> BitFieldResults(ValueTask<RespValue> pending, string name)
+    {
+        RespValue reply = await pending.ConfigureAwait(false);
+
+        if (reply.Items is not { } items)
+        {
+            throw new RuvioException($"{name} returned {reply.Kind}");
+        }
+
+        var results = new long?[items.Count];
+
+        for (int i = 0; i < results.Length; i++)
+        {
+            results[i] = items[i].Kind switch
+            {
+                RespKind.Null => null,
+                RespKind.Integer => items[i].Integer,
+                _ => throw new RuvioException($"{name} returned {items[i].Kind} in an array"),
+            };
+        }
+
+        return results;
+    }
+
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     internal static async ValueTask<double> Double(ValueTask<RespValue> pending, string name) =>
         ParseDouble((await pending.ConfigureAwait(false)).AsString() ?? throw new RuvioException($"{name} returned a null reply"));

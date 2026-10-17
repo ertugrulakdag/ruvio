@@ -339,6 +339,10 @@ public partial interface IRuvioClient
 
     ValueTask<double?> GeoDistanceAsync(string key, string from, string to, string unit = "m", CancellationToken cancellationToken = default);
 
+    /// <summary>Sends <c>GEODIST</c> with a typed unit. Example: <c>GeoDistanceAsync("cities", "a", "b", GeoUnit.Kilometers)</c>.</summary>
+    ValueTask<double?> GeoDistanceAsync(string key, string from, string to, GeoUnit unit, CancellationToken cancellationToken = default)
+        => RespRead.OptionalDouble(ExecuteAsync(new string[] { "GEODIST", key, from, to, Keywords.Word(unit) }, cancellationToken), "GEODIST");
+
     ValueTask<IReadOnlyList<string?>> GeoHashAsync(string key, params string[] members);
 
     ValueTask<IReadOnlyList<(double Longitude, double Latitude)?>> GeoPositionAsync(string key, params string[] members);
@@ -350,6 +354,22 @@ public partial interface IRuvioClient
     ValueTask<IReadOnlyList<string>> GeoRadiusByMemberAsync(string key, string member, double radius, string unit);
 
     ValueTask<IReadOnlyList<string>> GeoRadiusAsync(string key, double longitude, double latitude, double radius, string unit);
+
+    /// <summary>Sends <c>GEOSEARCH</c> with a typed unit and result order (nearest first by default).</summary>
+    ValueTask<IReadOnlyList<string>> GeoSearchAsync(string key, double longitude, double latitude, double radius, GeoUnit unit, GeoOrder order = GeoOrder.Ascending)
+        => RespRead.Strings(ExecuteAsync(new string[] { "GEOSEARCH", key, "FROMLONLAT", RespRead.Number(longitude), RespRead.Number(latitude), "BYRADIUS", RespRead.Number(radius), Keywords.Word(unit), Keywords.Word(order) }, CancellationToken.None), "GEOSEARCH");
+
+    /// <summary>Sends <c>GEOSEARCHSTORE</c> with a typed unit.</summary>
+    ValueTask<long> GeoSearchStoreAsync(string destination, string source, string member, double radius, GeoUnit unit)
+        => RespRead.Integer(ExecuteAsync(new string[] { "GEOSEARCHSTORE", destination, source, "FROMMEMBER", member, "BYRADIUS", RespRead.Number(radius), Keywords.Word(unit) }, CancellationToken.None), "GEOSEARCHSTORE");
+
+    /// <summary>Sends <c>GEORADIUSBYMEMBER</c> with a typed unit and result order (nearest first by default).</summary>
+    ValueTask<IReadOnlyList<string>> GeoRadiusByMemberAsync(string key, string member, double radius, GeoUnit unit, GeoOrder order = GeoOrder.Ascending)
+        => RespRead.Strings(ExecuteAsync(new string[] { "GEORADIUSBYMEMBER", key, member, RespRead.Number(radius), Keywords.Word(unit), Keywords.Word(order) }, CancellationToken.None), "GEORADIUSBYMEMBER");
+
+    /// <summary>Sends <c>GEORADIUS</c> with a typed unit and result order (nearest first by default).</summary>
+    ValueTask<IReadOnlyList<string>> GeoRadiusAsync(string key, double longitude, double latitude, double radius, GeoUnit unit, GeoOrder order = GeoOrder.Ascending)
+        => RespRead.Strings(ExecuteAsync(new string[] { "GEORADIUS", key, RespRead.Number(longitude), RespRead.Number(latitude), RespRead.Number(radius), Keywords.Word(unit), Keywords.Word(order) }, CancellationToken.None), "GEORADIUS");
 
     ValueTask<long?> GetSortedSetRankAsync(string key, string member, bool descending = false, CancellationToken cancellationToken = default);
 
@@ -623,6 +643,10 @@ public partial interface IRuvioClient
     /// <summary>Sends <c>LINSERT</c>. Returns the new length, -1 when the pivot is missing, 0 for a missing list.</summary>
     ValueTask<long> InsertListAsync(string key, bool before, string pivot, string value, CancellationToken cancellationToken = default);
 
+    /// <summary>Sends <c>LINSERT</c> with a typed position. Example: <c>InsertListAsync("queue", InsertPosition.After, "b", "c")</c>.</summary>
+    ValueTask<long> InsertListAsync(string key, InsertPosition position, string pivot, string value, CancellationToken cancellationToken = default)
+        => RespRead.Integer(ExecuteAsync(new string[] { "LINSERT", key, Keywords.Word(position), pivot, value }, cancellationToken), "LINSERT");
+
     /// <summary>Sends <c>LSET</c>.</summary>
     ValueTask SetListItemAsync(string key, long index, string value, CancellationToken cancellationToken = default);
 
@@ -641,20 +665,61 @@ public partial interface IRuvioClient
     /// <summary>Sends <c>LMOVE</c>. Null when the source is empty.</summary>
     ValueTask<string?> MoveListItemAsync(string source, string destination, bool fromLeft, bool toLeft, CancellationToken cancellationToken = default);
 
+    /// <summary>Sends <c>LMOVE</c> with typed sides. Example: <c>MoveListItemAsync("a", "b", ListSide.Right, ListSide.Left)</c>.</summary>
+    ValueTask<string?> MoveListItemAsync(string source, string destination, ListSide from, ListSide to, CancellationToken cancellationToken = default)
+        => RespRead.Text(ExecuteAsync(new string[] { "LMOVE", source, destination, Keywords.Word(from), Keywords.Word(to) }, cancellationToken));
+
     /// <summary>Sends <c>RPOPLPUSH</c>. Null when the source is empty.</summary>
     ValueTask<string?> PopListRightPushLeftAsync(string source, string destination, CancellationToken cancellationToken = default);
 
     /// <summary>Sends <c>BLMOVE</c>. Null when <paramref name="timeout"/> passes; <see cref="TimeSpan.Zero"/> waits forever.</summary>
     ValueTask<string?> MoveListItemBlockingAsync(string source, string destination, bool fromLeft, bool toLeft, TimeSpan timeout, CancellationToken cancellationToken = default);
 
+    /// <summary>Sends <c>BLMOVE</c> with typed sides. Null when <paramref name="timeout"/> passes; <see cref="TimeSpan.Zero"/> waits forever.</summary>
+    ValueTask<string?> MoveListItemBlockingAsync(string source, string destination, ListSide from, ListSide to, TimeSpan timeout, CancellationToken cancellationToken = default)
+        => RespRead.Text(ExecuteAsync(new string[] { "BLMOVE", source, destination, Keywords.Word(from), Keywords.Word(to), RespRead.Number((long)Math.Ceiling(timeout.TotalSeconds)) }, cancellationToken));
+
     /// <summary>Sends <c>LMPOP</c>. Returns the key that was popped and its elements, or null when every list is empty.</summary>
     ValueTask<KeyValuePair<string, IReadOnlyList<string>>?> PopListManyAsync(IReadOnlyList<string> keys, bool fromLeft, long count = 1, CancellationToken cancellationToken = default);
+
+    /// <summary>Sends <c>LMPOP</c> with a typed side. Example: <c>PopListManyAsync(keys, ListSide.Left, 2)</c>.</summary>
+    ValueTask<KeyValuePair<string, IReadOnlyList<string>>?> PopListManyAsync(IReadOnlyList<string> keys, ListSide side, long count = 1, CancellationToken cancellationToken = default)
+        => RespRead.ListPop(ExecuteAsync(PopListManyCommand(keys, side, count), cancellationToken), "LMPOP");
+
+    private static string[] PopListManyCommand(IReadOnlyList<string> keys, ListSide side, long count)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+
+        var parts = new string[keys.Count + 5];
+
+        parts[0] = "LMPOP";
+        parts[1] = RespRead.Number(keys.Count);
+
+        for (int index = 0; index < keys.Count; index++)
+        {
+            parts[index + 2] = keys[index];
+        }
+
+        parts[^3] = Keywords.Word(side);
+        parts[^2] = "COUNT";
+        parts[^1] = RespRead.Number(count);
+
+        return parts;
+    }
 
     /// <summary>Sends <c>BITFIELD</c>. Each result is a number, or null when <c>OVERFLOW FAIL</c> refused the write.</summary>
     ValueTask<IReadOnlyList<long?>> BitFieldAsync(string key, params string[] operations);
 
     /// <summary>Sends <c>BITFIELD_RO</c> with <c>GET type offset</c> subcommands.</summary>
     ValueTask<IReadOnlyList<long?>> BitFieldReadOnlyAsync(string key, params string[] operations);
+
+    /// <summary>Sends <c>BITFIELD</c> from typed steps. Example: <c>BitFieldAsync("k", BitFieldStep.IncrBy(BitFieldType.Unsigned(8), 0, 1))</c>.</summary>
+    ValueTask<IReadOnlyList<long?>> BitFieldAsync(string key, BitFieldStep first, params BitFieldStep[] rest)
+        => RespRead.BitFieldResults(ExecuteAsync(BitFieldStep.Command("BITFIELD", key, first, rest), CancellationToken.None), "BITFIELD");
+
+    /// <summary>Sends <c>BITFIELD_RO</c> from typed <see cref="BitFieldStep.Get"/> steps.</summary>
+    ValueTask<IReadOnlyList<long?>> BitFieldReadOnlyAsync(string key, BitFieldStep first, params BitFieldStep[] rest)
+        => RespRead.BitFieldResults(ExecuteAsync(BitFieldStep.Command("BITFIELD_RO", key, first, rest), CancellationToken.None), "BITFIELD_RO");
 
     /// <summary>Sends <c>DUMP</c>. The payload is opaque and readable only by <c>RESTORE</c> on a Ruvio server. Null for a missing key.</summary>
     ValueTask<byte[]?> DumpAsync(string key, CancellationToken cancellationToken = default);

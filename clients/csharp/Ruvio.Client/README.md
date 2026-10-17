@@ -154,6 +154,16 @@ await foreach (KeyValuePair<string, string> field in db.ScanHashEntriesAsync("h"
 await foreach (string member in db.ScanSetMembersAsync("s")) { }
 await foreach (SortedSetEntry entry in db.ScanSortedSetEntriesAsync("z")) { }
 
+// Typed keywords instead of strings and bools; each sends a pre-encoded token. The string and bool overloads still work.
+double? km = await db.GeoDistanceAsync("cities", "ankara", "izmir", GeoUnit.Kilometers);
+IReadOnlyList<string> far = await db.GeoRadiusAsync("cities", 32.8, 39.9, 500, GeoUnit.Kilometers, GeoOrder.Descending);
+await db.InsertListAsync("queue", InsertPosition.After, "b", "c");
+await db.MoveListItemAsync("queue", "done", ListSide.Right, ListSide.Left);
+ScanPage hashes = await db.ScanAsync(0, "user:*", 100, KeyType.Hash);
+IReadOnlyList<long?> bits = await db.BitFieldAsync("counters",
+    BitFieldStep.Overflow(BitFieldOverflow.Saturate),
+    BitFieldStep.IncrBy(BitFieldType.Unsigned(8), 0, 10));
+
 // "Recent items" capped list (LPUSHCAP) and Bloom "seen before" (BF.MADD / BF.MEXISTS).
 await db.PushRecentAsync("recent:ada", "item-42", cap: 50);
 IReadOnlyList<string> newest = await db.GetRecentAsync("recent:ada", 10);

@@ -97,6 +97,10 @@ public sealed partial class RuvioClient
     public ValueTask<KeyValuePair<string, IReadOnlyList<string>>?> PopListManyBlockingAsync(IReadOnlyList<string> keys, bool fromLeft, TimeSpan timeout, long count = 1, CancellationToken cancellationToken = default)
         => RespRead.ListPop(ExecuteCommandAsync(CoverageCommands.PopListManyBlocking(keys, fromLeft, timeout, count), cancellationToken), "BLMPOP");
 
+    /// <summary>Sends <c>BLMPOP</c> with a typed side. Null when <paramref name="timeout"/> passes.</summary>
+    public ValueTask<KeyValuePair<string, IReadOnlyList<string>>?> PopListManyBlockingAsync(IReadOnlyList<string> keys, ListSide side, TimeSpan timeout, long count = 1, CancellationToken cancellationToken = default)
+        => PopListManyBlockingAsync(keys, side == ListSide.Left, timeout, count, cancellationToken);
+
     /// <summary>Sends <c>SMISMEMBER</c>: one membership flag per member.</summary>
     public ValueTask<IReadOnlyList<bool>> SetContainsManyAsync(string key, params string[] members)
         => RespRead.Flags(ExecuteCommandAsync(CoverageCommands.Members("SMISMEMBER", key, members), CancellationToken.None), "SMISMEMBER");
@@ -108,6 +112,10 @@ public sealed partial class RuvioClient
     /// <summary>Sends <c>SSCAN key cursor [MATCH pattern] [COUNT n]</c>. See <c>ScanSetMembersAsync</c> for a lazy iterator.</summary>
     public ValueTask<SetScanPage> ScanSetAsync(string key, long cursor, string? pattern = null, int? count = null, CancellationToken cancellationToken = default)
         => RespRead.SetScan(ExecuteCommandAsync(CoverageCommands.KeyScan("SSCAN", key, cursor, pattern, count), cancellationToken));
+
+    /// <summary>Sends <c>SCAN cursor [MATCH pattern] [COUNT n] TYPE type</c> with a typed value type. Example: <c>ScanAsync(0, "user:*", 100, KeyType.Hash)</c>.</summary>
+    public ValueTask<ScanPage> ScanAsync(long cursor, string? pattern, int? count, KeyType type, CancellationToken cancellationToken = default)
+        => ScanAsync(cursor, pattern, count, Keywords.Word(type), cancellationToken);
 
     /// <summary>Sends <c>SCAN cursor [MATCH pattern] [COUNT n] [TYPE type]</c>.</summary>
     public ValueTask<ScanPage> ScanAsync(long cursor, string? pattern, int? count, string? type, CancellationToken cancellationToken = default)

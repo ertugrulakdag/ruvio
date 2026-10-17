@@ -56,6 +56,11 @@ public class InterfaceDefaultsTests
             return new byte[] { 1, 2 };
         }
 
+        if (type == typeof(BitFieldStep))
+        {
+            return BitFieldStep.Get("u8", 0);
+        }
+
         if (type.IsEnum)
         {
             return Enum.GetValues(type).GetValue(0);

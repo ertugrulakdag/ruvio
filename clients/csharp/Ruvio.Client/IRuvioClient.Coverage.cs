@@ -98,6 +98,10 @@ public partial interface IRuvioClient
     ValueTask<KeyValuePair<string, IReadOnlyList<string>>?> PopListManyBlockingAsync(IReadOnlyList<string> keys, bool fromLeft, TimeSpan timeout, long count = 1, CancellationToken cancellationToken = default)
         => RespRead.ListPop(ExecuteAsync(CoverageCommands.PopListManyBlocking(keys, fromLeft, timeout, count).AsList(), cancellationToken), "BLMPOP");
 
+    /// <summary>Sends <c>BLMPOP</c> with a typed side. Null when <paramref name="timeout"/> passes.</summary>
+    ValueTask<KeyValuePair<string, IReadOnlyList<string>>?> PopListManyBlockingAsync(IReadOnlyList<string> keys, ListSide side, TimeSpan timeout, long count = 1, CancellationToken cancellationToken = default)
+        => PopListManyBlockingAsync(keys, side == ListSide.Left, timeout, count, cancellationToken);
+
     /// <summary>Sends <c>SMISMEMBER</c>: one membership flag per member.</summary>
     ValueTask<IReadOnlyList<bool>> SetContainsManyAsync(string key, params string[] members)
         => RespRead.Flags(ExecuteAsync(CoverageCommands.Members("SMISMEMBER", key, members).AsList(), CancellationToken.None), "SMISMEMBER");
@@ -113,6 +117,10 @@ public partial interface IRuvioClient
     /// <summary>Sends <c>SCAN cursor [MATCH pattern] [COUNT n] [TYPE type]</c>.</summary>
     ValueTask<ScanPage> ScanAsync(long cursor, string? pattern, int? count, string? type, CancellationToken cancellationToken = default)
         => RuvioClient.ScanPageOf(ExecuteAsync(CoverageCommands.Scan(cursor, pattern, count, type).AsList(), cancellationToken));
+
+    /// <summary>Sends <c>SCAN cursor [MATCH pattern] [COUNT n] TYPE type</c> with a typed value type. Example: <c>ScanAsync(0, "user:*", 100, KeyType.Hash)</c>.</summary>
+    ValueTask<ScanPage> ScanAsync(long cursor, string? pattern, int? count, KeyType type, CancellationToken cancellationToken = default)
+        => ScanAsync(cursor, pattern, count, Keywords.Word(type), cancellationToken);
 
     /// <summary>Sends <c>ZRANGEBYLEX</c>, or <c>ZREVRANGEBYLEX key max min</c> when <paramref name="descending"/>. Bounds are <c>-</c>, <c>+</c>, <c>[member</c>, <c>(member</c>; a negative <paramref name="count"/> means no <c>LIMIT</c>.</summary>
     ValueTask<IReadOnlyList<string>> GetSortedSetRangeByLexAsync(string key, string min, string max, bool descending, long offset = 0, long count = -1, CancellationToken cancellationToken = default)
