@@ -904,7 +904,11 @@ fn run_blocking(address: &str, tag: &str, head: &str, frames: &[Vec<String>]) {
         std::thread::sleep(Duration::from_millis(300));
 
         for (mut conn, words) in open {
-            conn.writer
+            // Set on the stream the reads go through. Set on the writer, it relied on a cloned
+            // socket handle sharing its receive timeout, which Windows does not promise; if it
+            // does not, every command that stays blocked costs a 10 s read here.
+            conn.reader
+                .get_ref()
                 .set_read_timeout(Some(Duration::from_millis(1)))
                 .unwrap();
             match conn.read() {
