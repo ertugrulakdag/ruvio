@@ -69,3 +69,29 @@ func TestKeywordRequests(t *testing.T) {
 		t.Fatal("BitUnsigned")
 	}
 }
+
+func TestWave2WireBytesMatchStringPath(t *testing.T) {
+	old := newCmd(5, cXTRIM).s("s").s("MAXLEN").t(tTILDE).s("10").buf
+	if got := newCmd(5, cXTRIM).s("s").trim(TrimMaxLen.Of(10).WithMode(TrimApproximate)).buf; !bytes.Equal(got, old) {
+		t.Fatalf("trim ~: %q vs %q", got, old)
+	}
+	old = newCmd(5, cXTRIM).s("s").s("MINID").s("=").s("1-0").buf
+	if got := newCmd(5, cXTRIM).s("s").trim(TrimMinID.OfID("1-0").WithMode(TrimExact)).buf; !bytes.Equal(got, old) {
+		t.Fatalf("trim =: %q vs %q", got, old)
+	}
+	for _, s := range []InfoSection{InfoServer, InfoStats, InfoBuffers, InfoMemory, InfoMemoryBreakdown,
+		InfoKeyspace, InfoSnapshot, InfoCluster, InfoReplication, InfoCommandCounters,
+		InfoLatencyStats, InfoLogs, InfoSlabs, InfoAll, InfoDefault, InfoPrometheus} {
+		if !bytes.Equal(newCmd(2, cINFO).kw(s.token(), string(s)).buf, newCmd(2, cINFO).s(string(s)).buf) {
+			t.Fatalf("info %s", s)
+		}
+	}
+	for _, c := range []ClientType{ClientNormal, ClientMaster, ClientReplica, ClientPubSub} {
+		if !bytes.Equal(newCmd(1, cGET).kw(c.token(), string(c)).buf, newCmd(1, cGET).s(string(c)).buf) {
+			t.Fatalf("client type %s", c)
+		}
+	}
+	if ScoreExclusive(5) != "(5" || ScoreExclusive(1.5) != "(1.5" || LexInclusive("a") != "[a" || LexExclusive("a") != "(a" {
+		t.Fatal("bounds")
+	}
+}

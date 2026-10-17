@@ -122,6 +122,8 @@ type XAddArgs struct {
 	MinID string
 	// Approx makes the trim approximate ("~"), which is cheaper; the stream may keep a few more entries than the limit.
 	Approx bool
+	// Trim, when set, replaces MaxLen, MinID and Approx: strategy, "=" or "~" mode and threshold in one typed option (see StreamTrim).
+	Trim *StreamTrim
 	// Delay hides the entry from consumer-group delivery until the duration has passed (Ruvio extension, sent as DELAY in milliseconds). 0 means deliver at once.
 	Delay time.Duration
 	// Values are the entry fields as name, value, name, value ...; the count must be even and at least 2.
@@ -146,7 +148,9 @@ func (c *cmds) XAdd(ctx context.Context, a XAddArgs) (string, bool, error) {
 	if a.NoMkStream {
 		n++
 	}
-	if a.MaxLen > 0 || a.MinID != "" {
+	if a.Trim != nil {
+		n += a.Trim.size()
+	} else if a.MaxLen > 0 || a.MinID != "" {
 		n += 2
 		if a.Approx {
 			n++
@@ -159,7 +163,9 @@ func (c *cmds) XAdd(ctx context.Context, a XAddArgs) (string, bool, error) {
 	if a.NoMkStream {
 		r.t(tNOMKSTREAM)
 	}
-	if a.MaxLen > 0 || a.MinID != "" {
+	if a.Trim != nil {
+		r.trim(*a.Trim)
+	} else if a.MaxLen > 0 || a.MinID != "" {
 		if a.MaxLen > 0 {
 			r.t(tMAXLEN)
 		} else {
@@ -306,6 +312,14 @@ func (c *cmds) XTrim(ctx context.Context, stream, strategy, threshold string, ap
 		return c.intR(ctx, newCmd(5, cXTRIM).s(stream).s(strategy).t(tTILDE).s(threshold))
 	}
 	return c.intR(ctx, newCmd(4, cXTRIM).s(stream).s(strategy).s(threshold))
+}
+
+// XTrimBy trims the stream with a typed option (XTRIM) and returns how many entries
+// were removed. Mode may be "=" or "~" or empty; the server does not accept LIMIT.
+//
+//	n, err := c.XTrimBy(ctx, "events", ruvio.TrimMaxLen.Of(1000).WithMode(ruvio.TrimApproximate))
+func (c *cmds) XTrimBy(ctx context.Context, stream string, t StreamTrim) (int64, error) {
+	return c.intR(ctx, newCmd(2+t.size(), cXTRIM).s(stream).trim(t))
 }
 
 // XGroupCreate creates a consumer group on a stream (XGROUP CREATE stream group id). id

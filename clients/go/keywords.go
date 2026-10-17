@@ -304,3 +304,210 @@ func (r *request) kw(tok []byte, raw string) *request {
 	}
 	return r.s(raw)
 }
+
+var (
+	kwEQ = preEnc("=")
+
+	kwInfoSections = map[InfoSection][]byte{
+		InfoServer: preEnc("server"), InfoStats: preEnc("stats"), InfoBuffers: preEnc("buffers"),
+		InfoMemory: preEnc("memory"), InfoMemoryBreakdown: preEnc("memorybreakdown"),
+		InfoKeyspace: preEnc("keyspace"), InfoSnapshot: preEnc("snapshot"),
+		InfoCluster: preEnc("cluster"), InfoReplication: preEnc("replication"),
+		InfoCommandCounters: preEnc("commandcounters"), InfoLatencyStats: preEnc("latencystats"),
+		InfoLogs: preEnc("logs"), InfoSlabs: preEnc("slabs"), InfoAll: preEnc("all"),
+		InfoDefault: preEnc("default"), InfoPrometheus: preEnc("prometheus"),
+	}
+
+	kwClientTypes = map[ClientType][]byte{
+		ClientNormal: preEnc("normal"), ClientMaster: preEnc("master"),
+		ClientReplica: preEnc("replica"), ClientPubSub: preEnc("pubsub"),
+	}
+)
+
+// TrimStrategy is the stream trim criterion: TrimMaxLen ("MAXLEN") keeps at most N
+// entries, TrimMinID ("MINID") drops entries with an id below the threshold.
+//
+//	t := ruvio.StreamTrim{Strategy: ruvio.TrimMinID, Threshold: "1700000000000-0"}
+type TrimStrategy string
+
+// Stream trim strategies.
+const (
+	TrimMaxLen TrimStrategy = "MAXLEN"
+	TrimMinID  TrimStrategy = "MINID"
+)
+
+func (s TrimStrategy) token() []byte {
+	switch s {
+	case "MAXLEN":
+		return tMAXLEN
+	case "MINID":
+		return tMINID
+	}
+	return nil
+}
+
+// TrimMode is the optional trim modifier: TrimExact ("=") or TrimApproximate ("~").
+// The zero value sends no modifier. Ruvio trims exactly in both modes. The server does
+// not accept LIMIT.
+//
+//	t := ruvio.TrimMaxLen.Of(1000).WithMode(ruvio.TrimApproximate)
+type TrimMode string
+
+// Stream trim modes.
+const (
+	TrimExact       TrimMode = "="
+	TrimApproximate TrimMode = "~"
+)
+
+func (m TrimMode) token() []byte {
+	switch m {
+	case "=":
+		return kwEQ
+	case "~":
+		return tTILDE
+	}
+	return nil
+}
+
+// StreamTrim is one trim option shared by XADD (XAddArgs.Trim) and XTRIM (XTrimBy):
+// strategy MAXLEN or MINID, an optional mode "=" or "~", and the threshold (an entry
+// count for MAXLEN, a "ms-seq" id for MINID).
+//
+//	id, _, err := c.XAdd(ctx, ruvio.XAddArgs{
+//	    Stream: "events", Trim: ruvio.TrimMaxLen.Of(10000).WithMode(ruvio.TrimExact),
+//	    Values: []string{"k", "v"},
+//	})
+type StreamTrim struct {
+	// Strategy is TrimMaxLen or TrimMinID.
+	Strategy TrimStrategy
+	// Mode is TrimExact, TrimApproximate or empty (no modifier).
+	Mode TrimMode
+	// Threshold is the maximum entry count (MAXLEN) or the smallest id to keep (MINID).
+	Threshold string
+}
+
+// Of returns a StreamTrim with this strategy and a numeric threshold (MAXLEN count).
+//
+//	t := ruvio.TrimMaxLen.Of(500)
+func (s TrimStrategy) Of(n int64) StreamTrim {
+	return StreamTrim{Strategy: s, Threshold: strconv.FormatInt(n, 10)}
+}
+
+// OfID returns a StreamTrim with this strategy and an id threshold (MINID).
+//
+//	t := ruvio.TrimMinID.OfID("1700000000000-0")
+func (s TrimStrategy) OfID(id string) StreamTrim {
+	return StreamTrim{Strategy: s, Threshold: id}
+}
+
+// WithMode returns a copy of t with the given mode.
+func (t StreamTrim) WithMode(m TrimMode) StreamTrim {
+	t.Mode = m
+	return t
+}
+
+// size is the number of arguments the trim adds to a command.
+func (t StreamTrim) size() int {
+	if t.Mode != "" {
+		return 3
+	}
+	return 2
+}
+
+func (r *request) trim(t StreamTrim) *request {
+	r.kw(t.Strategy.token(), string(t.Strategy))
+	if t.Mode != "" {
+		r.kw(t.Mode.token(), string(t.Mode))
+	}
+	return r.s(t.Threshold)
+}
+
+// InfoSection names an INFO section. Valid values: InfoServer, InfoStats, InfoBuffers,
+// InfoMemory, InfoMemoryBreakdown, InfoKeyspace, InfoSnapshot, InfoCluster,
+// InfoReplication, InfoCommandCounters, InfoLatencyStats, InfoLogs, InfoSlabs, plus
+// InfoAll, InfoDefault and InfoPrometheus (Prometheus text format). The server returns
+// an empty reply for an unknown name.
+//
+//	text, err := c.InfoOf(ctx, ruvio.InfoMemory)
+type InfoSection string
+
+// INFO sections.
+const (
+	InfoServer          InfoSection = "server"
+	InfoStats           InfoSection = "stats"
+	InfoBuffers         InfoSection = "buffers"
+	InfoMemory          InfoSection = "memory"
+	InfoMemoryBreakdown InfoSection = "memorybreakdown"
+	InfoKeyspace        InfoSection = "keyspace"
+	InfoSnapshot        InfoSection = "snapshot"
+	InfoCluster         InfoSection = "cluster"
+	InfoReplication     InfoSection = "replication"
+	InfoCommandCounters InfoSection = "commandcounters"
+	InfoLatencyStats    InfoSection = "latencystats"
+	InfoLogs            InfoSection = "logs"
+	InfoSlabs           InfoSection = "slabs"
+	InfoAll             InfoSection = "all"
+	InfoDefault         InfoSection = "default"
+	InfoPrometheus      InfoSection = "prometheus"
+)
+
+func (s InfoSection) token() []byte { return kwInfoSections[s] }
+
+// ClientType filters CLIENT LIST TYPE. Valid values: ClientNormal ("normal"),
+// ClientMaster ("master"), ClientReplica ("replica"), ClientPubSub ("pubsub").
+//
+//	text, err := c.ClientListType(ctx, ruvio.ClientPubSub)
+type ClientType string
+
+// CLIENT LIST connection types.
+const (
+	ClientNormal  ClientType = "normal"
+	ClientMaster  ClientType = "master"
+	ClientReplica ClientType = "replica"
+	ClientPubSub  ClientType = "pubsub"
+)
+
+func (t ClientType) token() []byte { return kwClientTypes[t] }
+
+// Stream id constants for XADD, XGROUP, XREAD, XREADGROUP and the XRANGE family.
+const (
+	// StreamIDNew asks XADD to generate the id ("*").
+	StreamIDNew = "*"
+	// StreamIDLastDelivered is the last id of the stream at call time ("$").
+	StreamIDLastDelivered = "$"
+	// StreamIDNewMessages reads only messages never delivered to the group (">").
+	StreamIDNewMessages = ">"
+	// StreamIDMin is the lowest possible id for range bounds ("-").
+	StreamIDMin = "-"
+	// StreamIDMax is the highest possible id for range bounds ("+").
+	StreamIDMax = "+"
+)
+
+// Sorted-set score and lex bounds, accepted wherever a method takes a min/max string.
+const (
+	// ScoreNegInf is the lowest score bound ("-inf").
+	ScoreNegInf = "-inf"
+	// ScorePosInf is the highest score bound ("+inf").
+	ScorePosInf = "+inf"
+	// LexMin is the lowest lex bound ("-").
+	LexMin = "-"
+	// LexMax is the highest lex bound ("+").
+	LexMax = "+"
+)
+
+// ScoreExclusive returns the exclusive score bound "(x".
+//
+//	n, err := c.ZCount(ctx, "board", ruvio.ScoreExclusive(5), ruvio.ScorePosInf)
+func ScoreExclusive(x float64) string {
+	return string(strconv.AppendFloat(append(make([]byte, 0, 24), '('), x, 'f', -1, 64))
+}
+
+// LexInclusive returns the inclusive lex bound "[member".
+//
+//	ruvio.LexInclusive("a") // "[a"
+func LexInclusive(member string) string { return "[" + member }
+
+// LexExclusive returns the exclusive lex bound "(member".
+//
+//	ruvio.LexExclusive("a") // "(a"
+func LexExclusive(member string) string { return "(" + member }

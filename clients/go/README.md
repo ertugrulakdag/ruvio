@@ -114,6 +114,17 @@ for m := range ps.Channel() { fmt.Println(m.Kind, m.Channel, m.Payload) }
 
 `Tx.Multi` / `Tx.Queue` / `Tx.ExecQueued` / `Tx.Discard` give the explicit step-by-step form.
 
+### Typed keywords
+
+String-typed constants encode through pre-built RESP fragments (no per-call allocation); plain string literals still compile.
+
+```go
+id, _, _ := c.XAdd(ctx, ruvio.XAddArgs{Stream: "events", Trim: ruvio.TrimMaxLen.Of(10000).WithMode(ruvio.TrimApproximate), Values: []string{"k", "v"}})
+n, _ := c.XTrimBy(ctx, "events", ruvio.TrimMinID.OfID("1700000000000-0"))
+text, _ := c.InfoOf(ctx, ruvio.InfoMemory)
+n, _ = c.ZCount(ctx, "board", ruvio.ScoreExclusive(5), ruvio.ScorePosInf)
+```
+
 ## Helpers
 
 | Helper | Built on | Notes |

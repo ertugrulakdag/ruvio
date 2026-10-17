@@ -437,6 +437,14 @@ func (c *cmds) ClientList(ctx context.Context, ids ...int64) (string, error) {
 	return c.strR(ctx, r)
 }
 
+// ClientListType returns the CLIENT LIST text for one connection type (CLIENT LIST TYPE
+// type): ClientNormal, ClientMaster, ClientReplica or ClientPubSub.
+//
+//	text, err := c.ClientListType(ctx, ruvio.ClientNormal)
+func (c *cmds) ClientListType(ctx context.Context, typ ClientType) (string, error) {
+	return c.strR(ctx, newCmd(4, cCLIENT).t(tLIST).t(tTYPE).kw(typ.token(), string(typ)))
+}
+
 // ClientInfo returns the CLIENT LIST line of the connection that sent the command
 // (CLIENT INFO).
 func (c *cmds) ClientInfo(ctx context.Context) (string, error) {
@@ -524,6 +532,14 @@ func (c *cmds) ClientTracking(ctx context.Context, on bool) error {
 // Prometheus text). It reports the shard that answered.
 func (c *cmds) Info(ctx context.Context, sections ...string) (string, error) {
 	return c.strR(ctx, newCmd(1+len(sections), cINFO).ss(sections))
+}
+
+// InfoOf returns the INFO text of one typed section (INFO section), for example
+// InfoMemory or InfoPrometheus. An unknown section name gives an empty reply.
+//
+//	text, err := c.InfoOf(ctx, ruvio.InfoKeyspace)
+func (c *cmds) InfoOf(ctx context.Context, section InfoSection) (string, error) {
+	return c.strR(ctx, newCmd(2, cINFO).kw(section.token(), string(section)))
 }
 
 // Wait blocks until at least replicas replicas have synced this shard's writes, or
