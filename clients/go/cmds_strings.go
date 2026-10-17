@@ -675,10 +675,10 @@ func (c *cmds) BitOp(ctx context.Context, op BitOperation, dest string, keys ...
 // BitFieldOp is one sub-command of BITFIELD.
 //
 // Op is BitFieldGet, BitFieldSet, BitFieldIncrBy or BitFieldOverflow (case-insensitive). Type is the field type:
-// i1 to i64 (signed) or u1 to u63 (unsigned), for example "u8". Offset is a bit offset
+// i1 to i64 (signed) or u1 to u63 (unsigned), for example BitU8 (or BitSigned and BitUnsigned for any width). Offset is a bit offset
 // such as "0" or "100", or "#n" to mean n times the field width. Value is the operand of
 // SET and INCRBY and is ignored for GET. For OVERFLOW only Type is used and holds the
-// policy: "WRAP", "SAT" or "FAIL"; it applies to the INCRBY and SET operations that
+// policy: BitOverflowWrap, BitOverflowSat or BitOverflowFail; it applies to the INCRBY and SET operations that
 // follow it.
 type BitFieldOp struct {
 	Op     BitFieldOpName // GET, SET, INCRBY or OVERFLOW
@@ -720,9 +720,9 @@ func bitfieldReq(name []byte, key string, ops []BitFieldOp) *request {
 // the TTL; fields must end below 16 MiB.
 //
 //	r, err := c.BitField(ctx, "counters",
-//	    ruvio.BitFieldOp{Op: "OVERFLOW", Type: "SAT"},
-//	    ruvio.BitFieldOp{Op: "INCRBY", Type: "u8", Offset: "0", Value: 10},
-//	    ruvio.BitFieldOp{Op: "GET", Type: "u8", Offset: "0"},
+//	    ruvio.BitFieldOp{Op: ruvio.BitFieldOverflow, Type: ruvio.BitOverflowSat},
+//	    ruvio.BitFieldOp{Op: ruvio.BitFieldIncrBy, Type: ruvio.BitU8, Offset: "0", Value: 10},
+//	    ruvio.BitFieldOp{Op: ruvio.BitFieldGet, Type: ruvio.BitU8, Offset: "0"},
 //	)
 func (c *cmds) BitField(ctx context.Context, key string, ops ...BitFieldOp) ([]NullInt, error) {
 	v, err := c.value(ctx, bitfieldReq(cBITFIELD, key, ops))

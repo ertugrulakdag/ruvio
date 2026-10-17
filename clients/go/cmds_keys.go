@@ -83,8 +83,8 @@ type ScanOptions struct {
 	// Count is the page size hint (the server default is 10). Zero or less sends
 	// no COUNT.
 	Count int64
-	// Type keeps only keys of this type (SCAN only; names as returned by Type; see
-	// ScanType for the constants).
+	// Type keeps only keys of this type (SCAN only; names as returned by Type; use the ScanType
+	// constants such as ScanHash).
 	Type ScanType
 }
 

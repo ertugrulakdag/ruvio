@@ -183,9 +183,9 @@ func (c *cmds) LPosCount(ctx context.Context, key, elem string, count int64, o L
 }
 
 // LMove atomically pops an element from one end of src and pushes it to one end of dst,
-// and returns it (LMOVE). from and to are ListLeft or ListRight ("LEFT" or "RIGHT",
-// case-insensitive; anything else is a syntax error). src and dst may be the same list (a rotation). ok is false
-// and nothing moves when src is missing or empty. In cluster mode both keys must share a
+// and returns it (LMOVE). from and to are the ends to pop from and push to (ListSide: ListLeft or
+// ListRight; any other value is a syntax error). src and dst may be the same list (a
+// rotation). ok is false and nothing moves when src is missing or empty. In cluster mode both keys must share a
 // slot (ErrCrossSlot).
 //
 //	v, ok, err := c.LMove(ctx, "pending", "working", ruvio.ListLeft, ruvio.ListRight)

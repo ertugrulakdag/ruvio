@@ -592,9 +592,10 @@ func (c *cmds) GeoPosition(ctx context.Context, key string, members ...string) (
 //
 // Center: set Member to search around an existing member (FROMMEMBER), otherwise
 // Longitude and Latitude are used (FROMLONLAT). Shape: a Radius greater than 0 searches
-// a circle (BYRADIUS); otherwise Width and Height define a box (BYBOX). Unit is "m"
-// (default when empty), "km", "ft" or "mi" for the Radius, Width and Height. Sort is
-// "ASC" or "DESC" by distance from the center, or empty. Count > 0 limits the number of
+// a circle (BYRADIUS); otherwise Width and Height define a box (BYBOX). Unit (GeoUnit) is
+// GeoMeters (default when empty), GeoKilometers, GeoFeet or GeoMiles for the Radius,
+// Width and Height. Sort (GeoOrder) is GeoAsc or GeoDesc by distance from the center,
+// or empty. Count > 0 limits the number of
 // results; the nearest are kept and, when Count is given without Any, the result is
 // sorted ascending. Any with Count returns the first matches found, in no particular
 // order, which is faster. Any without Count is an error. WithDist, WithHash and
@@ -721,8 +722,8 @@ func toGeoLocations(v Value, dist, hash, coord bool) ([]GeoLocation, error) {
 // "ERR invalid longitude,latitude pair".
 //
 //	shops, err := c.GeoSearch(ctx, "shops", ruvio.GeoSearchQuery{
-//	    Longitude: 15, Latitude: 37, Radius: 200, Unit: "km",
-//	    Sort: "ASC", Count: 5, WithDist: true,
+//	    Longitude: 15, Latitude: 37, Radius: 200, Unit: ruvio.GeoKilometers,
+//	    Sort: ruvio.GeoAsc, Count: 5, WithDist: true,
 //	})
 func (c *cmds) GeoSearch(ctx context.Context, key string, q GeoSearchQuery) ([]GeoLocation, error) {
 	r := newCmd(2+q.n(false), cGEOSEARCH).s(key)
@@ -753,8 +754,8 @@ func (c *cmds) GeoSearchStore(ctx context.Context, dst, src string, q GeoSearchQ
 }
 
 // GeoRadiusQuery holds the options of GEORADIUS and GEORADIUSBYMEMBER. Radius is a
-// distance in Unit ("m" by default, "km", "ft", "mi") and must not be negative. Sort is
-// "ASC", "DESC" or empty; Count > 0 limits the result (and sorts ascending unless Any is
+// distance in Unit (GeoUnit; GeoMeters by default, GeoKilometers, GeoFeet, GeoMiles) and
+// must not be negative. Sort (GeoOrder) is GeoAsc, GeoDesc or empty; Count > 0 limits the result (and sorts ascending unless Any is
 // set); Any needs Count. WithDist, WithHash and WithCoord add details to each result and
 // cannot be used with the store forms.
 type GeoRadiusQuery struct {
