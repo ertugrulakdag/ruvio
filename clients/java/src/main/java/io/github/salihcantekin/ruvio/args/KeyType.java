@@ -9,17 +9,29 @@ import io.github.salihcantekin.ruvio.internal.RespOut;
  * <p>Example: {@code client.scan("0", ScanArgs.count(100).type(KeyType.HASH))}
  */
 public enum KeyType {
+    /** Plain string values. */
     STRING("string"),
+    /** JSON documents. */
     JSON("json"),
+    /** Lists. */
     LIST("list"),
+    /** Sets. */
     SET("set"),
+    /** Hashes. */
     HASH("hash"),
+    /** Sorted sets. */
     ZSET("zset"),
+    /** Bloom filters. */
     BLOOMFILTER("bloomfilter"),
+    /** Streams. */
     STREAM("stream"),
+    /** Leases created by {@code LEASE}. */
     LEASE("lease"),
+    /** Rate-limit counters created by {@code LIMIT}. */
     LIMIT("limit"),
+    /** Semaphores created by {@code SEMAPHORE}. */
     SEMAPHORE("semaphore"),
+    /** Keys created by {@code ONCE}. */
     ONCE("once");
 
     private final String word;
@@ -30,14 +42,19 @@ public enum KeyType {
         this.fragment = RespOut.fragment(word);
     }
 
-    /** The wire keyword, for example {@code "STRING"}. */
+    /**
+     * Returns the keyword as sent to the server.
+     *
+     * @return the keyword, for example {@code "string"}
+     */
     public String word() {
         return word;
     }
 
     /**
-     * The keyword pre-encoded as a complete RESP bulk string ({@code $len\r\nWORD\r\n}). The array is
-     * shared and must not be modified.
+     * Returns the keyword pre-encoded as a complete RESP bulk string ({@code $len\r\nWORD\r\n}).
+     *
+     * @return the shared encoded bytes; do not modify them
      */
     public byte[] fragment() {
         return fragment;

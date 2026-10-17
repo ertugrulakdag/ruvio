@@ -8,13 +8,23 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * BITFIELD operations. Types are {@code i1..i64} and {@code u1..u63}; offsets are numbers or
- * {@code #n}. BITFIELD_RO accepts only GET operations.
+ * Builds the operations of {@code BITFIELD} (and {@code BITFIELD_RO}, which accepts only {@code GET}): read, write and increment integer fields of any width inside a string. Types are {@code i1..i64} and {@code u1..u63}; offsets are bit numbers or {@code #n}. The reply holds one entry per operation: the value read, the old value for {@code SET}, the new value for {@code INCRBY}, or {@code null} when {@code OVERFLOW FAIL} refused it.
+ *
+ * <p>{@code BitFieldArgs.builder().set(BitFieldArgs.Type.unsigned(8), 0, 200).incrBy(BitFieldArgs.Type.unsigned(8), 0, 100)}
  */
 public final class BitFieldArgs {
-    /** OVERFLOW mode: WRAP, SAT or FAIL. */
+    /** Creates an empty option set; the static factories are the usual way in. */
+    public BitFieldArgs() {
+    }
+
+    /** The {@code OVERFLOW} mode for the {@code SET} and {@code INCRBY} operations that follow it. */
     public enum Overflow {
-        WRAP, SAT, FAIL;
+        /** Wrap around on overflow (the default). */
+        WRAP,
+        /** Clamp to the smallest or largest value of the type. */
+        SAT,
+        /** Do not change the value; the operation replies {@code null}. */
+        FAIL;
 
         private final byte[] fragment;
 
@@ -23,8 +33,9 @@ public final class BitFieldArgs {
         }
 
         /**
-         * The keyword pre-encoded as a complete RESP bulk string, identical on the wire to {@code name()}.
-         * The array is shared and must not be modified.
+         * Returns the keyword pre-encoded as a complete RESP bulk string, identical on the wire to {@code name()}.
+         *
+         * @return the shared encoded bytes; do not modify them
          */
         public byte[] fragment() {
             return fragment;
@@ -37,8 +48,7 @@ public final class BitFieldArgs {
     private static final byte[] OP_OVERFLOW = RespOut.fragment("OVERFLOW");
 
     /**
-     * A BITFIELD integer type: {@code i1..i64} (signed) or {@code u1..u63} (unsigned). The wire form is
-     * pre-encoded once, so using a type adds no per-call encoding cost.
+     * A {@code BITFIELD} integer type: {@code i1..i64} (signed) or {@code u1..u63} (unsigned). The wire form is pre-encoded once, so using a type adds no per-call encoding cost.
      *
      * <p>Example: {@code BitFieldArgs.builder().set(BitFieldArgs.Type.unsigned(8), 0, 200)}
      */
@@ -63,7 +73,13 @@ public final class BitFieldArgs {
             this.fragment = RespOut.fragment(word);
         }
 
-        /** The signed type {@code i<bits>}; {@code bits} is 1 to 64. */
+        /**
+         * Returns the signed type {@code i<bits>}.
+         *
+         * @param bits the width, from 1 to 64
+         * @return the type
+         * @throws IllegalArgumentException when the width is out of range
+         */
         public static Type signed(int bits) {
             if (bits < 1 || bits > 64) {
                 throw new IllegalArgumentException("signed bit width must be 1..64: " + bits);
@@ -71,7 +87,13 @@ public final class BitFieldArgs {
             return SIGNED[bits];
         }
 
-        /** The unsigned type {@code u<bits>}; {@code bits} is 1 to 63. */
+        /**
+         * Returns the unsigned type {@code u<bits>}.
+         *
+         * @param bits the width, from 1 to 63
+         * @return the type
+         * @throws IllegalArgumentException when the width is out of range
+         */
         public static Type unsigned(int bits) {
             if (bits < 1 || bits > 63) {
                 throw new IllegalArgumentException("unsigned bit width must be 1..63: " + bits);
@@ -79,16 +101,30 @@ public final class BitFieldArgs {
             return UNSIGNED[bits];
         }
 
-        /** The wire text, for example {@code "u8"}. */
+        /**
+         * Returns the wire text.
+         *
+         * @return the type text, for example {@code "u8"}
+         */
         public String word() {
             return word;
         }
 
-        /** The type pre-encoded as a RESP bulk string. The array is shared and must not be modified. */
+        /**
+         * Returns the type pre-encoded as a RESP bulk string.
+         *
+         * @return the shared encoded bytes; do not modify them
+         */
         public byte[] fragment() {
             return fragment;
         }
 
+        /**
+         *             return word;
+         * Returns the wire text.
+         *
+         * @return the type text
+         */
         @Override
         public String toString() {
             return word;
@@ -97,10 +133,22 @@ public final class BitFieldArgs {
 
     private final List<Object> parts = new ArrayList<>();
 
+    /**
+     * Starts an empty operation list.
+     *
+     * @return a new operation list
+     */
     public static BitFieldArgs builder() {
         return new BitFieldArgs();
     }
 
+    /**
+     * Adds {@code GET type offset}: reads a field.
+     *
+     * @param type the integer type as text, for example {@code "u8"}
+     * @param offset the bit offset, or {@code #n} to count in units of the type's width
+     * @return this builder
+     */
     public BitFieldArgs get(String type, String offset) {
         parts.add(OP_GET);
         parts.add(type);
@@ -108,10 +156,25 @@ public final class BitFieldArgs {
         return this;
     }
 
+    /**
+     * Adds {@code GET type offset}: reads a field.
+     *
+     * @param type the integer type as text, for example {@code "u8"}
+     * @param offset the bit offset (0 or more)
+     * @return this builder
+     */
     public BitFieldArgs get(String type, long offset) {
         return get(type, Long.toString(offset));
     }
 
+    /**
+     * Adds {@code SET type offset value}: writes a field; the reply is its old value.
+     *
+     * @param type the integer type as text, for example {@code "u8"}
+     * @param offset the bit offset, or {@code #n} to count in units of the type's width
+     * @param value the new value
+     * @return this builder
+     */
     public BitFieldArgs set(String type, String offset, long value) {
         parts.add(OP_SET);
         parts.add(type);
@@ -120,10 +183,26 @@ public final class BitFieldArgs {
         return this;
     }
 
+    /**
+     * Adds {@code SET type offset value}: writes a field; the reply is its old value.
+     *
+     * @param type the integer type as text, for example {@code "u8"}
+     * @param offset the bit offset (0 or more)
+     * @param value the new value
+     * @return this builder
+     */
     public BitFieldArgs set(String type, long offset, long value) {
         return set(type, Long.toString(offset), value);
     }
 
+    /**
+     * Adds {@code INCRBY type offset increment}: adds to a field; the reply is the new value.
+     *
+     * @param type the integer type as text, for example {@code "u8"}
+     * @param offset the bit offset, or {@code #n} to count in units of the type's width
+     * @param increment the amount to add (may be negative)
+     * @return this builder
+     */
     public BitFieldArgs incrBy(String type, String offset, long increment) {
         parts.add(OP_INCRBY);
         parts.add(type);
@@ -132,11 +211,25 @@ public final class BitFieldArgs {
         return this;
     }
 
+    /**
+     * Adds {@code INCRBY type offset increment}: adds to a field; the reply is the new value.
+     *
+     * @param type the integer type as text, for example {@code "u8"}
+     * @param offset the bit offset (0 or more)
+     * @param increment the amount to add (may be negative)
+     * @return this builder
+     */
     public BitFieldArgs incrBy(String type, long offset, long increment) {
         return incrBy(type, Long.toString(offset), increment);
     }
 
-    /** GET with a typed integer width, for example {@code get(Type.unsigned(8), 0)}. */
+    /**
+     * Adds {@code GET type offset} with a typed integer width, for example {@code get(Type.unsigned(8), "#2")}.
+     *
+     * @param type the integer width, for example {@code Type.unsigned(8)}
+     * @param offset the bit offset, or {@code #n} to count in units of the type's width
+     * @return this builder
+     */
     public BitFieldArgs get(Type type, String offset) {
         parts.add(OP_GET);
         parts.add(type.fragment());
@@ -144,12 +237,25 @@ public final class BitFieldArgs {
         return this;
     }
 
-    /** GET with a typed integer width and a numeric offset. */
+    /**
+     * Adds {@code GET type offset} with a typed integer width and a numeric offset.
+     *
+     * @param type the integer width, for example {@code Type.unsigned(8)}
+     * @param offset the bit offset (0 or more)
+     * @return this builder
+     */
     public BitFieldArgs get(Type type, long offset) {
         return get(type, Long.toString(offset));
     }
 
-    /** SET with a typed integer width, for example {@code set(Type.signed(16), "#1", -5)}. */
+    /**
+     * Adds {@code SET type offset value} with a typed integer width, for example {@code set(Type.signed(16), "#1", -5)}; the reply is the old value.
+     *
+     * @param type the integer width, for example {@code Type.unsigned(8)}
+     * @param offset the bit offset, or {@code #n} to count in units of the type's width
+     * @param value the new value
+     * @return this builder
+     */
     public BitFieldArgs set(Type type, String offset, long value) {
         parts.add(OP_SET);
         parts.add(type.fragment());
@@ -158,12 +264,26 @@ public final class BitFieldArgs {
         return this;
     }
 
-    /** SET with a typed integer width and a numeric offset. */
+    /**
+     * Adds {@code SET type offset value} with a typed integer width and a numeric offset; the reply is the old value.
+     *
+     * @param type the integer width, for example {@code Type.unsigned(8)}
+     * @param offset the bit offset (0 or more)
+     * @param value the new value
+     * @return this builder
+     */
     public BitFieldArgs set(Type type, long offset, long value) {
         return set(type, Long.toString(offset), value);
     }
 
-    /** INCRBY with a typed integer width, for example {@code incrBy(Type.unsigned(4), 8, 1)}. */
+    /**
+     * Adds {@code INCRBY type offset increment} with a typed integer width, for example {@code incrBy(Type.unsigned(4), "8", 1)}; the reply is the new value.
+     *
+     * @param type the integer width, for example {@code Type.unsigned(8)}
+     * @param offset the bit offset, or {@code #n} to count in units of the type's width
+     * @param increment the amount to add (may be negative)
+     * @return this builder
+     */
     public BitFieldArgs incrBy(Type type, String offset, long increment) {
         parts.add(OP_INCRBY);
         parts.add(type.fragment());
@@ -172,17 +292,35 @@ public final class BitFieldArgs {
         return this;
     }
 
-    /** INCRBY with a typed integer width and a numeric offset. */
+    /**
+     * Adds {@code INCRBY type offset increment} with a typed integer width and a numeric offset; the reply is the new value.
+     *
+     * @param type the integer width, for example {@code Type.unsigned(8)}
+     * @param offset the bit offset (0 or more)
+     * @param increment the amount to add (may be negative)
+     * @return this builder
+     */
     public BitFieldArgs incrBy(Type type, long offset, long increment) {
         return incrBy(type, Long.toString(offset), increment);
     }
 
+    /**
+     * Adds {@code OVERFLOW mode}: sets how the {@code SET} and {@code INCRBY} operations added after it handle overflow.
+     *
+     * @param mode wrap, saturate or fail
+     * @return this builder
+     */
     public BitFieldArgs overflow(Overflow mode) {
         parts.add(OP_OVERFLOW);
         parts.add(mode.fragment());
         return this;
     }
 
+    /**
+     * Appends the operations to a command being encoded. Used by the client; you do not call it.
+     *
+     * @param a the argument writer
+     */
     public void write(Args a) {
         for (Object p : parts) {
             if (p instanceof byte[]) {

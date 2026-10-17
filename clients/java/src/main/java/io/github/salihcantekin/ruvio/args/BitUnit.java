@@ -9,7 +9,9 @@ import io.github.salihcantekin.ruvio.internal.RespOut;
  * <p>Example: {@code client.bitcount(key, 0, 7, BitUnit.BIT)}
  */
 public enum BitUnit {
+    /** The range bounds are byte offsets. */
     BYTE("BYTE"),
+    /** The range bounds are bit offsets. */
     BIT("BIT");
 
     private final String word;
@@ -20,14 +22,19 @@ public enum BitUnit {
         this.fragment = RespOut.fragment(word);
     }
 
-    /** The wire keyword, for example {@code "BYTE"}. */
+    /**
+     * Returns the keyword as sent to the server.
+     *
+     * @return the keyword, for example {@code "BYTE"}
+     */
     public String word() {
         return word;
     }
 
     /**
-     * The keyword pre-encoded as a complete RESP bulk string ({@code $len\r\nWORD\r\n}). The array is
-     * shared and must not be modified.
+     * Returns the keyword pre-encoded as a complete RESP bulk string ({@code $len\r\nWORD\r\n}).
+     *
+     * @return the shared encoded bytes; do not modify them
      */
     public byte[] fragment() {
         return fragment;

@@ -3,9 +3,16 @@ package io.github.salihcantekin.ruvio.args;
 
 import io.github.salihcantekin.ruvio.internal.RespOut;
 
-/** BITOP operations. */
+/** The operation of {@code BITOP}. */
 public enum BitOp {
-    AND, OR, XOR, NOT;
+    /** Bitwise AND of all source keys. */
+    AND,
+    /** Bitwise OR of all source keys. */
+    OR,
+    /** Bitwise XOR of all source keys. */
+    XOR,
+    /** Bitwise NOT of exactly one source key. */
+    NOT;
 
     private final byte[] fragment;
 
@@ -14,8 +21,9 @@ public enum BitOp {
     }
 
     /**
-     * The keyword pre-encoded as a complete RESP bulk string, identical on the wire to {@code name()}.
-     * The array is shared and must not be modified.
+     * Returns the keyword pre-encoded as a complete RESP bulk string, identical on the wire to {@code name()}.
+     *
+     * @return the shared encoded bytes; do not modify them
      */
     public byte[] fragment() {
         return fragment;

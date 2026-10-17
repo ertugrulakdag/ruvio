@@ -9,7 +9,9 @@ import io.github.salihcantekin.ruvio.internal.RespOut;
  * <p>Example: {@code list.linsert(key, InsertPosition.BEFORE, pivot, value)}
  */
 public enum InsertPosition {
+    /** Insert in front of the pivot. */
     BEFORE("BEFORE"),
+    /** Insert behind the pivot. */
     AFTER("AFTER");
 
     private final String word;
@@ -20,14 +22,19 @@ public enum InsertPosition {
         this.fragment = RespOut.fragment(word);
     }
 
-    /** The wire keyword, for example {@code "BEFORE"}. */
+    /**
+     * Returns the keyword as sent to the server.
+     *
+     * @return the keyword, for example {@code "BEFORE"}
+     */
     public String word() {
         return word;
     }
 
     /**
-     * The keyword pre-encoded as a complete RESP bulk string ({@code $len\r\nWORD\r\n}). The array is
-     * shared and must not be modified.
+     * Returns the keyword pre-encoded as a complete RESP bulk string ({@code $len\r\nWORD\r\n}).
+     *
+     * @return the shared encoded bytes; do not modify them
      */
     public byte[] fragment() {
         return fragment;

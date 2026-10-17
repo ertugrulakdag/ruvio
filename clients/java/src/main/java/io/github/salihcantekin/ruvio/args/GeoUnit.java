@@ -3,9 +3,16 @@ package io.github.salihcantekin.ruvio.args;
 
 import io.github.salihcantekin.ruvio.internal.RespOut;
 
-/** Distance units for GEO commands. */
+/** Distance unit of the GEO commands. */
 public enum GeoUnit {
-    M, KM, FT, MI;
+    /** Meters. */
+    M,
+    /** Kilometers. */
+    KM,
+    /** Feet. */
+    FT,
+    /** Miles. */
+    MI;
 
     private final byte[] fragment;
 
@@ -14,8 +21,9 @@ public enum GeoUnit {
     }
 
     /**
-     * The keyword pre-encoded as a complete RESP bulk string, identical on the wire to {@code name()}.
-     * The array is shared and must not be modified.
+     * Returns the keyword pre-encoded as a complete RESP bulk string, identical on the wire to {@code name()}.
+     *
+     * @return the shared encoded bytes; do not modify them
      */
     public byte[] fragment() {
         return fragment;
