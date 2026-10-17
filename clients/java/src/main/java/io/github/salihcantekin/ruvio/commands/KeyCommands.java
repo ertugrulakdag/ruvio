@@ -3,6 +3,7 @@ package io.github.salihcantekin.ruvio.commands;
 
 import io.github.salihcantekin.ruvio.RuvioCodec;
 import io.github.salihcantekin.ruvio.RuvioServerException;
+import io.github.salihcantekin.ruvio.args.KeyType;
 import io.github.salihcantekin.ruvio.args.RestoreArgs;
 import io.github.salihcantekin.ruvio.args.ScanArgs;
 import io.github.salihcantekin.ruvio.internal.Args;
@@ -364,11 +365,11 @@ public abstract class KeyCommands<K, V> extends StringCommands<K, V> {
      * {@code COUNT} bounds the table slots examined per call (about 10 per requested key), so a page can hold fewer keys than asked.
      *
      * <pre>{@code
-     * ScanResult<String> page = client.scan("0", ScanArgs.match("user:*").limit(500).type("hash"));
+     * ScanResult<String> page = client.scan("0", ScanArgs.match("user:*").limit(500).type(KeyType.HASH));
      * }</pre>
      *
      * @param cursor {@code "0"} to start, otherwise the cursor of the previous page
-     * @param options pattern, count hint and type filter
+     * @param options pattern, count hint and type filter (use {@code ScanArgs.type(KeyType)} with a {@link KeyType} such as {@code KeyType.HASH})
      * @return the next cursor and the matching keys of this page
      */
     public CompletableFuture<ScanResult<K>> scan(String cursor, ScanArgs options) {

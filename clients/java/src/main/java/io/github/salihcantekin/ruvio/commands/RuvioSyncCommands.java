@@ -11,9 +11,11 @@ import io.github.salihcantekin.ruvio.args.BitOp;
 import io.github.salihcantekin.ruvio.args.BitUnit;
 import io.github.salihcantekin.ruvio.args.ClientKillArgs;
 import io.github.salihcantekin.ruvio.args.ExpireCondition;
+import io.github.salihcantekin.ruvio.args.GeoOrder;
 import io.github.salihcantekin.ruvio.args.GeoSearchArgs;
 import io.github.salihcantekin.ruvio.args.GeoUnit;
 import io.github.salihcantekin.ruvio.args.InsertPosition;
+import io.github.salihcantekin.ruvio.args.KeyType;
 import io.github.salihcantekin.ruvio.args.LPosArgs;
 import io.github.salihcantekin.ruvio.args.ListDirection;
 import io.github.salihcantekin.ruvio.args.RestoreArgs;
@@ -963,11 +965,11 @@ public abstract class RuvioSyncCommands<K, V> {
      * {@code COUNT} bounds the table slots examined per call (about 10 per requested key), so a page can hold fewer keys than asked.
      *
      * <pre>{@code
-     * ScanResult<String> page = client.scan("0", ScanArgs.match("user:*").limit(500).type("hash"));
+     * ScanResult<String> page = client.scan("0", ScanArgs.match("user:*").limit(500).type(KeyType.HASH));
      * }</pre>
      *
      * @param cursor {@code "0"} to start, otherwise the cursor of the previous page
-     * @param options pattern, count hint and type filter
+     * @param options pattern, count hint and type filter (use {@code ScanArgs.type(KeyType)} with a {@link KeyType} such as {@code KeyType.HASH})
      * @return the next cursor and the matching keys of this page
      */
     public ScanResult<K> scan(String cursor, ScanArgs options) {
@@ -1931,7 +1933,7 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
-     * Sends {@code LINSERT key BEFORE|AFTER pivot value}: inserts next to the first element equal to {@code pivot}. Rewrites the list (O(N)).
+     * Sends {@code LINSERT key BEFORE|AFTER pivot value}: inserts next to the first element equal to {@code pivot}. Rewrites the list (O(N)). Prefer the {@link InsertPosition} overload.
      *
      * @param key the list key
      * @param before {@code true} to insert before the pivot, {@code false} to insert after it
@@ -1944,7 +1946,20 @@ public abstract class RuvioSyncCommands<K, V> {
         return await(async.linsert(key, before, pivot, value));
     }
 
-    /** LINSERT key BEFORE|AFTER pivot value with an enum position, for example {@code InsertPosition.AFTER}. */
+    /**
+     * Sends {@code LINSERT key BEFORE|AFTER pivot value} with an enum position instead of a boolean. Rewrites the list (O(N)).
+     *
+     * <pre>{@code
+     * client.linsert("queue", InsertPosition.AFTER, "b", "c");
+     * }</pre>
+     *
+     * @param key the list key
+     * @param position {@link InsertPosition#BEFORE} or {@link InsertPosition#AFTER} the pivot
+     * @param pivot the existing element to look for
+     * @param value the element to insert
+     * @return the list length after the insert, {@code -1} when the pivot was not found, {@code 0} when the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     public Long linsert(K key, InsertPosition position, V pivot, V value) {
         return await(async.linsert(key, position, pivot, value));
     }
@@ -2031,8 +2046,8 @@ public abstract class RuvioSyncCommands<K, V> {
      *
      * @param source the list to pop from
      * @param destination the list to push to
-     * @param from which end of {@code source} to pop
-     * @param to which end of {@code destination} to push to
+     * @param from {@link ListDirection#LEFT} (head) or {@link ListDirection#RIGHT} (tail) end of {@code source} to pop
+     * @param to {@link ListDirection#LEFT} (head) or {@link ListDirection#RIGHT} (tail) end of {@code destination} to push to
      * @return the moved element, or {@code null} when {@code source} is empty or missing
      * @throws RuvioServerException {@code WRONGTYPE} for a non-list; {@code CROSSSLOT} in a cluster
      */
@@ -2057,8 +2072,8 @@ public abstract class RuvioSyncCommands<K, V> {
      *
      * @param source the list to pop from
      * @param destination the list to push to
-     * @param from which end of {@code source} to pop
-     * @param to which end of {@code destination} to push to
+     * @param from {@link ListDirection#LEFT} (head) or {@link ListDirection#RIGHT} (tail) end of {@code source} to pop
+     * @param to {@link ListDirection#LEFT} (head) or {@link ListDirection#RIGHT} (tail) end of {@code destination} to push to
      * @param timeoutSeconds seconds to wait; {@code 0} waits until an element arrives
      * @return the moved element, or {@code null} on timeout
      * @throws RuvioServerException {@code WRONGTYPE} for a non-list; {@code CROSSSLOT} in a cluster
@@ -2070,7 +2085,7 @@ public abstract class RuvioSyncCommands<K, V> {
     /**
      * Sends {@code LMPOP numkeys key [key ...] LEFT|RIGHT [COUNT n]}: pops elements from the first non-empty list.
      *
-     * @param direction which end to pop from
+     * @param direction {@link ListDirection#LEFT} (head) or {@link ListDirection#RIGHT} (tail): the end to pop from
      * @param count the most elements to pop; zero or less sends no {@code COUNT} (pops one)
      * @param keys one or more list keys, checked in order
      * @return the key popped from and the elements, or {@code null} when every list is empty
@@ -2085,7 +2100,7 @@ public abstract class RuvioSyncCommands<K, V> {
      * Sends {@code BLMPOP timeout numkeys key [key ...] LEFT|RIGHT [COUNT n]}: like {@link #lmpop} but waits (polling every 5 ms on the server) until a list has an element. Holds the shared connection; use {@link io.github.salihcantekin.ruvio.RuvioClient#dedicated()}. Not allowed inside a transaction.
      *
      * @param timeoutSeconds seconds to wait; {@code 0} waits until an element arrives
-     * @param direction which end to pop from
+     * @param direction {@link ListDirection#LEFT} (head) or {@link ListDirection#RIGHT} (tail): the end to pop from
      * @param count the most elements to pop; zero or less pops one
      * @param keys one or more list keys
      * @return the key popped from and the elements, or {@code null} on timeout
@@ -3161,7 +3176,7 @@ public abstract class RuvioSyncCommands<K, V> {
      * @param key the geo key
      * @param member1 the first place
      * @param member2 the second place
-     * @param unit the unit of the result: {@code M} meters, {@code KM} kilometers, {@code FT} feet, {@code MI} miles
+     * @param unit a {@link GeoUnit}: {@code M} meters, {@code KM} kilometers, {@code FT} feet, {@code MI} miles
      * @return the distance in {@code unit}, or {@code null} when either member or the key does not exist
      * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
      */
@@ -3201,14 +3216,14 @@ public abstract class RuvioSyncCommands<K, V> {
      *
      * <pre>{@code
      * List<GeoResult<String>> near = client.geosearch("cities",
-     *         GeoSearchArgs.fromLonLat(15, 37).byRadius(200, GeoUnit.KM).asc().count(5).withDist());
+     *         GeoSearchArgs.fromLonLat(15, 37).byRadius(200, GeoUnit.KM).order(GeoOrder.ASC).count(5).withDist());
      * for (GeoResult<String> r : near) {
      *     System.out.println(r.member() + " " + r.distance() + " km");
      * }
      * }</pre>
      *
      * @param key the geo key
-     * @param search origin, shape, order, count and which extra fields to return
+     * @param search origin, shape, order (a {@link GeoOrder}, via {@code order(GeoOrder)}, {@code asc()} or {@code desc()}), count and which extra fields to return
      * @return the matches; {@code distance()}, {@code hash()} and {@code coordinates()} are filled only for the {@code WITH*} flags you set; empty when the key does not exist
      * @throws RuvioServerException {@code ERR} when the origin or the shape is missing, {@code ANY} has no {@code COUNT}, {@code COUNT} is zero, or a size is negative; also when {@code fromMember} names a member that is not in the set; {@code WRONGTYPE} for a non-sorted-set
      */
@@ -3253,7 +3268,7 @@ public abstract class RuvioSyncCommands<K, V> {
      * @param latitude centre latitude, -85.05112878 to 85.05112878
      * @param radius the radius, zero or greater, in {@code unit}
      * @param unit {@code M}, {@code KM}, {@code FT} or {@code MI}
-     * @param options order, count and {@code WITH*} flags, from {@link GeoSearchArgs#options()}; the origin and shape in it are ignored
+     * @param options order (a {@link GeoOrder}), count and {@code WITH*} flags, from {@link GeoSearchArgs#options()}; the origin and shape in it are ignored
      * @return the matches with the extra fields you asked for
      * @throws RuvioServerException {@code ERR} for a negative radius or {@code ANY} without {@code COUNT}; {@code WRONGTYPE} for a non-sorted-set
      */
@@ -4544,7 +4559,7 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
-     * Sends {@code BITCOUNT key start end BIT|BYTE}.
+     * Sends {@code BITCOUNT key start end BIT|BYTE}. Prefer the {@link BitUnit} overload.
      *
      * @param key the bitmap key
      * @param start the first position, inclusive; negative counts from the end
@@ -4557,7 +4572,20 @@ public abstract class RuvioSyncCommands<K, V> {
         return await(async.bitcount(key, start, end, bitUnits));
     }
 
-    /** BITCOUNT key start end BYTE|BIT with an enum unit, for example {@code BitUnit.BIT}. */
+    /**
+     * Sends {@code BITCOUNT key start end BYTE|BIT} with an enum unit instead of a boolean.
+     *
+     * <pre>{@code
+     * long n = client.bitcount("online", 0, 7, BitUnit.BIT);
+     * }</pre>
+     *
+     * @param key the bitmap key
+     * @param start the first position, inclusive; negative counts from the end
+     * @param end the last position, inclusive; negative counts from the end
+     * @param unit {@link BitUnit#BYTE} reads {@code start}/{@code end} as byte positions, {@link BitUnit#BIT} as bit positions
+     * @return the number of set bits in the range
+     * @throws RuvioServerException {@code WRONGTYPE}
+     */
     public Long bitcount(K key, long start, long end, BitUnit unit) {
         return await(async.bitcount(key, start, end, unit));
     }
@@ -4604,7 +4632,7 @@ public abstract class RuvioSyncCommands<K, V> {
     /**
      * Sends {@code BITOP op destination key [key ...]}: combines strings bit by bit (shorter ones are padded with zeros) and stores the result. An empty result deletes {@code destination}. In a cluster all keys must hash to one slot.
      *
-     * @param op {@code AND}, {@code OR}, {@code XOR}, or {@code NOT} (which takes exactly one source key)
+     * @param op a {@link BitOp}: {@code AND}, {@code OR}, {@code XOR}, or {@code NOT} (which takes exactly one source key)
      * @param destination the key that receives the result
      * @param keys one or more source keys
      * @return the length of the result in bytes
@@ -4616,10 +4644,10 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
-     * Sends {@code BITFIELD key GET|SET|INCRBY ... [OVERFLOW WRAP|SAT|FAIL]}: reads and writes integer fields packed inside a string. Types are {@code i1} to {@code i64} (signed) and {@code u1} to {@code u63} (unsigned); an offset is a bit number or {@code #n} (n times the type width). A write grows the string and rewrites the value.
+     * Sends {@code BITFIELD key GET|SET|INCRBY ... [OVERFLOW WRAP|SAT|FAIL]}: reads and writes integer fields packed inside a string. Types are {@code i1} to {@code i64} (signed) and {@code u1} to {@code u63} (unsigned), given as text or as {@link BitFieldArgs.Type}; {@code OVERFLOW} takes a {@link BitFieldArgs.Overflow} mode; an offset is a bit number or {@code #n} (n times the type width). A write grows the string and rewrites the value.
      *
      * <pre>{@code
-     * List<Long> r = client.bitfield("stats", BitFieldArgs.builder().set("u8", 0, 200).incrBy("u8", 0, 100));
+     * List<Long> r = client.bitfield("stats", BitFieldArgs.builder().set(BitFieldArgs.Type.unsigned(8), 0, 200).incrBy(BitFieldArgs.Type.unsigned(8), 0, 100));
      * }</pre>
      *
      * @param key the key of the string

@@ -277,7 +277,7 @@ public abstract class ListCommands<K, V> extends HashCommands<K, V> {
     }
 
     /**
-     * Sends {@code LINSERT key BEFORE|AFTER pivot value}: inserts next to the first element equal to {@code pivot}. Rewrites the list (O(N)).
+     * Sends {@code LINSERT key BEFORE|AFTER pivot value}: inserts next to the first element equal to {@code pivot}. Rewrites the list (O(N)). Prefer the {@link InsertPosition} overload.
      *
      * @param key the list key
      * @param before {@code true} to insert before the pivot, {@code false} to insert after it
@@ -290,7 +290,20 @@ public abstract class ListCommands<K, V> extends HashCommands<K, V> {
         return linsert(key, before ? InsertPosition.BEFORE : InsertPosition.AFTER, pivot, value);
     }
 
-    /** LINSERT key BEFORE|AFTER pivot value with an enum position, for example {@code InsertPosition.AFTER}. */
+    /**
+     * Sends {@code LINSERT key BEFORE|AFTER pivot value} with an enum position instead of a boolean. Rewrites the list (O(N)).
+     *
+     * <pre>{@code
+     * client.linsert("queue", InsertPosition.AFTER, "b", "c");
+     * }</pre>
+     *
+     * @param key the list key
+     * @param position {@link InsertPosition#BEFORE} or {@link InsertPosition#AFTER} the pivot
+     * @param pivot the existing element to look for
+     * @param value the element to insert
+     * @return the list length after the insert, {@code -1} when the pivot was not found, {@code 0} when the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     public CompletableFuture<Long> linsert(K key, InsertPosition position, V pivot, V value) {
         return send(args().w(Cmd.LINSERT).k(key).w(position.fragment()).v(pivot).v(value), Reply.LONG);
     }
@@ -382,8 +395,8 @@ public abstract class ListCommands<K, V> extends HashCommands<K, V> {
      *
      * @param source the list to pop from
      * @param destination the list to push to
-     * @param from which end of {@code source} to pop
-     * @param to which end of {@code destination} to push to
+     * @param from {@link ListDirection#LEFT} (head) or {@link ListDirection#RIGHT} (tail) end of {@code source} to pop
+     * @param to {@link ListDirection#LEFT} (head) or {@link ListDirection#RIGHT} (tail) end of {@code destination} to push to
      * @return the moved element, or {@code null} when {@code source} is empty or missing
      * @throws RuvioServerException {@code WRONGTYPE} for a non-list; {@code CROSSSLOT} in a cluster
      */
@@ -408,8 +421,8 @@ public abstract class ListCommands<K, V> extends HashCommands<K, V> {
      *
      * @param source the list to pop from
      * @param destination the list to push to
-     * @param from which end of {@code source} to pop
-     * @param to which end of {@code destination} to push to
+     * @param from {@link ListDirection#LEFT} (head) or {@link ListDirection#RIGHT} (tail) end of {@code source} to pop
+     * @param to {@link ListDirection#LEFT} (head) or {@link ListDirection#RIGHT} (tail) end of {@code destination} to push to
      * @param timeoutSeconds seconds to wait; {@code 0} waits until an element arrives
      * @return the moved element, or {@code null} on timeout
      * @throws RuvioServerException {@code WRONGTYPE} for a non-list; {@code CROSSSLOT} in a cluster
@@ -421,7 +434,7 @@ public abstract class ListCommands<K, V> extends HashCommands<K, V> {
     /**
      * Sends {@code LMPOP numkeys key [key ...] LEFT|RIGHT [COUNT n]}: pops elements from the first non-empty list.
      *
-     * @param direction which end to pop from
+     * @param direction {@link ListDirection#LEFT} (head) or {@link ListDirection#RIGHT} (tail): the end to pop from
      * @param count the most elements to pop; zero or less sends no {@code COUNT} (pops one)
      * @param keys one or more list keys, checked in order
      * @return the key popped from and the elements, or {@code null} when every list is empty
@@ -440,7 +453,7 @@ public abstract class ListCommands<K, V> extends HashCommands<K, V> {
      * Sends {@code BLMPOP timeout numkeys key [key ...] LEFT|RIGHT [COUNT n]}: like {@link #lmpop} but waits (polling every 5 ms on the server) until a list has an element. Holds the shared connection; use {@link io.github.salihcantekin.ruvio.RuvioClient#dedicated()}. Not allowed inside a transaction.
      *
      * @param timeoutSeconds seconds to wait; {@code 0} waits until an element arrives
-     * @param direction which end to pop from
+     * @param direction {@link ListDirection#LEFT} (head) or {@link ListDirection#RIGHT} (tail): the end to pop from
      * @param count the most elements to pop; zero or less pops one
      * @param keys one or more list keys
      * @return the key popped from and the elements, or {@code null} on timeout

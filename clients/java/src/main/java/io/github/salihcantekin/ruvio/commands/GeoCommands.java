@@ -3,6 +3,7 @@ package io.github.salihcantekin.ruvio.commands;
 
 import io.github.salihcantekin.ruvio.RuvioCodec;
 import io.github.salihcantekin.ruvio.RuvioServerException;
+import io.github.salihcantekin.ruvio.args.GeoOrder;
 import io.github.salihcantekin.ruvio.args.GeoSearchArgs;
 import io.github.salihcantekin.ruvio.args.GeoUnit;
 import io.github.salihcantekin.ruvio.internal.Args;
@@ -158,7 +159,7 @@ public abstract class GeoCommands<K, V> extends SortedSetCommands<K, V> {
      * @param key the geo key
      * @param member1 the first place
      * @param member2 the second place
-     * @param unit the unit of the result: {@code M} meters, {@code KM} kilometers, {@code FT} feet, {@code MI} miles
+     * @param unit a {@link GeoUnit}: {@code M} meters, {@code KM} kilometers, {@code FT} feet, {@code MI} miles
      * @return the distance in {@code unit}, or {@code null} when either member or the key does not exist
      * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
      */
@@ -198,14 +199,14 @@ public abstract class GeoCommands<K, V> extends SortedSetCommands<K, V> {
      *
      * <pre>{@code
      * List<GeoResult<String>> near = client.geosearch("cities",
-     *         GeoSearchArgs.fromLonLat(15, 37).byRadius(200, GeoUnit.KM).asc().count(5).withDist());
+     *         GeoSearchArgs.fromLonLat(15, 37).byRadius(200, GeoUnit.KM).order(GeoOrder.ASC).count(5).withDist());
      * for (GeoResult<String> r : near) {
      *     System.out.println(r.member() + " " + r.distance() + " km");
      * }
      * }</pre>
      *
      * @param key the geo key
-     * @param search origin, shape, order, count and which extra fields to return
+     * @param search origin, shape, order (a {@link GeoOrder}, via {@code order(GeoOrder)}, {@code asc()} or {@code desc()}), count and which extra fields to return
      * @return the matches; {@code distance()}, {@code hash()} and {@code coordinates()} are filled only for the {@code WITH*} flags you set; empty when the key does not exist
      * @throws RuvioServerException {@code ERR} when the origin or the shape is missing, {@code ANY} has no {@code COUNT}, {@code COUNT} is zero, or a size is negative; also when {@code fromMember} names a member that is not in the set; {@code WRONGTYPE} for a non-sorted-set
      */
@@ -257,7 +258,7 @@ public abstract class GeoCommands<K, V> extends SortedSetCommands<K, V> {
      * @param latitude centre latitude, -85.05112878 to 85.05112878
      * @param radius the radius, zero or greater, in {@code unit}
      * @param unit {@code M}, {@code KM}, {@code FT} or {@code MI}
-     * @param options order, count and {@code WITH*} flags, from {@link GeoSearchArgs#options()}; the origin and shape in it are ignored
+     * @param options order (a {@link GeoOrder}), count and {@code WITH*} flags, from {@link GeoSearchArgs#options()}; the origin and shape in it are ignored
      * @return the matches with the extra fields you asked for
      * @throws RuvioServerException {@code ERR} for a negative radius or {@code ANY} without {@code COUNT}; {@code WRONGTYPE} for a non-sorted-set
      */

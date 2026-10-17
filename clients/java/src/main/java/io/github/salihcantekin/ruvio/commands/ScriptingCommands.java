@@ -245,7 +245,7 @@ public abstract class ScriptingCommands<K, V> extends JsonCommands<K, V> {
     }
 
     /**
-     * Sends {@code BITCOUNT key start end BIT|BYTE}.
+     * Sends {@code BITCOUNT key start end BIT|BYTE}. Prefer the {@link BitUnit} overload.
      *
      * @param key the bitmap key
      * @param start the first position, inclusive; negative counts from the end
@@ -258,7 +258,20 @@ public abstract class ScriptingCommands<K, V> extends JsonCommands<K, V> {
         return bitcount(key, start, end, bitUnits ? BitUnit.BIT : BitUnit.BYTE);
     }
 
-    /** BITCOUNT key start end BYTE|BIT with an enum unit, for example {@code BitUnit.BIT}. */
+    /**
+     * Sends {@code BITCOUNT key start end BYTE|BIT} with an enum unit instead of a boolean.
+     *
+     * <pre>{@code
+     * long n = client.bitcount("online", 0, 7, BitUnit.BIT);
+     * }</pre>
+     *
+     * @param key the bitmap key
+     * @param start the first position, inclusive; negative counts from the end
+     * @param end the last position, inclusive; negative counts from the end
+     * @param unit {@link BitUnit#BYTE} reads {@code start}/{@code end} as byte positions, {@link BitUnit#BIT} as bit positions
+     * @return the number of set bits in the range
+     * @throws RuvioServerException {@code WRONGTYPE}
+     */
     public CompletableFuture<Long> bitcount(K key, long start, long end, BitUnit unit) {
         return send(args().w(Cmd.BITCOUNT).k(key).l(start).l(end).w(unit.fragment()), Reply.LONG);
     }
@@ -305,7 +318,7 @@ public abstract class ScriptingCommands<K, V> extends JsonCommands<K, V> {
     /**
      * Sends {@code BITOP op destination key [key ...]}: combines strings bit by bit (shorter ones are padded with zeros) and stores the result. An empty result deletes {@code destination}. In a cluster all keys must hash to one slot.
      *
-     * @param op {@code AND}, {@code OR}, {@code XOR}, or {@code NOT} (which takes exactly one source key)
+     * @param op a {@link BitOp}: {@code AND}, {@code OR}, {@code XOR}, or {@code NOT} (which takes exactly one source key)
      * @param destination the key that receives the result
      * @param keys one or more source keys
      * @return the length of the result in bytes
@@ -317,10 +330,10 @@ public abstract class ScriptingCommands<K, V> extends JsonCommands<K, V> {
     }
 
     /**
-     * Sends {@code BITFIELD key GET|SET|INCRBY ... [OVERFLOW WRAP|SAT|FAIL]}: reads and writes integer fields packed inside a string. Types are {@code i1} to {@code i64} (signed) and {@code u1} to {@code u63} (unsigned); an offset is a bit number or {@code #n} (n times the type width). A write grows the string and rewrites the value.
+     * Sends {@code BITFIELD key GET|SET|INCRBY ... [OVERFLOW WRAP|SAT|FAIL]}: reads and writes integer fields packed inside a string. Types are {@code i1} to {@code i64} (signed) and {@code u1} to {@code u63} (unsigned), given as text or as {@link BitFieldArgs.Type}; {@code OVERFLOW} takes a {@link BitFieldArgs.Overflow} mode; an offset is a bit number or {@code #n} (n times the type width). A write grows the string and rewrites the value.
      *
      * <pre>{@code
-     * List<Long> r = client.bitfield("stats", BitFieldArgs.builder().set("u8", 0, 200).incrBy("u8", 0, 100));
+     * List<Long> r = client.bitfield("stats", BitFieldArgs.builder().set(BitFieldArgs.Type.unsigned(8), 0, 200).incrBy(BitFieldArgs.Type.unsigned(8), 0, 100));
      * }</pre>
      *
      * @param key the key of the string
