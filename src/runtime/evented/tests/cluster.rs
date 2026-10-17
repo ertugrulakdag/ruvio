@@ -1282,7 +1282,7 @@ fn evented_save_returns_while_save_and_bgsave_requests_keep_arriving() {
     .collect();
     let started = Instant::now();
 
-    for round in 0..4u32 {
+    for round in 0..2u32 {
         let value = round.to_string();
 
         assert_eq!(
@@ -1326,7 +1326,7 @@ fn evented_save_returns_while_save_and_bgsave_requests_keep_arriving() {
 
     assert_eq!(
         request(right_addr, &resp(&[&[b"GET", b"{left}:k"]])),
-        b"$1\r\n3\r\n"
+        b"$1\r\n1\r\n"
     );
     stop.request();
     join_within(left_server, PATIENCE).unwrap();

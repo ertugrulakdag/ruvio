@@ -91,14 +91,23 @@ fn run(shards: &str, durability: &str, policy: &str) {
     }
 }
 
+// One test per configuration, so they run side by side.
 #[test]
-fn allkeys_eviction_never_refuses_a_write_that_fits() {
-    for (shards, durability, policy) in [
-        ("1", "memory", "allkeys-lru"),
-        ("2", "memory", "allkeys-lru"),
-        ("1", "everysec", "allkeys-lfu"),
-        ("2", "always", "allkeys-lru"),
-    ] {
-        run(shards, durability, policy);
-    }
+fn allkeys_lru_eviction_never_refuses_a_write_that_fits() {
+    run("1", "memory", "allkeys-lru");
+}
+
+#[test]
+fn allkeys_lru_eviction_never_refuses_a_write_that_fits_on_two_shards() {
+    run("2", "memory", "allkeys-lru");
+}
+
+#[test]
+fn allkeys_lfu_eviction_never_refuses_a_write_that_fits_with_everysec() {
+    run("1", "everysec", "allkeys-lfu");
+}
+
+#[test]
+fn allkeys_lru_eviction_never_refuses_a_write_that_fits_on_two_shards_with_always() {
+    run("2", "always", "allkeys-lru");
 }
