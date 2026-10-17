@@ -62,15 +62,37 @@ fn accept_bounded(listener: &std::net::TcpListener) -> StdTcpStream {
 const PATIENCE: Duration = Duration::from_secs(30);
 
 fn request(address: SocketAddr, payload: &[u8]) -> Vec<u8> {
-    let mut client = StdTcpStream::connect(address).unwrap();
+    let client = StdTcpStream::connect(address).unwrap();
 
     client.set_read_timeout(Some(PATIENCE)).unwrap();
-    client.write_all(payload).unwrap();
-    client.shutdown(Shutdown::Write).unwrap();
+    client.set_write_timeout(Some(PATIENCE)).unwrap();
+    send_then_close(&client, payload).unwrap()
+}
+
+/// Writes `payload` and half-closes on a second thread while this one reads every reply.
+/// Written first, a payload whose replies outgrow the socket buffers (small on Windows)
+/// stalls both ways: the server stops reading while its replies wait, and this side stops
+/// reading while its write waits.
+fn send_then_close(client: &StdTcpStream, payload: &[u8]) -> std::io::Result<Vec<u8>> {
+    let mut writer = client.try_clone()?;
+    let mut reader = client.try_clone()?;
     let mut response = Vec::new();
 
-    client.read_to_end(&mut response).unwrap();
-    response
+    let read = thread::scope(|scope| {
+        let sending = scope.spawn(|| {
+            writer.write_all(payload)?;
+            writer.shutdown(Shutdown::Write)
+        });
+        let read = reader.read_to_end(&mut response);
+
+        if read.is_err() {
+            // Unblocks the writer if the server stopped reading.
+            let _ = reader.shutdown(Shutdown::Both);
+        }
+        sending.join().unwrap().and(read)
+    });
+
+    read.map(|_| response)
 }
 
 /// One single-line reply, read with the write side left open: a client still connected,
@@ -92,18 +114,11 @@ fn request_connected(address: SocketAddr, payload: &[u8]) -> Vec<u8> {
 
 /// Fails when `timeout` elapses. A shared lock held by a blocked peer shows up here.
 fn request_within(address: SocketAddr, payload: &[u8], timeout: Duration) -> Vec<u8> {
-    let mut client = StdTcpStream::connect(address).unwrap();
+    let client = StdTcpStream::connect(address).unwrap();
 
     client.set_read_timeout(Some(timeout)).unwrap();
     client.set_write_timeout(Some(timeout)).unwrap();
-    client.write_all(payload).unwrap();
-    client.shutdown(Shutdown::Write).unwrap();
-    let mut response = Vec::new();
-
-    client
-        .read_to_end(&mut response)
-        .expect("shard did not answer while its peer was blocked");
-    response
+    send_then_close(&client, payload).expect("shard did not answer while its peer was blocked")
 }
 
 fn key_on_shard(shard: usize, label: &str) -> String {
