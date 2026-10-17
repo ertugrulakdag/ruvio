@@ -1553,7 +1553,7 @@ export abstract class Commands {
    * Shard-local: on a multi-shard server one connection sees only its shard's keys, and cursors walk sorted live keys rather than Redis hash-table cursors. {@link ClusterClient.scanIterator} walks every node.
    *
    * @param cursor Start with `0`; pass the returned cursor for the next page.
-   * @param opts {@link ScanOptions}: `match` glob, `count` page-size hint, `type` filter.
+   * @param opts {@link ScanOptions}: `match` glob, `count` page-size hint, `type` filter (see {@link ScanType}).
    * @returns A {@link ScanPage}; its `cursor` is `'0'` when the walk is finished. A page may be empty before that.
    *
    * @example
@@ -3816,7 +3816,7 @@ export abstract class Commands {
    *
    * @param destination Key that receives the result (any existing value is replaced).
    * @param keys Input keys.
-   * @param opts {@link ZStoreOptions}: `weights` (one multiplier per input) and `aggregate` (`'SUM'` default, `'MIN'`, `'MAX'`).
+   * @param opts {@link ZStoreOptions}: `weights` (one multiplier per input) and `aggregate` (`'SUM'` default, `'MIN'`, `'MAX'`; see {@link Aggregate}).
    * @returns The size of the stored set.
    * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
    *
@@ -4185,7 +4185,7 @@ export abstract class Commands {
    * @param longitude Centre longitude, -180 to 180.
    * @param latitude Centre latitude, -85.05112878 to 85.05112878.
    * @param radius Search radius, in `unit`.
-   * @param unit Distance unit: `m`, `km`, `ft` or `mi`.
+   * @param unit Distance unit: `m`, `km`, `ft` or `mi` (see {@link GeoUnit}; upper case also works).
    * @param opts {@link GeoRadiusOptions}: `withCoord`, `withDist`, `withHash`, `count` (+`any`), `order`, `store`, `storeDist`.
    * @returns Member names or {@link GeoMatch} objects; a number when storing.
    * @throws {@link RuvioError} `ERR` for an invalid coordinate; `WRONGTYPE`.
@@ -4206,7 +4206,7 @@ export abstract class Commands {
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param member Member whose position is the centre.
    * @param radius Search radius, in `unit`.
-   * @param unit Distance unit: `m`, `km`, `ft` or `mi`.
+   * @param unit Distance unit: `m`, `km`, `ft` or `mi` (see {@link GeoUnit}; upper case also works).
    * @param opts {@link GeoRadiusOptions}.
    * @returns Member names or {@link GeoMatch} objects; a number when storing.
    * @throws {@link RuvioError} `ERR` when the member does not exist; `WRONGTYPE`.
@@ -5752,7 +5752,7 @@ export abstract class Commands {
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param start First byte (or bit) of the range; negative counts from the end. Only used together with `end`.
    * @param end Last byte (or bit), inclusive.
-   * @param unit `'BYTE'` (default) or `'BIT'`.
+   * @param unit `'BYTE'` (default) or `'BIT'` (see {@link BitUnit}).
    * @returns The number of bits set; `0` for a missing key.
    * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
    *
@@ -5773,7 +5773,7 @@ export abstract class Commands {
    * @param bit `0` or `1`.
    * @param start Optional first byte (or bit) to search.
    * @param end Optional last byte (or bit), inclusive; needs `start`.
-   * @param unit `'BYTE'` (default) or `'BIT'`; needs `end`.
+   * @param unit `'BYTE'` (default) or `'BIT'` (see {@link BitUnit}); needs `end`.
    * @returns The bit position, or `-1` when not found.
    * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
    *
