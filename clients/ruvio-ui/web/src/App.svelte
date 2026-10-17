@@ -75,8 +75,10 @@
           const defaults = await api("/api/defaults");
           if (!active) return;
           const last = preference("connection", {});
-          host = last.host ?? defaults.host ?? host;
-          port = last.port ?? defaults.port ?? port;
+          // Host/port set through RUVIO_UI_TARGET_* win over the remembered connection.
+          const remembered = defaults.pinned ? {} : last;
+          host = remembered.host ?? defaults.host ?? host;
+          port = remembered.port ?? defaults.port ?? port;
           password = defaults.password ?? password;
         }
       } catch (error) {

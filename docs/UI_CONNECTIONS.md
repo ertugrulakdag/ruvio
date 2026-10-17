@@ -56,7 +56,10 @@ Windows and macOS defines that name. On Linux add
 `--add-host=host.docker.internal:host-gateway` to the `docker run` command.
 
 The `RUVIO_UI_TARGET_*` variables only fill in the sign-in form. You can leave
-them out and type the host, port and password on the sign-in screen.
+them out and type the host, port and password on the sign-in screen. When
+`RUVIO_UI_TARGET_HOST` or `RUVIO_UI_TARGET_PORT` is set, it overrides the
+address the browser remembers from an earlier sign-in. If the form still shows
+an old host, update the UI image.
 
 If you do not need a container, the UI is also released as a plain binary for
 Windows, macOS and Linux. It runs on the same machine as Ruvio and connects to
