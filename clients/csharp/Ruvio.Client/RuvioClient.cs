@@ -85,6 +85,14 @@ public sealed partial class RuvioClient : IRuvioClient
     }
 
     /// <summary>The cluster hash slot (0-16383) of <paramref name="key"/>, honoring <c>{hash tags}</c>.</summary>
+    /// <param name="key">The key. When it contains <c>{tag}</c> with at least one character inside, only the tag is hashed.</param>
+    /// <returns>The slot, from 0 to 16383 (CRC16 of the key or tag, modulo 16384).</returns>
+    /// <remarks>Use it to check whether two keys share a slot (and so can be used together in one multi-key command). No server call is made.</remarks>
+    /// <example>
+    /// <code>
+    /// bool same = RuvioClient.GetHashSlot("{user:1}:cart") == RuvioClient.GetHashSlot("{user:1}:wishlist");   // true
+    /// </code>
+    /// </example>
     public static int GetHashSlot(string key)
     {
         ArgumentNullException.ThrowIfNull(key);
