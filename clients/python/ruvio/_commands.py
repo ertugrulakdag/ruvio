@@ -1,10 +1,11 @@
 # MIT License - Copyright (c) 2026 Salih Cantekin. See LICENSE.
-"""Typed command methods shared by the sync client, the asyncio client and pipelines.
+"""Typed Ruvio commands shared by the sync client, the asyncio client and pipelines.
 
-Every method encodes its command and hands ``(converter, bytes)`` to ``self._x``.
-The sync client sends and returns the converted reply, the asyncio client returns
-an awaitable future, and a pipeline queues the command and returns itself. The
-converter runs on the raw reply exactly once (in the reader for asyncio).
+Every public method of :class:`Commands` sends one server command (named in the first line
+of its docstring) and converts the reply to a Python value. The same methods exist on
+``ruvio.Ruvio``, ``ruvio.asyncio.Ruvio`` (awaitable), ``ruvio.ClusterRuvio`` and on
+pipelines (queued, return the pipeline). Use ``help(ruvio.Ruvio.<method>)`` or your IDE
+hover to read the per-command notes: arguments, return value, errors and an example.
 """
 
 from __future__ import annotations
@@ -78,7 +79,39 @@ _HGET = b"*3\r\n$4\r\nHGET\r\n"
 
 
 class Commands:
-    """Typed Ruvio commands. Sync clients return values; asyncio clients return awaitables."""
+    """Typed Ruvio commands: one method per server command, with converted replies.
+
+    The methods on this class are shared by every client flavour:
+
+    * ``ruvio.Ruvio`` (sync): a method sends the command and returns the converted reply.
+    * ``ruvio.asyncio.Ruvio``: the same methods return an awaitable, so write
+      ``value = await client.get("k")``. The examples in these docstrings use the sync form;
+      add ``await`` on the asyncio client.
+    * ``client.pipeline()`` / ``client.pipeline(transaction=True)``: a method queues the command
+      and returns the pipeline, so calls chain; ``execute()`` sends the batch and returns one
+      converted result per command.
+
+    Conventions used by every method:
+
+    * ``KeyT`` is ``str`` or ``bytes`` (a key); ``Arg`` is ``str``, ``bytes``, ``int`` or
+      ``float`` (a value). Text is sent as UTF-8; ``bytes`` are sent as they are.
+    * Replies are ``str`` when the client was created with ``decode_responses=True`` (the
+      default) and ``bytes`` otherwise; ``client.raw`` gives a bytes view of the same connection.
+    * A missing key is reported the way the command documents it (``None``, ``0``, ``False`` or an
+      empty list); each method says which.
+    * Server error replies raise a :class:`ruvio.RuvioError` subclass: ``WRONGTYPE`` raises
+      :class:`ruvio.WrongTypeError`, any other ``-ERR`` raises :class:`ruvio.ResponseError`.
+      Socket failures raise :class:`ruvio.ConnectionError` or :class:`ruvio.TimeoutError`. These
+      are not repeated in every ``Raises:`` section; only errors specific to a command are.
+    * Ruvio-specific commands (``setv``, ``take``, ``limit``, ``lease``, ``fillget`` ...) are
+      Ruvio extensions and do not exist on a Redis server.
+
+    Cluster notes (see :class:`ruvio.ClusterRuvio`): keys are routed to the shard that owns their
+    hash slot. Keyless admin commands such as ``info`` or ``config_get`` go to the seed node
+    only. A server started with ``port_mode = "per-shard"`` (the default for several shards)
+    answers ``dbsize``, ``keys``, ``flushdb`` and ``flushall`` for the shard behind the port
+    only; the cluster client fans these out to every shard itself.
+    """
 
     __slots__ = ()
 
@@ -89,7 +122,27 @@ class Commands:
         return self._x(conv, encode(name, args))
 
     def execute_command(self, *args: Arg) -> Any:
-        """Sends any command, e.g. ``execute_command("SET", "k", "v", "PX", 100)``. Returns the raw reply."""
+        """Sends any command and returns the raw, unconverted reply.
+
+        Use it for commands that have no typed method. The first argument is the command name
+        (``str`` or ``bytes``), the rest are its arguments, encoded like any other argument.
+
+        Args:
+            *args: Command name followed by its arguments, e.g. ``"SET", "k", "v", "PX", 100``.
+
+        Returns:
+            The server reply as parsed: ``str``/``bytes`` for strings, ``int``, ``list``, ``None`` for
+            a null reply. No conversion is applied (``"OK"`` stays ``"OK"``, not ``True``).
+
+        Raises:
+            ResponseError: The server answered with an error (subclasses such as
+                :class:`WrongTypeError` for ``WRONGTYPE``).
+            CrossSlotError: Cluster client only, when the keys of the command are in different slots.
+
+        Example:
+            client.execute_command("SET", "k", "v", "PX", 100)    # -> "OK"
+            client.execute_command("OBJECT", "ENCODING", "k")     # -> "embstr"
+        """
         name = args[0]
         if type(name) is not str:
             name = _s(bytes(name) if not isinstance(name, bytes) else name)
@@ -97,13 +150,48 @@ class Commands:
 
     # ======================================================= connection
     def ruvio(self, option: Optional[str] = None) -> Any:
-        """``RUVIO [OWNER]`` - identity check; ``OWNER`` names the shard rule."""
+        """``RUVIO [OWNER]`` - identity check for a Ruvio server.
+
+        Args:
+            option: ``None`` for the plain check, or ``"OWNER"`` to get the one-line description of
+                how a key's shard is chosen.
+
+        Returns:
+            ``"PONG is taken"`` without an option, a short description text with ``"OWNER"``. A Redis
+            server answers with an error, which makes this a cheap way to tell Ruvio from Redis.
+
+        Raises:
+            ResponseError: ``option`` is anything other than ``OWNER``.
+
+        Example:
+            client.ruvio()    # -> "PONG is taken"
+        """
         return self._c(None, "RUVIO") if option is None else self._c(None, "RUVIO", option)
 
     def ping(self, message: Optional[Arg] = None) -> Any:
+        """``PING [message]`` - checks that the connection is alive.
+
+        Args:
+            message: Optional text/bytes to be echoed back.
+
+        Returns:
+            ``"PONG"`` without a message, otherwise the message itself.
+
+        Example:
+            client.ping()          # -> "PONG"
+            client.ping("hello")   # -> "hello"
+        """
         return self._c(None, "PING") if message is None else self._c(None, "PING", message)
 
     def echo(self, message: Arg) -> Any:
+        """``ECHO message`` - returns ``message`` unchanged.
+
+        Args:
+            message: Text or bytes to send back.
+
+        Returns:
+            The same message as the server received it.
+        """
         return self._c(None, "ECHO", message)
 
     def hello(
@@ -113,8 +201,32 @@ class Commands:
         password: Optional[str] = None,
         setname: Optional[str] = None,
     ) -> Any:
-        """``HELLO [2|3] [AUTH user pass] [SETNAME name]``. Note: HELLO 3 switches the
-        connection to RESP3 (typed converters accept both shapes)."""
+        """``HELLO [protover [AUTH user pass] [SETNAME name]]`` - negotiates the protocol version.
+
+        Without arguments it only reports server information. ``HELLO 3`` switches this connection to
+        RESP3 (the typed converters accept both RESP2 and RESP3 shapes). ``CLIENT TRACKING ON``
+        requires RESP3. Protocol replies of Pub/Sub stay RESP2 arrays.
+
+        Args:
+            protover: ``2`` or ``3``, or ``None`` to leave the protocol alone. Any other number is
+                refused with ``NOPROTO`` and nothing changes.
+            username: ACL user for the ``AUTH`` part (default user when only ``password`` is given).
+                Used only together with ``protover`` and ``password``.
+            password: Password to authenticate with in the same round trip.
+            setname: Connection name to set (see :meth:`client_setname`). Used only with ``protover``.
+
+        Returns:
+            A dict with text keys: ``server`` (``"ruvio"``), ``version``, ``proto``, ``id``,
+            ``mode``, ``role`` and ``modules``.
+
+        Raises:
+            ResponseError: Unknown protocol version (``NOPROTO``) or bad credentials; the previous
+                protocol and name stay in place.
+
+        Example:
+            info = client.hello(3)
+            info["proto"]   # -> 3
+        """
         args: List[Any] = []
         if protover is not None:
             args.append(protover)
@@ -125,48 +237,193 @@ class Commands:
         return self._c(_hello, "HELLO", *args)
 
     def auth(self, password: str, username: Optional[str] = None) -> Any:
+        """``AUTH [username] password`` - authenticates the connection.
+
+        The sync and asyncio ``Ruvio`` clients remember the credentials and send them again after a
+        reconnect.
+
+        Args:
+            password: The password.
+            username: ACL user name. Omit to authenticate the ``default`` user.
+
+        Returns:
+            ``True`` on success.
+
+        Raises:
+            ResponseError: Wrong credentials, or no password is configured on the server.
+
+        Example:
+            client.auth("s3cret")
+            client.auth("s3cret", username="app")
+        """
         if username is None:
             return self._c(_ok, "AUTH", password)
         return self._c(_ok, "AUTH", username, password)
 
     def select(self, db: int) -> Any:
+        """``SELECT db`` - switches this connection to a logical database.
+
+        The sync and asyncio ``Ruvio`` clients remember the number and select it again after a
+        reconnect. Database 0 is the default. A server has ``databases`` numbered key spaces (16 by
+        default, at most 256) when it runs one shard; with several shards only database 0 exists.
+        The cluster client sends ``SELECT`` to every node.
+
+        Args:
+            db: Database number, ``0`` to ``databases - 1``.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: ``db`` is out of range, or is not ``0`` on a multi-shard (cluster) server.
+
+        Example:
+            client.select(1)
+        """
         return self._c(_ok, "SELECT", db)
 
     def command(self) -> Any:
+        """``COMMAND`` - lists the commands the server knows.
+
+        Returns:
+            The raw reply: a list with one entry per command (Redis 7 shape: name, arity, flags and
+            key positions; tips, key specs and subcommands are empty).
+        """
         return self._c(None, "COMMAND")
 
     def command_count(self) -> Any:
+        """``COMMAND COUNT`` - number of commands the server knows.
+
+        Returns:
+            The count as ``int``.
+        """
         return self._c(None, "COMMAND COUNT")
 
     def command_info(self, *names: str) -> Any:
+        """``COMMAND INFO [name ...]`` - table entries of the named commands.
+
+        Args:
+            *names: Command names. With none, every command is described.
+
+        Returns:
+            The raw reply: one entry per name (``None`` for an unknown name).
+        """
         return self._c(None, "COMMAND INFO", *names)
 
     def command_docs(self, *names: str) -> Any:
+        """``COMMAND DOCS [name ...]`` - documentation entries of the named commands.
+
+        Args:
+            *names: Command names.
+
+        Returns:
+            The raw reply. Ruvio returns empty maps; use these docstrings or the website for docs.
+        """
         return self._c(None, "COMMAND DOCS", *names)
 
     def client_getname(self) -> Any:
+        """``CLIENT GETNAME`` - the name of this connection.
+
+        Returns:
+            The name set with :meth:`client_setname` / ``HELLO ... SETNAME``, or ``None`` when the
+            connection has no name.
+        """
         return self._c(None, "CLIENT GETNAME")
 
     def client_setname(self, name: str) -> Any:
+        """``CLIENT SETNAME name`` - names this connection (shown by ``CLIENT LIST``).
+
+        The name is not durable and is sent again by the sync and asyncio clients after a reconnect.
+
+        Args:
+            name: The name; an empty string clears it.
+
+        Returns:
+            ``True``.
+        """
         return self._c(_ok, "CLIENT SETNAME", name)
 
     def client_tracking(self, on: bool) -> Any:
-        """``CLIENT TRACKING ON|OFF`` (ON requires RESP3, see :meth:`hello`)."""
+        """``CLIENT TRACKING ON|OFF`` - turns client-side-caching invalidation on or off.
+
+        Ruvio records the keys read by ``GET`` and ``MGET`` (misses included) on the shard of this
+        connection and pushes one RESP3 ``invalidate`` message when such a key is written. Only the
+        plain ``ON``/``OFF`` forms are accepted (no ``REDIRECT``, ``BCAST``, ``PREFIX``,
+        ``OPTIN``, ``OPTOUT`` or ``NOLOOP``); tracking does not cross shards.
+
+        Args:
+            on: ``True`` for ``ON`` (needs RESP3, see :meth:`hello`), ``False`` for ``OFF``.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: ``ON`` while the connection still speaks RESP2.
+
+        Example:
+            client.hello(3)
+            client.client_tracking(True)
+        """
         return self._c(_ok, "CLIENT TRACKING", "ON" if on else "OFF")
 
     def client_id(self) -> Any:
+        """``CLIENT ID`` - the id of this connection.
+
+        Ids are per shard: with several shards two connections can share an id.
+
+        Returns:
+            The id as ``int``.
+        """
         return self._c(None, "CLIENT ID")
 
     def client_list(self, type: Optional[str] = None) -> Any:  # noqa: A002
+        """``CLIENT LIST [TYPE type]`` - describes the connections of the shard that got the command.
+
+        Each shard only knows its own connections. Lines report id, addr, laddr, name, age, db,
+        multi, resp and user. ``TYPE`` is validated but not used as a filter.
+
+        Args:
+            type: Optional connection type (``normal``, ``pubsub`` ...), accepted for compatibility.
+
+        Returns:
+            The text of the reply, one line per connection.
+        """
         return self._c(_info, "CLIENT LIST") if type is None else self._c(_info, "CLIENT LIST", "TYPE", type)
 
     def client_info(self) -> Any:
+        """``CLIENT INFO`` - the ``CLIENT LIST`` line of this connection.
+
+        Returns:
+            The line as text.
+        """
         return self._c(_info, "CLIENT INFO")
 
     def client_kill(
         self, addr: Optional[str] = None, *, id: Optional[int] = None, skipme: Optional[bool] = None, legacy: bool = False
     ) -> Any:  # noqa: A002
-        """``CLIENT KILL`` by ``ID``/``ADDR`` filters (count reply) or the legacy ``addr`` form."""
+        """``CLIENT KILL`` - closes connections of the shard that got the command.
+
+        Filters combine (a connection must match all given ones). ``USER``, ``LADDR`` and ``TYPE``
+        filters are not supported.
+
+        Args:
+            addr: ``ip:port`` of the connection to close (``ADDR``). With ``legacy=True`` this is the
+                only argument and is sent as the old ``CLIENT KILL ip:port`` form.
+            id: Connection id to close (``ID``, see :meth:`client_id`).
+            skipme: ``True`` to keep the calling connection (the server default when omitted),
+                ``False`` to allow closing it.
+            legacy: Use the old single-address form; the reply is then ``True`` instead of a count.
+
+        Returns:
+            The number of closed connections (``int``); ``True`` for the legacy form.
+
+        Raises:
+            ResponseError: ``No such client`` for the legacy form when no connection matched, or an
+                unsupported filter.
+
+        Example:
+            client.client_kill(id=42)
+        """
         if legacy:
             return self._c(_ok, "CLIENT KILL", addr)
         args: List[Any] = []
@@ -179,46 +436,159 @@ class Commands:
         return self._c(None, "CLIENT KILL", *args)
 
     def slowlog_get(self, count: Optional[int] = None) -> Any:
+        """``SLOWLOG GET [count]`` - recent slow commands of this shard.
+
+        Only commands that go through the generic dispatcher are timed (not the fast paths of
+        ``GET``, ``SET``, ``INCR``, ``PING``); blocking commands are skipped. An entry holds the
+        command name and its first key, not every argument. The threshold and size are server
+        settings (``slowlog_threshold_micros``, ``slowlog_max_len``).
+
+        Args:
+            count: Maximum number of entries, newest first. ``None`` for the server default.
+
+        Returns:
+            The raw list of entries.
+        """
         return self._c(None, "SLOWLOG GET") if count is None else self._c(None, "SLOWLOG GET", count)
 
     def slowlog_len(self) -> Any:
+        """``SLOWLOG LEN`` - number of entries in this shard's slow log.
+
+        Returns:
+            The count as ``int``.
+        """
         return self._c(None, "SLOWLOG LEN")
 
     def slowlog_reset(self) -> Any:
+        """``SLOWLOG RESET`` - empties this shard's slow log.
+
+        Returns:
+            ``True``.
+        """
         return self._c(_ok, "SLOWLOG RESET")
 
     def latency_latest(self) -> Any:
+        """``LATENCY LATEST`` - latency spike events.
+
+        Ruvio records no such events, so the list is always empty; use ``info("latencystats")``.
+
+        Returns:
+            ``[]``.
+        """
         return self._c(None, "LATENCY LATEST")
 
     # ======================================================= acl
     def acl_whoami(self) -> Any:
+        """``ACL WHOAMI`` - the user this connection is authenticated as.
+
+        Returns:
+            The name used at the last ``AUTH`` as text.
+        """
         return self._c(_text, "ACL WHOAMI")
 
     def acl_users(self) -> Any:
+        """``ACL USERS`` - the names of all ACL users, including ones added with :meth:`acl_setuser`.
+
+        Returns:
+            A list of user names.
+        """
         return self._c(_texts, "ACL USERS")
 
     def acl_list(self) -> Any:
+        """``ACL LIST`` - one rule line per ACL user. Passwords are redacted.
+
+        Returns:
+            A list of rule strings.
+        """
         return self._c(_texts, "ACL LIST")
 
     def acl_getuser(self, username: str) -> Any:
+        """``ACL GETUSER username`` - the rules of one user.
+
+        Args:
+            username: The ACL user.
+
+        Returns:
+            A dict with text keys ``flags`` (``on``/``off``), ``passwords`` (how many, not the
+            passwords), ``commands`` and ``keys`` (the rule text). ``None`` when the user does not exist.
+        """
         return self._c(lambda r: None if r is None else _pairs_text_keys(r), "ACL GETUSER", username)
 
     def acl_cat(self, category: Optional[str] = None) -> Any:
+        """``ACL CAT [category]`` - command categories, or the commands in one category.
+
+        Args:
+            category: A category name. ``None`` lists the categories (Ruvio categories only).
+
+        Returns:
+            A list of names.
+        """
         return self._c(_texts, "ACL CAT") if category is None else self._c(_texts, "ACL CAT", category)
 
     def acl_setuser(self, username: str, *rules: str) -> Any:
-        """``ACL SETUSER name rule...`` e.g. ``acl_setuser("app", "on", ">pw", "+get", "~app:*")``."""
+        """``ACL SETUSER name rule...`` - creates or changes an ACL user.
+
+        Rules are applied one after the other; a failed rule changes nothing. A new user starts
+        with no password, no commands and no keys. Open connections keep the rules from their last
+        ``AUTH``. Changes live until restart unless saved with :meth:`acl_save`. Refused while
+        replication is enabled.
+
+        Args:
+            username: The user to create or change.
+            *rules: Rule tokens such as ``"on"``, ``">password"``, ``"+get"``, ``"-@dangerous"``,
+                ``"~app:*"``, ``"nopass"``.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: A rule is not valid.
+
+        Example:
+            client.acl_setuser("app", "on", ">pw", "+get", "+set", "~app:*")
+        """
         return self._c(_ok, "ACL SETUSER", username, *rules)
 
     def acl_load(self) -> Any:
+        """``ACL LOAD`` - replaces the live users from the ACL file (``security.acl_file``).
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: No ACL file path is configured, or a line is invalid (nothing changes).
+        """
         return self._c(_ok, "ACL LOAD")
 
     def acl_save(self) -> Any:
+        """``ACL SAVE`` - writes the live users to the ACL file, passwords as BLAKE3 hashes.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: No ACL file path is configured.
+        """
         return self._c(_ok, "ACL SAVE")
 
     # ======================================================= strings
     def get(self, key: KeyT) -> Any:
-        """``GET`` - the value or None."""
+        """``GET key`` - the string value of a key.
+
+        Args:
+            key: The key.
+
+        Returns:
+            The value, or ``None`` when the key does not exist.
+
+        Raises:
+            WrongTypeError: The key holds something other than a string.
+
+        Example:
+            client.set("greeting", "hello")
+            client.get("greeting")   # -> "hello"
+            client.get("missing")    # -> None
+        """
         if type(key) is str:
             key = key.encode("utf-8", "surrogateescape")
         n = len(key)
@@ -238,8 +608,42 @@ class Commands:
         get: bool = False,
         ifeq: Optional[Arg] = None,
     ) -> Any:
-        """``SET``. Returns True when written, False when NX/XX/IFEQ refused it, or the
-        previous value with ``get=True``. ``ifeq`` writes only when the current value equals it."""
+        """``SET key value [IFEQ x] [EX|PX|EXAT|PXAT|KEEPTTL] [NX|XX] [GET]`` - writes a string.
+
+        ``SET`` replaces a value of any type. Without ``keepttl`` it clears an existing TTL.
+        ``nx``, ``xx`` and ``ifeq`` are conditions: when one is not met nothing is written.
+        ``ifeq`` is a Ruvio extension: it writes only when the current string equals the given value,
+        which makes compare-and-set and lock renewal a single command; it cannot be combined with
+        ``nx``, ``xx`` or ``get``.
+
+        Args:
+            key: The key.
+            value: The value (text, bytes, int or float; numbers are stored as their decimal text).
+            ex: Expire after this many seconds (positive integer).
+            px: Expire after this many milliseconds (positive integer).
+            exat: Expire at this Unix time in seconds. A time in the past leaves the key absent.
+            pxat: Expire at this Unix time in milliseconds. A time in the past leaves the key absent.
+            keepttl: Keep the TTL the key already has instead of clearing it.
+            nx: Write only when the key does not exist.
+            xx: Write only when the key already exists.
+            get: Return the previous string value instead of a success flag.
+            ifeq: Write only when the key holds a string equal to this value (Ruvio extension).
+
+        Returns:
+            ``True`` when written, ``False`` when ``nx``/``xx``/``ifeq`` refused the write. With
+            ``get=True``: the previous value, or ``None`` when there was none (a refused write then
+            also gives the previous value or ``None``).
+
+        Raises:
+            WrongTypeError: ``get=True`` or ``ifeq`` was used and the key holds a non-string.
+            ResponseError: Invalid or conflicting options (``syntax error``), or a zero/negative TTL.
+
+        Example:
+            client.set("k", "v", ex=60)             # -> True, expires in a minute
+            client.set("k", "w", nx=True)           # -> False (already exists)
+            client.set("k", "x", ifeq="v")          # -> True only if the value is still "v"
+            client.set("k", "y", get=True)          # -> previous value
+        """
         if ex is None and px is None and exat is None and pxat is None and not (keepttl or nx or xx or get) and ifeq is None:
             t = type(key)
             if t is str:
@@ -290,95 +694,480 @@ class Commands:
         return self._c(_set_reply, "SET", *args)
 
     def setv(self, key: KeyT, value: Arg, version: Optional[int] = None) -> Any:
-        """``SETV`` versioned write; returns the new version (omit ``version`` to create v1)."""
+        """``SETV key value [version]`` - versioned write (optimistic concurrency on one key). Ruvio extension.
+
+        The first call without ``version`` creates the key at version 1. Every later call must pass the
+        version it last saw and receives the next one, so two writers cannot overwrite each other
+        silently. A plain ``SET`` replaces a versioned string and removes the version. The version is
+        stored only on keys written with ``SETV``.
+
+        Args:
+            key: The key.
+            value: The new value.
+            version: The current version of the key (a non-negative integer). Omit it to create the
+                key at version 1.
+
+        Returns:
+            The new version number (``int``).
+
+        Raises:
+            ResponseError: ``ERR version mismatch`` - ``version`` is not the current one, the key does
+                not exist but a version was given, or the key is already versioned and no version was given.
+            WrongTypeError: The key holds a non-string type.
+
+        Example:
+            v = client.setv("doc", "draft 1")        # -> 1
+            v = client.setv("doc", "draft 2", v)     # -> 2
+            client.setv("doc", "stale", 1)           # raises ResponseError: version mismatch
+        """
         if version is None:
             return self._c(None, "SETV", key, value)
         return self._c(None, "SETV", key, value, version)
 
     def take(self, key: KeyT, count: int) -> Any:
-        """``TAKE`` - subtracts ``count`` when available; remainder or None (unchanged)."""
+        """``TAKE key count`` - subtracts ``count`` from an integer key only when enough is left. Ruvio extension.
+
+        Handy for stock, credits and tokens: the check and the subtraction are one atomic step. A
+        missing key or a shortfall changes nothing.
+
+        Args:
+            key: A key holding a decimal integer.
+            count: A positive integer to subtract.
+
+        Returns:
+            The remainder after subtracting (``int``, may be ``0``), or ``None`` when the key does not
+            exist or holds less than ``count`` (the key is left unchanged).
+
+        Raises:
+            ResponseError: ``count`` is not a positive integer, or the value is not an integer.
+            WrongTypeError: The key holds a non-string type.
+
+        Example:
+            client.set("stock", 5)
+            client.take("stock", 2)   # -> 3
+            client.take("stock", 9)   # -> None, stock stays 3
+        """
         return self._c(None, "TAKE", key, count)
 
     def delex(self, key: KeyT, ifeq: Arg) -> Any:
-        """``DELEX key IFEQ value`` - deletes only when the value matches. True when deleted."""
+        """``DELEX key IFEQ value`` - deletes a string only when it equals ``value``. Ruvio extension.
+
+        Use it to release a lock safely: only the holder who knows the token can delete the key.
+
+        Args:
+            key: The key.
+            ifeq: The value the key must hold for the delete to happen.
+
+        Returns:
+            ``True`` when the key was deleted, ``False`` when it was missing or held another value.
+
+        Raises:
+            WrongTypeError: The key holds a non-string type.
+
+        Example:
+            client.set("lock", "token-1", px=5000, nx=True)
+            client.delex("lock", "token-1")   # -> True
+            client.delex("lock", "token-1")   # -> False
+        """
         return self._c(_bool, "DELEX", key, "IFEQ", ifeq)
 
     def getex(self, key: KeyT, ttl_ms: int) -> Any:
-        """``GETEX key ms`` - returns the value and sets its TTL to ``ttl_ms`` milliseconds."""
+        """``GETEX key ttl_ms`` - reads a string and sets its TTL in milliseconds (sliding expiry).
+
+        This is Ruvio's form of ``GETEX``: the TTL is given in milliseconds as a plain number (Redis
+        uses ``EX``/``PX``/``PERSIST`` options). ``GET`` never moves a deadline; ``GETEX`` does.
+
+        Args:
+            key: The key.
+            ttl_ms: New time to live in milliseconds (positive integer).
+
+        Returns:
+            The value, or ``None`` when the key does not exist (nothing is stored).
+
+        Raises:
+            WrongTypeError: The key holds a non-string type.
+            ResponseError: ``ttl_ms`` is zero or not an integer.
+
+        Example:
+            client.set("session:1", "data")
+            client.getex("session:1", 30000)   # -> "data", now expires in 30 s
+        """
         return self._c(None, "GETEX", key, ttl_ms)
 
     def mget(self, *keys: KeyT) -> Any:
+        """``MGET key [key ...]`` - values of several keys.
+
+        Args:
+            *keys: The keys, as separate arguments or as one list/tuple.
+
+        Returns:
+            A list in the order of ``keys``; an entry is ``None`` when that key is missing or does not
+            hold a string (no error for the wrong type).
+
+        Note:
+            Keys in different slots are fetched per shard and merged in your order (not atomic). A
+            standalone or single-shard server needs no special handling.
+
+        Example:
+            client.mset({"a": 1, "b": 2})
+            client.mget("a", "b", "c")   # -> ["1", "2", None]
+            client.mget(["a", "b"])      # -> ["1", "2"]
+        """
         if len(keys) == 1 and not isinstance(keys[0], (str, bytes)):
             keys = tuple(keys[0])  # type: ignore[arg-type]
         return self._c(None, "MGET", *keys)
 
     def mset(self, mapping: Union[Mapping[Any, Any], Iterable[Tuple[Any, Any]]]) -> Any:
+        """``MSET key value [key value ...]`` - writes several strings.
+
+        Existing TTLs are cleared, as with ``SET``. On one server the whole command is applied at once.
+
+        Args:
+            mapping: A ``dict`` or an iterable of ``(key, value)`` pairs.
+
+        Returns:
+            ``True``.
+
+        Note:
+            Pairs for different slots are sent per shard, so the write is not atomic across shards.
+
+        Example:
+            client.mset({"a": 1, "b": "two"})
+        """
         return self._c(_ok, "MSET", *_flat_pairs(mapping))
 
     def msetnx(self, mapping: Union[Mapping[Any, Any], Iterable[Tuple[Any, Any]]]) -> Any:
+        """``MSETNX key value [key value ...]`` - writes several strings only if none of the keys exists.
+
+        Args:
+            mapping: A ``dict`` or an iterable of ``(key, value)`` pairs.
+
+        Returns:
+            ``True`` when all keys were written, ``False`` when at least one existed (nothing is written).
+
+        Raises:
+            CrossSlotError: Cluster client only - the keys are in different slots (the command is not split).
+        """
         return self._c(_bool, "MSETNX", *_flat_pairs(mapping))
 
     def getset(self, key: KeyT, value: Arg) -> Any:
+        """``GETSET key value`` - sets a string and returns the old one. Clears the TTL.
+
+        Args:
+            key: The key.
+            value: The new value.
+
+        Returns:
+            The previous value, or ``None`` when the key did not exist.
+
+        Raises:
+            WrongTypeError: The key holds a non-string type.
+        """
         return self._c(None, "GETSET", key, value)
 
     def append(self, key: KeyT, value: Arg) -> Any:
+        """``APPEND key value`` - appends to a string (creates it when missing). Keeps an existing TTL.
+
+        Args:
+            key: The key.
+            value: Text or bytes to add at the end.
+
+        Returns:
+            The length of the string after the append, in bytes.
+
+        Raises:
+            WrongTypeError: The key holds a non-string type.
+        """
         return self._c(None, "APPEND", key, value)
 
     def strlen(self, key: KeyT) -> Any:
+        """``STRLEN key`` - length of a string in bytes.
+
+        Args:
+            key: The key.
+
+        Returns:
+            The length; ``0`` when the key does not exist.
+
+        Raises:
+            WrongTypeError: The key holds a non-string type.
+        """
         return self._c(None, "STRLEN", key)
 
     def incr(self, key: KeyT) -> Any:
+        """``INCR key`` - adds 1 to a decimal integer. A missing key counts as 0.
+
+        Counters are signed 64-bit integers and keep an existing TTL.
+
+        Args:
+            key: The key.
+
+        Returns:
+            The new value (``int``).
+
+        Raises:
+            ResponseError: The value is not an integer or the result would overflow (value unchanged).
+            WrongTypeError: The key holds a non-string type.
+
+        Example:
+            client.incr("hits")   # -> 1
+            client.incr("hits")   # -> 2
+        """
         if type(key) is str:
             key = key.encode("utf-8", "surrogateescape")
         n = len(key)
         return self._x(None, b"".join((_INCR, _BULK_LEN[n] if n < _TABLE else b"$%d\r\n" % n, key, _CRLF)))
 
     def decr(self, key: KeyT) -> Any:
+        """``DECR key`` - subtracts 1 from a decimal integer. A missing key counts as 0.
+
+        Args:
+            key: The key.
+
+        Returns:
+            The new value (``int``).
+
+        Raises:
+            ResponseError: The value is not an integer or the result would overflow.
+            WrongTypeError: The key holds a non-string type.
+        """
         return self._c(None, "DECR", key)
 
     def incrby(self, key: KeyT, amount: int = 1, max: Optional[int] = None) -> Any:  # noqa: A002
-        """``INCRBY [MAX limit]``. With ``max`` the reply is None (nothing written) when the
-        result would pass the limit."""
+        """``INCRBY key amount [MAX limit]`` - adds an integer; with ``max`` it refuses to pass a ceiling.
+
+        The ``MAX`` option is a Ruvio extension, useful for quotas: the check and the increment are
+        one atomic step.
+
+        Args:
+            key: The key (a missing key counts as 0).
+            amount: Integer to add; may be negative.
+            max: Optional ceiling. When the result would be greater than ``max`` nothing is written.
+
+        Returns:
+            The new value (``int``), or ``None`` when ``max`` would have been exceeded.
+
+        Raises:
+            ResponseError: The value is not an integer or the result would overflow 64 bits.
+            WrongTypeError: The key holds a non-string type.
+
+        Example:
+            client.incrby("quota", 1, max=3)   # -> 1, 2, 3 and then None
+        """
         if max is None:
             return self._c(None, "INCRBY", key, amount)
         return self._c(None, "INCRBY", key, amount, "MAX", max)
 
     def decrby(self, key: KeyT, amount: int = 1) -> Any:
+        """``DECRBY key amount`` - subtracts an integer.
+
+        Args:
+            key: The key (a missing key counts as 0).
+            amount: Integer to subtract.
+
+        Returns:
+            The new value (``int``).
+
+        Raises:
+            ResponseError: The value is not an integer or the result would overflow.
+            WrongTypeError: The key holds a non-string type.
+        """
         return self._c(None, "DECRBY", key, amount)
 
     def incrbyfloat(self, key: KeyT, amount: float) -> Any:
+        """``INCRBYFLOAT key amount`` - adds a float. A missing key counts as 0; keeps the TTL.
+
+        The sum is computed in double precision and stored with at most 15 significant digits (Redis
+        uses ``long double``, so the last digits can differ).
+
+        Args:
+            key: The key.
+            amount: Number to add; may be negative.
+
+        Returns:
+            The new value as ``float``.
+
+        Raises:
+            ResponseError: The value is not a valid float, or the result would be NaN or infinite.
+            WrongTypeError: The key holds a non-string type.
+        """
         return self._c(float, "INCRBYFLOAT", key, amount)
 
     def setex(self, key: KeyT, seconds: int, value: Arg) -> Any:
+        """``SETEX key seconds value`` - writes a string with a TTL in seconds (same as ``SET ... EX``).
+
+        Args:
+            key: The key.
+            seconds: Time to live in seconds (positive integer).
+            value: The value.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: ``seconds`` is zero or negative.
+        """
         return self._c(_ok, "SETEX", key, seconds, value)
 
     def psetex(self, key: KeyT, ms: int, value: Arg) -> Any:
+        """``PSETEX key ms value`` - writes a string with a TTL in milliseconds (same as ``SET ... PX``).
+
+        Args:
+            key: The key.
+            ms: Time to live in milliseconds (positive integer).
+            value: The value.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: ``ms`` is zero or negative.
+        """
         return self._c(_ok, "PSETEX", key, ms, value)
 
     def setnx(self, key: KeyT, value: Arg) -> Any:
+        """``SETNX key value`` - writes a string only when the key does not exist.
+
+        Args:
+            key: The key.
+            value: The value.
+
+        Returns:
+            ``True`` when written, ``False`` when the key already existed.
+        """
         return self._c(_bool, "SETNX", key, value)
 
     def getdel(self, key: KeyT) -> Any:
+        """``GETDEL key`` - reads a string and deletes the key.
+
+        Args:
+            key: The key.
+
+        Returns:
+            The value, or ``None`` when the key did not exist.
+
+        Raises:
+            WrongTypeError: The key holds a non-string type (it is not deleted).
+        """
         return self._c(None, "GETDEL", key)
 
     def getrange(self, key: KeyT, start: int, end: int) -> Any:
+        """``GETRANGE key start end`` - a slice of a string by byte offsets, both ends inclusive.
+
+        Args:
+            key: The key.
+            start: First byte offset; negative counts from the end (``-1`` is the last byte).
+            end: Last byte offset, inclusive; negative counts from the end.
+
+        Returns:
+            The slice. An empty string when the key is missing or the range is empty. Unlike Redis 7.0, a
+            range wholly before the start of the string gives an empty string.
+
+        Raises:
+            WrongTypeError: The key holds a non-string type.
+
+        Example:
+            client.set("k", "hello")
+            client.getrange("k", 1, 3)    # -> "ell"
+            client.getrange("k", -2, -1)  # -> "lo"
+        """
         return self._c(None, "GETRANGE", key, start, end)
 
     def substr(self, key: KeyT, start: int, end: int) -> Any:
+        """``SUBSTR key start end`` - old name of :meth:`getrange` (same arguments and reply).
+
+        Args:
+            key: The key.
+            start: First byte offset (negative counts from the end).
+            end: Last byte offset, inclusive.
+
+        Returns:
+            The slice as text/bytes; empty when the key is missing.
+        """
         return self._c(None, "SUBSTR", key, start, end)
 
     def setrange(self, key: KeyT, offset: int, value: Arg) -> Any:
+        """``SETRANGE key offset value`` - overwrites part of a string, growing it with zero bytes if needed.
+
+        The string is capped at 16 MiB and each call rewrites the value (cost grows with its size).
+        An existing TTL is kept.
+
+        Args:
+            key: The key (created when missing).
+            offset: Byte offset to start writing at (``>= 0``).
+            value: Text or bytes to write.
+
+        Returns:
+            The length of the string after the write, in bytes. An empty ``value`` writes nothing and
+            returns the current length.
+
+        Raises:
+            ResponseError: The result would be larger than 16 MiB.
+            WrongTypeError: The key holds a non-string type.
+        """
         return self._c(None, "SETRANGE", key, offset, value)
 
     def fillget(self, key: KeyT, fill_ms: int, wait_ms: Optional[int] = None) -> Any:
-        """``FILLGET key fill_ms [WAIT ms]`` -> :class:`FillResult`. ``WAIT`` parks the whole
-        connection; prefer :meth:`get_or_create` which polls without WAIT."""
+        """``FILLGET key fill_ms [WAIT wait_ms]`` - reads a cache entry and decides who rebuilds it. Ruvio extension.
+
+        This is the read half of cache-stampede protection; :meth:`fillset` is the write half and
+        :meth:`get_or_create` wraps both. The reply says what this caller must do:
+
+        * ``HIT``: the value is cached and fresh; use ``value``.
+        * ``FILL``: the entry is missing and this caller won the right to build it. Build the value
+          and call :meth:`fillset` with ``token`` before ``fill_ms`` elapse.
+        * ``BUSY``: another caller is already building it; wait and ask again.
+        * ``STALE``: ``value`` is a stale copy inside the stale-while-revalidate window. If ``token`` is
+          not ``None`` this caller must refresh it; otherwise someone else already does.
+
+        The fill marker lives in memory only and lapses after ``fill_ms``.
+
+        Args:
+            key: The cache key.
+            fill_ms: How long the winning caller may take to build the value, in milliseconds.
+            wait_ms: Hold a caller that would get ``BUSY`` for up to this many milliseconds (the server
+                retries every 5 ms) until the filler writes, the marker lapses (the waiter then becomes
+                the filler) or the wait ends with ``BUSY``. This parks the whole connection, so on the
+                shared asyncio connection use :meth:`dedicated`; not allowed inside a transaction.
+
+        Returns:
+            A :class:`FillResult` ``(state, value, token)``. ``value`` is set for ``HIT`` and ``STALE``,
+            ``token`` for ``FILL`` and for a refreshing ``STALE``.
+
+        Raises:
+            WrongTypeError: The key holds a non-string type.
+            ResponseError: Too many pending fills on the shard.
+
+        Example:
+            r = client.fillget("page:home", 5000)
+            if r.state == "FILL":
+                client.fillset("page:home", render_page(), 60000, r.token)
+        """
         if wait_ms is None:
             return self._c(_fill, "FILLGET", key, fill_ms)
         return self._c(_fill, "FILLGET", key, fill_ms, "WAIT", wait_ms)
 
     def fillset(self, key: KeyT, value: Arg, ttl_ms: int, token: Arg, swr_ms: Optional[int] = None) -> Any:
-        """``FILLSET key value ttl_ms token [SWR stale_ms]`` - True when the token was live."""
+        """``FILLSET key value ttl_ms token [SWR stale_ms]`` - stores the value built after a ``FILL``. Ruvio extension.
+
+        The write succeeds only while ``token`` is the live fill token of the key, so a slow filler
+        whose marker lapsed cannot overwrite the value a newer filler wrote.
+
+        Args:
+            key: The cache key.
+            value: The value to cache.
+            ttl_ms: Fresh time to live in milliseconds.
+            token: The token returned by :meth:`fillget` (``FillResult.token``).
+            swr_ms: Optional stale-while-revalidate window in milliseconds. The value stays readable
+                for this long after ``ttl_ms`` and ``fillget`` reports it as ``STALE`` so one caller can
+                refresh it. The soft expiry is not persisted.
+
+        Returns:
+            ``True`` when stored, ``False`` when the token was no longer live (nothing is written).
+
+        Raises:
+            WrongTypeError: The key holds a non-string type.
+        """
         if swr_ms is None:
             return self._c(_bool, "FILLSET", key, value, ttl_ms, token)
         return self._c(_bool, "FILLSET", key, value, ttl_ms, token, "SWR", swr_ms)
