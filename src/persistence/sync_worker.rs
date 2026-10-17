@@ -110,14 +110,36 @@ impl SyncWorker {
     }
 
     pub(crate) fn drain(&self) -> Result<(), PersistenceError> {
+        // A test never waits this long for one sync: past it, a lost wake or a worker a failed
+        // test left paused fails that test instead of hanging the run (every WAL test drains
+        // on drop).
+        #[cfg(test)]
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         while state.busy || state.pending.is_some() {
             check_failure(&state)?;
-            state = self
-                .shared
-                .changed
-                .wait(state)
-                .unwrap_or_else(|e| e.into_inner());
+            #[cfg(test)]
+            {
+                let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                    return Err(PersistenceError::Failed(
+                        "WAL sync worker did not drain within 30 s".into(),
+                    ));
+                };
+                state = self
+                    .shared
+                    .changed
+                    .wait_timeout(state, left)
+                    .unwrap_or_else(|e| e.into_inner())
+                    .0;
+            }
+            #[cfg(not(test))]
+            {
+                state = self
+                    .shared
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(|e| e.into_inner());
+            }
         }
         check_failure(&state)
     }
@@ -280,6 +302,11 @@ impl Drop for SyncWorker {
         {
             let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
             state.stopped = true;
+            // A worker still paused (by a test that failed first) would never see the stop.
+            #[cfg(test)]
+            {
+                state.paused = false;
+            }
             self.shared.unavailable.store(true, Ordering::Release);
             self.shared.changed.notify_all();
             self.shared.ready.notify_waiters();
@@ -297,6 +324,18 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    /// Runs `future` on `runtime`, failing the test after 10 s instead of hanging.
+    fn block_on_bounded<F: std::future::Future>(
+        runtime: &tokio::runtime::Runtime,
+        future: F,
+    ) -> F::Output {
+        runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(10), future)
+                .await
+                .expect("test wait exceeded 10 s")
+        })
+    }
+
     #[test]
     fn barriers_cover_multiple_waiters_and_repeated_sequences() {
         let mut file = tempfile::tempfile().unwrap();
@@ -308,7 +347,7 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        runtime.block_on(async {
+        block_on_bounded(&runtime, async {
             let first = worker.submit(Arc::clone(&file), 1).unwrap();
             let repeated = worker.submit(Arc::clone(&file), 1).unwrap();
             let later = worker.submit(Arc::clone(&file), 2).unwrap();
@@ -333,7 +372,7 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        assert!(runtime.block_on(barrier.wait()).is_err());
+        assert!(block_on_bounded(&runtime, barrier.wait()).is_err());
         assert!(worker.submit(file, 2).is_err());
         assert!(worker.drain().is_err());
         assert_eq!(durable.load(Ordering::Acquire), 0);
@@ -354,7 +393,7 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        runtime.block_on(async {
+        block_on_bounded(&runtime, async {
             let later = worker.submit(Arc::clone(&file), 1000).unwrap();
             let release = async {
                 tokio::task::yield_now().await;
@@ -381,7 +420,7 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        runtime.block_on(async {
+        block_on_bounded(&runtime, async {
             assert!(
                 tokio::time::timeout(std::time::Duration::from_millis(10), first.wait())
                     .await
@@ -389,10 +428,7 @@ mod tests {
             );
             assert_eq!(durable.load(Ordering::Acquire), 0);
             worker.pause(false);
-            tokio::time::timeout(std::time::Duration::from_secs(2), other.wait())
-                .await
-                .unwrap()
-                .unwrap();
+            other.wait().await.unwrap();
         });
         assert_eq!(durable.load(Ordering::Acquire), 1);
     }

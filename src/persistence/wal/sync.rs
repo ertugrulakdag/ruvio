@@ -482,7 +482,8 @@ impl WalSink {
         };
 
         #[cfg(test)]
-        let injected = super::crash::take_io_fault(super::crash::CrashSite::Sync);
+        let injected = super::crash::take_io_fault(super::crash::CrashSite::Sync)
+            .map(|error| (error, super::crash::take_sync_hold()));
         let sequence = self.last_sequence();
         let running = Arc::clone(&self.sync_running);
         let durable = Arc::clone(&self.durable);
@@ -497,9 +498,12 @@ impl WalSink {
                 let _clear = ClearSync(running);
                 #[cfg(test)]
                 let synced = match injected {
-                    Some(error) => {
-                        // Fail after the caller moved on, like a slow device.
-                        std::thread::sleep(std::time::Duration::from_millis(30));
+                    Some((error, hold)) => {
+                        // Fail after the caller moved on, like a slow device; a test that
+                        // holds the sync decides when.
+                        if let Some(hold) = hold {
+                            super::crash::wait_released(&hold);
+                        }
                         Err(error)
                     }
                     None => cloned.sync_data(),

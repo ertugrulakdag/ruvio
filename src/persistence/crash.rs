@@ -1,8 +1,12 @@
 #[cfg(test)]
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     process,
-    sync::atomic::{AtomicU8, AtomicU64, Ordering},
+    sync::{
+        Arc, Condvar, Mutex, PoisonError,
+        atomic::{AtomicU8, AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use std::{
@@ -37,6 +41,71 @@ static REMAINING: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 thread_local! {
     static IO_FAULT: Cell<u8> = const { Cell::new(0) };
+    static SYNC_HOLD: RefCell<Option<Gate>> = const { RefCell::new(None) };
+}
+
+/// Open once the test lets a held sync report its failure.
+#[cfg(test)]
+pub(crate) type Gate = Arc<(Mutex<bool>, Condvar)>;
+
+/// Keeps the next background WAL sync with an injected fault from reporting its failure until
+/// [`SyncHold::release`] or drop, so a test acts while that sync is still running instead of
+/// guessing how long a thread takes. Dropping it on a failed assertion lets the sync finish.
+#[cfg(test)]
+pub(crate) struct SyncHold(Gate);
+
+#[cfg(test)]
+impl SyncHold {
+    pub(crate) fn release(&self) {
+        let (open, wake) = &*self.0;
+
+        *open.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        wake.notify_all();
+    }
+}
+
+#[cfg(test)]
+impl Drop for SyncHold {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+/// Fails the next sync on this thread like [`arm_io_fault`]; a background sync waits for the
+/// returned hold before it reports the failure.
+#[cfg(test)]
+pub(crate) fn arm_held_sync_fault() -> SyncHold {
+    let gate = Gate::default();
+
+    arm_io_fault(CrashSite::Sync);
+    SYNC_HOLD.with(|hold| *hold.borrow_mut() = Some(Arc::clone(&gate)));
+    SyncHold(gate)
+}
+
+/// The hold armed with the sync fault just taken on this thread, if any.
+#[cfg(test)]
+pub(crate) fn take_sync_hold() -> Option<Gate> {
+    SYNC_HOLD.with(|hold| hold.borrow_mut().take())
+}
+
+/// Waits until the hold is released; after 30 s the sync goes on, so a test that never
+/// releases it fails on its own assertions instead of hanging.
+#[cfg(test)]
+pub(crate) fn wait_released(gate: &Gate) {
+    let (open, wake) = &**gate;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut released = open.lock().unwrap_or_else(PoisonError::into_inner);
+
+    while !*released {
+        let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+            return;
+        };
+
+        released = wake
+            .wait_timeout(released, left)
+            .unwrap_or_else(PoisonError::into_inner)
+            .0;
+    }
 }
 
 #[cfg(test)]
@@ -120,10 +189,11 @@ pub(crate) fn hit_write(site: CrashSite, file: &mut File, bytes: &[u8]) -> io::R
 #[cfg(test)]
 mod tests {
     use std::{
-        fs::{self, OpenOptions},
+        fs::{self, File, OpenOptions},
         io::Write,
         path::Path,
-        process::Command,
+        process::{Command, Stdio},
+        time::{Duration, Instant},
     };
 
     use tempfile::tempdir;
@@ -165,7 +235,11 @@ mod tests {
 
     fn trial(site: &str, after: u64, worker: bool) {
         let directory = tempdir().expect("tempdir");
-        let output = Command::new(std::env::current_exe().expect("test executable"))
+        // The child's stderr goes to a file outside its data directory, so a full pipe cannot
+        // stall it and the test reads it after the child is gone.
+        let logs = tempdir().expect("tempdir");
+        let log_path = logs.path().join("stderr");
+        let mut child = Command::new(std::env::current_exe().expect("test executable"))
             .arg(TEST_NAME)
             .arg("--exact")
             .env("RUVIO_CRASH_CHILD", "1")
@@ -173,34 +247,44 @@ mod tests {
             .env("RUVIO_CRASH_AFTER", after.to_string())
             .env("RUVIO_CRASH_DIR", directory.path())
             .env("RUVIO_CRASH_WORKER", if worker { "1" } else { "0" })
-            .output()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(File::create(&log_path).expect("child log"))
+            .spawn()
             .expect("spawn crash child");
+        // Eight small records take milliseconds; a child that hangs fails the trial.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("crash child status") {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!(
+                    "crash child for {site} after {after} did not exit within 60 s: {}",
+                    fs::read_to_string(&log_path).unwrap_or_default()
+                );
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let stderr = fs::read_to_string(&log_path).unwrap_or_default();
 
         assert!(
             directory.path().join("started").exists(),
-            "crash child did not start for {site} after {after}: {}",
-            String::from_utf8_lossy(&output.stderr)
+            "crash child did not start for {site} after {after}: {stderr}"
         );
 
         // `abort` ends a Windows process with STATUS_STACK_BUFFER_OVERRUN.
         const WINDOWS_ABORT: i32 = 0xC000_0409_u32 as i32;
-        if let Some(code) = output
-            .status
+        if let Some(code) = status
             .code()
             .filter(|code| !(cfg!(windows) && *code == WINDOWS_ABORT))
         {
-            assert_eq!(
-                code,
-                0,
-                "{site} after {after} exited {code}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            assert_eq!(code, 0, "{site} after {after} exited {code}: {stderr}");
         }
         if worker {
-            assert!(
-                !output.status.success(),
-                "worker crash site was not reached"
-            );
+            assert!(!status.success(), "worker crash site was not reached");
         }
 
         if matches!(site, "snapshot" | "rename") {

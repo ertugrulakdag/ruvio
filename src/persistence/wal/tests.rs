@@ -275,7 +275,7 @@ fn observed_read_barrier_waits_for_another_clients_unsynced_write() {
         .enable_all()
         .build()
         .unwrap();
-    runtime.block_on(async {
+    block_on_bounded(&runtime, async {
         let release = async {
             tokio::task::yield_now().await;
             sink.sync_worker.as_ref().unwrap().pause(false);
@@ -377,12 +377,7 @@ fn base_replacement_resets_worker_submission_cursor() {
     .unwrap();
     sink.end_group().unwrap();
     let barrier = sink.prepare_sync_barrier().unwrap().unwrap();
-    runtime.block_on(async {
-        tokio::time::timeout(std::time::Duration::from_secs(2), barrier.wait())
-            .await
-            .unwrap()
-            .unwrap();
-    });
+    block_on_bounded(&runtime, barrier.wait()).unwrap();
     assert_eq!(sink.durable.load(Ordering::Acquire), 1);
 }
 
@@ -791,9 +786,10 @@ fn background_sync_failure_keeps_writes_refused_until_restart() {
     std::thread::sleep(std::time::Duration::from_millis(5));
     // The background sync this append starts fails: the pages it covered may be gone
     // while a later sync reports success.
-    super::super::crash::arm_io_fault(super::super::crash::CrashSite::Sync);
+    let hold = super::super::crash::arm_held_sync_fault();
     set(&mut sink, b"two", b"v").unwrap();
     assert!(sink.sync_running.load(Ordering::Acquire));
+    hold.release();
     assert!(sink.flush().is_err());
     sink.shrink_to_written();
     let sizes = segment_sizes(directory.path());
@@ -831,15 +827,17 @@ fn write_failure_while_a_background_sync_fails_is_not_recovered() {
     // The sync this append started must be done, or the next append would not start one.
     wait_background_sync_bounded(&sink);
     std::thread::sleep(std::time::Duration::from_millis(5));
-    // This append starts a background sync that fails ~30 ms later.
-    super::super::crash::arm_io_fault(super::super::crash::CrashSite::Sync);
+    // This append starts a background sync that fails once the test releases it.
+    let hold = super::super::crash::arm_held_sync_fault();
     set(&mut sink, b"two", b"v").unwrap();
     assert!(sink.sync_running.load(Ordering::Acquire));
     // Meanwhile a write fails (a full disk): an ordinary, recoverable failure.
     super::super::crash::arm_io_fault(super::super::crash::CrashSite::Append);
     assert!(set(&mut sink, b"three", b"v").is_err());
     assert!(!sink.sync_failed);
-    // Recovery's own sync would report clean pages the failed sync may have lost.
+    // The background sync fails while recovery runs; recovery's own sync would report clean
+    // pages the failed sync may have lost.
+    hold.release();
     sink.last_recovery = None;
     assert!(set(&mut sink, b"four", b"v").is_err());
     assert!(sink.sync_failed);
