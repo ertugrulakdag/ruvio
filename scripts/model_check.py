@@ -25,14 +25,21 @@ LD_PRELOAD shim (scripts/model_check_shim.c) compiled into the work directory. T
 drives two crash forms for the WAL profiles: a power loss (kill -9, then the WAL bytes written
 since their file's last fsync are zeroed) and a torn write (the server dies after a random prefix
 of one WAL write, so a crash lands between or inside the records of one batch). A failure writes
-a self-contained repro directory under --results. The run is reproducible from the seed except
-for OS timing (which commands overlap and where a kill lands).
+a self-contained repro directory under --results.
+
+The seed fixes the run's schedule: how many epochs, how many commands each one sends, which
+event ends it and after how many commands a disk fault starts. No part of the schedule reads the
+clock, so `--seed N` replays the same epochs and events on a fast or a slow machine; --duration
+is nominal work (OPS_PER_SECOND commands per second) and the wall time follows the machine.
+What stays up to OS timing is which commands overlap, so which keys are free for the next one,
+and where inside a write a kill lands.
 """
 
 from __future__ import annotations
 
 import argparse
 import collections
+import ctypes
 import hashlib
 import json
 import math
@@ -61,6 +68,13 @@ TTL_VALUE_SLACK_MS = 1200
 WAL_HEADER_BYTES = 52
 # Keys with a deadline this close to now are not touched by new commands.
 QUARANTINE_MS = 600
+# Commands one nominal second of --duration sends. A debug build on a loaded runner keeps up.
+OPS_PER_SECOND = 1000
+# Ports one run uses from its base: the primary's shards, the replica's shards at
+# REPLICA_PORT_OFFSET and the replication listener's at REPLICATION_PORT_OFFSET.
+PORT_BLOCK = 16
+REPLICA_PORT_OFFSET = 5
+REPLICATION_PORT_OFFSET = 10
 
 SCRIPT = (
     "local v = ruvio.call('GET', KEYS[1]) if not v then v = '' end "
@@ -1225,13 +1239,15 @@ class Server:
         with self.log_path.open("a") as log:
             log.write(f"\n===== model_check: start #{self.starts} at {time.time():.3f} =====\n")
         handle = self.log_path.open("a")
+        # The server stays in the checker's process group, so killing that group (the Rust
+        # smoke test does on a timeout) ends the servers too, and it dies with the checker.
         self.proc = subprocess.Popen(
             [self.checker.bin, "--config", str(self.config_path)],
             env=env,
             cwd=self.dir,
             stdout=handle,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            preexec_fn=die_with_parent,
         )
         handle.close()
 
@@ -1374,6 +1390,9 @@ class Checker:
         self.results = results
         self.bin = str(Path(args.bin).resolve())
         self.rng = random.Random(f"{seed}:{name}")
+        # The epochs and their events come from their own generator: how many random numbers
+        # the commands take depends on timing (which keys are free), the schedule must not.
+        self.schedule = random.Random(f"{seed}:{name}:schedule")
         self.shards = self.cfg["shards"]
         self.shim = args.shim
         self.op_seq = 0
@@ -1381,7 +1400,8 @@ class Checker:
         self.log = collections.deque(maxlen=args.log_tail)
         self.notes = []
         self.stats = collections.Counter()
-        self.stream_seq = int(time.time() * 1000)
+        # Explicit stream ids only have to grow; a constant start keeps the values the seed's.
+        self.stream_seq = 1_000_000_000_000
         self.value_seq = 0
         rng = self.rng
         profile = self.cfg["profile"]
@@ -1437,11 +1457,13 @@ class Checker:
         (root / "primary").mkdir(parents=True)
         self.root = root
 
+        assert self.shards <= REPLICA_PORT_OFFSET, "the port block holds five shards per server"
         if self.cfg.get("replica"):
-            self.primary = Server(self, "primary", base, root / "primary" / "data", "primary", repl_port=base + 20)
+            repl_port = base + REPLICATION_PORT_OFFSET
+            self.primary = Server(self, "primary", base, root / "primary" / "data", "primary", repl_port=repl_port)
             (root / "replica").mkdir(parents=True)
-            self.replica = Server(self, "replica", base + 10, root / "replica" / "data", "replica",
-                                  primary_port=base + 20)
+            self.replica = Server(self, "replica", base + REPLICA_PORT_OFFSET, root / "replica" / "data", "replica",
+                                  primary_port=repl_port)
         else:
             self.primary = Server(self, "server", base, root / "primary" / "data")
             self.replica = None
@@ -1455,20 +1477,34 @@ class Checker:
             self.replica.start()
         self.state = {k: None for k in self.all_keys}
         self.new_epoch(time.time() * 1000)
-        end = time.time() + self.duration
+        plan = self.plan_epochs()
+        self.note(f"plan: {len(plan)} epochs of {', '.join(str(ops) for ops in plan)} commands")
         epoch = 0
 
         try:
-            while time.time() < end:
+            for ops in plan:
                 epoch += 1
                 self.epoch_number = epoch
-                self.one_epoch(min(self.rng.uniform(0.8, 4.0), max(0.3, end - time.time())))
+                self.one_epoch(ops)
                 self.housekeeping()
         finally:
             for server in (self.primary, self.replica):
                 if server and server.alive():
                     server.kill9()
         self.stats["epochs"] = epoch
+
+    def plan_epochs(self) -> list[int]:
+        """Commands per epoch, from the seed alone: epochs of 0.8 to 4 nominal seconds until
+        --duration is used up."""
+
+        plan = []
+        left = self.duration
+
+        while left > 0:
+            seconds = min(self.schedule.uniform(0.8, 4.0), max(0.3, left))
+            plan.append(max(1, round(seconds * OPS_PER_SECOND)))
+            left -= seconds
+        return plan
 
     def housekeeping(self):
         size = sum(f.stat().st_size for f in self.root.rglob("*") if f.is_file())
@@ -1513,8 +1549,8 @@ class Checker:
             conn.close()
 
     # -- one epoch: workload, then an event
-    def one_epoch(self, seconds):
-        rng = self.rng
+    def one_epoch(self, ops):
+        rng = self.schedule
         self.connect_all()
         self.depth = rng.choice([1, 1, 2, 4])
         events = ["kill9"] * 4 + ["sigterm"] * 2 + ["check"] * 2
@@ -1530,8 +1566,11 @@ class Checker:
         if self.args.events:
             events = [e for e in events if e in self.args.events] or [self.args.events[0]]
         event = rng.choice(events)
-        fault_at = time.time() + seconds * rng.uniform(0.3, 0.8) if event == "disk" else None
-        stop_at = time.time() + seconds
+        first_op = self.op_seq
+        fault_at = first_op + round(ops * rng.uniform(0.3, 0.8)) if event == "disk" else None
+        stop_at = first_op + ops
+        how = "kill9" if event == "kill9" or rng.random() < 0.6 else "sigterm"
+        self.note(f"epoch {self.epoch_number}: {ops} commands, then {event}")
         self.stats[f"event:{event}"] += 1
 
         if event == "powerloss":
@@ -1539,8 +1578,13 @@ class Checker:
             self.primary.track_log.unlink(missing_ok=True)
             self.primary.set_fault(f"track - {self.primary.data_dir}/wal/")
 
-        while time.time() < stop_at:
-            if fault_at and time.time() >= fault_at:
+        # Counted in commands sent, not seconds: the schedule is the seed's on any machine.
+        # Something must be sent now and then; a stall that long is a failure, as a reply
+        # that late is.
+        progress = (self.op_seq, time.time())
+
+        while self.op_seq < stop_at:
+            if fault_at is not None and self.op_seq >= fault_at:
                 fault_at = None
                 self.start_disk_fault()
             self.pump(0.002)
@@ -1548,10 +1592,15 @@ class Checker:
 
             if self.fault and self.fault.get("ended"):
                 break
+            if self.op_seq != progress[0]:
+                progress = (self.op_seq, time.time())
+            elif time.time() - progress[1] > self.args.hang_seconds:
+                raise Failure("stall", f"no command could be sent for {self.args.hang_seconds} s "
+                              f"({self.op_seq - first_op} of {ops} in epoch {self.epoch_number})",
+                              self.probe_server())
         if self.fault:
             self.finish_disk_fault()
         if event in ("kill9", "disk"):
-            how = "kill9" if event == "kill9" or rng.random() < 0.6 else "sigterm"
             self.restart_primary(how)
         elif event in ("powerloss", "tear"):
             self.restart_primary(event)
@@ -2459,10 +2508,13 @@ class Checker:
         crash inside a batch, between or inside its records. Most tears first drain the
         server, send one multi-record write and cut its first, second or third WAL write."""
 
-        targeted = self.rng.random() < 0.6 and self.go_idle(2.0)
+        # Both drawn before waiting, so the schedule takes the same numbers however that goes.
+        wants_target = self.schedule.random() < 0.6
         # Each record is its own write: letting one or two through lands the cut on a later
         # record of the same command, between the records of a write split in two.
-        skip = self.rng.choice([0, 1, 1, 2]) if targeted else 0
+        target_skip = self.schedule.choice([0, 1, 1, 2])
+        targeted = wants_target and self.go_idle(2.0)
+        skip = target_skip if targeted else 0
         self.primary.set_fault(f"tear {skip} {self.primary.data_dir}/wal/")
         self.tearing = True
         end = time.time() + 3
@@ -2776,7 +2828,7 @@ class Checker:
 
     # -- disk faults
     def start_disk_fault(self):
-        rng = self.rng
+        rng = self.schedule
         profile = self.cfg["profile"]
         targets = ["checkpoints"] if profile == "snapshot" else ["wal", "wal", "checkpoints", "both"]
         target = rng.choice(targets)
@@ -2954,6 +3006,19 @@ def flatten(value):
         yield value
 
 
+# Loaded before any fork: the child between fork and exec only calls into it.
+LIBC = ctypes.CDLL(None) if sys.platform.startswith("linux") else None
+PR_SET_PDEATHSIG = 1
+
+
+def die_with_parent():
+    """In a server between fork and exec: on Linux, SIGKILL it when the checker dies, so a
+    checker killed for any reason leaves no server behind on its ports."""
+
+    if LIBC is not None:
+        LIBC.prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
+
+
 def free_port_block(start: int, count: int) -> int:
     for base in range(start, 65000 - count, count):
         try:
@@ -2988,12 +3053,15 @@ def build_shim(work: Path) -> Path | None:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--seed", type=int, default=None, help="random seed (printed; default: from time)")
-    parser.add_argument("--duration", type=float, default=60.0, help="total seconds, split over the configs")
+    parser.add_argument("--duration", type=float, default=60.0,
+                        help=f"nominal seconds of work ({OPS_PER_SECOND} commands each), split over the configs")
     parser.add_argument("--config", default="all", help="a config name, a comma list, or all: " + ", ".join(CONFIGS))
     parser.add_argument("--bin", default=str(REPO / "target" / "release-fast" / "ruvio"))
     parser.add_argument("--results", default=str(REPO / "target" / "model-check"))
     parser.add_argument("--work-dir", default=None, help="server data dirs (default: a temporary directory)")
-    parser.add_argument("--port-base", type=int, default=27000, help="first port to try (40 consecutive are used)")
+    parser.add_argument("--port-base", type=int, default=None,
+                        help=f"first of {PORT_BLOCK} consecutive ports the caller keeps free for this run; "
+                        "used as given (default: a free block from 27000)")
     parser.add_argument("--max-data-mb", type=int, default=256, help="take a SAVE when data dirs grow past this")
     parser.add_argument("--log-tail", type=int, default=4000, help="op log lines kept for a repro")
     parser.add_argument("--everysec-slack-ms", type=int, default=1000, help="extra loss window for everysec")
@@ -3041,35 +3109,40 @@ def main(argv=None) -> int:
     slice_seconds = args.duration / len(names)
     totals = {}
 
+    # Configs run one after another and every server is gone before the next starts, so one
+    # block serves them all, as it serves a server's restarts.
+    port_base = args.port_base if args.port_base is not None else free_port_block(27000, PORT_BLOCK)
+
     try:
-        for index, name in enumerate(names):
-            port_base = free_port_block(args.port_base + index * 40 % 800, 40)
+        for name in names:
             started = time.time()
-            remaining = slice_seconds
             round_index = 0
 
-            while remaining > 1:
+            while True:
                 seed = args.seed if round_index == 0 else args.seed * 1000 + round_index
-                checker = Checker(args, name, seed, remaining, port_base, work, results)
-                t = time.time()
+                checker = Checker(args, name, seed, slice_seconds, port_base, work, results)
+                failed = False
 
                 try:
                     checker.run()
-                    print(f"ok   {name}: {checker.stats['epochs']} epochs, {checker.stats['ok']} acknowledged ops, "
+                    print(f"ok   {name}: {checker.stats['epochs']} epochs, {checker.op_seq} commands sent, "
+                          f"{checker.stats['ok']} acknowledged ops, "
                           f"{checker.stats['refused']} refused, {checker.stats['oom']} OOM, "
                           f"{dict((k, v) for k, v in checker.stats.items() if ':' in k)}", flush=True)
                 except Failure as failure:
+                    failed = True
                     failures += 1
                     out = checker.write_repro(failure)
                     print(f"FAIL {name} seed {seed}: {failure.kind}: {failure.detail}\n     repro: {out}", flush=True)
                     for server in (checker.primary, checker.replica):
                         if server and server.alive():
                             server.kill9()
-                    if not args.keep_going:
-                        break
-                remaining -= time.time() - t
                 round_index += 1
                 shutil.rmtree(work / name, ignore_errors=True)
+                # A clean run did the config's planned work. After a failure --keep-going starts
+                # again with the next seed while the config's share of the duration lasts.
+                if not (failed and args.keep_going and time.time() - started < slice_seconds):
+                    break
             totals[name] = time.time() - started
     finally:
         if own_work:
