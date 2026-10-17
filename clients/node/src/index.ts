@@ -24,4 +24,5 @@ export { RuvioError, ConnectionError, ReplyError } from './errors.js';
 export { Encoder, cmd } from './encoder.js';
 export type { Arg, Cmd } from './encoder.js';
 export { Parser, NEED_MORE, PushMessage } from './parser.js';
+export { BitfieldOp } from './bitfield.js';
 export * from './types.js';

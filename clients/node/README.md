@@ -80,6 +80,7 @@ including the Ruvio options: `set(k, v, { ifEq })`, `incrbyMax`, `fillget`/`fill
 | `c.getOrCreate(key, ttlMs, factory, { staleMs })` | `FILLGET`/`FILLSET`; waiters poll plain `FILLGET` with backoff (never `WAIT`) |
 | `c.idempotent(key, fingerprint, ttlMs, fn)` | `IDEM BEGIN/COMPLETE` |
 | `c.scanIterator()`, `hscanIterator`, `sscanIterator`, `zscanIterator` | cursor-driven async generators |
+| `GeoUnit`, `GeoOrder`, `ListSide`, `InsertPosition`, `BitOp`, `BitUnit`, `Aggregate`, `ScanType`, `BitfieldOp` | named keyword constants and `BITFIELD` builders, e.g. `c.geodist('g', 'a', 'b', GeoUnit.Km)`, `c.scan(0, { type: ScanType.Hash })`, `c.bitfield(k, ...BitfieldOp.get('u8', 0))`; plain string literals still work, and the keywords are sent pre-encoded |
 | `c.jsonGetAs<T>()`, `c.jsonSetAs()` | `JSON.GET/SET` + `JSON.parse/stringify` |
 | `c.pushRecent(key, cap, ...)`, `c.recent(key, n)` | `LPUSHCAP` |
 | `c.seenBefore(key, ...items)`, `c.mightContain` | `BF.MADD` / `BF.MEXISTS` |

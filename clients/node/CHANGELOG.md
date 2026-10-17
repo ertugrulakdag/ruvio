@@ -4,6 +4,8 @@ Notable changes to the Node.js client `ruvio-client` on npm. New entries go unde
 
 ## Unreleased
 
+- Named keyword constants next to the string unions (`GeoUnit.Km`, `GeoOrder`, `ListSide`, `InsertPosition`, `BitOp`, `BitUnit`, `Aggregate`, `ScanType`, `ExpireCondition`), sent from pre-encoded buffers. `ScanOptions.type` is typed by `ScanType`; `BitfieldType` is now `` `i${number}` | `u${number}` ``; `BitfieldOp` builds `BITFIELD` sub-operations. String literals keep working.
+
 ## 0.1.2 - 2026-10-17
 
 - Cluster routing is cheaper: a command whose first argument is its key is routed without scanning the key rules, a cluster batch is routed in one pass into reused scratch and written unchanged when every command goes to one node, and only error replies are checked for `MOVED`. See `docs/evidence/2026-10-16-client-cluster-routing.md`.

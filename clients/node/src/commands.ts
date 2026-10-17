@@ -42,7 +42,12 @@ import type {
   RestoreOptions,
   ClientKillOptions,
   BitUnit,
+  BitOp,
+  ListSide,
+  InsertPosition,
+  BitfieldType,
 } from './types.js';
+import { KW_AGGREGATE, KW_BITOP, KW_BITUNIT, KW_GEO_UNIT, KW_ORDER, KW_SCAN_TYPE, KW_SIDE, KW_WHERE, kw } from './keywords.js';
 
 
 // Option words as Buffers: encoded with a single copy, no string scan.
@@ -73,7 +78,7 @@ function pushScan(a: Arg[], o?: ScanOptions): Arg[] {
   if (o !== undefined) {
     if (o.match !== undefined) a.push(W.MATCH, o.match);
     if (o.count !== undefined) a.push(W.COUNT, o.count);
-    if (o.type !== undefined) a.push(W.TYPE, o.type);
+    if (o.type !== undefined) a.push(W.TYPE, kw(KW_SCAN_TYPE, o.type));
   }
   return a;
 }
@@ -112,9 +117,9 @@ function geoTf(o: { withCoord?: boolean; withDist?: boolean; withHash?: boolean 
 function pushGeoShape(a: Arg[], o: GeoSearchOptions): void {
   if (o.fromMember !== undefined) a.push(W.FROMMEMBER, o.fromMember);
   if (o.fromLonLat !== undefined) a.push(W.FROMLONLAT, o.fromLonLat[0], o.fromLonLat[1]);
-  if (o.byRadius !== undefined) a.push(W.BYRADIUS, o.byRadius.radius, o.byRadius.unit);
-  if (o.byBox !== undefined) a.push(W.BYBOX, o.byBox.width, o.byBox.height, o.byBox.unit);
-  if (o.order !== undefined) a.push(o.order);
+  if (o.byRadius !== undefined) a.push(W.BYRADIUS, o.byRadius.radius, kw(KW_GEO_UNIT, o.byRadius.unit));
+  if (o.byBox !== undefined) a.push(W.BYBOX, o.byBox.width, o.byBox.height, kw(KW_GEO_UNIT, o.byBox.unit));
+  if (o.order !== undefined) a.push(kw(KW_ORDER, o.order));
   if (o.count !== undefined) {
     a.push(W.COUNT, o.count);
     if (o.any) a.push(W.ANY);
@@ -129,7 +134,7 @@ function pushZStore(a: Arg[], keys: readonly Key[], o?: ZStoreOptions): Arg[] {
       a.push(W.WEIGHTS);
       pushAll(a, o.weights);
     }
-    if (o.aggregate !== undefined) a.push(W.AGGREGATE, o.aggregate);
+    if (o.aggregate !== undefined) a.push(W.AGGREGATE, kw(KW_AGGREGATE, o.aggregate));
   }
   return a;
 }
@@ -2235,7 +2240,7 @@ export abstract class Commands {
    * Inserts an element before or after a pivot element (`LINSERT`). Rewrites the list (cost grows with its length).
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
-   * @param where `'BEFORE'` or `'AFTER'` the pivot.
+   * @param where `'BEFORE'` or `'AFTER'` the pivot (see {@link InsertPosition}).
    * @param pivot Existing element to insert next to (the first match is used).
    * @param value Element to insert.
    * @returns The new list length, `-1` when the pivot was not found, `0` when the key does not exist.
@@ -2246,8 +2251,8 @@ export abstract class Commands {
    * await client.linsert('queue', 'BEFORE', 'b', 'a');
    * ```
    */
-  linsert(key: Key, where: 'BEFORE' | 'AFTER', pivot: Value, value: Value): R<number> {
-    return this._4(null, C.LINSERT, key, where, pivot, value);
+  linsert(key: Key, where: InsertPosition, pivot: Value, value: Value): R<number> {
+    return this._4(null, C.LINSERT, key, kw(KW_WHERE, where), pivot, value);
   }
   /**
    * Replaces the element at a position (`LSET`). Rewrites the list.
@@ -2361,8 +2366,8 @@ export abstract class Commands {
    *
    * @param source List to pop from.
    * @param destination List to push to (may be the same list to rotate it).
-   * @param from Side to pop from: `'LEFT'` or `'RIGHT'`.
-   * @param to Side to push to: `'LEFT'` or `'RIGHT'`.
+   * @param from Side to pop from: `'LEFT'` or `'RIGHT'` (see {@link ListSide}).
+   * @param to Side to push to: `'LEFT'` or `'RIGHT'` (see {@link ListSide}).
    * @returns The moved element, or `null` when the source is empty or missing.
    * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
    *
@@ -2371,8 +2376,8 @@ export abstract class Commands {
    * await client.lmove('pending', 'working', 'LEFT', 'RIGHT');
    * ```
    */
-  lmove(source: Key, destination: Key, from: 'LEFT' | 'RIGHT', to: 'LEFT' | 'RIGHT'): R<string | null> {
-    return this._4(null, C.LMOVE, source, destination, from, to);
+  lmove(source: Key, destination: Key, from: ListSide, to: ListSide): R<string | null> {
+    return this._4(null, C.LMOVE, source, destination, kw(KW_SIDE, from), kw(KW_SIDE, to));
   }
   /**
    * Pops from the tail of one list and pushes onto the head of another (`RPOPLPUSH`). Same as `lmove(source, destination, 'RIGHT', 'LEFT')`.
@@ -2396,8 +2401,8 @@ export abstract class Commands {
    *
    * @param source Key to read from.
    * @param destination Key that receives the result (any existing value is replaced).
-   * @param from Side to pop from: `'LEFT'` or `'RIGHT'`.
-   * @param to Side to push to: `'LEFT'` or `'RIGHT'`.
+   * @param from Side to pop from: `'LEFT'` or `'RIGHT'` (see {@link ListSide}).
+   * @param to Side to push to: `'LEFT'` or `'RIGHT'` (see {@link ListSide}).
    * @param timeoutSeconds Seconds to wait; `0` waits forever.
    * @returns The moved element, or `null` on timeout.
    *
@@ -2406,14 +2411,14 @@ export abstract class Commands {
    * const job = await worker.blmove('pending', 'working', 'LEFT', 'RIGHT', 5);
    * ```
    */
-  blmove(source: Key, destination: Key, from: 'LEFT' | 'RIGHT', to: 'LEFT' | 'RIGHT', timeoutSeconds: number): R<string | null> {
-    return this._v(null, C.BLMOVE, [source, destination, from, to, timeoutSeconds]);
+  blmove(source: Key, destination: Key, from: ListSide, to: ListSide, timeoutSeconds: number): R<string | null> {
+    return this._v(null, C.BLMOVE, [source, destination, kw(KW_SIDE, from), kw(KW_SIDE, to), timeoutSeconds]);
   }
   /**
    * Pops from the first non-empty list of several (`LMPOP numkeys key... LEFT|RIGHT [COUNT n]`).
    *
    * @param keys Lists to try, in order.
-   * @param where Side to pop from: `'LEFT'` or `'RIGHT'`.
+   * @param where Side to pop from: `'LEFT'` or `'RIGHT'` (see {@link ListSide}).
    * @param count Maximum elements to pop (default 1).
    * @returns A {@link ListPopResult} with the list `key` and the popped `elements`, or `null` when all lists are empty.
    * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
@@ -2423,8 +2428,8 @@ export abstract class Commands {
    * const r = await client.lmpop(['a', 'b'], 'LEFT', 10);
    * ```
    */
-  lmpop(keys: Key[], where: 'LEFT' | 'RIGHT', count?: number): R<ListPopResult | null> {
-    const a: Arg[] = [keys.length, ...keys, where];
+  lmpop(keys: Key[], where: ListSide, count?: number): R<ListPopResult | null> {
+    const a: Arg[] = [keys.length, ...keys, kw(KW_SIDE, where)];
     if (count !== undefined) a.push(W.COUNT, count);
     return this._v(T.lmpop, C.LMPOP, a);
   }
@@ -2433,7 +2438,7 @@ export abstract class Commands {
    *
    * @param timeoutSeconds Seconds to wait; `0` waits forever.
    * @param keys Lists to try, in order.
-   * @param where Side to pop from: `'LEFT'` or `'RIGHT'`.
+   * @param where Side to pop from: `'LEFT'` or `'RIGHT'` (see {@link ListSide}).
    * @param count Maximum elements to pop (default 1).
    * @returns A {@link ListPopResult}, or `null` on timeout.
    *
@@ -2442,8 +2447,8 @@ export abstract class Commands {
    * const r = await worker.blmpop(5, ['a', 'b'], 'LEFT');
    * ```
    */
-  blmpop(timeoutSeconds: number, keys: Key[], where: 'LEFT' | 'RIGHT', count?: number): R<ListPopResult | null> {
-    const a: Arg[] = [timeoutSeconds, keys.length, ...keys, where];
+  blmpop(timeoutSeconds: number, keys: Key[], where: ListSide, count?: number): R<ListPopResult | null> {
+    const a: Arg[] = [timeoutSeconds, keys.length, ...keys, kw(KW_SIDE, where)];
     if (count !== undefined) a.push(W.COUNT, count);
     return this._v(T.lmpop, C.BLMPOP, a);
   }
@@ -4090,7 +4095,7 @@ export abstract class Commands {
   geodist(key: Key, member1: Value, member2: Value, unit?: GeoUnit): R<number | null> {
     return unit === undefined
       ? this._3(T.float, C.GEODIST, key, member1, member2)
-      : this._4(T.float, C.GEODIST, key, member1, member2, unit);
+      : this._4(T.float, C.GEODIST, key, member1, member2, kw(KW_GEO_UNIT, unit));
   }
   /**
    * Returns geohash strings (`GEOHASH`).
@@ -4191,7 +4196,7 @@ export abstract class Commands {
    * ```
    */
   georadius(key: Key, longitude: number, latitude: number, radius: number, unit: GeoUnit, opts?: GeoRadiusOptions): R<(string | GeoMatch)[] | number> {
-    const a: Arg[] = [key, longitude, latitude, radius, unit];
+    const a: Arg[] = [key, longitude, latitude, radius, kw(KW_GEO_UNIT, unit)];
     pushRadius(a, opts);
     return this._v(opts ? geoTf(opts) : null, C.GEORADIUS, a);
   }
@@ -4212,7 +4217,7 @@ export abstract class Commands {
    * ```
    */
   georadiusbymember(key: Key, member: Value, radius: number, unit: GeoUnit, opts?: GeoRadiusOptions): R<(string | GeoMatch)[] | number> {
-    const a: Arg[] = [key, member, radius, unit];
+    const a: Arg[] = [key, member, radius, kw(KW_GEO_UNIT, unit)];
     pushRadius(a, opts);
     return this._v(opts ? geoTf(opts) : null, C.GEORADIUSBYMEMBER, a);
   }
@@ -5759,7 +5764,7 @@ export abstract class Commands {
    */
   bitcount(key: Key, start?: number, end?: number, unit?: BitUnit): R<number> {
     if (start === undefined || end === undefined) return this._1(null, C.BITCOUNT, key);
-    return unit === undefined ? this._3(null, C.BITCOUNT, key, start, end) : this._4(null, C.BITCOUNT, key, start, end, unit);
+    return unit === undefined ? this._3(null, C.BITCOUNT, key, start, end) : this._4(null, C.BITCOUNT, key, start, end, kw(KW_BITUNIT, unit));
   }
   /**
    * Finds the first bit with a given value (`BITPOS`).
@@ -5783,7 +5788,7 @@ export abstract class Commands {
       a.push(start);
       if (end !== undefined) {
         a.push(end);
-        if (unit !== undefined) a.push(unit);
+        if (unit !== undefined) a.push(kw(KW_BITUNIT, unit));
       }
     }
     return this._v(null, C.BITPOS, a);
@@ -5791,7 +5796,7 @@ export abstract class Commands {
   /**
    * Bitwise operation across strings, stored in `destination` (`BITOP`). Result limited to 16 MiB. Keys must share a slot.
    *
-   * @param op `'AND'`, `'OR'`, `'XOR'` or `'NOT'` (`NOT` takes exactly one source).
+   * @param op `'AND'`, `'OR'`, `'XOR'` or `'NOT'` (see {@link BitOp}; `NOT` takes exactly one source).
    * @param destination Key that receives the result (any existing value is replaced).
    * @param keys Source keys.
    * @returns The length in bytes of the stored result.
@@ -5802,8 +5807,8 @@ export abstract class Commands {
    * await client.bitop('AND', '{d}both', '{d}a', '{d}b');
    * ```
    */
-  bitop(op: 'AND' | 'OR' | 'XOR' | 'NOT', destination: Key, ...keys: Key[]): R<number> {
-    return this._v(null, C.BITOP, pushAll([op, destination], keys));
+  bitop(op: BitOp, destination: Key, ...keys: Key[]): R<number> {
+    return this._v(null, C.BITOP, pushAll([kw(KW_BITOP, op), destination], keys));
   }
   /**
    * Reads and writes integer fields inside a string (`BITFIELD key op...`) using raw operation words.
@@ -5817,6 +5822,8 @@ export abstract class Commands {
    * @example
    * ```ts
    * await client.bitfield('k', 'SET', 'u8', 0, 200, 'GET', 'u8', 0, 'OVERFLOW', 'SAT', 'INCRBY', 'u8', 0, 100);
+   * // same words, with pre-encoded keywords (see {@link BitfieldOp}):
+   * await client.bitfield('k', ...BitfieldOp.set('u8', 0, 200), ...BitfieldOp.get('u8', 0));
    * ```
    */
   bitfield(key: Key, ...ops: Value[]): R<(number | null)[]> {
@@ -5835,7 +5842,7 @@ export abstract class Commands {
    * await client.bitfieldRo('k', ['u8', 0], ['i16', '#1']);
    * ```
    */
-  bitfieldRo(key: Key, ...gets: [type: string, offset: number | string][]): R<number[]> {
+  bitfieldRo(key: Key, ...gets: [type: BitfieldType, offset: number | string][]): R<number[]> {
     const a: Arg[] = [key];
     for (const g of gets) a.push(W.GET, g[0], g[1]);
     return this._v(null, C.BITFIELD_RO, a);
@@ -5922,7 +5929,7 @@ function pushRadius(a: Arg[], o?: GeoRadiusOptions): void {
     a.push(W.COUNT, o.count);
     if (o.any) a.push(W.ANY);
   }
-  if (o.order !== undefined) a.push(o.order);
+  if (o.order !== undefined) a.push(kw(KW_ORDER, o.order));
   if (o.store !== undefined) a.push(W.STORE, o.store);
   if (o.storeDist !== undefined) a.push(W.STOREDIST, o.storeDist);
 }
