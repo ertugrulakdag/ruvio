@@ -34,3 +34,22 @@ public static class RuvioRateLimitingExtensions
     public static IApplicationBuilder UseRuvioRateLimiting(this IApplicationBuilder app)
         => app.UseMiddleware<RuvioRateLimitingMiddleware>();
 }
+
+/// <summary>Applies a Ruvio rate limit to minimal API endpoints and groups without writing the attribute by hand.</summary>
+public static class RuvioRateLimitEndpointExtensions
+{
+    /// <summary>
+    /// Limits the endpoint or group to <paramref name="permits"/> requests per <paramref name="window"/> per partition.
+    /// Same as <see cref="RuvioRateLimitAttribute"/>; the window is rounded up to whole seconds.
+    /// </summary>
+    public static TBuilder WithRuvioRateLimit<TBuilder>(
+        this TBuilder builder, string policy, long permits, TimeSpan window)
+        where TBuilder : IEndpointConventionBuilder
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        int seconds = checked((int)Math.Ceiling(window.TotalSeconds));
+
+        return builder.WithMetadata(new RuvioRateLimitAttribute(policy, permits, seconds));
+    }
+}

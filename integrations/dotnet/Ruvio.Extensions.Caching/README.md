@@ -56,6 +56,24 @@ interface implementation explicitly rejects unsupported binary commands. Registr
 uses `TryAdd`, preserving an existing `IDistributedCache`. Options are validated at
 registration and construction and then snapshotted; no hot reload is performed.
 
+## Strings and models, not just `byte[]`
+
+`IDistributedCache` only speaks `byte[]`, so the package adds extension methods on it (they work on any
+`IDistributedCache`):
+
+```csharp
+// plain string (Microsoft's SetStringAsync/GetStringAsync also work); this one adds cross-process single build
+string html = await cache.GetOrCreateStringAsync("page:1", ct => RenderAsync(ct), entryOptions);
+
+// an object as JSON: default options, your JsonSerializerOptions, or a source-generated JsonTypeInfo<T> (AOT/trim safe)
+await cache.SetJsonAsync("order:7", order, entryOptions, jsonOptions);
+Order? o = await cache.GetJsonAsync<Order>("order:7", jsonOptions);       // null on a miss
+Order  p = await cache.GetOrCreateJsonAsync("order:8", ct => LoadAsync(ct), AppJson.Default.Order, entryOptions);
+
+// already have a JSON string? store it as a string
+await cache.SetStringAsync("order:9", json, entryOptions);
+```
+
 ## Stampede protection
 
 `IDistributedCache` has no way to say "build this once", so the provider adds

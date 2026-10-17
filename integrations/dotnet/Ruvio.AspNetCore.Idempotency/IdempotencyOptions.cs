@@ -82,3 +82,16 @@ public static class IdempotencyExtensions
     public static IApplicationBuilder UseRuvioIdempotency(this IApplicationBuilder app) =>
         app.UseMiddleware<IdempotencyMiddleware>();
 }
+
+/// <summary>Enables idempotency on minimal API endpoints and groups without writing the attribute by hand.</summary>
+public static class IdempotencyEndpointExtensions
+{
+    /// <summary>Same as adding <see cref="RuvioIdempotencyAttribute"/> to the endpoint or every endpoint of the group.</summary>
+    public static TBuilder WithRuvioIdempotency<TBuilder>(this TBuilder builder)
+        where TBuilder : IEndpointConventionBuilder
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        return builder.WithMetadata(new RuvioIdempotencyAttribute());
+    }
+}
