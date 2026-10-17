@@ -1213,7 +1213,7 @@ public partial interface IRuvioClient
     /// <param name="owner">A token (1 to 128 bytes) for the caller that does the work.</param>
     /// <param name="ttl">How long the record lives, from 1 ms to 7 days. It is not renewed by retries or completion.</param>
     /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
-    /// <returns>An <see cref="IdempotencyBegin"/>: <c>Started</c> to run the work, <c>Pending</c> while another owner runs it, <c>Conflict</c> for a different fingerprint, or <c>Completed</c> with the stored result.</returns>
+    /// <returns>An <see cref="IdempotencyBegin"/>: <c>Acquired</c> to run the work (then call <see cref="CompleteIdempotencyAsync"/>), <c>Pending</c> while another owner runs it, <c>Conflict</c> for a different fingerprint, or <c>Completed</c> with the stored result.</returns>
     /// <exception cref="RuvioException">The token or retention is out of range, or the key holds a non-IDEM value.</exception>
     /// <remarks>Not exactly-once for external effects. Pair it with <see cref="CompleteIdempotencyAsync"/>.</remarks>
     /// <example>

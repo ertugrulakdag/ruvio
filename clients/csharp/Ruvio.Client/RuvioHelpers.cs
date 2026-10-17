@@ -13,6 +13,21 @@ namespace Ruvio.Client;
 /// the key while it still holds this owner's token, so a lock that expired and was taken by someone else is never
 /// deleted. <c>await using</c> releases it.
 /// </summary>
+/// <remarks>
+/// Get one from <see cref="RuvioClientHelpers.TryAcquireLockAsync"/> or <see cref="RuvioClientHelpers.AcquireLockAsync"/>.
+/// The lock expires on its own after its TTL, so work that may run longer must call <see cref="RenewAsync"/>.
+/// It guards one Ruvio key, not the external resource: a holder that stalls past the TTL can overlap with the next owner.
+/// </remarks>
+/// <example>
+/// <code>
+/// await using RuvioLock? held = await db.TryAcquireLockAsync("lock:report", TimeSpan.FromSeconds(30));
+/// if (held is not null)
+/// {
+///     await RunReportAsync();
+///     // released when the block ends
+/// }
+/// </code>
+/// </example>
 public sealed class RuvioLock : IAsyncDisposable
 {
     private readonly IRuvioClient _client;
@@ -39,18 +54,32 @@ public sealed class RuvioLock : IAsyncDisposable
     public bool IsReleased => Volatile.Read(ref _released) != 0;
 
     /// <summary>Extends the lock to <paramref name="ttl"/> (default <see cref="Ttl"/>) from now. False when the lock was lost.</summary>
+    /// <param name="ttl">The new lifetime counted from now. Null uses <see cref="Ttl"/>.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply; a command already sent still runs.</param>
+    /// <returns><see langword="true"/> when the key still held this token and its expiry was reset; <see langword="false"/> when the lock expired or moved to another owner, or was already released.</returns>
+    /// <exception cref="RuvioException">The server refuses the command.</exception>
+    /// <example>
+    /// <code>
+    /// if (!await held.RenewAsync()) { /* lost the lock: stop the work */ }
+    /// </code>
+    /// </example>
     public ValueTask<bool> RenewAsync(TimeSpan? ttl = null, CancellationToken cancellationToken = default) =>
         IsReleased
             ? new ValueTask<bool>(false)
             : _client.SetIfEqualAsync(Key, Token, Token, ttl ?? Ttl, cancellationToken);
 
     /// <summary>Deletes the key only while it holds this token. False when the lock had already expired or moved on.</summary>
+    /// <param name="cancellationToken">Abandons the wait for the reply; a command already sent still runs.</param>
+    /// <returns><see langword="true"/> when this call deleted the key; <see langword="false"/> when the lock had expired, belongs to someone else, or was already released by an earlier call.</returns>
+    /// <exception cref="RuvioException">The server refuses the command.</exception>
+    /// <remarks>Only the first call sends <c>DELEX</c>; later calls return <see langword="false"/> without a round trip.</remarks>
     public ValueTask<bool> ReleaseAsync(CancellationToken cancellationToken = default) =>
         Interlocked.Exchange(ref _released, 1) != 0
             ? new ValueTask<bool>(false)
             : _client.DeleteIfEqualAsync(Key, Token, cancellationToken);
 
     /// <summary>Releases the lock (once). Errors are not swallowed.</summary>
+    /// <exception cref="RuvioException">The server refuses the command.</exception>
     public async ValueTask DisposeAsync() => _ = await ReleaseAsync().ConfigureAwait(false);
 }
 
@@ -58,6 +87,16 @@ public sealed class RuvioLock : IAsyncDisposable
 /// A token from <c>LEASE</c> (a fencing token: it only grows for one key) or from <c>SEMAPHORE</c> (one slot).
 /// <c>await using</c> sends <c>RELEASE key token</c>, which frees it only while this token still holds it.
 /// </summary>
+/// <remarks>
+/// Get one from <see cref="RuvioClientHelpers.TryAcquireLeaseAsync"/> or <see cref="RuvioClientHelpers.TryAcquireSemaphoreAsync"/>.
+/// It also frees itself when the TTL passed at acquisition ends.
+/// </remarks>
+/// <example>
+/// <code>
+/// await using RuvioLease? slot = await db.TryAcquireSemaphoreAsync("sem:uploads", 4, TimeSpan.FromMinutes(1));
+/// if (slot is null) { /* four uploads already running */ }
+/// </code>
+/// </example>
 public sealed class RuvioLease : IAsyncDisposable
 {
     private readonly IRuvioClient client;
@@ -80,19 +119,27 @@ public sealed class RuvioLease : IAsyncDisposable
     public bool IsReleased => Volatile.Read(ref released) != 0;
 
     /// <summary>Sends <c>RELEASE key token</c> once. False when the token no longer held it.</summary>
+    /// <param name="cancellationToken">Abandons the wait for the reply; a command already sent still runs.</param>
+    /// <returns><see langword="true"/> when the server freed this token; <see langword="false"/> when it had expired or moved on, or this object was already released.</returns>
+    /// <exception cref="RuvioException">The server refuses the command.</exception>
     public async ValueTask<bool> ReleaseAsync(CancellationToken cancellationToken = default) =>
         Interlocked.Exchange(ref released, 1) == 0
         && await client.ReleaseAsync(Key, Token, cancellationToken).ConfigureAwait(false) > 0;
 
     /// <summary>Releases the token (once).</summary>
+    /// <exception cref="RuvioException">The server refuses the command.</exception>
     public async ValueTask DisposeAsync() => _ = await ReleaseAsync().ConfigureAwait(false);
 }
 
 /// <summary>
 /// Higher-level patterns built on Ruvio's native commands: locks, leases, semaphores, rate limits,
 /// cache-aside with stampede protection, scan iterators, recent-items lists and "seen before" filters.
-/// They work on any <see cref="IRuvioClient"/>.
+/// They work on any <see cref="IRuvioClient"/> and are called as extension methods on it.
 /// </summary>
+/// <remarks>
+/// Each helper only combines the documented commands, so its cost and failure modes are those of the commands it names.
+/// A server error surfaces as <see cref="RuvioException"/>; a cancelled token throws <see cref="OperationCanceledException"/>.
+/// </remarks>
 public static class RuvioClientHelpers
 {
     private const int MaxBackoffMilliseconds = 25;
@@ -100,9 +147,22 @@ public static class RuvioClientHelpers
     // ---- Locks, leases, semaphores -------------------------------------------------------------
 
     /// <summary>
-    /// Tries once to take the lock at <paramref name="key"/> for <paramref name="ttl"/>. Null when another owner holds it.
-    /// <code>await using RuvioLock? held = await db.TryAcquireLockAsync("lock:job", TimeSpan.FromSeconds(10));</code>
+    /// Tries once to take the lock at <paramref name="key"/> for <paramref name="ttl"/> (<c>SET key token NX PX ttl</c>).
+    /// Null when another owner holds it.
     /// </summary>
+    /// <param name="client">The client to send the commands on.</param>
+    /// <param name="key">The lock key. Use a key that holds nothing else.</param>
+    /// <param name="ttl">How long the lock lives unless renewed. Must be positive; it is sent in milliseconds.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply; a command already sent still runs.</param>
+    /// <returns>The held lock, or <see langword="null"/> when the key is already taken.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="ttl"/> is zero or negative.</exception>
+    /// <exception cref="RuvioException">The key holds a value that is not a string (<c>WRONGTYPE</c>) or the server refuses the command.</exception>
+    /// <example>
+    /// <code>
+    /// await using RuvioLock? held = await db.TryAcquireLockAsync("lock:job", TimeSpan.FromSeconds(10));
+    /// if (held is null) return;   // someone else is running it
+    /// </code>
+    /// </example>
     public static async ValueTask<RuvioLock?> TryAcquireLockAsync(
         this IRuvioClient client,
         string key,
@@ -127,6 +187,20 @@ public static class RuvioClientHelpers
     /// Takes the lock at <paramref name="key"/>, retrying with a short backoff (2 to 25 ms) for up to <paramref name="wait"/>.
     /// Null when it is still held after that.
     /// </summary>
+    /// <param name="client">The client to send the commands on.</param>
+    /// <param name="key">The lock key.</param>
+    /// <param name="ttl">How long the lock lives unless renewed. Must be positive.</param>
+    /// <param name="wait">The longest total time to keep retrying. <see cref="TimeSpan.Zero"/> tries once.</param>
+    /// <param name="cancellationToken">Stops the retry loop with an <see cref="OperationCanceledException"/>.</param>
+    /// <returns>The held lock, or <see langword="null"/> when <paramref name="wait"/> ran out.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="ttl"/> is zero or negative.</exception>
+    /// <exception cref="RuvioException">The key holds a value that is not a string or the server refuses the command.</exception>
+    /// <remarks>Polls with plain commands, so it never holds the shared connection while it waits.</remarks>
+    /// <example>
+    /// <code>
+    /// await using RuvioLock? held = await db.AcquireLockAsync("lock:job", TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(5));
+    /// </code>
+    /// </example>
     public static async ValueTask<RuvioLock?> AcquireLockAsync(
         this IRuvioClient client,
         string key,
@@ -155,6 +229,19 @@ public static class RuvioClientHelpers
     }
 
     /// <summary>Sends <c>LEASE key ttl</c>. Null while another holder's lease is live; otherwise a fenced lease.</summary>
+    /// <param name="client">The client to send the command on.</param>
+    /// <param name="key">The lease key.</param>
+    /// <param name="ttl">How long the lease lives, rounded up to whole milliseconds (at least 1 ms).</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply; a command already sent still runs.</param>
+    /// <returns>The lease with its fencing token, or <see langword="null"/> when another holder's lease is live.</returns>
+    /// <exception cref="RuvioException">The key holds another type or the server refuses the command.</exception>
+    /// <remarks>The token grows with every new lease on the key. Hand it to the guarded resource, which should reject smaller tokens.</remarks>
+    /// <example>
+    /// <code>
+    /// await using RuvioLease? lease = await db.TryAcquireLeaseAsync("leader:jobs", TimeSpan.FromSeconds(15));
+    /// if (lease is not null) await DoLeaderWorkAsync(lease.Token);
+    /// </code>
+    /// </example>
     public static async ValueTask<RuvioLease?> TryAcquireLeaseAsync(
         this IRuvioClient client,
         string key,
@@ -168,6 +255,18 @@ public static class RuvioClientHelpers
     }
 
     /// <summary>Sends <c>SEMAPHORE key max ttl</c>. Null when <paramref name="max"/> holders are live; otherwise one slot.</summary>
+    /// <param name="client">The client to send the command on.</param>
+    /// <param name="key">The semaphore key.</param>
+    /// <param name="max">The most holders allowed at once.</param>
+    /// <param name="ttl">How long this slot lives, rounded up to whole milliseconds (at least 1 ms).</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply; a command already sent still runs.</param>
+    /// <returns>A handle for one slot, or <see langword="null"/> when <paramref name="max"/> holders are live.</returns>
+    /// <exception cref="RuvioException">The key holds another type or the server refuses the command.</exception>
+    /// <example>
+    /// <code>
+    /// await using RuvioLease? slot = await db.TryAcquireSemaphoreAsync("sem:exports", 3, TimeSpan.FromMinutes(5));
+    /// </code>
+    /// </example>
     public static async ValueTask<RuvioLease?> TryAcquireSemaphoreAsync(
         this IRuvioClient client,
         string key,
@@ -186,6 +285,19 @@ public static class RuvioClientHelpers
     /// <summary>
     /// One fixed-window rate-limit decision with <c>LIMIT key max window</c>. A refused call does not count.
     /// </summary>
+    /// <param name="client">The client to send the command on.</param>
+    /// <param name="key">The counter key, for example one per user or IP address.</param>
+    /// <param name="max">How many calls fit in one window.</param>
+    /// <param name="window">The window length, rounded up to whole milliseconds (at least 1 ms).</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply; a command already sent still runs.</param>
+    /// <returns>A <see cref="RateLimitResult"/>: <c>Allowed</c> with the allowance left, or not allowed with 0 remaining.</returns>
+    /// <exception cref="RuvioException">The key holds another type or the server refuses the command.</exception>
+    /// <example>
+    /// <code>
+    /// RateLimitResult r = await db.RateLimitAsync($"rl:{userId}", 100, TimeSpan.FromMinutes(1));
+    /// if (!r.Allowed) return Results.StatusCode(429);
+    /// </code>
+    /// </example>
     public static async ValueTask<RateLimitResult> RateLimitAsync(
         this IRuvioClient client,
         string key,
@@ -209,6 +321,22 @@ public static class RuvioClientHelpers
     /// stores the value itself. With <see cref="GetOrCreateOptions.StaleWindow"/>, callers keep getting the stale
     /// value while the one caller holding the refresh token rebuilds it.
     /// </summary>
+    /// <param name="client">The client to send the commands on.</param>
+    /// <param name="key">The cache key.</param>
+    /// <param name="ttl">How long a built value stays fresh. Must be positive.</param>
+    /// <param name="factory">Builds the value on a miss. It runs in at most one caller at a time per key, unless a waiter times out.</param>
+    /// <param name="options">Fill, wait and stale-window settings. Null uses <see cref="GetOrCreateOptions.Default"/>.</param>
+    /// <param name="cancellationToken">Stops the waiting loop and is passed to <paramref name="factory"/>.</param>
+    /// <returns>The cached or newly built value.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="ttl"/> is zero or negative.</exception>
+    /// <exception cref="RuvioException">The key holds a value that is not a string, or the server refuses a command.</exception>
+    /// <remarks>If <paramref name="factory"/> throws, the exception propagates and the fill marker lapses on its own after <see cref="GetOrCreateOptions.FillTimeout"/>, after which another caller can try.</remarks>
+    /// <example>
+    /// <code>
+    /// string html = await db.GetOrCreateAsync(
+    ///     "page:home", TimeSpan.FromMinutes(1), async ct => await RenderHomeAsync(ct));
+    /// </code>
+    /// </example>
     public static async ValueTask<string> GetOrCreateAsync(
         this IRuvioClient client,
         string key,
@@ -270,6 +398,24 @@ public static class RuvioClientHelpers
     /// <see cref="GetOrCreateAsync(IRuvioClient, string, TimeSpan, Func{CancellationToken, ValueTask{string}}, GetOrCreateOptions?, CancellationToken)"/>
     /// for a typed value stored as JSON with <paramref name="typeInfo"/> (trimming and AOT safe).
     /// </summary>
+    /// <typeparam name="T">The cached type.</typeparam>
+    /// <param name="client">The client to send the commands on.</param>
+    /// <param name="key">The cache key.</param>
+    /// <param name="ttl">How long a built value stays fresh. Must be positive.</param>
+    /// <param name="factory">Builds the value on a miss.</param>
+    /// <param name="typeInfo">Source-generated JSON metadata for <typeparamref name="T"/>.</param>
+    /// <param name="options">Fill, wait and stale-window settings. Null uses <see cref="GetOrCreateOptions.Default"/>.</param>
+    /// <param name="cancellationToken">Stops the waiting loop and is passed to <paramref name="factory"/>.</param>
+    /// <returns>The cached or newly built value.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="ttl"/> is zero or negative.</exception>
+    /// <exception cref="RuvioException">The key holds a value that is not a string, or the server refuses a command.</exception>
+    /// <exception cref="JsonException">The cached text is not valid JSON for <typeparamref name="T"/>.</exception>
+    /// <example>
+    /// <code>
+    /// Profile p = await db.GetOrCreateAsync(
+    ///     "profile:7", TimeSpan.FromMinutes(5), ct => LoadProfileAsync(7, ct), AppJson.Default.Profile);
+    /// </code>
+    /// </example>
     public static async ValueTask<T> GetOrCreateAsync<T>(
         this IRuvioClient client,
         string key,
@@ -303,6 +449,22 @@ public static class RuvioClientHelpers
     // ---- Scan iterators ---------------------------------------------------------------------------
 
     /// <summary>Lazily walks <c>SCAN</c> pages. Keys added or removed during the walk may or may not appear.</summary>
+    /// <param name="client">The client to scan.</param>
+    /// <param name="pattern">Glob filter on key names. Null returns all.</param>
+    /// <param name="count">A hint for the page size. Null uses the server default.</param>
+    /// <param name="type">Only keys of this type, for example <c>hash</c>. Null returns all.</param>
+    /// <param name="cancellationToken">Stops the walk with an <see cref="OperationCanceledException"/>.</param>
+    /// <returns>A sequence of key names; it ends when the server returns cursor 0.</returns>
+    /// <exception cref="RuvioException">The server refuses a <c>SCAN</c> page.</exception>
+    /// <remarks>Each page is one <c>SCAN</c> call. In a cluster the walk goes through the shards in turn.</remarks>
+    /// <example>
+    /// <code>
+    /// await foreach (string key in db.ScanKeysAsync("session:*", count: 500))
+    /// {
+    ///     Console.WriteLine(key);
+    /// }
+    /// </code>
+    /// </example>
     public static async IAsyncEnumerable<string> ScanKeysAsync(
         this IRuvioClient client,
         string? pattern = null,
@@ -328,6 +490,18 @@ public static class RuvioClientHelpers
     }
 
     /// <summary>Lazily walks <c>HSCAN</c> pages of one hash.</summary>
+    /// <param name="client">The client to scan.</param>
+    /// <param name="key">The hash key.</param>
+    /// <param name="pattern">Glob filter on field names. Null returns all.</param>
+    /// <param name="count">A hint for the page size. Null uses the server default.</param>
+    /// <param name="cancellationToken">Stops the walk with an <see cref="OperationCanceledException"/>.</param>
+    /// <returns>Field and value pairs; empty when the key is missing.</returns>
+    /// <exception cref="RuvioException">The key holds another type (<c>WRONGTYPE</c>).</exception>
+    /// <example>
+    /// <code>
+    /// await foreach (var (field, value) in db.ScanHashEntriesAsync("user:1")) { }
+    /// </code>
+    /// </example>
     public static async IAsyncEnumerable<KeyValuePair<string, string>> ScanHashEntriesAsync(
         this IRuvioClient client,
         string key,
@@ -353,6 +527,18 @@ public static class RuvioClientHelpers
     }
 
     /// <summary>Lazily walks <c>SSCAN</c> pages of one set.</summary>
+    /// <param name="client">The client to scan.</param>
+    /// <param name="key">The set key.</param>
+    /// <param name="pattern">Glob filter on members. Null returns all.</param>
+    /// <param name="count">A hint for the page size. Null uses the server default.</param>
+    /// <param name="cancellationToken">Stops the walk with an <see cref="OperationCanceledException"/>.</param>
+    /// <returns>The members; empty when the key is missing.</returns>
+    /// <exception cref="RuvioException">The key holds another type (<c>WRONGTYPE</c>).</exception>
+    /// <example>
+    /// <code>
+    /// await foreach (string tag in db.ScanSetMembersAsync("tags")) { }
+    /// </code>
+    /// </example>
     public static async IAsyncEnumerable<string> ScanSetMembersAsync(
         this IRuvioClient client,
         string key,
@@ -378,6 +564,18 @@ public static class RuvioClientHelpers
     }
 
     /// <summary>Lazily walks <c>ZSCAN</c> pages of one sorted set.</summary>
+    /// <param name="client">The client to scan.</param>
+    /// <param name="key">The sorted set key.</param>
+    /// <param name="pattern">Glob filter on members. Null returns all.</param>
+    /// <param name="count">A hint for the page size. Null uses the server default.</param>
+    /// <param name="cancellationToken">Stops the walk with an <see cref="OperationCanceledException"/>.</param>
+    /// <returns>The members with their scores; empty when the key is missing.</returns>
+    /// <exception cref="RuvioException">The key holds another type (<c>WRONGTYPE</c>).</exception>
+    /// <example>
+    /// <code>
+    /// await foreach (SortedSetEntry entry in db.ScanSortedSetEntriesAsync("leaderboard")) { }
+    /// </code>
+    /// </example>
     public static async IAsyncEnumerable<SortedSetEntry> ScanSortedSetEntriesAsync(
         this IRuvioClient client,
         string key,
@@ -405,6 +603,17 @@ public static class RuvioClientHelpers
     // ---- Recent items, seen-before --------------------------------------------------------------
 
     /// <summary>Pushes <paramref name="value"/> to the head of a "recent items" list kept at most <paramref name="cap"/> long (<c>LPUSHCAP</c>).</summary>
+    /// <param name="client">The client to send the command on.</param>
+    /// <param name="key">The list key.</param>
+    /// <param name="value">The item to remember.</param>
+    /// <param name="cap">The most items the list keeps; older ones fall off the tail.</param>
+    /// <returns>The list length after the push and trim.</returns>
+    /// <exception cref="RuvioException">The key holds another type (<c>WRONGTYPE</c>).</exception>
+    /// <example>
+    /// <code>
+    /// await db.PushRecentAsync("recent:user:1", "product:42", 20);
+    /// </code>
+    /// </example>
     public static ValueTask<long> PushRecentAsync(this IRuvioClient client, string key, string value, long cap)
     {
         ArgumentNullException.ThrowIfNull(client);
@@ -413,6 +622,17 @@ public static class RuvioClientHelpers
     }
 
     /// <summary>The newest <paramref name="count"/> items of a list written by <see cref="PushRecentAsync"/>, newest first.</summary>
+    /// <param name="client">The client to send the command on.</param>
+    /// <param name="key">The list key.</param>
+    /// <param name="count">How many items. Zero or negative returns an empty list without a round trip.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply; a command already sent still runs.</param>
+    /// <returns>Up to <paramref name="count"/> items; fewer when the list is shorter, empty when the key is missing.</returns>
+    /// <exception cref="RuvioException">The key holds another type (<c>WRONGTYPE</c>).</exception>
+    /// <example>
+    /// <code>
+    /// IReadOnlyList&lt;string&gt; last5 = await db.GetRecentAsync("recent:user:1", 5);
+    /// </code>
+    /// </example>
     public static ValueTask<IReadOnlyList<string>> GetRecentAsync(
         this IRuvioClient client,
         string key,
@@ -430,6 +650,16 @@ public static class RuvioClientHelpers
     /// Records <paramref name="items"/> in a Bloom filter (<c>BF.MADD</c>) and returns, per item, whether it was
     /// (probably) seen before. A false answer is certain; a true answer can be a false positive at the filter's error rate.
     /// </summary>
+    /// <param name="client">The client to send the command on.</param>
+    /// <param name="key">The Bloom filter key. A missing key becomes a scalable filter with the server defaults.</param>
+    /// <param name="items">The items to record and check.</param>
+    /// <returns>One flag per item, in order: true when it was (probably) already in the filter.</returns>
+    /// <exception cref="RuvioException">The key holds another type, or a non-scaling filter is full.</exception>
+    /// <example>
+    /// <code>
+    /// IReadOnlyList&lt;bool&gt; seen = await db.SeenBeforeAsync("seen:events", "evt-1", "evt-2");
+    /// </code>
+    /// </example>
     public static async ValueTask<IReadOnlyList<bool>> SeenBeforeAsync(this IRuvioClient client, string key, params string[] items)
     {
         ArgumentNullException.ThrowIfNull(client);
@@ -445,6 +675,16 @@ public static class RuvioClientHelpers
     }
 
     /// <summary>Checks <paramref name="items"/> against a Bloom filter without recording them (<c>BF.MEXISTS</c>).</summary>
+    /// <param name="client">The client to send the command on.</param>
+    /// <param name="key">The Bloom filter key.</param>
+    /// <param name="items">The items to check.</param>
+    /// <returns>One flag per item: false means definitely absent, true means probably present. All false when the key is missing.</returns>
+    /// <exception cref="RuvioException">The key holds another type (<c>WRONGTYPE</c>).</exception>
+    /// <example>
+    /// <code>
+    /// IReadOnlyList&lt;bool&gt; maybe = await db.MaybeSeenAsync("seen:events", "evt-1");
+    /// </code>
+    /// </example>
     public static ValueTask<IReadOnlyList<bool>> MaybeSeenAsync(this IRuvioClient client, string key, params string[] items)
     {
         ArgumentNullException.ThrowIfNull(client);
