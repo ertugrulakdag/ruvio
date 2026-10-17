@@ -103,6 +103,9 @@ def gen_sync():
             count += 1
             names = [re.sub(r".*\s", "", p) for p in plist]
             generic_varargs = any(re.search(r"\b[KV](<[^>]*>)?\.\.\.", p) or re.search(r"GeoValue<V>\.\.\.", p) for p in plist)
+            if doc and ret == "Void":
+                # the blocking method returns nothing, so the async-only @return line goes
+                doc = re.sub(r"[ \t]*\*[ \t]*@return[^\n]*(?:\n(?![ \t]*\*[ \t]*(?:@|/|\n)|[ \t]*\*/)[^\n]*)*\n", "", doc)
             if doc:
                 body.append(doc)
             mods = "public final " if generic_varargs else "public "
@@ -127,16 +130,46 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * Blocking facade over {@link RuvioAsync}: every method sends the typed command on the shared
- * multiplexed connection and waits for its reply. Server errors are thrown as
- * {@link RuvioServerException}, socket failures as {@link RuvioConnectionException}.
+ * multiplexed connection and waits for its reply. The method docs describe the value returned.
+ *
+ * <p>Errors surface as unchecked exceptions: a {@code -ERR ...} reply (for example {@code WRONGTYPE}
+ * when a key holds another type) is a {@link RuvioServerException} whose {@code code()} is the first
+ * word; a socket failure is a {@link RuvioConnectionException} (the command may or may not have run);
+ * waiting longer than {@code commandTimeoutMillis} from the options fails with a
+ * {@link io.github.salihcantekin.ruvio.RuvioException}. {@code null} arguments for keys and values are
+ * refused with {@link IllegalArgumentException} before anything is sent.
+ *
+ * <p>In a cluster, keyless commands ({@code DBSIZE}, {@code FLUSHDB}, {@code KEYS}, {@code SCAN},
+ * {@code INFO} and so on) go to the seed node only; use {@code RuvioClient#onNode} to reach another node.
+ * A command whose keys span slots fails with {@code CROSSSLOT} unless it is one of the commands the
+ * client splits per slot ({@code MGET}, {@code MSET}, {@code DEL}, {@code EXISTS}, {@code UNLINK},
+ * {@code TOUCH}), whose parts are not atomic. Blocking server commands ({@code BLPOP}, {@code XREAD BLOCK},
+ * {@code FILLGET ... WAIT}) hold the shared connection while they wait: run them on
+ * {@code RuvioClient#dedicated()}.
+ *
+ * @param <K> key type (also hash fields and stream field names)
+ * @param <V> value type (also set and sorted-set members, list elements and stream field values)
  */
 public abstract class RuvioSyncCommands<K, V> {
+    /** The asynchronous API every method delegates to. */
     protected final RuvioAsync<K, V> async;
 
+    /**
+     * Creates the facade over an asynchronous command set.
+     *
+     * @param async the asynchronous commands to wrap
+     */
     protected RuvioSyncCommands(RuvioAsync<K, V> async) {
         this.async = async;
     }
 
+    /**
+     * Waits for a reply, honouring the command timeout, and rethrows failures as unchecked exceptions.
+     *
+     * @param future the pending reply
+     * @param <T> the reply type
+     * @return the reply value
+     */
     protected abstract <T> T await(CompletableFuture<T> future);
 """ + text.rstrip() + "\n}\n"
     return src, count

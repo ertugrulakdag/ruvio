@@ -13,37 +13,70 @@ import io.github.salihcantekin.ruvio.internal.RoutedRequest;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Encoding helpers shared by every command family. Fixed-shape commands encode straight into the
- * destination buffer ({@link #begin()} ... {@code end}); commands with options use
- * {@link Args}. Subclasses decide where frames go: the shared connection, a pipeline buffer or a
- * transaction.
+ * Shared base of every command family. It holds the key and value codecs and the low-level encoders; the typed commands live in the subclasses ({@code StringCommands}, {@code HashCommands} and so on, chained up to {@link RuvioCommands}).
+ *
+ * <p>The same command methods exist on {@link io.github.salihcantekin.ruvio.RuvioAsync} (each returns a {@link CompletableFuture}), on {@link io.github.salihcantekin.ruvio.Pipeline} and {@link io.github.salihcantekin.ruvio.Transaction} (queued, answered on flush or exec), and, as blocking calls, on {@link io.github.salihcantekin.ruvio.RuvioClient}. The Javadoc of a method describes the value it produces; a future completes with that value, and an error reply completes it exceptionally with a {@link RuvioServerException}.
+ *
+ * @param <K> key type (also hash fields and stream field names)
+ * @param <V> value type (also set and sorted-set members, list elements and stream field values)
  */
 public abstract class BaseCommands<K, V> {
+    /** The codec that encodes keys (and hash fields) and decodes keys in replies. */
     protected final RuvioCodec<K> kc;
+    /** The codec that encodes values (and members, elements) and decodes values in replies. */
     protected final RuvioCodec<V> vc;
 
+    /**
+     * Creates a command family with the given codecs.
+     *
+     * @param keys the key codec
+     * @param values the value codec
+     */
     protected BaseCommands(RuvioCodec<K> keys, RuvioCodec<V> values) {
         this.kc = keys;
         this.vc = values;
     }
 
-    /** The codec for keys. */
+    /**
+     * The codec used for keys and hash fields.
+     *
+     * @return the key codec
+     */
     public final RuvioCodec<K> keyCodec() {
         return kc;
     }
 
-    /** The codec for values. */
+    /**
+     * The codec used for values, members and elements.
+     *
+     * @return the value codec
+     */
     public final RuvioCodec<V> valueCodec() {
         return vc;
     }
 
-    /** Returns the buffer for one frame (locked for the shared connection). */
+    /**
+     * Returns the buffer for one frame (locked for the shared connection). Internal: part of the extension point used by the connection, pipeline and transaction front-ends.
+     *
+     * @return the output buffer to encode into
+     */
     protected abstract RespOut begin();
 
-    /** Rolls back a frame started with {@link #begin()} after an encoding failure. */
+    /**
+     * Rolls back a frame started with {@link #begin()} after an encoding failure. Internal.
+     *
+     * @param out the buffer returned by {@code begin}
+     */
     protected abstract void abort(RespOut out);
 
-    /** Registers the request for the frame just written into {@code out} and releases the buffer. */
+    /**
+     * Registers the request for the frame just written into {@code out} and releases the buffer. Internal.
+     *
+     * @param out the buffer returned by {@code begin}
+     * @param request the pending reply
+     * @param <T> the reply type
+     * @return the future that completes with the decoded reply
+     */
     protected abstract <T> CompletableFuture<T> end(RespOut out, Request<T> request);
 
     /** True when frames are routed by key (cluster mode); requests then carry what a redirect needs. */
@@ -317,9 +350,18 @@ public abstract class BaseCommands<K, V> {
     }
 
     /**
-     * Sends any command. Arguments may be byte[], String, Long/Integer, Double or anything with a
-     * useful {@code toString()}. The reply is the generic tree: bulk strings are byte[], status
-     * replies String, integers Long, arrays List, errors inside arrays {@link RuvioServerException}.
+     * Sends any command by name, for commands this client has no typed method for. Arguments may be {@code byte[]}, {@code String}, {@code Long}/{@code Integer}, {@code Double}, or anything with a useful {@code toString()}. In a cluster the key is found from the command table, so the command goes to the right node.
+     *
+     * <p>The reply is the generic tree: bulk strings are {@code byte[]}, status replies {@code String}, integers {@code Long}, arrays {@code List}, {@code nil} is {@code null}, and an error inside an array is a {@link RuvioServerException} element. A top-level error reply completes the future exceptionally.
+     *
+     * <pre>{@code
+     * Object reply = client.execute("LPOS", "mylist", "x", "RANK", 2);
+     * }</pre>
+     *
+     * @param arguments the command name followed by its arguments
+     * @return the reply tree
+     * @throws IllegalArgumentException when no argument is given
+     * @throws RuvioServerException for a top-level error reply
      */
     public final CompletableFuture<Object> execute(Object... arguments) {
         if (arguments.length == 0) {
@@ -332,7 +374,14 @@ public abstract class BaseCommands<K, V> {
         return send(a, Reply.RAW);
     }
 
-    /** Like {@link #execute(Object...)} but bulk strings in the reply are UTF-8 Strings. */
+    /**
+     * Like {@link #execute(Object...)} but bulk strings in the reply are decoded as UTF-8 {@code String}s instead of {@code byte[]}.
+     *
+     * @param arguments the command name followed by its arguments
+     * @return the reply tree with text decoded
+     * @throws IllegalArgumentException when no argument is given
+     * @throws RuvioServerException for a top-level error reply
+     */
     public final CompletableFuture<Object> executeText(Object... arguments) {
         if (arguments.length == 0) {
             throw new IllegalArgumentException("empty command");

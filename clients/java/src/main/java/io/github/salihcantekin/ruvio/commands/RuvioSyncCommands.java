@@ -45,200 +45,619 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * Blocking facade over {@link RuvioAsync}: every method sends the typed command on the shared
- * multiplexed connection and waits for its reply. Server errors are thrown as
- * {@link RuvioServerException}, socket failures as {@link RuvioConnectionException}.
+ * multiplexed connection and waits for its reply. The method docs describe the value returned.
+ *
+ * <p>Errors surface as unchecked exceptions: a {@code -ERR ...} reply (for example {@code WRONGTYPE}
+ * when a key holds another type) is a {@link RuvioServerException} whose {@code code()} is the first
+ * word; a socket failure is a {@link RuvioConnectionException} (the command may or may not have run);
+ * waiting longer than {@code commandTimeoutMillis} from the options fails with a
+ * {@link io.github.salihcantekin.ruvio.RuvioException}. {@code null} arguments for keys and values are
+ * refused with {@link IllegalArgumentException} before anything is sent.
+ *
+ * <p>In a cluster, keyless commands ({@code DBSIZE}, {@code FLUSHDB}, {@code KEYS}, {@code SCAN},
+ * {@code INFO} and so on) go to the seed node only; use {@code RuvioClient#onNode} to reach another node.
+ * A command whose keys span slots fails with {@code CROSSSLOT} unless it is one of the commands the
+ * client splits per slot ({@code MGET}, {@code MSET}, {@code DEL}, {@code EXISTS}, {@code UNLINK},
+ * {@code TOUCH}), whose parts are not atomic. Blocking server commands ({@code BLPOP}, {@code XREAD BLOCK},
+ * {@code FILLGET ... WAIT}) hold the shared connection while they wait: run them on
+ * {@code RuvioClient#dedicated()}.
+ *
+ * @param <K> key type (also hash fields and stream field names)
+ * @param <V> value type (also set and sorted-set members, list elements and stream field values)
  */
 public abstract class RuvioSyncCommands<K, V> {
+    /** The asynchronous API every method delegates to. */
     protected final RuvioAsync<K, V> async;
 
+    /**
+     * Creates the facade over an asynchronous command set.
+     *
+     * @param async the asynchronous commands to wrap
+     */
     protected RuvioSyncCommands(RuvioAsync<K, V> async) {
         this.async = async;
     }
 
+    /**
+     * Waits for a reply, honouring the command timeout, and rethrows failures as unchecked exceptions.
+     *
+     * @param future the pending reply
+     * @param <T> the reply type
+     * @return the reply value
+     */
     protected abstract <T> T await(CompletableFuture<T> future);
 
     // ---- BaseCommands ----
     /**
-     * Sends any command. Arguments may be byte[], String, Long/Integer, Double or anything with a
-     * useful {@code toString()}. The reply is the generic tree: bulk strings are byte[], status
-     * replies String, integers Long, arrays List, errors inside arrays {@link RuvioServerException}.
+     * Sends any command by name, for commands this client has no typed method for. Arguments may be {@code byte[]}, {@code String}, {@code Long}/{@code Integer}, {@code Double}, or anything with a useful {@code toString()}. In a cluster the key is found from the command table, so the command goes to the right node.
+     *
+     * <p>The reply is the generic tree: bulk strings are {@code byte[]}, status replies {@code String}, integers {@code Long}, arrays {@code List}, {@code nil} is {@code null}, and an error inside an array is a {@link RuvioServerException} element. A top-level error reply completes the future exceptionally.
+     *
+     * <pre>{@code
+     * Object reply = client.execute("LPOS", "mylist", "x", "RANK", 2);
+     * }</pre>
+     *
+     * @param arguments the command name followed by its arguments
+     * @return the reply tree
+     * @throws IllegalArgumentException when no argument is given
+     * @throws RuvioServerException for a top-level error reply
      */
     public Object execute(Object... arguments) {
         return await(async.execute(arguments));
     }
 
-    /** Like {@link #execute(Object...)} but bulk strings in the reply are UTF-8 Strings. */
+    /**
+     * Like {@link #execute(Object...)} but bulk strings in the reply are decoded as UTF-8 {@code String}s instead of {@code byte[]}.
+     *
+     * @param arguments the command name followed by its arguments
+     * @return the reply tree with text decoded
+     * @throws IllegalArgumentException when no argument is given
+     * @throws RuvioServerException for a top-level error reply
+     */
     public Object executeText(Object... arguments) {
         return await(async.executeText(arguments));
     }
 
 
     // ---- StringCommands ----
-    /** GET key. Null when missing. */
+    /**
+     * Sends {@code GET key}: reads a string value.
+     *
+     * <pre>{@code
+     * String name = client.get("user:1:name"); // null when missing
+     * }</pre>
+     *
+     * @param key the key to read
+     * @return the value, or {@code null} when the key does not exist or has expired
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a list, set, hash, JSON or other non-string value
+     */
     public V get(K key) {
         return await(async.get(key));
     }
 
-    /** SET key value. */
+    /**
+     * Sends {@code SET key value}: stores a string, replacing any existing value of any type. An existing
+     * TTL is cleared; use {@link #set(Object, Object, SetOptions)} with {@code keepTtl()} to keep it.
+     *
+     * <pre>{@code
+     * client.set("user:1:name", "Ada");
+     * }</pre>
+     *
+     * @param key the key to write
+     * @param value the value to store
+     */
     public void set(K key, V value) {
         await(async.set(key, value));
     }
 
-    /** SET key value [EX|PX|EXAT|PXAT|KEEPTTL] [NX|XX]. False when NX/XX prevented the write. */
+    /**
+     * Sends {@code SET key value [EX|PX|EXAT|PXAT|KEEPTTL] [NX|XX]}: a string write with an optional
+     * expiry and an optional condition.
+     *
+     * <pre>{@code
+     * // 30 second session token, only if nobody else created it
+     * boolean created = client.set("session:42", token, SetOptions.ex(30).ifAbsent());
+     * }</pre>
+     *
+     * @param key the key to write
+     * @param value the value to store
+     * @param options expiry and condition, built with {@link SetOptions}; an empty options object is a plain {@code SET}
+     * @return {@code true} when the value was written, {@code false} when {@code NX} (key already exists) or
+     * {@code XX} (key missing) prevented the write
+     * @throws RuvioServerException {@code ERR} for an expiry of zero or less, or a syntax error
+     */
     public Boolean set(K key, V value, SetOptions options) {
         return await(async.set(key, value, options));
     }
 
-    /** SET key value GET: returns the previous string (null when missing). */
+    /**
+     * Sends {@code SET key value GET}: stores a string and returns the one it replaced. Any TTL is cleared.
+     *
+     * <pre>{@code
+     * String old = client.setGet("config:mode", "fast");
+     * }</pre>
+     *
+     * @param key the key to write
+     * @param value the new value
+     * @return the previous value, or {@code null} when the key did not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the existing value is not a string (nothing is written)
+     */
     public V setGet(K key, V value) {
         return await(async.setGet(key, value));
     }
 
-    /** SET key value [options] GET: returns the previous string (null when missing). */
+    /**
+     * Sends {@code SET key value [options] GET}: like {@link #setGet(Object, Object)} with an expiry and/or
+     * a condition.
+     *
+     * @param key the key to write
+     * @param value the new value
+     * @param options expiry and condition, built with {@link SetOptions}
+     * @return the previous value, or {@code null} when the key did not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the existing value is not a string
+     */
     public V setGet(K key, V value, SetOptions options) {
         return await(async.setGet(key, value, options));
     }
 
     /**
-     * Ruvio {@code SET key value IFEQ expected}: writes only when the current string equals
-     * {@code expected}. True when written.
+     * Sends the Ruvio command {@code SET key value IFEQ expected}: a compare-and-set on a string. The
+     * write happens only when the current value is byte-for-byte equal to {@code expected}. Any TTL is cleared.
+     *
+     * <pre>{@code
+     * boolean swapped = client.setIfEq("lock:report", "owner-b", "owner-a");
+     * }</pre>
+     *
+     * @param key the key to write
+     * @param value the new value
+     * @param expected the value the key must currently hold
+     * @return {@code true} when the value was written, {@code false} when the key is missing or holds a different value
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-string
      */
     public Boolean setIfEq(K key, V value, V expected) {
         return await(async.setIfEq(key, value, expected));
     }
 
-    /** {@code SET key value IFEQ expected [EX|PX|EXAT|PXAT|KEEPTTL]} (the NX/XX part of options is ignored). */
+    /**
+     * Sends {@code SET key value IFEQ expected [EX|PX|EXAT|PXAT|KEEPTTL]}: like
+     * {@link #setIfEq(Object, Object, Object)} with an expiry for the new value.
+     *
+     * @param key the key to write
+     * @param value the new value
+     * @param expected the value the key must currently hold
+     * @param expiry the expiry to apply; only its expiry part is sent, any {@code NX}/{@code XX} condition is ignored
+     * @return {@code true} when the value was written, {@code false} when the key is missing or holds a different value
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-string
+     */
     public Boolean setIfEq(K key, V value, V expected, SetOptions expiry) {
         return await(async.setIfEq(key, value, expected, expiry));
     }
 
-    /** SETV key value: creates version 1. Returns the new version. */
+    /**
+     * Sends the Ruvio command {@code SETV key value}: starts a versioned string and returns its version.
+     * It works on a missing key or a plain string (the key becomes versioned, version 1). Once a key is
+     * versioned, later writes must use {@link #setv(Object, Object, long)} with the current version.
+     *
+     * <pre>{@code
+     * long v = client.setv("doc:7", "draft"); // 1
+     * }</pre>
+     *
+     * @param key the key to write
+     * @param value the value to store
+     * @return the new version, always {@code 1}
+     * @throws RuvioServerException {@code ERR version mismatch} when the key is already versioned; {@code WRONGTYPE} when it holds a non-string
+     */
     public Long setv(K key, V value) {
         return await(async.setv(key, value));
     }
 
-    /** SETV key value version: compare-and-set on the version; a mismatch fails with an error. */
+    /**
+     * Sends {@code SETV key value version}: an optimistic-concurrency write on a versioned string. It
+     * succeeds only when {@code version} equals the key's current version, which then increases by one.
+     * {@code TYPE} still reports {@code string}, and {@code INCR} refuses a versioned string.
+     *
+     * <pre>{@code
+     * long v = client.setv("doc:7", "draft");        // 1
+     * long v2 = client.setv("doc:7", "final", v);    // 2
+     * }</pre>
+     *
+     * @param key the key to write
+     * @param value the new value
+     * @param version the version the caller last saw (returned by an earlier {@code setv})
+     * @return the new version number
+     * @throws RuvioServerException {@code ERR version mismatch} when the version differs or the key is missing (nothing changes); {@code WRONGTYPE} for a plain string or other type
+     */
     public Long setv(K key, V value, long version) {
         return await(async.setv(key, value, version));
     }
 
-    /** TAKE key count: the remainder, or null when the key holds less (nothing changes). */
+    /**
+     * Sends the Ruvio command {@code TAKE key count}: atomically subtracts {@code count} from an integer
+     * string, but only when the key holds at least that much. Use it for stock, credits or tokens.
+     *
+     * <pre>{@code
+     * client.set("stock:sku1", "5");
+     * Long left = client.take("stock:sku1", 2);  // 3
+     * Long none = client.take("stock:sku1", 10); // null, stock stays 3
+     * }</pre>
+     *
+     * @param key the counter key (a decimal integer string)
+     * @param count the amount to take; must be greater than zero
+     * @return the remainder after subtracting, or {@code null} when the key is missing or holds less than
+     * {@code count} (nothing changes)
+     * @throws RuvioServerException {@code ERR} when {@code count} is not positive or the value is not an integer; {@code WRONGTYPE} for a non-string
+     */
     public Long take(K key, long count) {
         return await(async.take(key, count));
     }
 
-    /** DELEX key IFEQ value: deletes only when the string equals {@code expected}. */
+    /**
+     * Sends the Ruvio command {@code DELEX key IFEQ expected}: deletes a string only when it equals
+     * {@code expected}. The usual safe way to release a token-based lock.
+     *
+     * <pre>{@code
+     * boolean released = client.delex("lock:report", myToken);
+     * }</pre>
+     *
+     * @param key the key to delete
+     * @param expected the value the key must currently hold
+     * @return {@code true} when the key was deleted, {@code false} when it is missing or holds another value
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-string
+     */
     public Boolean delex(K key, V expected) {
         return await(async.delex(key, expected));
     }
 
-    /** GETEX key ttl_ms: returns the string and sets its TTL in milliseconds. */
+    /**
+     * Sends the Ruvio command {@code GETEX key ttl_ms}: reads a string and sets its time to live in one step.
+     *
+     * <pre>{@code
+     * String session = client.getex("session:42", 30_000); // slide the expiry to 30 s from now
+     * }</pre>
+     *
+     * @param key the key to read
+     * @param ttlMillis the new TTL in milliseconds; must be greater than zero
+     * @return the value, or {@code null} when the key does not exist (no TTL is set then)
+     * @throws RuvioServerException {@code ERR} when {@code ttlMillis} is not positive; {@code WRONGTYPE} for a non-string
+     */
     public V getex(K key, long ttlMillis) {
         return await(async.getex(key, ttlMillis));
     }
 
+    /**
+     * Sends {@code MGET key [key ...]}: reads several strings at once.
+     * In a cluster, keys in different slots are sent per slot and the replies merged in key order; the
+     * read is then not a single atomic snapshot.
+     *
+     * <pre>{@code
+     * List<String> values = client.mget("a", "b", "c");
+     * }</pre>
+     *
+     * @param keys one or more keys
+     * @return one element per key in the same order; an element is {@code null} when that key is missing or
+     * does not hold a string (no {@code WRONGTYPE} error is raised)
+     * @throws IllegalArgumentException when no key is given
+     */
     @SafeVarargs
     public final List<V> mget(K... keys) {
         return await(async.mget(keys));
     }
 
+    /**
+     * Sends {@code MSET key value [key value ...]}: writes several strings. Existing values of any type and
+     * their TTLs are replaced.
+     * In a cluster, pairs whose keys fall in different slots are sent per slot; that split is not atomic.
+     *
+     * <pre>{@code
+     * client.mset(Map.of("a", "1", "b", "2"));
+     * }</pre>
+     *
+     * @param pairs the keys and values to write; iteration order is the send order
+     */
     public void mset(Map<K, V> pairs) {
         await(async.mset(pairs));
     }
 
-    /** MSETNX: all or nothing. True when every key was set. */
+    /**
+     * Sends {@code MSETNX key value [key value ...]}: writes all pairs only when none of the keys exists.
+     * All or nothing. In a cluster every key must hash to the same slot (use a {@code {tag}}), otherwise the
+     * client fails with {@code CROSSSLOT} before sending.
+     *
+     * @param pairs the keys and values to write
+     * @return {@code true} when every key was set, {@code false} (nothing written) when at least one key already existed
+     * @throws RuvioServerException {@code CROSSSLOT} in a cluster when the keys span slots
+     */
     public Boolean msetnx(Map<K, V> pairs) {
         return await(async.msetnx(pairs));
     }
 
+    /**
+     * Sends {@code GETSET key value}: stores a string and returns the previous one. The TTL is cleared.
+     * Prefer {@link #setGet(Object, Object)}.
+     *
+     * @param key the key to write
+     * @param value the new value
+     * @return the previous value, or {@code null} when the key did not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the existing value is not a string
+     */
     public V getset(K key, V value) {
         return await(async.getset(key, value));
     }
 
+    /**
+     * Sends {@code APPEND key value}: adds bytes to the end of a string, creating it when missing. An
+     * existing TTL is kept.
+     *
+     * @param key the key to extend
+     * @param value the bytes to append
+     * @return the length of the string in bytes after the append
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-string
+     */
     public Long append(K key, V value) {
         return await(async.append(key, value));
     }
 
+    /**
+     * Sends {@code STRLEN key}.
+     *
+     * @param key the key to measure
+     * @return the length of the string in bytes, or {@code 0} when the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-string
+     */
     public Long strlen(K key) {
         return await(async.strlen(key));
     }
 
+    /**
+     * Sends {@code INCR key}: adds one to a decimal integer string. A missing key counts as 0; an existing TTL is kept.
+     *
+     * <pre>{@code
+     * long hits = client.incr("page:hits");
+     * }</pre>
+     *
+     * @param key the counter key
+     * @return the value after the increment
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer or the result overflows (value unchanged); {@code WRONGTYPE} for a non-string
+     */
     public Long incr(K key) {
         return await(async.incr(key));
     }
 
+    /**
+     * Sends {@code DECR key}: subtracts one from a decimal integer string. A missing key counts as 0; an existing TTL is kept.
+     *
+     * @param key the counter key
+     * @return the value after the decrement
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer or the result overflows; {@code WRONGTYPE} for a non-string
+     */
     public Long decr(K key) {
         return await(async.decr(key));
     }
 
+    /**
+     * Sends {@code INCRBY key delta}: adds {@code delta} (may be negative) to a decimal integer string. A
+     * missing key counts as 0; an existing TTL is kept.
+     *
+     * @param key the counter key
+     * @param delta the signed amount to add
+     * @return the value after the addition
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer or the result overflows; {@code WRONGTYPE} for a non-string
+     */
     public Long incrby(K key, long delta) {
         return await(async.incrby(key, delta));
     }
 
-    /** INCRBY key delta MAX limit: null (and no write) when the result would pass {@code limit}. */
+    /**
+     * Sends the Ruvio command {@code INCRBY key delta MAX limit}: adds {@code delta} only when the result
+     * stays at or below {@code limit}. Handy for quotas and bounded counters. A missing key counts as 0.
+     *
+     * <pre>{@code
+     * Long used = client.incrbyMax("quota:user1", 1, 100); // null once 100 is reached
+     * }</pre>
+     *
+     * @param key the counter key
+     * @param delta the signed amount to add
+     * @param limit the highest value the counter may reach
+     * @return the value after the addition, or {@code null} when the result would pass {@code limit}
+     * (nothing is written)
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer; {@code WRONGTYPE} for a non-string
+     */
     public Long incrbyMax(K key, long delta, long limit) {
         return await(async.incrbyMax(key, delta, limit));
     }
 
+    /**
+     * Sends {@code DECRBY key delta}: subtracts {@code delta} from a decimal integer string. A missing key counts as 0; an existing TTL is kept.
+     *
+     * @param key the counter key
+     * @param delta the amount to subtract (a negative value adds)
+     * @return the value after the subtraction
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer or the result overflows; {@code WRONGTYPE} for a non-string
+     */
     public Long decrby(K key, long delta) {
         return await(async.decrby(key, delta));
     }
 
+    /**
+     * Sends {@code INCRBYFLOAT key delta}: adds a floating-point number to a numeric string. A missing key
+     * counts as 0. Ruvio computes in double precision and stores 15 significant digits (Redis uses long double).
+     *
+     * @param key the key to change
+     * @param delta the amount to add (may be negative)
+     * @return the value after the addition
+     * @throws RuvioServerException {@code ERR} when the value is not a number or the result is NaN or infinite; {@code WRONGTYPE} for a non-string
+     */
     public Double incrbyfloat(K key, double delta) {
         return await(async.incrbyfloat(key, delta));
     }
 
     /**
-     * FILLGET key fill_ms: HIT with the value, FILL with a token (this caller builds the value),
-     * BUSY, or STALE.
+     * Sends the Ruvio command {@code FILLGET key fill_ms}: cache read with stampede protection. When the
+     * key is missing, exactly one caller is told to build the value; everyone else sees {@code BUSY}.
+     * Answers by {@link FillResult#state()}:
+     * <ul>
+     * <li>{@code HIT}: the value is present and fresh, in {@link FillResult#value()}.</li>
+     * <li>{@code FILL}: this caller owns the fill; compute the value and call {@code fillset} with
+     * {@link FillResult#token()} before {@code fillMillis} pass.</li>
+     * <li>{@code BUSY}: another caller is filling; retry shortly.</li>
+     * <li>{@code STALE}: inside a stale-while-revalidate window the old value is returned; a non-null token means
+     * this caller should refresh it.</li>
+     * </ul>
+     * The fill marker lives in server memory only and lapses after {@code fillMillis}, after which the next
+     * caller becomes the filler. {@link io.github.salihcantekin.ruvio.RuvioClient#getOrCreate} wraps this whole loop.
+     *
+     * <pre>{@code
+     * FillResult<String> r = client.fillget("page:home", 5_000);
+     * if (r.state() == FillResult.State.FILL) {
+     *     client.fillset("page:home", render(), 60_000, r.token());
+     * }
+     * }</pre>
+     *
+     * @param key the cache key
+     * @param fillMillis how long a filler may take, in milliseconds
+     * @return the state with value and/or token
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-string; {@code ERR too many pending fills} when the server's marker table (65,536) is full
      */
     public FillResult<V> fillget(K key, long fillMillis) {
         return await(async.fillget(key, fillMillis));
     }
 
     /**
-     * FILLGET key fill_ms WAIT wait_ms. Waits on the server, which parks this whole multiplexed
-     * connection; prefer {@code fillget} with client-side polling, or a dedicated client.
+     * Sends {@code FILLGET key fill_ms WAIT wait_ms}: like {@link #fillget(Object, long)}, but a caller that
+     * would get {@code BUSY} is held on the server until the filler writes, the marker lapses (the waiter then
+     * becomes the filler) or {@code waitMillis} pass (then {@code BUSY}). While it waits, the whole shared
+     * multiplexed connection is parked; call it on {@link io.github.salihcantekin.ruvio.RuvioClient#dedicated()}
+     * or use client-side polling. Refused inside a transaction.
+     *
+     * @param key the cache key
+     * @param fillMillis how long a filler may take, in milliseconds
+     * @param waitMillis the longest a busy caller waits, in milliseconds
+     * @return the state with value and/or token
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-string
      */
     public FillResult<V> fillgetWait(K key, long fillMillis, long waitMillis) {
         return await(async.fillgetWait(key, fillMillis, waitMillis));
     }
 
-    /** FILLSET key value ttl_ms token. True when the token was live and the value was written. */
+    /**
+     * Sends the Ruvio command {@code FILLSET key value ttl_ms token}: stores a value built after
+     * {@code FILLGET} answered {@code FILL}.
+     *
+     * @param key the cache key
+     * @param value the value to cache
+     * @param ttlMillis how long the value lives, in milliseconds
+     * @param token the token {@code fillget} returned
+     * @return {@code true} when the token was still live and the value was written, {@code false} when it
+     * was not (the marker lapsed or another caller took over); nothing is written then
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-string
+     */
     public Boolean fillset(K key, V value, long ttlMillis, String token) {
         return await(async.fillset(key, value, ttlMillis, token));
     }
 
-    /** FILLSET key value ttl_ms token SWR stale_ms (stale-while-revalidate). */
+    /**
+     * Sends {@code FILLSET key value ttl_ms token SWR stale_ms}: like
+     * {@link #fillset(Object, Object, long, String)}, and the value may still be served as {@code STALE} for
+     * {@code staleMillis} after its TTL while one caller refreshes it (stale-while-revalidate).
+     *
+     * @param key the cache key
+     * @param value the value to cache
+     * @param ttlMillis how long the value is fresh, in milliseconds
+     * @param token the token {@code fillget} returned
+     * @param staleMillis extra time after expiry during which the old value may be served, in milliseconds
+     * @return {@code true} when written, {@code false} when the token was no longer live
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-string
+     */
     public Boolean fillset(K key, V value, long ttlMillis, String token, long staleMillis) {
         return await(async.fillset(key, value, ttlMillis, token, staleMillis));
     }
 
+    /**
+     * Sends {@code SETEX key seconds value}: stores a string with a TTL. Same as {@code SET key value EX seconds}.
+     *
+     * @param key the key to write
+     * @param seconds the TTL in seconds; must be greater than zero
+     * @param value the value to store
+     * @throws RuvioServerException {@code ERR} when {@code seconds} is not positive
+     */
     public void setex(K key, long seconds, V value) {
         await(async.setex(key, seconds, value));
     }
 
+    /**
+     * Sends {@code PSETEX key millis value}: stores a string with a TTL in milliseconds.
+     *
+     * @param key the key to write
+     * @param millis the TTL in milliseconds; must be greater than zero
+     * @param value the value to store
+     * @throws RuvioServerException {@code ERR} when {@code millis} is not positive
+     */
     public void psetex(K key, long millis, V value) {
         await(async.psetex(key, millis, value));
     }
 
+    /**
+     * Sends {@code SETNX key value}: stores a string only when the key does not exist.
+     *
+     * @param key the key to write
+     * @param value the value to store
+     * @return {@code true} when written, {@code false} when the key already existed
+     */
     public Boolean setnx(K key, V value) {
         return await(async.setnx(key, value));
     }
 
+    /**
+     * Sends {@code GETDEL key}: reads a string and deletes the key.
+     *
+     * @param key the key to read and remove
+     * @return the value, or {@code null} when the key did not exist
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-string
+     */
     public V getdel(K key) {
         return await(async.getdel(key));
     }
 
+    /**
+     * Sends {@code GETRANGE key start end}: reads a slice of a string by byte offset.
+     *
+     * <pre>{@code
+     * String tail = client.getrange("greeting", -5, -1);
+     * }</pre>
+     *
+     * @param key the key to read
+     * @param start the first byte offset, inclusive; negative counts from the end ({@code -1} is the last byte)
+     * @param end the last byte offset, inclusive; negative counts from the end; clamped to the string length
+     * @return the slice, or an empty value when the key is missing or the range is empty (never {@code null})
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-string
+     */
     public V getrange(K key, long start, long end) {
         return await(async.getrange(key, start, end));
     }
 
-    /** SUBSTR: alias of GETRANGE. */
+    /**
+     * Sends {@code SUBSTR key start end}: the old name of {@link #getrange(Object, long, long)}, same behaviour.
+     *
+     * @param key the key to read
+     * @param start the first byte offset, inclusive; negative counts from the end
+     * @param end the last byte offset, inclusive; negative counts from the end
+     * @return the slice, or an empty value when the key is missing or the range is empty
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-string
+     */
     public V substr(K key, long start, long end) {
         return await(async.substr(key, start, end));
     }
 
+    /**
+     * Sends {@code SETRANGE key offset value}: overwrites part of a string starting at a byte offset,
+     * padding with zero bytes if the string is shorter. A missing key is created. Strings are capped at 16 MiB.
+     *
+     * @param key the key to modify
+     * @param offset the byte offset to start at; zero or greater
+     * @param value the bytes to write
+     * @return the length of the string after the write
+     * @throws RuvioServerException {@code ERR} when the result would exceed 16 MiB; {@code WRONGTYPE} for a non-string
+     */
     public Long setrange(K key, long offset, V value) {
         return await(async.setrange(key, offset, value));
     }
@@ -246,359 +665,1043 @@ public abstract class RuvioSyncCommands<K, V> {
 
     // ---- KeyCommands ----
     /**
-     * LIMIT key max window_ms: fixed-window rate limit. Returns the remaining allowance after this
-     * call, or null when the window is full (the call is rejected and not counted).
+     * Sends the Ruvio command {@code LIMIT key max window_ms}: a fixed-window rate limiter kept on the server.
+     * The first call starts a window of {@code windowMillis}; each call inside the window uses one of
+     * {@code max} permits. When the permits are gone, calls are rejected until the window ends. Rejected
+     * calls are not counted. For a result object see {@link io.github.salihcantekin.ruvio.RuvioClient#rateLimit}.
+     *
+     * <pre>{@code
+     * Long left = client.limit("rl:user:1", 100, 60_000); // null when 100 calls were already made this minute
+     * }</pre>
+     *
+     * @param key the limiter key (one key per subject, for example per user or IP)
+     * @param max permits per window; must be greater than zero
+     * @param windowMillis window length in milliseconds; must be greater than zero
+     * @return the permits left after this call ({@code max - 1} on the first), or {@code null} when the window is full
+     * @throws RuvioServerException {@code ERR} when {@code max} or {@code windowMillis} is not positive; {@code WRONGTYPE} when the key holds another type
      */
     public Long limit(K key, long max, long windowMillis) {
         return await(async.limit(key, max, windowMillis));
     }
 
-    /** IDEM key BEGIN fingerprint owner ttl_ms. */
+    /**
+     * Sends the Ruvio command {@code IDEM key BEGIN fingerprint owner ttl_ms}: reserves a request so it runs once.
+     * The server only compares the tokens; it does not hash the request or check who the owner is. Use a digest of
+     * every input that defines the request as the fingerprint, and an unguessable per-attempt value as the owner.
+     * Reserve the key exclusively for this command: ordinary writes such as {@code SET} or {@code DEL} break its guarantees.
+     *
+     * <p>Only the {@code ACQUIRED} case writes. Other cases leave the record and its deadline unchanged, so a
+     * longer TTL on a retry does not extend it. This is not exactly-once for external side effects: a caller can
+     * crash after acting and before {@link #idemComplete(Object, String, String, byte[])}.
+     *
+     * <pre>{@code
+     * IdemResult r = client.idemBegin("order:42", digest, attemptToken, 60_000);
+     * switch (r.state()) {
+     *     case ACQUIRED -> { run(); client.idemComplete("order:42", digest, attemptToken, "saved"); }
+     *     case COMPLETED -> reuse(r.resultString());
+     *     case PENDING -> retryLater();
+     *     case CONFLICT -> reject(); // same key, different fingerprint
+     * }
+     * }</pre>
+     *
+     * @param key the idempotency key; scope it to the tenant and operation
+     * @param fingerprint opaque request digest, 1 to 128 bytes
+     * @param owner opaque per-attempt token, 1 to 128 bytes
+     * @param ttlMillis how long the record is kept, from 1 to 604800000 (7 days)
+     * @return {@code ACQUIRED} (you own a new pending record), {@code PENDING} (same fingerprint, not completed yet),
+     * {@code CONFLICT} (live record has another fingerprint) or {@code COMPLETED} (same fingerprint; the saved result is in the reply)
+     * @throws RuvioServerException {@code ERR} for tokens outside 1-128 bytes, a TTL out of range, or a key that does not hold an IDEM record; {@code WRONGTYPE} for another type
+     * @see io.github.salihcantekin.ruvio.RuvioClient#idempotent
+     */
     public IdemResult idemBegin(K key, String fingerprint, String owner, long ttlMillis) {
         return await(async.idemBegin(key, fingerprint, owner, ttlMillis));
     }
 
-    /** IDEM key COMPLETE fingerprint owner result. Returns 1 when published (or identical). */
+    /**
+     * Sends {@code IDEM key COMPLETE fingerprint owner result}: publishes the outcome of an attempt that got
+     * {@code ACQUIRED} from {@link #idemBegin}. Retention is not extended. The result is binary safe and at
+     * most 4 MiB (also limited by the server's value size limit).
+     *
+     * <pre>{@code
+     * long ok = client.idemComplete("order:42", digest, attemptToken, resultBytes); // 1
+     * }</pre>
+     *
+     * @param key the idempotency key
+     * @param fingerprint the same fingerprint used in {@code idemBegin}
+     * @param owner the same owner token used in {@code idemBegin}
+     * @param result the bytes later callers will replay
+     * @return {@code 1} when the result was stored (also when the identical result was already stored), {@code 0} when the
+     * record is missing or expired, the owner or fingerprint differ, or a different result is already stored
+     * @throws RuvioServerException {@code ERR} for invalid tokens or a result over the limit
+     */
     public Long idemComplete(K key, String fingerprint, String owner, byte[] result) {
         return await(async.idemComplete(key, fingerprint, owner, result));
     }
 
-    /** IDEM key COMPLETE with a UTF-8 result. */
+    /**
+     * Like {@link #idemComplete(Object, String, String, byte[])} with the result given as text (sent as UTF-8).
+     *
+     * @param key the idempotency key
+     * @param fingerprint the same fingerprint used in {@code idemBegin}
+     * @param owner the same owner token used in {@code idemBegin}
+     * @param result the text later callers will replay
+     * @return {@code 1} when stored, {@code 0} when the record is missing, expired, owned by another attempt, or already completed with a different result
+     */
     public Long idemComplete(K key, String fingerprint, String owner, String result) {
         return await(async.idemComplete(key, fingerprint, owner, result));
     }
 
-    /** ONCE key ttl_ms: true for the first call within the TTL. */
+    /**
+     * Sends the Ruvio command {@code ONCE key ttl_ms}: a "first one wins" marker. Use it to run a job or send a notice once per period.
+     *
+     * <pre>{@code
+     * if (client.once("welcome-mail:user1", 86_400_000)) {
+     *     sendWelcomeMail();
+     * }
+     * }</pre>
+     *
+     * @param key the marker key
+     * @param ttlMillis how long the marker lives, in milliseconds; must be greater than zero
+     * @return {@code true} for the first call (the marker is created), {@code false} until the marker expires
+     * @throws RuvioServerException {@code ERR} when {@code ttlMillis} is not positive; {@code WRONGTYPE} when the key holds another type
+     */
     public Boolean once(K key, long ttlMillis) {
         return await(async.once(key, ttlMillis));
     }
 
-    /** LEASE key ttl_ms: a new fencing token, or null while another holder has the lease. */
+    /**
+     * Sends the Ruvio command {@code LEASE key ttl_ms}: takes an exclusive, time-limited hold on a key. Pass the
+     * token to {@link #release(Object, long)} to give it up early. See also
+     * {@link io.github.salihcantekin.ruvio.RuvioClient#tryLease}, which wraps the token in an object.
+     *
+     * <pre>{@code
+     * Long token = client.lease("job:nightly", 30_000);
+     * if (token != null) {
+     *     try { runJob(); } finally { client.release("job:nightly", token); }
+     * }
+     * }</pre>
+     *
+     * @param key the lease key
+     * @param ttlMillis how long the lease is held, in milliseconds; must be greater than zero
+     * @return the holder token, or {@code null} while another holder's lease is still live
+     * @throws RuvioServerException {@code ERR} when {@code ttlMillis} is not positive; {@code WRONGTYPE} when the key holds another type
+     */
     public Long lease(K key, long ttlMillis) {
         return await(async.lease(key, ttlMillis));
     }
 
-    /** SEMAPHORE key max ttl_ms: a holder token, or null when all {@code max} slots are taken. */
+    /**
+     * Sends the Ruvio command {@code SEMAPHORE key max ttl_ms}: takes one of at most {@code max} slots. Each
+     * holder has its own TTL; when the last holder expires or is released, the key goes away. Give the slot back with
+     * {@link #release(Object, long)}. See also {@link io.github.salihcantekin.ruvio.RuvioClient#tryAcquirePermit}.
+     *
+     * <pre>{@code
+     * Long permit = client.semaphore("pool:render", 4, 60_000);
+     * if (permit != null) {
+     *     try { render(); } finally { client.release("pool:render", permit); }
+     * }
+     * }</pre>
+     *
+     * @param key the semaphore key
+     * @param max the number of slots; must be greater than zero
+     * @param ttlMillis how long this holder's slot lasts, in milliseconds; must be greater than zero
+     * @return the holder token, or {@code null} when all {@code max} slots are held
+     * @throws RuvioServerException {@code ERR} when {@code max} or {@code ttlMillis} is not positive; {@code WRONGTYPE} when the key holds another type
+     */
     public Long semaphore(K key, long max, long ttlMillis) {
         return await(async.semaphore(key, max, ttlMillis));
     }
 
-    /** RELEASE key token: frees a lease or one semaphore slot. True when the token matched. */
+    /**
+     * Sends the Ruvio command {@code RELEASE key token}: gives up a lease or one semaphore slot.
+     *
+     * @param key the lease or semaphore key
+     * @param token the token returned by {@link #lease(Object, long)} or {@link #semaphore(Object, long, long)}
+     * @return {@code true} when the token was live and the hold was released, {@code false} when the key is missing or the
+     * token is stale or does not match
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds something other than a lease or semaphore
+     */
     public Boolean release(K key, long token) {
         return await(async.release(key, token));
     }
 
-    /** CHANGES START: arms the change feed on this shard and returns the cursor. */
+    /**
+     * Sends the Ruvio command {@code CHANGES START}: turns on the small in-memory change feed of the shard the
+     * command reaches, and returns the cursor to pass to {@link #changes(long)}. Nothing is recorded before this
+     * call, the feed is empty after a restart, and only the last 1024 notes are kept. For a durable, resumable stream
+     * use the server's {@code CHANGES SUBSCRIBE}.
+     *
+     * @return the current cursor; notes created after it have a higher sequence
+     */
     public Long changesStart() {
         return await(async.changesStart());
     }
 
-    /** CHANGES cursor: notes after the cursor (at most 1024). */
+    /**
+     * Sends {@code CHANGES cursor}: reads notes of the in-memory feed that have a sequence above {@code cursor}.
+     * Each note is text like {@code SET key}, {@code LIMIT key} or {@code RELEASE key}. Call {@link #changesStart()} first.
+     *
+     * <pre>{@code
+     * long cursor = client.changesStart();
+     * // ... writes happen ...
+     * for (ChangeNote n : client.changes(cursor)) {
+     *     cursor = n.sequence();
+     *     System.out.println(n.text());
+     * }
+     * }</pre>
+     *
+     * @param cursor the last sequence already seen (from {@code changesStart} or {@link ChangeNote#sequence()})
+     * @return the newer notes, oldest first; empty when none (or when the feed was never started)
+     */
     public List<ChangeNote> changes(long cursor) {
         return await(async.changes(cursor));
     }
 
+    /**
+     * Sends {@code DEL key [key ...]}: removes keys of any type.
+     * In a cluster, keys in different slots are sent per slot and the counts added up; that is not atomic.
+     *
+     * <pre>{@code
+     * long removed = client.del("a", "b");
+     * }</pre>
+     *
+     * @param keys one or more keys
+     * @return how many keys existed and were removed
+     * @throws IllegalArgumentException when no key is given
+     */
     @SafeVarargs
     public final Long del(K... keys) {
         return await(async.del(keys));
     }
 
+    /**
+     * Sends {@code UNLINK key [key ...]}: same as {@link #del(Object[])}; Ruvio removes the keys synchronously.
+     *
+     * @param keys one or more keys
+     * @return how many keys existed and were removed
+     * @throws IllegalArgumentException when no key is given
+     */
     @SafeVarargs
     public final Long unlink(K... keys) {
         return await(async.unlink(keys));
     }
 
+    /**
+     * Sends {@code EXISTS key [key ...]}: counts keys that exist. A key given twice is counted twice.
+     *
+     * @param keys one or more keys
+     * @return how many of the given keys exist
+     * @throws IllegalArgumentException when no key is given
+     */
     @SafeVarargs
     public final Long exists(K... keys) {
         return await(async.exists(keys));
     }
 
-    /** TYPE key: string, list, set, zset, hash, stream, none, ... */
+    /**
+     * Sends {@code TYPE key}.
+     *
+     * @param key the key to inspect
+     * @return {@code string} (also for {@code SETV} and IDEM values), {@code list}, {@code set}, {@code zset}
+     * (also geo), {@code hash}, {@code stream}, {@code json}, {@code bloomfilter}, {@code lease}, {@code limit},
+     * {@code semaphore}, {@code once}, or {@code none} when the key does not exist
+     */
     public String type(K key) {
         return await(async.type(key));
     }
 
+    /**
+     * Sends {@code RENAME key newkey}: moves a value to another key name, replacing the target. In a cluster both
+     * keys must hash to the same slot (use a {@code {tag}}), otherwise the client throws {@code CROSSSLOT} before sending.
+     *
+     * @param key the existing key
+     * @param newKey the new name
+     * @throws RuvioServerException {@code ERR no such key} when {@code key} does not exist; {@code CROSSSLOT} in a cluster
+     */
     public void rename(K key, K newKey) {
         await(async.rename(key, newKey));
     }
 
+    /**
+     * Sends {@code RENAMENX key newkey}: renames only when the new name is unused.
+     *
+     * @param key the existing key
+     * @param newKey the new name
+     * @return {@code true} when renamed, {@code false} when {@code newKey} already exists
+     * @throws RuvioServerException {@code ERR no such key} when {@code key} does not exist; {@code CROSSSLOT} in a cluster
+     */
     public Boolean renamenx(K key, K newKey) {
         return await(async.renamenx(key, newKey));
     }
 
-    /** SCAN cursor. Start with "0"; the iteration ends when the returned cursor is "0". */
+    /**
+     * Sends {@code SCAN cursor}: walks the keys of one shard a page at a time without blocking the server.
+     * Start with {@code "0"} and pass back {@link ScanResult#cursor()} until {@link ScanResult#isFinished()}.
+     * A key that exists for the whole walk is returned at least once; a key can repeat if the table was rebuilt
+     * between calls. A page can be empty or short while the cursor is not yet {@code "0"}. In a cluster this covers only the
+     * node the call lands on; {@link io.github.salihcantekin.ruvio.RuvioClient#scanIterable} walks every node.
+     *
+     * <pre>{@code
+     * String cursor = "0";
+     * do {
+     *     ScanResult<String> page = client.scan(cursor);
+     *     page.items().forEach(System.out::println);
+     *     cursor = page.cursor();
+     * } while (!"0".equals(cursor));
+     * }</pre>
+     *
+     * @param cursor {@code "0"} to start, otherwise the cursor of the previous page
+     * @return the next cursor and the keys of this page
+     * @see io.github.salihcantekin.ruvio.RuvioClient#scanIterable
+     */
     public ScanResult<K> scan(String cursor) {
         return await(async.scan(cursor));
     }
 
+    /**
+     * Sends {@code SCAN cursor [MATCH pattern] [COUNT n] [TYPE type]}: like {@link #scan(String)} with filters.
+     * {@code COUNT} bounds the table slots examined per call (about 10 per requested key), so a page can hold fewer keys than asked.
+     *
+     * <pre>{@code
+     * ScanResult<String> page = client.scan("0", ScanArgs.match("user:*").limit(500).type("hash"));
+     * }</pre>
+     *
+     * @param cursor {@code "0"} to start, otherwise the cursor of the previous page
+     * @param options pattern, count hint and type filter
+     * @return the next cursor and the matching keys of this page
+     */
     public ScanResult<K> scan(String cursor, ScanArgs options) {
         return await(async.scan(cursor, options));
     }
 
+    /**
+     * Sends {@code DBSIZE}: the number of keys in the selected database of the shard that answers. Keys past
+     * their TTL count until the server removes them. With several shards and {@code port_mode = "per-shard"} each
+     * shard counts its own keys; sum over {@link io.github.salihcantekin.ruvio.RuvioClient#onNode} views for a total.
+     *
+     * @return the key count
+     */
     public Long dbsize() {
         return await(async.dbsize());
     }
 
+    /**
+     * Sends {@code FLUSHDB}: deletes every key of the selected database. Dangerous: it cannot be undone.
+     * In a multi-shard server with the default {@code port_mode = "per-shard"}, and in a cluster client (which
+     * sends keyless commands to its seed node), it clears only the shard that receives the command. To empty
+     * everything, call it on each node with {@link io.github.salihcantekin.ruvio.RuvioClient#onNode}.
+     */
     public void flushdb() {
         await(async.flushdb());
     }
 
+    /**
+     * Sends {@code FLUSHALL}: deletes every key of every database. Dangerous: it cannot be undone.
+     * Like {@link #flushdb()}, with {@code port_mode = "per-shard"} it clears only the shard that receives it;
+     * repeat it on each node ({@link io.github.salihcantekin.ruvio.RuvioClient#onNode}) to empty a whole cluster.
+     */
     public void flushall() {
         await(async.flushall());
     }
 
+    /**
+     * Sends {@code SWAPDB first second}: exchanges two logical databases in O(1). Connections on one see the other's keys.
+     * Not available in cluster mode.
+     *
+     * @param first a database index, from 0 to {@code databases - 1} (16 databases by default)
+     * @param second another database index in the same range
+     * @throws RuvioServerException {@code ERR} when an index is out of range or cluster mode is on
+     */
     public void swapdb(int first, int second) {
         await(async.swapdb(first, second));
     }
 
+    /**
+     * Sends {@code MOVE key db}: moves a key to another logical database. Not available in cluster mode.
+     *
+     * @param key the key to move
+     * @param database the target database index, from 0 to {@code databases - 1}
+     * @return {@code true} when moved, {@code false} when the key is missing or already exists in the target
+     * @throws RuvioServerException {@code ERR} when {@code database} is out of range or equals the current one, or cluster mode is on
+     */
     public Boolean move(K key, int database) {
         return await(async.move(key, database));
     }
 
+    /**
+     * Sends {@code EXPIRE key seconds}: gives a key a time to live in seconds. Replaces an earlier TTL.
+     *
+     * @param key the key
+     * @param seconds seconds from now; zero or negative deletes the key
+     * @return {@code true} when the TTL was set (or the key deleted), {@code false} when the key does not exist
+     */
     public Boolean expire(K key, long seconds) {
         return await(async.expire(key, seconds));
     }
 
+    /**
+     * Sends {@code PEXPIRE key milliseconds}: like {@link #expire(Object, long)} in milliseconds.
+     *
+     * @param key the key
+     * @param millis milliseconds from now; zero or negative deletes the key
+     * @return {@code true} when the TTL was set (or the key deleted), {@code false} when the key does not exist
+     */
     public Boolean pexpire(K key, long millis) {
         return await(async.pexpire(key, millis));
     }
 
+    /**
+     * Sends {@code EXPIREAT key timestamp}: expires a key at an absolute Unix time in seconds.
+     *
+     * @param key the key
+     * @param unixSeconds seconds since 1970-01-01 UTC; a time in the past deletes the key
+     * @return {@code true} when the deadline was set (or the key deleted), {@code false} when the key does not exist
+     */
     public Boolean expireat(K key, long unixSeconds) {
         return await(async.expireat(key, unixSeconds));
     }
 
+    /**
+     * Sends {@code PEXPIREAT key timestamp}: expires a key at an absolute Unix time in milliseconds.
+     *
+     * @param key the key
+     * @param unixMillis milliseconds since 1970-01-01 UTC; a time in the past deletes the key
+     * @return {@code true} when the deadline was set (or the key deleted), {@code false} when the key does not exist
+     */
     public Boolean pexpireat(K key, long unixMillis) {
         return await(async.pexpireat(key, unixMillis));
     }
 
+    /**
+     * Sends {@code TTL key}.
+     *
+     * @param key the key
+     * @return the remaining time to live in seconds, {@code -1} when the key has no expiry, {@code -2} when it does not exist
+     */
     public Long ttl(K key) {
         return await(async.ttl(key));
     }
 
+    /**
+     * Sends {@code PTTL key}.
+     *
+     * @param key the key
+     * @return the remaining time to live in milliseconds, {@code -1} when the key has no expiry, {@code -2} when it does not exist
+     */
     public Long pttl(K key) {
         return await(async.pttl(key));
     }
 
+    /**
+     * Sends {@code PERSIST key}: removes a key's expiry so it lives on.
+     *
+     * @param key the key
+     * @return {@code true} when an expiry was removed, {@code false} when the key is missing or had none
+     */
     public Boolean persist(K key) {
         return await(async.persist(key));
     }
 
+    /**
+     * Sends {@code EXPIRETIME key}.
+     *
+     * @param key the key
+     * @return the absolute expiry as Unix seconds, {@code -1} when the key has no expiry, {@code -2} when it does not exist
+     */
     public Long expiretime(K key) {
         return await(async.expiretime(key));
     }
 
+    /**
+     * Sends {@code PEXPIRETIME key}.
+     *
+     * @param key the key
+     * @return the absolute expiry as Unix milliseconds, {@code -1} when the key has no expiry, {@code -2} when it does not exist
+     */
     public Long pexpiretime(K key) {
         return await(async.pexpiretime(key));
     }
 
-    /** KEYS pattern. Refused above 100,000 keys per shard; prefer {@link #scan(String, ScanArgs)}. */
+    /**
+     * Sends {@code KEYS pattern}: lists the keys of the selected database that match a glob ({@code *}, {@code ?}).
+     * It walks the whole database, so the server refuses it when the database has more than 100,000 keys; use
+     * {@link #scan(String, ScanArgs)} instead. It covers one shard only (see {@link #dbsize()}).
+     *
+     * @param pattern a glob such as {@code user:*}
+     * @return the matching keys, in no particular order; empty when none
+     * @throws RuvioServerException {@code ERR KEYS is limited to 100000 keys per database, use SCAN}
+     */
     public List<K> keys(String pattern) {
         return await(async.keys(pattern));
     }
 
+    /**
+     * Sends {@code RANDOMKEY}.
+     *
+     * @return a random key of the selected database, or {@code null} when it is empty
+     */
     public K randomkey() {
         return await(async.randomkey());
     }
 
+    /**
+     * Sends {@code TOUCH key [key ...]}: marks keys as accessed (for LRU/LFU eviction) without reading them.
+     * In a cluster, keys in different slots are sent per slot and the counts added up.
+     *
+     * @param keys one or more keys
+     * @return how many of the keys exist
+     * @throws IllegalArgumentException when no key is given
+     */
     @SafeVarargs
     public final Long touch(K... keys) {
         return await(async.touch(keys));
     }
 
+    /**
+     * Sends {@code COPY source destination}: duplicates a key (value and TTL, also JSON documents) into a new name in the selected database.
+     *
+     * @param source the key to copy
+     * @param destination the new key; the copy fails if it already exists
+     * @return {@code true} when copied, {@code false} when {@code source} is missing or {@code destination} exists
+     * @throws RuvioServerException {@code CROSSSLOT} in a cluster when the keys hash to different slots
+     */
     public Boolean copy(K source, K destination) {
         return await(async.copy(source, destination));
     }
 
+    /**
+     * Sends {@code COPY source destination [REPLACE]}.
+     *
+     * @param source the key to copy
+     * @param destination the target key
+     * @param replace {@code true} to overwrite an existing {@code destination}
+     * @return {@code true} when copied, {@code false} when {@code source} is missing or {@code destination} exists and {@code replace} is false
+     * @throws RuvioServerException {@code CROSSSLOT} in a cluster when the keys hash to different slots
+     */
     public Boolean copy(K source, K destination, boolean replace) {
         return await(async.copy(source, destination, replace));
     }
 
-    /** OBJECT ENCODING key. */
+    /**
+     * Sends {@code OBJECT ENCODING key}.
+     *
+     * @param key the key to inspect
+     * @return the internal encoding name, or {@code null} when the key does not exist
+     */
     public String objectEncoding(K key) {
         return await(async.objectEncoding(key));
     }
 
-    /** OBJECT IDLETIME key (needs an LRU maxmemory-policy). */
+    /**
+     * Sends {@code OBJECT IDLETIME key}: seconds since the key was last accessed. Needs an LRU {@code maxmemory-policy}.
+     *
+     * @param key the key to inspect
+     * @return the idle seconds, or {@code null} when the key does not exist
+     * @throws RuvioServerException {@code ERR} when an LFU policy is selected
+     */
     public Long objectIdletime(K key) {
         return await(async.objectIdletime(key));
     }
 
-    /** OBJECT FREQ key (needs allkeys-lfu). */
+    /**
+     * Sends {@code OBJECT FREQ key}: the access-frequency counter. Needs the {@code allkeys-lfu} {@code maxmemory-policy}.
+     *
+     * @param key the key to inspect
+     * @return the frequency counter, or {@code null} when the key does not exist
+     * @throws RuvioServerException {@code ERR} when an LFU policy is not selected
+     */
     public Long objectFreq(K key) {
         return await(async.objectFreq(key));
     }
 
-    /** MEMORY USAGE key. Null when the key is missing. */
+    /**
+     * Sends {@code MEMORY USAGE key}.
+     *
+     * @param key the key to inspect
+     * @return the approximate bytes the key uses, or {@code null} when it does not exist
+     */
     public Long memoryUsage(K key) {
         return await(async.memoryUsage(key));
     }
 
+    /**
+     * Sends {@code MEMORY USAGE key SAMPLES n}: like {@link #memoryUsage(Object)}; the sample count is accepted for Redis compatibility.
+     *
+     * @param key the key to inspect
+     * @param samples number of nested elements to sample
+     * @return the approximate bytes the key uses, or {@code null} when it does not exist
+     */
     public Long memoryUsage(K key, long samples) {
         return await(async.memoryUsage(key, samples));
     }
 
-    /** DUMP key: Ruvio's own payload (only Ruvio's RESTORE reads it). Null when missing. */
+    /**
+     * Sends {@code DUMP key}: serializes a key (any type, JSON included) into Ruvio's own payload. Only Ruvio's
+     * {@link #restore(Object, long, byte[])} can read it; Redis payloads are not compatible.
+     *
+     * @param key the key to serialize
+     * @return the payload, or {@code null} when the key does not exist
+     */
     public byte[] dump(K key) {
         return await(async.dump(key));
     }
 
-    /** RESTORE key ttl_ms payload. */
+    /**
+     * Sends {@code RESTORE key ttl payload}: creates a key from a {@link #dump(Object)} payload.
+     *
+     * @param key the key to create
+     * @param ttlMillis time to live in milliseconds, or {@code 0} for no expiry
+     * @param payload the bytes returned by {@code dump}
+     * @throws RuvioServerException {@code BUSYKEY} when the key already exists; {@code ERR} for a negative TTL or a damaged payload
+     */
     public void restore(K key, long ttlMillis, byte[] payload) {
         await(async.restore(key, ttlMillis, payload));
     }
 
+    /**
+     * Sends {@code RESTORE key ttl payload [REPLACE] [ABSTTL] [IDLETIME s] [FREQ n]}.
+     *
+     * @param key the key to create
+     * @param ttlMillis time to live in milliseconds ({@code 0} for no expiry), or an absolute Unix time in milliseconds with {@code absTtl()}
+     * @param payload the bytes returned by {@code dump}
+     * @param options {@code replace()} overwrites an existing key; {@code absTtl()} reads the TTL as an absolute time; idle time and frequency are accepted and ignored
+     * @throws RuvioServerException {@code BUSYKEY} when the key exists and {@code replace} was not set; {@code ERR} for a negative TTL or a damaged payload
+     */
     public void restore(K key, long ttlMillis, byte[] payload, RestoreArgs options) {
         await(async.restore(key, ttlMillis, payload, options));
     }
 
 
     // ---- HashCommands ----
-    /** HSET key field value. Returns the number of new fields. */
+    /**
+     * Sends {@code HSET key field value}: sets one field of a hash, creating the hash when missing. An existing field is overwritten, and its field TTL is dropped.
+     *
+     * <pre>{@code
+     * client.hset("user:1", "name", "Ada");
+     * }</pre>
+     *
+     * @param key the hash key
+     * @param field the field name (encoded with the key codec)
+     * @param value the field value
+     * @return {@code 1} when the field is new, {@code 0} when an existing field was overwritten
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     public Long hset(K key, K field, V value) {
         return await(async.hset(key, field, value));
     }
 
-    /** HSET key field value [field value ...]. */
+    /**
+     * Sends {@code HSET key field value [field value ...]}: sets several fields in one command.
+     *
+     * <pre>{@code
+     * client.hset("user:1", Map.of("name", "Ada", "city", "London"));
+     * }</pre>
+     *
+     * @param key the hash key
+     * @param fields the field names and values to set; must not be empty
+     * @return how many fields were new (overwritten fields are not counted)
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     public Long hset(K key, Map<K, V> fields) {
         return await(async.hset(key, fields));
     }
 
+    /**
+     * Sends {@code HGET key field}.
+     *
+     * @param key the hash key
+     * @param field the field to read
+     * @return the value, or {@code null} when the key or the field does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     public V hget(K key, K field) {
         return await(async.hget(key, field));
     }
 
+    /**
+     * Sends {@code HDEL key field [field ...]}: removes fields. A hash left without fields disappears.
+     *
+     * @param key the hash key
+     * @param fields one or more fields to remove
+     * @return how many fields existed and were removed
+     * @throws IllegalArgumentException when no field is given
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final Long hdel(K key, K... fields) {
         return await(async.hdel(key, fields));
     }
 
+    /**
+     * Sends {@code HLEN key}.
+     *
+     * @param key the hash key
+     * @return the number of fields, {@code 0} when the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     public Long hlen(K key) {
         return await(async.hlen(key));
     }
 
-    /** HGETALL key, in field order. */
+    /**
+     * Sends {@code HGETALL key}: reads every field and value. The order is the server's storage order (unspecified, as in Redis). Cost grows with the hash size; for big hashes page with {@link #hscan(Object, String)}.
+     *
+     * <pre>{@code
+     * Map<String, String> user = client.hgetall("user:1");
+     * }</pre>
+     *
+     * @param key the hash key
+     * @return a map of field to value, empty when the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     public Map<K, V> hgetall(K key) {
         return await(async.hgetall(key));
     }
 
+    /**
+     * Sends {@code HMGET key field [field ...]}: reads several fields at once.
+     *
+     * @param key the hash key
+     * @param fields one or more fields
+     * @return one element per field in the same order; {@code null} for a field (or a whole key) that does not exist
+     * @throws IllegalArgumentException when no field is given
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final List<V> hmget(K key, K... fields) {
         return await(async.hmget(key, fields));
     }
 
+    /**
+     * Sends {@code HEXISTS key field}.
+     *
+     * @param key the hash key
+     * @param field the field to test
+     * @return {@code true} when the field exists, {@code false} when the field or the key does not
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     public Boolean hexists(K key, K field) {
         return await(async.hexists(key, field));
     }
 
+    /**
+     * Sends {@code HKEYS key}: lists the field names, in unspecified order.
+     *
+     * @param key the hash key
+     * @return the field names, empty when the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     public List<K> hkeys(K key) {
         return await(async.hkeys(key));
     }
 
+    /**
+     * Sends {@code HVALS key}: lists the values, in unspecified order.
+     *
+     * @param key the hash key
+     * @return the values, empty when the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     public List<V> hvals(K key) {
         return await(async.hvals(key));
     }
 
+    /**
+     * Sends {@code HINCRBY key field delta}: adds an integer to a field. A missing key or field counts as 0. The field's TTL is kept.
+     *
+     * @param key the hash key
+     * @param field the field to change
+     * @param delta the signed amount to add
+     * @return the field value after the addition
+     * @throws RuvioServerException {@code ERR} when the field is not a signed 64-bit integer or the result overflows; {@code WRONGTYPE} when the key holds a non-hash
+     */
     public Long hincrby(K key, K field, long delta) {
         return await(async.hincrby(key, field, delta));
     }
 
+    /**
+     * Sends {@code HINCRBYFLOAT key field delta}: adds a floating-point number to a field. A missing key or field counts as 0.
+     *
+     * @param key the hash key
+     * @param field the field to change
+     * @param delta the amount to add (may be negative)
+     * @return the field value after the addition
+     * @throws RuvioServerException {@code ERR} when the field is not a number; {@code WRONGTYPE} when the key holds a non-hash
+     */
     public Double hincrbyfloat(K key, K field, double delta) {
         return await(async.hincrbyfloat(key, field, delta));
     }
 
+    /**
+     * Sends {@code HSETNX key field value}: sets a field only when it does not exist yet.
+     *
+     * @param key the hash key
+     * @param field the field to set
+     * @param value the value to store
+     * @return {@code true} when the field was written, {@code false} when it already existed (nothing changes)
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     public Boolean hsetnx(K key, K field, V value) {
         return await(async.hsetnx(key, field, value));
     }
 
+    /**
+     * Sends {@code HSTRLEN key field}.
+     *
+     * @param key the hash key
+     * @param field the field to measure
+     * @return the value length in bytes, {@code 0} when the key or field does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     public Long hstrlen(K key, K field) {
         return await(async.hstrlen(key, field));
     }
 
+    /**
+     * Sends {@code HSCAN key cursor}: walks a hash a page at a time. Start with {@code "0"} and continue with
+     * {@link ScanResult#cursor()} until {@link ScanResult#isFinished()}. A field can appear twice if the hash
+     * is rebuilt between pages, but none is skipped. See {@link io.github.salihcantekin.ruvio.RuvioClient#hscanIterable}.
+     *
+     * @param key the hash key
+     * @param cursor {@code "0"} to start, otherwise the previous page's cursor
+     * @return the next cursor and the field/value pairs of this page (empty page for a missing key)
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     public ScanResult<KeyValue<K, V>> hscan(K key, String cursor) {
         return await(async.hscan(key, cursor));
     }
 
+    /**
+     * Sends {@code HSCAN key cursor [MATCH pattern] [COUNT n]}: like {@link #hscan(Object, String)} with a field-name filter and a page size hint. The {@code TYPE} option of {@code ScanArgs} does not apply here.
+     *
+     * @param key the hash key
+     * @param cursor {@code "0"} to start, otherwise the previous page's cursor
+     * @param options {@code MATCH} glob on field names and {@code COUNT} hint
+     * @return the next cursor and the matching field/value pairs of this page
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     public ScanResult<KeyValue<K, V>> hscan(K key, String cursor, ScanArgs options) {
         return await(async.hscan(key, cursor, options));
     }
 
-    /** HRANDFIELD key: one random field, or null for a missing key. */
+    /**
+     * Sends {@code HRANDFIELD key}: picks one random field.
+     *
+     * @param key the hash key
+     * @return a field name, or {@code null} when the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     public K hrandfield(K key) {
         return await(async.hrandfield(key));
     }
 
-    /** HRANDFIELD key count (negative count may repeat). */
+    /**
+     * Sends {@code HRANDFIELD key count}: picks random fields. Does not remove anything.
+     *
+     * @param key the hash key
+     * @param count a positive count returns up to that many distinct fields; a negative count returns {@code -count} fields that may repeat (limited to 1,048,576)
+     * @return the chosen field names, empty when the key does not exist
+     * @throws RuvioServerException {@code ERR count is out of range} for a negative count beyond the limit; {@code WRONGTYPE} when the key holds a non-hash
+     */
     public List<K> hrandfield(K key, long count) {
         return await(async.hrandfield(key, count));
     }
 
-    /** HRANDFIELD key count WITHVALUES. */
+    /**
+     * Sends {@code HRANDFIELD key count WITHVALUES}: like {@link #hrandfield(Object, long)}, with each field's value.
+     *
+     * @param key the hash key
+     * @param count positive for distinct fields, negative for repeats allowed
+     * @return the chosen field/value pairs, empty when the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     public List<KeyValue<K, V>> hrandfieldWithValues(K key, long count) {
         return await(async.hrandfieldWithValues(key, count));
     }
 
-    /** HEXPIRE key seconds FIELDS n field...: per field -2 missing, 0 condition not met, 1 set, 2 deleted. */
+    /**
+     * Sends {@code HEXPIRE key seconds FIELDS n field [field ...]}: gives individual hash fields a time to live. When a field's TTL passes, the field is removed; the hash disappears with its last field.
+     *
+     * <pre>{@code
+     * List<Long> r = client.hexpire("session:1", 60, "token", "nonce"); // [1, 1]
+     * }</pre>
+     *
+     * @param key the hash key
+     * @param seconds seconds from now
+     * @param fields one or more fields
+     * @return one status per field, in order: {@code 1} TTL set, {@code 2} the field was deleted (TTL already due),
+     * {@code 0} not applied, {@code -2} the field (or the key) does not exist
+     * @throws IllegalArgumentException when no field is given
+     * @throws RuvioServerException {@code ERR} for an out-of-range time; {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final List<Long> hexpire(K key, long seconds, K... fields) {
         return await(async.hexpire(key, seconds, fields));
     }
 
+    /**
+     * Sends {@code HEXPIRE key seconds [NX|XX|GT|LT] FIELDS n field [field ...]}: like
+     * {@link #hexpire(Object, long, Object[])} but only for fields whose current TTL satisfies the condition.
+     *
+     * @param key the hash key
+     * @param seconds seconds from now
+     * @param condition {@code NX} only fields without a TTL, {@code XX} only fields with one, {@code GT}/{@code LT} only when the new deadline is later/earlier; {@code ALWAYS} (or null) sends no flag
+     * @param fields one or more fields
+     * @return one status per field: {@code 1} set, {@code 2} deleted, {@code 0} the condition was not met, {@code -2} no such field
+     * @throws RuvioServerException {@code ERR} for an out-of-range time; {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final List<Long> hexpire(K key, long seconds, ExpireCondition condition, K... fields) {
         return await(async.hexpire(key, seconds, condition, fields));
     }
 
+    /**
+     * Sends {@code HPEXPIRE key milliseconds FIELDS n field [field ...]}: like {@link #hexpire(Object, long, Object[])} in milliseconds.
+     *
+     * @param key the hash key
+     * @param millis milliseconds from now
+     * @param fields one or more fields
+     * @return one status per field: {@code 1} set, {@code 2} deleted, {@code 0} not applied, {@code -2} no such field
+     * @throws RuvioServerException {@code ERR} for an out-of-range time; {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final List<Long> hpexpire(K key, long millis, K... fields) {
         return await(async.hpexpire(key, millis, fields));
     }
 
+    /**
+     * Sends {@code HPEXPIRE key milliseconds [NX|XX|GT|LT] FIELDS n field [field ...]}: milliseconds variant with a condition.
+     *
+     * @param key the hash key
+     * @param millis milliseconds from now
+     * @param condition which fields to change, see {@link ExpireCondition}
+     * @param fields one or more fields
+     * @return one status per field: {@code 1} set, {@code 2} deleted, {@code 0} condition not met, {@code -2} no such field
+     * @throws RuvioServerException {@code ERR} for an out-of-range time; {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final List<Long> hpexpire(K key, long millis, ExpireCondition condition, K... fields) {
         return await(async.hpexpire(key, millis, condition, fields));
     }
 
+    /**
+     * Sends {@code HEXPIREAT key unix-seconds FIELDS n field [field ...]}: expires fields at an absolute Unix time in seconds.
+     *
+     * @param key the hash key
+     * @param unixSeconds absolute deadline in seconds since 1970-01-01 UTC; a time in the past deletes the fields
+     * @param fields one or more fields
+     * @return one status per field: {@code 1} set, {@code 2} deleted, {@code 0} not applied, {@code -2} no such field
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final List<Long> hexpireat(K key, long unixSeconds, K... fields) {
         return await(async.hexpireat(key, unixSeconds, fields));
     }
 
+    /**
+     * Sends {@code HEXPIREAT key unix-seconds [NX|XX|GT|LT] FIELDS n field [field ...]}.
+     *
+     * @param key the hash key
+     * @param unixSeconds absolute deadline in seconds since 1970-01-01 UTC
+     * @param condition which fields to change, see {@link ExpireCondition}
+     * @param fields one or more fields
+     * @return one status per field: {@code 1} set, {@code 2} deleted, {@code 0} condition not met, {@code -2} no such field
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final List<Long> hexpireat(K key, long unixSeconds, ExpireCondition condition, K... fields) {
         return await(async.hexpireat(key, unixSeconds, condition, fields));
     }
 
+    /**
+     * Sends {@code HPEXPIREAT key unix-ms FIELDS n field [field ...]}: expires fields at an absolute Unix time in milliseconds.
+     *
+     * @param key the hash key
+     * @param unixMillis absolute deadline in milliseconds since 1970-01-01 UTC; a time in the past deletes the fields
+     * @param fields one or more fields
+     * @return one status per field: {@code 1} set, {@code 2} deleted, {@code 0} not applied, {@code -2} no such field
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final List<Long> hpexpireat(K key, long unixMillis, K... fields) {
         return await(async.hpexpireat(key, unixMillis, fields));
     }
 
+    /**
+     * Sends {@code HPEXPIREAT key unix-ms [NX|XX|GT|LT] FIELDS n field [field ...]}.
+     *
+     * @param key the hash key
+     * @param unixMillis absolute deadline in milliseconds since 1970-01-01 UTC
+     * @param condition which fields to change, see {@link ExpireCondition}
+     * @param fields one or more fields
+     * @return one status per field: {@code 1} set, {@code 2} deleted, {@code 0} condition not met, {@code -2} no such field
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final List<Long> hpexpireat(K key, long unixMillis, ExpireCondition condition, K... fields) {
         return await(async.hpexpireat(key, unixMillis, condition, fields));
     }
 
+    /**
+     * Sends {@code HTTL key FIELDS n field [field ...]}: remaining time to live of fields, in seconds (rounded up).
+     *
+     * @param key the hash key
+     * @param fields one or more fields
+     * @return one value per field: the seconds left, {@code -1} when the field has no TTL, {@code -2} when the field or key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final List<Long> httl(K key, K... fields) {
         return await(async.httl(key, fields));
     }
 
+    /**
+     * Sends {@code HPTTL key FIELDS n field [field ...]}: remaining time to live of fields, in milliseconds.
+     *
+     * @param key the hash key
+     * @param fields one or more fields
+     * @return one value per field: the milliseconds left, {@code -1} no TTL, {@code -2} no such field or key
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final List<Long> hpttl(K key, K... fields) {
         return await(async.hpttl(key, fields));
     }
 
+    /**
+     * Sends {@code HEXPIRETIME key FIELDS n field [field ...]}: the absolute expiry of fields as Unix seconds.
+     *
+     * @param key the hash key
+     * @param fields one or more fields
+     * @return one value per field: the Unix time in seconds, {@code -1} no TTL, {@code -2} no such field or key
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final List<Long> hexpiretime(K key, K... fields) {
         return await(async.hexpiretime(key, fields));
     }
 
+    /**
+     * Sends {@code HPEXPIRETIME key FIELDS n field [field ...]}: the absolute expiry of fields as Unix milliseconds.
+     *
+     * @param key the hash key
+     * @param fields one or more fields
+     * @return one value per field: the Unix time in milliseconds, {@code -1} no TTL, {@code -2} no such field or key
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final List<Long> hpexpiretime(K key, K... fields) {
         return await(async.hpexpiretime(key, fields));
     }
 
-    /** HPERSIST: per field 1 removed a TTL, -1 had none, -2 missing. */
+    /**
+     * Sends {@code HPERSIST key FIELDS n field [field ...]}: removes the TTL of fields so they live on.
+     *
+     * @param key the hash key
+     * @param fields one or more fields
+     * @return one value per field: {@code 1} a TTL was removed, {@code -1} the field had no TTL, {@code -2} no such field or key
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
     @SafeVarargs
     public final List<Long> hpersist(K key, K... fields) {
         return await(async.hpersist(key, fields));
@@ -606,82 +1709,237 @@ public abstract class RuvioSyncCommands<K, V> {
 
 
     // ---- ListCommands ----
+    /**
+     * Sends {@code LPUSH key value [value ...]}: adds values to the head of a list, creating it when missing. Values are pushed one after another, so the last argument ends up first.
+     *
+     * <pre>{@code
+     * client.lpush("queue", "a", "b"); // list is now [b, a]
+     * }</pre>
+     *
+     * @param key the list key
+     * @param values one or more values
+     * @return the list length after the push
+     * @throws IllegalArgumentException when no value is given
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     @SafeVarargs
     public final Long lpush(K key, V... values) {
         return await(async.lpush(key, values));
     }
 
+    /**
+     * Sends {@code RPUSH key value [value ...]}: adds values to the tail of a list, creating it when missing.
+     *
+     * @param key the list key
+     * @param values one or more values
+     * @return the list length after the push
+     * @throws IllegalArgumentException when no value is given
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     @SafeVarargs
     public final Long rpush(K key, V... values) {
         return await(async.rpush(key, values));
     }
 
+    /**
+     * Sends {@code LPUSHX key value [value ...]}: like {@link #lpush(Object, Object[])} but only when the list already exists.
+     *
+     * @param key the list key
+     * @param values one or more values
+     * @return the list length after the push, {@code 0} when the list does not exist (nothing is created)
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     @SafeVarargs
     public final Long lpushx(K key, V... values) {
         return await(async.lpushx(key, values));
     }
 
+    /**
+     * Sends {@code RPUSHX key value [value ...]}: like {@link #rpush(Object, Object[])} but only when the list already exists.
+     *
+     * @param key the list key
+     * @param values one or more values
+     * @return the list length after the push, {@code 0} when the list does not exist (nothing is created)
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     @SafeVarargs
     public final Long rpushx(K key, V... values) {
         return await(async.rpushx(key, values));
     }
 
-    /** LPUSHCAP key cap value...: LPUSH, then trim from the tail to at most {@code cap}. Returns the length. */
+    /**
+     * Sends the Ruvio command {@code LPUSHCAP key cap value [value ...]}: pushes to the head, then drops items from the tail until at most {@code cap} remain. It keeps a "latest N" list in one step (see {@link io.github.salihcantekin.ruvio.RuvioClient#pushRecent}).
+     *
+     * <pre>{@code
+     * client.lpushcap("recent:user1", 10, "page-42"); // newest first, at most 10 kept
+     * }</pre>
+     *
+     * @param key the list key
+     * @param cap the most items the list may keep; must be greater than zero
+     * @param values one or more values
+     * @return the list length after the push and trim (never more than {@code cap})
+     * @throws RuvioServerException {@code ERR} for an invalid cap; {@code WRONGTYPE} when the key holds a non-list
+     */
     @SafeVarargs
     public final Long lpushcap(K key, long cap, V... values) {
         return await(async.lpushcap(key, cap, values));
     }
 
-    /** RPUSHCAP key cap value...: RPUSH, then trim from the head to at most {@code cap}. */
+    /**
+     * Sends the Ruvio command {@code RPUSHCAP key cap value [value ...]}: pushes to the tail, then drops items from the head until at most {@code cap} remain.
+     *
+     * @param key the list key
+     * @param cap the most items the list may keep; must be greater than zero
+     * @param values one or more values
+     * @return the list length after the push and trim (never more than {@code cap})
+     * @throws RuvioServerException {@code ERR} for an invalid cap; {@code WRONGTYPE} when the key holds a non-list
+     */
     @SafeVarargs
     public final Long rpushcap(K key, long cap, V... values) {
         return await(async.rpushcap(key, cap, values));
     }
 
+    /**
+     * Sends {@code LPOP key}: removes and returns the first element.
+     *
+     * @param key the list key
+     * @return the element, or {@code null} when the list is empty or missing
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     public V lpop(K key) {
         return await(async.lpop(key));
     }
 
+    /**
+     * Sends {@code LPOP key count}: removes and returns up to {@code count} elements from the head.
+     *
+     * @param key the list key
+     * @param count how many to remove; must be positive
+     * @return the removed elements, head first; empty when the list is empty or missing
+     * @throws RuvioServerException {@code ERR} for a non-positive count; {@code WRONGTYPE} when the key holds a non-list
+     */
     public List<V> lpop(K key, long count) {
         return await(async.lpop(key, count));
     }
 
+    /**
+     * Sends {@code RPOP key}: removes and returns the last element.
+     *
+     * @param key the list key
+     * @return the element, or {@code null} when the list is empty or missing
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     public V rpop(K key) {
         return await(async.rpop(key));
     }
 
+    /**
+     * Sends {@code RPOP key count}: removes and returns up to {@code count} elements from the tail.
+     *
+     * @param key the list key
+     * @param count how many to remove; must be positive
+     * @return the removed elements, tail first; empty when the list is empty or missing
+     * @throws RuvioServerException {@code ERR} for a non-positive count; {@code WRONGTYPE} when the key holds a non-list
+     */
     public List<V> rpop(K key, long count) {
         return await(async.rpop(key, count));
     }
 
+    /**
+     * Sends {@code LLEN key}.
+     *
+     * @param key the list key
+     * @return the number of elements, {@code 0} when the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     public Long llen(K key) {
         return await(async.llen(key));
     }
 
+    /**
+     * Sends {@code LINDEX key index}.
+     *
+     * @param key the list key
+     * @param index zero-based position; negative counts from the tail ({@code -1} is the last element)
+     * @return the element, or {@code null} when the index is out of range or the key is missing
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     public V lindex(K key, long index) {
         return await(async.lindex(key, index));
     }
 
+    /**
+     * Sends {@code LRANGE key start stop}: reads a slice of a list.
+     *
+     * <pre>{@code
+     * List<String> all = client.lrange("queue", 0, -1);
+     * }</pre>
+     *
+     * @param key the list key
+     * @param start first position, inclusive; negative counts from the tail
+     * @param stop last position, inclusive; negative counts from the tail ({@code -1} is the last element); clamped to the list
+     * @return the elements in order; empty when the range is empty or the key is missing
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     public List<V> lrange(K key, long start, long stop) {
         return await(async.lrange(key, start, stop));
     }
 
+    /**
+     * Sends {@code LTRIM key start stop}: keeps only the elements in the range and drops the rest. An empty result removes the key.
+     *
+     * @param key the list key
+     * @param start first position to keep, inclusive; negative counts from the tail
+     * @param stop last position to keep, inclusive; negative counts from the tail
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     public void ltrim(K key, long start, long stop) {
         await(async.ltrim(key, start, stop));
     }
 
-    /** BLPOP key... timeout_seconds. Null on timeout. */
+    /**
+     * Sends {@code BLPOP key [key ...] timeout}: removes the first element of the first non-empty list, waiting for one to appear. The wait happens on the server and holds the shared connection, so run it on {@link io.github.salihcantekin.ruvio.RuvioClient#dedicated()}. At most 1,024 clients can wait on one shard. The command is shard-local; in a cluster all keys must hash to one slot.
+     *
+     * <pre>{@code
+     * try (RuvioClient<String, String> worker = client.dedicated()) {
+     *     KeyValue<String, String> job = worker.blpop(5, "jobs");
+     * }
+     * }</pre>
+     *
+     * @param timeoutSeconds how long to wait in seconds (fractions allowed); {@code 0} waits until an element arrives or the server shuts down
+     * @param keys one or more list keys, checked in order
+     * @return the key the element came from and the element, or {@code null} when the timeout passed
+     * @throws IllegalArgumentException when no key is given
+     * @throws RuvioServerException {@code ERR max number of blocking clients reached}; {@code WRONGTYPE} when a key holds a non-list
+     */
     @SafeVarargs
     public final KeyValue<K, V> blpop(double timeoutSeconds, K... keys) {
         return await(async.blpop(timeoutSeconds, keys));
     }
 
+    /**
+     * Sends {@code BRPOP key [key ...] timeout}: like {@link #blpop(double, Object[])} but takes from the tail.
+     *
+     * @param timeoutSeconds how long to wait in seconds; {@code 0} waits without limit
+     * @param keys one or more list keys, checked in order
+     * @return the key and the removed element, or {@code null} on timeout
+     * @throws RuvioServerException {@code ERR max number of blocking clients reached}; {@code WRONGTYPE} when a key holds a non-list
+     */
     @SafeVarargs
     public final KeyValue<K, V> brpop(double timeoutSeconds, K... keys) {
         return await(async.brpop(timeoutSeconds, keys));
     }
 
-    /** LINSERT key BEFORE|AFTER pivot value. -1 when the pivot is missing. */
+    /**
+     * Sends {@code LINSERT key BEFORE|AFTER pivot value}: inserts next to the first element equal to {@code pivot}. Rewrites the list (O(N)).
+     *
+     * @param key the list key
+     * @param before {@code true} to insert before the pivot, {@code false} to insert after it
+     * @param pivot the existing element to look for
+     * @param value the element to insert
+     * @return the list length after the insert, {@code -1} when the pivot was not found, {@code 0} when the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     public Long linsert(K key, boolean before, V pivot, V value) {
         return await(async.linsert(key, before, pivot, value));
     }
@@ -691,52 +1949,148 @@ public abstract class RuvioSyncCommands<K, V> {
         return await(async.linsert(key, position, pivot, value));
     }
 
+    /**
+     * Sends {@code LSET key index value}: replaces the element at a position (O(N)).
+     *
+     * @param key the list key
+     * @param index zero-based position; negative counts from the tail
+     * @param value the new element
+     * @throws RuvioServerException {@code ERR no such key} when the list is missing; {@code ERR index out of range}; {@code WRONGTYPE} for a non-list
+     */
     public void lset(K key, long index, V value) {
         await(async.lset(key, index, value));
     }
 
+    /**
+     * Sends {@code LREM key count value}: removes elements equal to {@code value} (O(N)).
+     *
+     * @param key the list key
+     * @param count positive: remove up to that many starting at the head; negative: starting at the tail; {@code 0}: remove all matches
+     * @param value the element to remove
+     * @return how many elements were removed, {@code 0} when the key is missing
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     public Long lrem(K key, long count, V value) {
         return await(async.lrem(key, count, value));
     }
 
-    /** LPOS key value: index of the first match, or null. */
+    /**
+     * Sends {@code LPOS key element}: finds the position of the first match.
+     *
+     * @param key the list key
+     * @param value the element to look for
+     * @return the zero-based index, or {@code null} when not found or the key is missing
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     public Long lpos(K key, V value) {
         return await(async.lpos(key, value));
     }
 
+    /**
+     * Sends {@code LPOS key element [RANK r] [MAXLEN m]}.
+     *
+     * @param key the list key
+     * @param value the element to look for
+     * @param options {@code rank}: which match to return (1 is the first, 2 the second, negative counts from the tail); {@code maxLen}: stop after comparing this many elements ({@code 0} means no limit)
+     * @return the zero-based index of the chosen match, or {@code null} when there is none
+     * @throws RuvioServerException {@code ERR} for an invalid rank; {@code WRONGTYPE} when the key holds a non-list
+     */
     public Long lpos(K key, V value, LPosArgs options) {
         return await(async.lpos(key, value, options));
     }
 
-    /** LPOS key value COUNT n (0 means all matches). */
+    /**
+     * Sends {@code LPOS key element COUNT n}: finds the positions of several matches.
+     *
+     * @param key the list key
+     * @param value the element to look for
+     * @param count the most matches to return; {@code 0} returns all
+     * @return the zero-based indexes in list order, empty when there is no match
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-list
+     */
     public List<Long> lposAll(K key, V value, long count) {
         return await(async.lposAll(key, value, count));
     }
 
+    /**
+     * Sends {@code LPOS key element [RANK r] [MAXLEN m] COUNT n}.
+     *
+     * @param key the list key
+     * @param value the element to look for
+     * @param count the most matches to return; {@code 0} returns all
+     * @param options {@code rank} (where to start counting matches; negative scans from the tail) and {@code maxLen}
+     * @return the zero-based indexes of the matches, empty when there is none
+     * @throws RuvioServerException {@code ERR} for an invalid rank; {@code WRONGTYPE} when the key holds a non-list
+     */
     public List<Long> lposAll(K key, V value, long count, LPosArgs options) {
         return await(async.lposAll(key, value, count, options));
     }
 
+    /**
+     * Sends {@code LMOVE source destination LEFT|RIGHT LEFT|RIGHT}: atomically pops an element from one list and pushes it to another (or the same one, to rotate). In a cluster both keys must hash to the same slot, otherwise the client throws {@code CROSSSLOT} before sending.
+     *
+     * @param source the list to pop from
+     * @param destination the list to push to
+     * @param from which end of {@code source} to pop
+     * @param to which end of {@code destination} to push to
+     * @return the moved element, or {@code null} when {@code source} is empty or missing
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-list; {@code CROSSSLOT} in a cluster
+     */
     public V lmove(K source, K destination, ListDirection from, ListDirection to) {
         return await(async.lmove(source, destination, from, to));
     }
 
+    /**
+     * Sends {@code RPOPLPUSH source destination}: pops the tail of one list and pushes it to the head of another. Same as {@code lmove(source, destination, RIGHT, LEFT)}.
+     *
+     * @param source the list to pop from
+     * @param destination the list to push to
+     * @return the moved element, or {@code null} when {@code source} is empty or missing
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-list; {@code CROSSSLOT} in a cluster
+     */
     public V rpoplpush(K source, K destination) {
         return await(async.rpoplpush(source, destination));
     }
 
-    /** BLMOVE ... timeout_seconds. Null on timeout. Use a dedicated client. */
+    /**
+     * Sends {@code BLMOVE source destination LEFT|RIGHT LEFT|RIGHT timeout}: like {@link #lmove} but waits for an element. The server polls every 5 ms, and the shared connection is held while waiting, so use {@link io.github.salihcantekin.ruvio.RuvioClient#dedicated()}. Not allowed inside a transaction.
+     *
+     * @param source the list to pop from
+     * @param destination the list to push to
+     * @param from which end of {@code source} to pop
+     * @param to which end of {@code destination} to push to
+     * @param timeoutSeconds seconds to wait; {@code 0} waits until an element arrives
+     * @return the moved element, or {@code null} on timeout
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-list; {@code CROSSSLOT} in a cluster
+     */
     public V blmove(K source, K destination, ListDirection from, ListDirection to, double timeoutSeconds) {
         return await(async.blmove(source, destination, from, to, timeoutSeconds));
     }
 
-    /** LMPOP numkeys key... LEFT|RIGHT [COUNT n]. Null when every list is empty. */
+    /**
+     * Sends {@code LMPOP numkeys key [key ...] LEFT|RIGHT [COUNT n]}: pops elements from the first non-empty list.
+     *
+     * @param direction which end to pop from
+     * @param count the most elements to pop; zero or less sends no {@code COUNT} (pops one)
+     * @param keys one or more list keys, checked in order
+     * @return the key popped from and the elements, or {@code null} when every list is empty
+     * @throws RuvioServerException {@code WRONGTYPE} when a key holds a non-list; {@code CROSSSLOT} in a cluster when keys span slots
+     */
     @SafeVarargs
     public final KeyValue<K, List<V>> lmpop(ListDirection direction, long count, K... keys) {
         return await(async.lmpop(direction, count, keys));
     }
 
-    /** BLMPOP timeout numkeys key... LEFT|RIGHT [COUNT n]. Null on timeout. Use a dedicated client. */
+    /**
+     * Sends {@code BLMPOP timeout numkeys key [key ...] LEFT|RIGHT [COUNT n]}: like {@link #lmpop} but waits (polling every 5 ms on the server) until a list has an element. Holds the shared connection; use {@link io.github.salihcantekin.ruvio.RuvioClient#dedicated()}. Not allowed inside a transaction.
+     *
+     * @param timeoutSeconds seconds to wait; {@code 0} waits until an element arrives
+     * @param direction which end to pop from
+     * @param count the most elements to pop; zero or less pops one
+     * @param keys one or more list keys
+     * @return the key popped from and the elements, or {@code null} on timeout
+     * @throws RuvioServerException {@code WRONGTYPE} when a key holds a non-list; {@code CROSSSLOT} in a cluster when keys span slots
+     */
     @SafeVarargs
     public final KeyValue<K, List<V>> blmpop(double timeoutSeconds, ListDirection direction, long count, K... keys) {
         return await(async.blmpop(timeoutSeconds, direction, count, keys));
@@ -744,861 +2098,2461 @@ public abstract class RuvioSyncCommands<K, V> {
 
 
     // ---- SetCommands ----
+    /**
+     * Sends {@code SADD key member [member ...]}: adds members to a set, creating it when missing.
+     *
+     * <pre>{@code
+     * long added = client.sadd("tags", "red", "blue");
+     * }</pre>
+     *
+     * @param key the set key
+     * @param members one or more members
+     * @return how many members were new
+     * @throws IllegalArgumentException when no member is given
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-set
+     */
     @SafeVarargs
     public final Long sadd(K key, V... members) {
         return await(async.sadd(key, members));
     }
 
+    /**
+     * Sends {@code SREM key member [member ...]}: removes members. A set left empty disappears.
+     *
+     * @param key the set key
+     * @param members one or more members
+     * @return how many members existed and were removed
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-set
+     */
     @SafeVarargs
     public final Long srem(K key, V... members) {
         return await(async.srem(key, members));
     }
 
+    /**
+     * Sends {@code SISMEMBER key member}.
+     *
+     * @param key the set key
+     * @param member the member to test
+     * @return {@code true} when it is a member, {@code false} otherwise (also for a missing key)
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-set
+     */
     public Boolean sismember(K key, V member) {
         return await(async.sismember(key, member));
     }
 
+    /**
+     * Sends {@code SMISMEMBER key member [member ...]}: tests several members at once.
+     *
+     * @param key the set key
+     * @param members one or more members
+     * @return one flag per member in the same order
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-set
+     */
     @SafeVarargs
     public final List<Boolean> smismember(K key, V... members) {
         return await(async.smismember(key, members));
     }
 
+    /**
+     * Sends {@code SCARD key}.
+     *
+     * @param key the set key
+     * @return the number of members, {@code 0} for a missing key
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-set
+     */
     public Long scard(K key) {
         return await(async.scard(key));
     }
 
+    /**
+     * Sends {@code SMEMBERS key}: all members. Ruvio returns them sorted. Cost grows with the set size; for big sets page with {@link #sscan(Object, String)}.
+     *
+     * @param key the set key
+     * @return the members, empty for a missing key
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-set
+     */
     public List<V> smembers(K key) {
         return await(async.smembers(key));
     }
 
+    /**
+     * Sends {@code SINTER key [key ...]}: members present in every set. In a cluster all keys must hash to one slot.
+     *
+     * @param keys one or more set keys
+     * @return the common members, sorted; empty when there are none or any set is missing
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-set; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final List<V> sinter(K... keys) {
         return await(async.sinter(keys));
     }
 
+    /**
+     * Sends {@code SUNION key [key ...]}: members present in any set. In a cluster all keys must hash to one slot.
+     *
+     * @param keys one or more set keys
+     * @return the combined members, sorted; missing sets count as empty
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-set; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final List<V> sunion(K... keys) {
         return await(async.sunion(keys));
     }
 
+    /**
+     * Sends {@code SDIFF key [key ...]}: members of the first set that are in none of the others. In a cluster all keys must hash to one slot.
+     *
+     * @param keys the first set followed by the sets to subtract
+     * @return the remaining members, sorted
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-set; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final List<V> sdiff(K... keys) {
         return await(async.sdiff(keys));
     }
 
+    /**
+     * Sends {@code SINTERSTORE destination key [key ...]}: like {@link #sinter(Object[])}, but stores the result in {@code destination} (overwriting it; an empty result removes it). All keys must hash to one slot in a cluster.
+     *
+     * @param destination the key that receives the result
+     * @param keys one or more source set keys
+     * @return the number of members in the stored result
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-set source; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final Long sinterstore(K destination, K... keys) {
         return await(async.sinterstore(destination, keys));
     }
 
+    /**
+     * Sends {@code SUNIONSTORE destination key [key ...]}: like {@link #sunion(Object[])}, but stores the result in {@code destination}. All keys must hash to one slot in a cluster.
+     *
+     * @param destination the key that receives the result
+     * @param keys one or more source set keys
+     * @return the number of members in the stored result
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-set source; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final Long sunionstore(K destination, K... keys) {
         return await(async.sunionstore(destination, keys));
     }
 
+    /**
+     * Sends {@code SDIFFSTORE destination key [key ...]}: like {@link #sdiff(Object[])}, but stores the result in {@code destination}. All keys must hash to one slot in a cluster.
+     *
+     * @param destination the key that receives the result
+     * @param keys the first set followed by the sets to subtract
+     * @return the number of members in the stored result
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-set source; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final Long sdiffstore(K destination, K... keys) {
         return await(async.sdiffstore(destination, keys));
     }
 
-    /** SINTERCARD numkeys key... */
+    /**
+     * Sends {@code SINTERCARD numkeys key [key ...]}: the size of the intersection without building it.
+     *
+     * @param keys one or more set keys (same slot in a cluster)
+     * @return the number of common members
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-set; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final Long sintercard(K... keys) {
         return await(async.sintercard(keys));
     }
 
-    /** SINTERCARD numkeys key... LIMIT limit */
+    /**
+     * Sends {@code SINTERCARD numkeys key [key ...] LIMIT limit}: like {@link #sintercard(Object[])} but stops counting at {@code limit}.
+     *
+     * @param limit the count at which to stop; {@code 0} means no limit
+     * @param keys one or more set keys (same slot in a cluster)
+     * @return the number of common members, at most {@code limit} when it is non-zero
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-set; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final Long sintercard(long limit, K... keys) {
         return await(async.sintercard(limit, keys));
     }
 
+    /**
+     * Sends {@code SMOVE source destination member}: moves a member from one set to another. In a cluster both keys must hash to one slot.
+     *
+     * @param source the set to take the member from
+     * @param destination the set to add it to
+     * @param member the member to move
+     * @return {@code true} when moved, {@code false} when {@code member} is not in {@code source}
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-set; {@code CROSSSLOT} in a cluster
+     */
     public Boolean smove(K source, K destination, V member) {
         return await(async.smove(source, destination, member));
     }
 
+    /**
+     * Sends {@code SPOP key}: removes and returns a random member.
+     *
+     * @param key the set key
+     * @return the removed member, or {@code null} when the set is empty or missing
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-set
+     */
     public V spop(K key) {
         return await(async.spop(key));
     }
 
+    /**
+     * Sends {@code SPOP key count}: removes and returns up to {@code count} random members. Members come from neighbouring table positions, so they are random between calls but not independent draws.
+     *
+     * @param key the set key
+     * @param count how many to remove; zero or greater
+     * @return the removed members, empty when the set is empty or missing
+     * @throws RuvioServerException {@code ERR} for a negative count; {@code WRONGTYPE} when the key holds a non-set
+     */
     public List<V> spop(K key, long count) {
         return await(async.spop(key, count));
     }
 
+    /**
+     * Sends {@code SRANDMEMBER key}: returns a random member without removing it.
+     *
+     * @param key the set key
+     * @return a member, or {@code null} when the set is empty or missing
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-set
+     */
     public V srandmember(K key) {
         return await(async.srandmember(key));
     }
 
+    /**
+     * Sends {@code SRANDMEMBER key count}: returns random members without removing them.
+     *
+     * @param key the set key
+     * @param count a positive count returns up to that many distinct members; a negative count returns {@code -count} members that may repeat (at most 1,048,576)
+     * @return the members, empty when the set is empty or missing
+     * @throws RuvioServerException {@code ERR count is out of range} beyond the limit; {@code WRONGTYPE} when the key holds a non-set
+     */
     public List<V> srandmember(K key, long count) {
         return await(async.srandmember(key, count));
     }
 
+    /**
+     * Sends {@code SSCAN key cursor}: walks a set a page at a time. Start with {@code "0"} and pass back {@link ScanResult#cursor()} until {@link ScanResult#isFinished()}. A member can appear twice if the set is rebuilt between pages, but none is skipped. See {@link io.github.salihcantekin.ruvio.RuvioClient#sscanIterable}.
+     *
+     * @param key the set key
+     * @param cursor {@code "0"} to start, otherwise the previous page's cursor
+     * @return the next cursor and the members of this page
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-set
+     */
     public ScanResult<V> sscan(K key, String cursor) {
         return await(async.sscan(key, cursor));
     }
 
+    /**
+     * Sends {@code SSCAN key cursor [MATCH pattern] [COUNT n]}: like {@link #sscan(Object, String)} with a member filter and a page size hint.
+     *
+     * @param key the set key
+     * @param cursor {@code "0"} to start, otherwise the previous page's cursor
+     * @param options {@code MATCH} glob and {@code COUNT} hint
+     * @return the next cursor and the matching members of this page
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-set
+     */
     public ScanResult<V> sscan(K key, String cursor, ScanArgs options) {
         return await(async.sscan(key, cursor, options));
     }
 
 
     // ---- SortedSetCommands ----
-    /** ZADD key score member. Returns the number of new members. */
+    /**
+     * Sends {@code ZADD key score member}: adds a member with a score, or changes the score of an existing member. Members are ordered by score, then by bytes.
+     *
+     * <pre>{@code
+     * client.zadd("leaders", 120.5, "ada");
+     * }</pre>
+     *
+     * @param key the sorted set key
+     * @param score the score (a double; {@code NaN} is refused)
+     * @param member the member
+     * @return {@code 1} when the member is new, {@code 0} when only its score changed or nothing changed
+     * @throws RuvioServerException {@code ERR} for an invalid score; {@code WRONGTYPE} when the key holds a non-sorted-set
+     */
     public Long zadd(K key, double score, V member) {
         return await(async.zadd(key, score, member));
     }
 
-    /** ZADD key score member [score member ...] from member -> score. */
+    /**
+     * Sends {@code ZADD key score member [score member ...]}: adds or updates several members in one command.
+     *
+     * @param key the sorted set key
+     * @param members the members and their scores; must not be empty
+     * @return how many members were new
+     * @throws RuvioServerException {@code ERR} for an invalid score; {@code WRONGTYPE} for a non-sorted-set
+     */
     public Long zadd(K key, Map<V, Double> members) {
         return await(async.zadd(key, members));
     }
 
-    /** ZADD key [NX|XX] [GT|LT] [CH] score member ... */
+    /**
+     * Sends {@code ZADD key [NX|XX] [GT|LT] [CH] score member ...}.
+     *
+     * <pre>{@code
+     * long newOnly = client.zadd("leaders", ZAddArgs.builder().nx(), Map.of("ada", 10.0));
+     * }</pre>
+     *
+     * @param key the sorted set key
+     * @param options {@code nx()} only add new members; {@code xx()} only update existing members; {@code gt()}/{@code lt()} only update when the new score is greater/lower (new members are still added); {@code ch()} count changed members too
+     * @param members the members and their scores
+     * @return without {@code ch()}: how many members were new; with {@code ch()}: how many were new or changed score
+     * @throws RuvioServerException {@code ERR} for incompatible flags (for example {@code NX} with {@code XX}); {@code WRONGTYPE} for a non-sorted-set
+     */
     public Long zadd(K key, ZAddArgs options, Map<V, Double> members) {
         return await(async.zadd(key, options, members));
     }
 
-    /** ZADD key INCR increment member: the new score. */
+    /**
+     * Sends {@code ZADD key INCR increment member}: adds {@code increment} to a member's score, creating it with that score when missing (same as {@link #zincrby}).
+     *
+     * @param key the sorted set key
+     * @param increment the amount to add
+     * @param member the member
+     * @return the new score
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public Double zaddIncr(K key, double increment, V member) {
         return await(async.zaddIncr(key, increment, member));
     }
 
-    /** ZADD key [flags] INCR increment member: the new score, or null when a flag blocked it. */
+    /**
+     * Sends {@code ZADD key [NX|XX] [GT|LT] INCR increment member}.
+     *
+     * @param key the sorted set key
+     * @param options the conditions to apply
+     * @param increment the amount to add
+     * @param member the member
+     * @return the new score, or {@code null} when a condition rejected the update
+     * @throws RuvioServerException {@code ERR} for incompatible flags; {@code WRONGTYPE} for a non-sorted-set
+     */
     public Double zaddIncr(K key, ZAddArgs options, double increment, V member) {
         return await(async.zaddIncr(key, options, increment, member));
     }
 
+    /**
+     * Sends {@code ZRANGE key start stop}: members by rank, lowest score first.
+     *
+     * <pre>{@code
+     * List<String> top3Lowest = client.zrange("leaders", 0, 2);
+     * }</pre>
+     *
+     * @param key the sorted set key
+     * @param start first rank, inclusive, zero based; negative counts from the highest rank
+     * @param stop last rank, inclusive; negative counts from the highest rank ({@code -1} is the last)
+     * @return the members in order; empty for a missing key or empty range
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<V> zrange(K key, long start, long stop) {
         return await(async.zrange(key, start, stop));
     }
 
+    /**
+     * Sends {@code ZRANGE key start stop WITHSCORES}: like {@link #zrange(Object, long, long)} with each score.
+     *
+     * @param key the sorted set key
+     * @param start first rank, inclusive; negative counts from the end
+     * @param stop last rank, inclusive; negative counts from the end
+     * @return members with scores, lowest first
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<ScoredValue<V>> zrangeWithScores(K key, long start, long stop) {
         return await(async.zrangeWithScores(key, start, stop));
     }
 
-    /** Unified ZRANGE key start stop [BYSCORE|BYLEX] [REV] [LIMIT offset count]. */
+    /**
+     * Sends the unified {@code ZRANGE key start stop [BYSCORE|BYLEX] [REV] [LIMIT offset count]}.
+     *
+     * <pre>{@code
+     * List<String> mid = client.zrange("leaders", "10", "(50", ZRangeArgs.builder().byScore().limit(0, 20));
+     * }</pre>
+     *
+     * @param key the sorted set key
+     * @param start the lower bound as text: a rank, a score bound ({@code 1.5}, {@code (1.5} exclusive, {@code -inf}, {@code +inf}) with {@code byScore()}, or a lex bound ({@code -}, {@code +}, {@code [a}, {@code (a}) with {@code byLex()}
+     * @param stop the upper bound in the same form
+     * @param options {@code byScore()}, {@code byLex()}, {@code rev()} and {@code limit(offset, count)}; with {@code rev()} give the higher bound first
+     * @return the members in range order
+     * @throws RuvioServerException {@code ERR} for a bad bound or a {@code LIMIT} without {@code BYSCORE}/{@code BYLEX}; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<V> zrange(K key, String start, String stop, ZRangeArgs options) {
         return await(async.zrange(key, start, stop, options));
     }
 
+    /**
+     * Like {@link #zrange(Object, String, String, ZRangeArgs)} with {@code WITHSCORES}.
+     *
+     * @param key the sorted set key
+     * @param start the lower bound as text (rank, score or lex bound, depending on {@code options})
+     * @param stop the upper bound as text
+     * @param options range mode, order and limit
+     * @return members with scores in range order
+     * @throws RuvioServerException {@code ERR} for a bad bound; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<ScoredValue<V>> zrangeWithScores(K key, String start, String stop, ZRangeArgs options) {
         return await(async.zrangeWithScores(key, start, stop, options));
     }
 
+    /**
+     * Sends {@code ZREVRANGE key start stop}: members by rank, highest score first.
+     *
+     * @param key the sorted set key
+     * @param start first rank counted from the highest, inclusive; negative counts from the lowest
+     * @param stop last rank, inclusive
+     * @return the members, highest score first
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<V> zrevrange(K key, long start, long stop) {
         return await(async.zrevrange(key, start, stop));
     }
 
+    /**
+     * Sends {@code ZREVRANGE key start stop WITHSCORES}.
+     *
+     * @param key the sorted set key
+     * @param start first rank counted from the highest, inclusive
+     * @param stop last rank, inclusive
+     * @return members with scores, highest first
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<ScoredValue<V>> zrevrangeWithScores(K key, long start, long stop) {
         return await(async.zrevrangeWithScores(key, start, stop));
     }
 
+    /**
+     * Sends {@code ZRANGEBYSCORE key min max}: members whose score is in a range, lowest first.
+     *
+     * @param key the sorted set key
+     * @param min the lower score bound: a number, {@code (5} for exclusive, or {@code -inf}
+     * @param max the upper score bound: a number, {@code (5} for exclusive, or {@code +inf}
+     * @return the members in score order
+     * @throws RuvioServerException {@code ERR min or max is not a float}; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<V> zrangebyscore(K key, String min, String max) {
         return await(async.zrangebyscore(key, min, max));
     }
 
+    /**
+     * Sends {@code ZRANGEBYSCORE key min max LIMIT offset count}.
+     *
+     * @param key the sorted set key
+     * @param min the lower score bound ({@code -inf}, {@code (5}, {@code 5})
+     * @param max the upper score bound ({@code +inf}, {@code (5}, {@code 5})
+     * @param offset how many matches to skip; zero or greater
+     * @param count the most matches to return; negative returns the rest
+     * @return the members in score order
+     * @throws RuvioServerException {@code ERR} for a bad bound or negative offset; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<V> zrangebyscore(K key, String min, String max, long offset, long count) {
         return await(async.zrangebyscore(key, min, max, offset, count));
     }
 
+    /**
+     * Sends {@code ZRANGEBYSCORE key min max WITHSCORES}.
+     *
+     * @param key the sorted set key
+     * @param min the lower score bound ({@code -inf}, {@code (5}, {@code 5})
+     * @param max the upper score bound
+     * @return members with scores, lowest first
+     * @throws RuvioServerException {@code ERR} for a bad bound; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<ScoredValue<V>> zrangebyscoreWithScores(K key, String min, String max) {
         return await(async.zrangebyscoreWithScores(key, min, max));
     }
 
+    /**
+     * Sends {@code ZRANGEBYSCORE key min max WITHSCORES LIMIT offset count}.
+     *
+     * @param key the sorted set key
+     * @param min the lower score bound
+     * @param max the upper score bound
+     * @param offset how many matches to skip
+     * @param count the most matches to return; negative returns the rest
+     * @return members with scores, lowest first
+     * @throws RuvioServerException {@code ERR} for a bad bound or negative offset; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<ScoredValue<V>> zrangebyscoreWithScores(K key, String min, String max, long offset, long count) {
         return await(async.zrangebyscoreWithScores(key, min, max, offset, count));
     }
 
+    /**
+     * Sends {@code ZRANGEBYLEX key min max}: members in a lexicographic range. Meant for sets whose members all have the same score; the score is ignored.
+     *
+     * @param key the sorted set key
+     * @param min the lower bound: {@code -} (lowest), {@code [a} inclusive or {@code (a} exclusive
+     * @param max the upper bound: {@code +} (highest), {@code [z} inclusive or {@code (z} exclusive
+     * @return the members in byte order
+     * @throws RuvioServerException {@code ERR} for a bound without {@code [}, {@code (}, {@code -} or {@code +}; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<V> zrangebylex(K key, String min, String max) {
         return await(async.zrangebylex(key, min, max));
     }
 
+    /**
+     * Sends {@code ZRANGEBYLEX key min max LIMIT offset count}.
+     *
+     * @param key the sorted set key
+     * @param min the lower lex bound
+     * @param max the upper lex bound
+     * @param offset how many matches to skip
+     * @param count the most matches to return; negative returns the rest
+     * @return the members in byte order
+     * @throws RuvioServerException {@code ERR} for a bad bound or negative offset; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<V> zrangebylex(K key, String min, String max, long offset, long count) {
         return await(async.zrangebylex(key, min, max, offset, count));
     }
 
-    /** ZREVRANGEBYLEX key max min: the high bound comes first. */
+    /**
+     * Sends {@code ZREVRANGEBYLEX key max min}: like {@link #zrangebylex(Object, String, String)} but in descending order. The high bound comes first.
+     *
+     * @param key the sorted set key
+     * @param max the upper lex bound ({@code +}, {@code [z}, {@code (z})
+     * @param min the lower lex bound ({@code -}, {@code [a}, {@code (a})
+     * @return the members in reverse byte order
+     * @throws RuvioServerException {@code ERR} for a bad bound; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<V> zrevrangebylex(K key, String max, String min) {
         return await(async.zrevrangebylex(key, max, min));
     }
 
+    /**
+     * Sends {@code ZREVRANGEBYLEX key max min LIMIT offset count}.
+     *
+     * @param key the sorted set key
+     * @param max the upper lex bound
+     * @param min the lower lex bound
+     * @param offset how many matches to skip
+     * @param count the most matches to return; negative returns the rest
+     * @return the members in reverse byte order
+     * @throws RuvioServerException {@code ERR} for a bad bound or negative offset; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<V> zrevrangebylex(K key, String max, String min, long offset, long count) {
         return await(async.zrevrangebylex(key, max, min, offset, count));
     }
 
+    /**
+     * Sends {@code ZREM key member [member ...]}: removes members. A set left empty disappears.
+     *
+     * @param key the sorted set key
+     * @param members one or more members
+     * @return how many members existed and were removed
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     @SafeVarargs
     public final Long zrem(K key, V... members) {
         return await(async.zrem(key, members));
     }
 
+    /**
+     * Sends {@code ZINCRBY key increment member}: adds to a member's score, creating the member (and set) when missing.
+     *
+     * @param key the sorted set key
+     * @param increment the amount to add (may be negative)
+     * @param member the member
+     * @return the new score
+     * @throws RuvioServerException {@code ERR} when the result is NaN; {@code WRONGTYPE} for a non-sorted-set
+     */
     public Double zincrby(K key, double increment, V member) {
         return await(async.zincrby(key, increment, member));
     }
 
+    /**
+     * Sends {@code ZCARD key}.
+     *
+     * @param key the sorted set key
+     * @return the number of members, {@code 0} for a missing key
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public Long zcard(K key) {
         return await(async.zcard(key));
     }
 
+    /**
+     * Sends {@code ZSCORE key member}.
+     *
+     * @param key the sorted set key
+     * @param member the member
+     * @return the score, or {@code null} when the member or key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public Double zscore(K key, V member) {
         return await(async.zscore(key, member));
     }
 
+    /**
+     * Sends {@code ZMSCORE key member [member ...]}.
+     *
+     * @param key the sorted set key
+     * @param members one or more members
+     * @return one score per member in order; {@code null} for a member (or key) that does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     @SafeVarargs
     public final List<Double> zmscore(K key, V... members) {
         return await(async.zmscore(key, members));
     }
 
+    /**
+     * Sends {@code ZRANK key member}: position counted from the lowest score.
+     *
+     * @param key the sorted set key
+     * @param member the member
+     * @return the zero-based rank, or {@code null} when the member or key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public Long zrank(K key, V member) {
         return await(async.zrank(key, member));
     }
 
+    /**
+     * Sends {@code ZREVRANK key member}: position counted from the highest score.
+     *
+     * @param key the sorted set key
+     * @param member the member
+     * @return the zero-based rank from the top, or {@code null} when the member or key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public Long zrevrank(K key, V member) {
         return await(async.zrevrank(key, member));
     }
 
+    /**
+     * Sends {@code ZPOPMIN key}: removes and returns the member with the lowest score.
+     *
+     * @param key the sorted set key
+     * @return a list with that one member and its score; empty when the set is empty or missing
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<ScoredValue<V>> zpopmin(K key) {
         return await(async.zpopmin(key));
     }
 
+    /**
+     * Sends {@code ZPOPMIN key count}: removes and returns up to {@code count} lowest members.
+     *
+     * @param key the sorted set key
+     * @param count how many to remove; zero or greater
+     * @return members with scores, lowest first; empty when the set is empty or missing
+     * @throws RuvioServerException {@code ERR} for a negative count; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<ScoredValue<V>> zpopmin(K key, long count) {
         return await(async.zpopmin(key, count));
     }
 
+    /**
+     * Sends {@code ZPOPMAX key}: removes and returns the member with the highest score.
+     *
+     * @param key the sorted set key
+     * @return a list with that one member and its score; empty when the set is empty or missing
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<ScoredValue<V>> zpopmax(K key) {
         return await(async.zpopmax(key));
     }
 
+    /**
+     * Sends {@code ZPOPMAX key count}: removes and returns up to {@code count} highest members.
+     *
+     * @param key the sorted set key
+     * @param count how many to remove; zero or greater
+     * @return members with scores, highest first; empty when the set is empty or missing
+     * @throws RuvioServerException {@code ERR} for a negative count; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<ScoredValue<V>> zpopmax(K key, long count) {
         return await(async.zpopmax(key, count));
     }
 
-    /** BZPOPMIN key... timeout. Null on timeout. Use a dedicated client. */
+    /**
+     * Sends {@code BZPOPMIN key [key ...] timeout}: pops the lowest member of the first non-empty set, waiting for one. Holds the shared connection while it waits; use {@link io.github.salihcantekin.ruvio.RuvioClient#dedicated()}. At most 1,024 clients can wait on one shard.
+     *
+     * @param timeoutSeconds seconds to wait; {@code 0} waits until a member arrives
+     * @param keys one or more sorted set keys (same slot in a cluster)
+     * @return the key, member and score, or {@code null} on timeout
+     * @throws RuvioServerException {@code ERR max number of blocking clients reached}; {@code WRONGTYPE} for a non-sorted-set
+     */
     @SafeVarargs
     public final KeyValue<K, ScoredValue<V>> bzpopmin(double timeoutSeconds, K... keys) {
         return await(async.bzpopmin(timeoutSeconds, keys));
     }
 
+    /**
+     * Sends {@code BZPOPMAX key [key ...] timeout}: like {@link #bzpopmin(double, Object[])} for the highest member.
+     *
+     * @param timeoutSeconds seconds to wait; {@code 0} waits until a member arrives
+     * @param keys one or more sorted set keys (same slot in a cluster)
+     * @return the key, member and score, or {@code null} on timeout
+     * @throws RuvioServerException {@code ERR max number of blocking clients reached}; {@code WRONGTYPE} for a non-sorted-set
+     */
     @SafeVarargs
     public final KeyValue<K, ScoredValue<V>> bzpopmax(double timeoutSeconds, K... keys) {
         return await(async.bzpopmax(timeoutSeconds, keys));
     }
 
+    /**
+     * Sends {@code ZREMRANGEBYRANK key start stop}: removes members by rank.
+     *
+     * @param key the sorted set key
+     * @param start first rank, inclusive; negative counts from the end
+     * @param stop last rank, inclusive
+     * @return how many members were removed
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public Long zremrangebyrank(K key, long start, long stop) {
         return await(async.zremrangebyrank(key, start, stop));
     }
 
+    /**
+     * Sends {@code ZREMRANGEBYSCORE key min max}: removes members in a score range.
+     *
+     * @param key the sorted set key
+     * @param min the lower score bound ({@code -inf}, {@code (5}, {@code 5})
+     * @param max the upper score bound ({@code +inf}, {@code (5}, {@code 5})
+     * @return how many members were removed
+     * @throws RuvioServerException {@code ERR} for a bad bound; {@code WRONGTYPE} for a non-sorted-set
+     */
     public Long zremrangebyscore(K key, String min, String max) {
         return await(async.zremrangebyscore(key, min, max));
     }
 
+    /**
+     * Sends {@code ZREMRANGEBYLEX key min max}: removes members in a lexicographic range.
+     *
+     * @param key the sorted set key
+     * @param min the lower lex bound ({@code -}, {@code [a}, {@code (a})
+     * @param max the upper lex bound ({@code +}, {@code [z}, {@code (z})
+     * @return how many members were removed
+     * @throws RuvioServerException {@code ERR} for a bad bound; {@code WRONGTYPE} for a non-sorted-set
+     */
     public Long zremrangebylex(K key, String min, String max) {
         return await(async.zremrangebylex(key, min, max));
     }
 
+    /**
+     * Sends {@code ZCOUNT key min max}: counts members in a score range.
+     *
+     * @param key the sorted set key
+     * @param min the lower score bound ({@code -inf}, {@code (5}, {@code 5})
+     * @param max the upper score bound ({@code +inf}, {@code (5}, {@code 5})
+     * @return the number of members in range, {@code 0} for a missing key
+     * @throws RuvioServerException {@code ERR} for a bad bound; {@code WRONGTYPE} for a non-sorted-set
+     */
     public Long zcount(K key, String min, String max) {
         return await(async.zcount(key, min, max));
     }
 
+    /**
+     * Sends {@code ZLEXCOUNT key min max}: counts members in a lexicographic range.
+     *
+     * @param key the sorted set key
+     * @param min the lower lex bound ({@code -}, {@code [a}, {@code (a})
+     * @param max the upper lex bound ({@code +}, {@code [z}, {@code (z})
+     * @return the number of members in range, {@code 0} for a missing key
+     * @throws RuvioServerException {@code ERR} for a bad bound; {@code WRONGTYPE} for a non-sorted-set
+     */
     public Long zlexcount(K key, String min, String max) {
         return await(async.zlexcount(key, min, max));
     }
 
+    /**
+     * Sends {@code ZSCAN key cursor}: walks a sorted set a page at a time, in score order. Start with {@code "0"} and continue with {@link ScanResult#cursor()} until {@link ScanResult#isFinished()}. A write between pages can shift members between pages. See {@link io.github.salihcantekin.ruvio.RuvioClient#zscanIterable}.
+     *
+     * @param key the sorted set key
+     * @param cursor {@code "0"} to start, otherwise the previous page's cursor
+     * @return the next cursor and the members with scores of this page
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public ScanResult<ScoredValue<V>> zscan(K key, String cursor) {
         return await(async.zscan(key, cursor));
     }
 
+    /**
+     * Sends {@code ZSCAN key cursor [MATCH pattern] [COUNT n]}.
+     *
+     * @param key the sorted set key
+     * @param cursor {@code "0"} to start, otherwise the previous page's cursor
+     * @param options {@code MATCH} glob on members and {@code COUNT} hint
+     * @return the next cursor and the matching members of this page
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public ScanResult<ScoredValue<V>> zscan(K key, String cursor, ScanArgs options) {
         return await(async.zscan(key, cursor, options));
     }
 
+    /**
+     * Sends {@code ZUNIONSTORE destination numkeys key [key ...]}: stores the union of sorted sets, adding the scores of members present in several. All keys must hash to one slot in a cluster.
+     *
+     * @param destination the key that receives the result (overwritten)
+     * @param keys one or more source sorted sets
+     * @return the number of members in the stored result
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set source; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final Long zunionstore(K destination, K... keys) {
         return await(async.zunionstore(destination, keys));
     }
 
+    /**
+     * Sends {@code ZUNIONSTORE destination numkeys key ... [WEIGHTS w ...] [AGGREGATE SUM|MIN|MAX]}.
+     *
+     * @param destination the key that receives the result (overwritten)
+     * @param options per-source weights (one per key, multiplied into the scores) and how to combine duplicates
+     * @param keys one or more source sorted sets
+     * @return the number of members in the stored result
+     * @throws RuvioServerException {@code ERR} when the weight count differs from the key count; {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final Long zunionstore(K destination, ZStoreArgs options, K... keys) {
         return await(async.zunionstore(destination, options, keys));
     }
 
+    /**
+     * Sends {@code ZINTERSTORE destination numkeys key [key ...]}: stores members present in every source, adding their scores. All keys must hash to one slot in a cluster.
+     *
+     * @param destination the key that receives the result (overwritten)
+     * @param keys one or more source sorted sets
+     * @return the number of members in the stored result
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set source; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final Long zinterstore(K destination, K... keys) {
         return await(async.zinterstore(destination, keys));
     }
 
+    /**
+     * Sends {@code ZINTERSTORE destination numkeys key ... [WEIGHTS ...] [AGGREGATE ...]}.
+     *
+     * @param destination the key that receives the result (overwritten)
+     * @param options per-source weights and the aggregate function
+     * @param keys one or more source sorted sets
+     * @return the number of members in the stored result
+     * @throws RuvioServerException {@code ERR} when the weight count differs from the key count; {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final Long zinterstore(K destination, ZStoreArgs options, K... keys) {
         return await(async.zinterstore(destination, options, keys));
     }
 
+    /**
+     * Sends {@code ZDIFFSTORE destination numkeys key [key ...]}: stores the members of the first set that are in none of the others.
+     *
+     * @param destination the key that receives the result (overwritten)
+     * @param keys the first sorted set followed by the sets to subtract
+     * @return the number of members in the stored result
+     * @throws RuvioServerException {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final Long zdiffstore(K destination, K... keys) {
         return await(async.zdiffstore(destination, keys));
     }
 
+    /**
+     * Sends {@code ZUNION numkeys key [key ...]}: the union of sorted sets, without storing it.
+     *
+     * @param keys one or more sorted set keys (same slot in a cluster)
+     * @return the members, ordered by combined score
+     * @throws RuvioServerException {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final List<V> zunion(K... keys) {
         return await(async.zunion(keys));
     }
 
+    /**
+     * Sends {@code ZUNION numkeys key ... [WEIGHTS ...] [AGGREGATE ...]}.
+     *
+     * @param options per-source weights and the aggregate function
+     * @param keys one or more sorted set keys (same slot in a cluster)
+     * @return the members, ordered by combined score
+     * @throws RuvioServerException {@code ERR} when the weight count differs from the key count; {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final List<V> zunion(ZStoreArgs options, K... keys) {
         return await(async.zunion(options, keys));
     }
 
+    /**
+     * Sends {@code ZUNION numkeys key ... [WEIGHTS ...] [AGGREGATE ...] WITHSCORES}.
+     *
+     * @param options per-source weights and the aggregate function
+     * @param keys one or more sorted set keys (same slot in a cluster)
+     * @return the members with their combined scores
+     * @throws RuvioServerException {@code ERR} when the weight count differs from the key count; {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final List<ScoredValue<V>> zunionWithScores(ZStoreArgs options, K... keys) {
         return await(async.zunionWithScores(options, keys));
     }
 
+    /**
+     * Sends {@code ZINTER numkeys key [key ...]}: members present in every sorted set, without storing.
+     *
+     * @param keys one or more sorted set keys (same slot in a cluster)
+     * @return the common members, ordered by combined score
+     * @throws RuvioServerException {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final List<V> zinter(K... keys) {
         return await(async.zinter(keys));
     }
 
+    /**
+     * Sends {@code ZINTER numkeys key ... [WEIGHTS ...] [AGGREGATE ...]}.
+     *
+     * @param options per-source weights and the aggregate function
+     * @param keys one or more sorted set keys (same slot in a cluster)
+     * @return the common members, ordered by combined score
+     * @throws RuvioServerException {@code ERR} when the weight count differs from the key count; {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final List<V> zinter(ZStoreArgs options, K... keys) {
         return await(async.zinter(options, keys));
     }
 
+    /**
+     * Sends {@code ZINTER numkeys key ... [WEIGHTS ...] [AGGREGATE ...] WITHSCORES}.
+     *
+     * @param options per-source weights and the aggregate function
+     * @param keys one or more sorted set keys (same slot in a cluster)
+     * @return the common members with their combined scores
+     * @throws RuvioServerException {@code ERR} when the weight count differs from the key count; {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final List<ScoredValue<V>> zinterWithScores(ZStoreArgs options, K... keys) {
         return await(async.zinterWithScores(options, keys));
     }
 
+    /**
+     * Sends {@code ZDIFF numkeys key [key ...]}: members of the first sorted set that are in none of the others.
+     *
+     * @param keys the first sorted set followed by the sets to subtract (same slot in a cluster)
+     * @return the remaining members
+     * @throws RuvioServerException {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final List<V> zdiff(K... keys) {
         return await(async.zdiff(keys));
     }
 
+    /**
+     * Sends {@code ZDIFF numkeys key [key ...] WITHSCORES}.
+     *
+     * @param keys the first sorted set followed by the sets to subtract (same slot in a cluster)
+     * @return the remaining members with the scores they have in the first set
+     * @throws RuvioServerException {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final List<ScoredValue<V>> zdiffWithScores(K... keys) {
         return await(async.zdiffWithScores(keys));
     }
 
+    /**
+     * Sends {@code ZRANDMEMBER key}: returns a random member without removing it.
+     *
+     * @param key the sorted set key
+     * @return a member, or {@code null} when the set is empty or missing
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public V zrandmember(K key) {
         return await(async.zrandmember(key));
     }
 
+    /**
+     * Sends {@code ZRANDMEMBER key count}.
+     *
+     * @param key the sorted set key
+     * @param count positive: up to that many distinct members; negative: {@code -count} members that may repeat (at most 1,048,576)
+     * @return the members, empty when the set is empty or missing
+     * @throws RuvioServerException {@code ERR count is out of range}; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<V> zrandmember(K key, long count) {
         return await(async.zrandmember(key, count));
     }
 
+    /**
+     * Sends {@code ZRANDMEMBER key count WITHSCORES}.
+     *
+     * @param key the sorted set key
+     * @param count positive: up to that many distinct members; negative: members may repeat
+     * @return the members with scores, empty when the set is empty or missing
+     * @throws RuvioServerException {@code ERR count is out of range}; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<ScoredValue<V>> zrandmemberWithScores(K key, long count) {
         return await(async.zrandmemberWithScores(key, count));
     }
 
 
     // ---- GeoCommands ----
+    /**
+     * Sends {@code GEOADD key longitude latitude member}: stores a place. Ruvio keeps it in a sorted set whose score is a 52-bit geohash, so {@code TYPE} reports {@code zset} and the sorted-set commands also work on the key. Adding an existing member moves it.
+     *
+     * <pre>{@code
+     * client.geoadd("cities", 13.361389, 38.115556, "Palermo");
+     * }</pre>
+     *
+     * @param key the geo key
+     * @param longitude degrees east, from -180 to 180
+     * @param latitude degrees north, from -85.05112878 to 85.05112878 (the Web Mercator limit)
+     * @param member the place name
+     * @return {@code 1} when the member is new, {@code 0} when an existing member was moved
+     * @throws RuvioServerException {@code ERR invalid longitude,latitude pair} when a coordinate is outside the ranges; {@code WRONGTYPE} when the key holds a non-sorted-set
+     */
     public Long geoadd(K key, double longitude, double latitude, V member) {
         return await(async.geoadd(key, longitude, latitude, member));
     }
 
+    /**
+     * Sends {@code GEOADD key longitude latitude member [longitude latitude member ...]}: stores several places in one command.
+     *
+     * <pre>{@code
+     * client.geoadd("cities", GeoValue.of(13.36, 38.11, "Palermo"), GeoValue.of(15.08, 37.50, "Catania"));
+     * }</pre>
+     *
+     * @param key the geo key
+     * @param members the places, built with {@link GeoValue#of}; longitude -180 to 180, latitude -85.05112878 to 85.05112878
+     * @return how many members were new
+     * @throws RuvioServerException {@code ERR invalid longitude,latitude pair} for an out-of-range coordinate (nothing is written); {@code WRONGTYPE} for a non-sorted-set
+     */
     @SafeVarargs
     public final Long geoadd(K key, GeoValue<V>... members) {
         return await(async.geoadd(key, members));
     }
 
-    /** GEOADD key [NX|XX] [CH] lon lat member ... */
+    /**
+     * Sends {@code GEOADD key [NX|XX] [CH] longitude latitude member ...}.
+     *
+     * @param key the geo key
+     * @param nx {@code true} to add only new members (existing ones are not moved)
+     * @param xx {@code true} to update only existing members (new ones are not added)
+     * @param ch {@code true} to count members whose position changed as well as new ones
+     * @param members the places; longitude -180 to 180, latitude -85.05112878 to 85.05112878
+     * @return how many members were new, or with {@code ch} new plus changed
+     * @throws RuvioServerException {@code ERR} for an out-of-range coordinate or {@code nx} together with {@code xx}; {@code WRONGTYPE} for a non-sorted-set
+     */
     @SafeVarargs
     public final Long geoadd(K key, boolean nx, boolean xx, boolean ch, GeoValue<V>... members) {
         return await(async.geoadd(key, nx, xx, ch, members));
     }
 
-    /** GEODIST in meters. Null when a member is missing. */
+    /**
+     * Sends {@code GEODIST key member1 member2}: the distance between two stored places, in meters.
+     *
+     * <pre>{@code
+     * Double meters = client.geodist("cities", "Palermo", "Catania");
+     * }</pre>
+     *
+     * @param key the geo key
+     * @param member1 the first place
+     * @param member2 the second place
+     * @return the distance in meters, or {@code null} when either member or the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public Double geodist(K key, V member1, V member2) {
         return await(async.geodist(key, member1, member2));
     }
 
+    /**
+     * Sends {@code GEODIST key member1 member2 unit}.
+     *
+     * @param key the geo key
+     * @param member1 the first place
+     * @param member2 the second place
+     * @param unit the unit of the result: {@code M} meters, {@code KM} kilometers, {@code FT} feet, {@code MI} miles
+     * @return the distance in {@code unit}, or {@code null} when either member or the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     public Double geodist(K key, V member1, V member2, GeoUnit unit) {
         return await(async.geodist(key, member1, member2, unit));
     }
 
+    /**
+     * Sends {@code GEOHASH key member [member ...]}: the standard 11-character geohash text of each place.
+     *
+     * @param key the geo key
+     * @param members one or more places
+     * @return one string per member in order; {@code null} for a member that does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     @SafeVarargs
     public final List<String> geohash(K key, V... members) {
         return await(async.geohash(key, members));
     }
 
-    /** GEOPOS: one entry per member, null for a missing member. */
+    /**
+     * Sends {@code GEOPOS key member [member ...]}: the stored position of each place. Values are the position after rounding to the 52-bit geohash, so they can differ slightly from the input.
+     *
+     * @param key the geo key
+     * @param members one or more places
+     * @return one entry per member in order (longitude, latitude in degrees); {@code null} for a member that does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
     @SafeVarargs
     public final List<GeoCoordinates> geopos(K key, V... members) {
         return await(async.geopos(key, members));
     }
 
-    /** GEOSEARCH key FROMMEMBER|FROMLONLAT BYRADIUS|BYBOX [ASC|DESC] [COUNT n [ANY]] [WITH...]. */
+    /**
+     * Sends {@code GEOSEARCH key FROMMEMBER|FROMLONLAT ... BYRADIUS|BYBOX ... [ASC|DESC] [COUNT n [ANY]] [WITHCOORD] [WITHDIST] [WITHHASH]}: finds places inside a circle or a box.
+     * Build the options with {@link GeoSearchArgs}: one origin ({@code fromMember} or {@code fromLonLat}) and one shape ({@code byRadius} or {@code byBox}) are required.
+     *
+     * <pre>{@code
+     * List<GeoResult<String>> near = client.geosearch("cities",
+     *         GeoSearchArgs.fromLonLat(15, 37).byRadius(200, GeoUnit.KM).asc().count(5).withDist());
+     * for (GeoResult<String> r : near) {
+     *     System.out.println(r.member() + " " + r.distance() + " km");
+     * }
+     * }</pre>
+     *
+     * @param key the geo key
+     * @param search origin, shape, order, count and which extra fields to return
+     * @return the matches; {@code distance()}, {@code hash()} and {@code coordinates()} are filled only for the {@code WITH*} flags you set; empty when the key does not exist
+     * @throws RuvioServerException {@code ERR} when the origin or the shape is missing, {@code ANY} has no {@code COUNT}, {@code COUNT} is zero, or a size is negative; also when {@code fromMember} names a member that is not in the set; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<GeoResult<V>> geosearch(K key, GeoSearchArgs search) {
         return await(async.geosearch(key, search));
     }
 
-    /** GEOSEARCHSTORE destination source ... [STOREDIST]. Returns the stored count. */
+    /**
+     * Sends {@code GEOSEARCHSTORE destination source ... [STOREDIST]}: like {@link #geosearch} but writes the matches into the sorted set {@code destination} (replacing it). The {@code WITH*} flags are not allowed here. In a cluster both keys must hash to one slot.
+     *
+     * @param destination the key that receives the matches
+     * @param source the geo key to search
+     * @param search origin, shape, order and count (no {@code WITH*} flags)
+     * @param storeDist {@code false} stores each match with its geohash as score (a geo set); {@code true} stores the distance from the origin, in the shape's unit, as score
+     * @return the number of members stored
+     * @throws RuvioServerException {@code ERR} for incomplete options or {@code WITH*} flags; {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     public Long geosearchstore(K destination, K source, GeoSearchArgs search, boolean storeDist) {
         return await(async.geosearchstore(destination, source, search, storeDist));
     }
 
-    /** GEORADIUS key lon lat radius unit [WITH...] [COUNT] [ASC|DESC]. */
+    /**
+     * Sends {@code GEORADIUS key longitude latitude radius unit}: places within a circle around a point. The newer {@link #geosearch} replaces it.
+     *
+     * @param key the geo key
+     * @param longitude centre longitude, -180 to 180
+     * @param latitude centre latitude, -85.05112878 to 85.05112878
+     * @param radius the radius, zero or greater, in {@code unit}
+     * @param unit {@code M}, {@code KM}, {@code FT} or {@code MI}
+     * @return the member names, unsorted; empty when none or the key does not exist
+     * @throws RuvioServerException {@code ERR radius must be non-negative}; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<GeoResult<V>> georadius(K key, double longitude, double latitude, double radius, GeoUnit unit) {
         return await(async.georadius(key, longitude, latitude, radius, unit));
     }
 
+    /**
+     * Sends {@code GEORADIUS key longitude latitude radius unit [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT n [ANY]] [ASC|DESC]}.
+     *
+     * @param key the geo key
+     * @param longitude centre longitude, -180 to 180
+     * @param latitude centre latitude, -85.05112878 to 85.05112878
+     * @param radius the radius, zero or greater, in {@code unit}
+     * @param unit {@code M}, {@code KM}, {@code FT} or {@code MI}
+     * @param options order, count and {@code WITH*} flags, from {@link GeoSearchArgs#options()}; the origin and shape in it are ignored
+     * @return the matches with the extra fields you asked for
+     * @throws RuvioServerException {@code ERR} for a negative radius or {@code ANY} without {@code COUNT}; {@code WRONGTYPE} for a non-sorted-set
+     */
     public List<GeoResult<V>> georadius(K key, double longitude, double latitude, double radius, GeoUnit unit, GeoSearchArgs options) {
         return await(async.georadius(key, longitude, latitude, radius, unit, options));
     }
 
-    /** GEORADIUS ... STORE|STOREDIST destination. Returns the stored count. */
+    /**
+     * Sends {@code GEORADIUS key longitude latitude radius unit STORE|STOREDIST destination}: stores the matches in {@code destination}. In a cluster both keys must hash to one slot.
+     *
+     * @param key the geo key to search
+     * @param longitude centre longitude
+     * @param latitude centre latitude
+     * @param radius the radius, zero or greater, in {@code unit}
+     * @param unit {@code M}, {@code KM}, {@code FT} or {@code MI}
+     * @param destination the key that receives the matches (replaced)
+     * @param storeDist {@code false} for {@code STORE} (geohash scores), {@code true} for {@code STOREDIST} (distance scores)
+     * @return the number of members stored
+     * @throws RuvioServerException {@code ERR radius must be non-negative}; {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     public Long georadiusStore(K key, double longitude, double latitude, double radius, GeoUnit unit, K destination, boolean storeDist) {
         return await(async.georadiusStore(key, longitude, latitude, radius, unit, destination, storeDist));
     }
 
+    /**
+     * Sends {@code GEORADIUSBYMEMBER key member radius unit}: places within a circle around a stored member. The newer {@link #geosearch} replaces it.
+     *
+     * @param key the geo key
+     * @param member the stored place used as the centre
+     * @param radius the radius, zero or greater, in {@code unit}
+     * @param unit {@code M}, {@code KM}, {@code FT} or {@code MI}
+     * @return the matches (the centre member included), unsorted
+     * @throws RuvioServerException {@code ERR} when {@code member} is not in the set or the radius is negative; {@code WRONGTYPE}
+     */
     public List<GeoResult<V>> georadiusbymember(K key, V member, double radius, GeoUnit unit) {
         return await(async.georadiusbymember(key, member, radius, unit));
     }
 
+    /**
+     * Sends {@code GEORADIUSBYMEMBER key member radius unit [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT n [ANY]] [ASC|DESC]}.
+     *
+     * @param key the geo key
+     * @param member the stored place used as the centre
+     * @param radius the radius, zero or greater, in {@code unit}
+     * @param unit {@code M}, {@code KM}, {@code FT} or {@code MI}
+     * @param options order, count and {@code WITH*} flags, from {@link GeoSearchArgs#options()}
+     * @return the matches with the extra fields you asked for
+     * @throws RuvioServerException {@code ERR} when {@code member} is not in the set, the radius is negative or {@code ANY} has no {@code COUNT}; {@code WRONGTYPE}
+     */
     public List<GeoResult<V>> georadiusbymember(K key, V member, double radius, GeoUnit unit, GeoSearchArgs options) {
         return await(async.georadiusbymember(key, member, radius, unit, options));
     }
 
+    /**
+     * Sends {@code GEORADIUSBYMEMBER key member radius unit STORE|STOREDIST destination}. In a cluster both keys must hash to one slot.
+     *
+     * @param key the geo key to search
+     * @param member the stored place used as the centre
+     * @param radius the radius, zero or greater, in {@code unit}
+     * @param unit {@code M}, {@code KM}, {@code FT} or {@code MI}
+     * @param destination the key that receives the matches (replaced)
+     * @param storeDist {@code false} for {@code STORE} (geohash scores), {@code true} for {@code STOREDIST} (distance scores)
+     * @return the number of members stored
+     * @throws RuvioServerException {@code ERR} when {@code member} is not in the set or the radius is negative; {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     public Long georadiusbymemberStore(K key, V member, double radius, GeoUnit unit, K destination, boolean storeDist) {
         return await(async.georadiusbymemberStore(key, member, radius, unit, destination, storeDist));
     }
 
 
     // ---- StreamCommands ----
-    /** XADD key * field value ...: the new id. */
+    /**
+     * Sends {@code XADD key * field value [field value ...]}: appends an entry to a stream with a server-generated id, creating the stream when missing.
+     *
+     * <pre>{@code
+     * String id = client.xadd("events", Map.of("type", "signup", "user", "42"));
+     * }</pre>
+     *
+     * @param key the stream key
+     * @param fields the entry's field names (key codec) and values (value codec); must not be empty
+     * @return the new entry id, like {@code 1718000000000-0}
+     * @throws IllegalArgumentException when {@code fields} is empty
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-stream
+     */
     public String xadd(K key, Map<K, V> fields) {
         return await(async.xadd(key, fields));
     }
 
-    /** XADD key id field value ... */
+    /**
+     * Sends {@code XADD key id field value ...} with an explicit id.
+     *
+     * @param key the stream key
+     * @param id {@code *} for a generated id, {@code ms-*} to fix only the millisecond part, or {@code ms-seq}; it must be greater than the last id
+     * @param fields the entry's fields; must not be empty
+     * @return the id the entry got
+     * @throws IllegalArgumentException when {@code fields} is empty
+     * @throws RuvioServerException {@code ERR} when the id is invalid or not greater than the stream's last id; {@code WRONGTYPE} for a non-stream
+     */
     public String xadd(K key, String id, Map<K, V> fields) {
         return await(async.xadd(key, id, fields));
     }
 
-    /** XADD with options (NOMKSTREAM, DELAY, MAXLEN/MINID, id). Null when NOMKSTREAM met a missing key. */
+    /**
+     * Sends {@code XADD key [NOMKSTREAM] [DELAY ms] [MAXLEN|MINID [~] threshold] id field value ...}.
+     *
+     * <pre>{@code
+     * client.xadd("jobs", XAddArgs.builder().maxLen(10_000).delay(5_000), Map.of("job", "email"));
+     * }</pre>
+     *
+     * @param key the stream key
+     * @param options id, {@code noMkStream()} (do not create the stream), {@code maxLen}/{@code minId} trimming (exact even with {@code ~}), and the Ruvio {@code delay(ms)} that hides the entry from {@code XREADGROUP} for that long
+     * @param fields the entry's fields; must not be empty
+     * @return the id the entry got, or {@code null} when {@code noMkStream()} was set and the stream does not exist
+     * @throws IllegalArgumentException when {@code fields} is empty
+     * @throws RuvioServerException {@code ERR} for an invalid id; {@code WRONGTYPE} for a non-stream
+     */
     public String xadd(K key, XAddArgs options, Map<K, V> fields) {
         return await(async.xadd(key, options, fields));
     }
 
+    /**
+     * Sends {@code XLEN key}.
+     *
+     * @param key the stream key
+     * @return the number of entries, {@code 0} for a missing key
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-stream
+     */
     public Long xlen(K key) {
         return await(async.xlen(key));
     }
 
+    /**
+     * Sends {@code XRANGE key start end}: entries between two ids, oldest first.
+     *
+     * <pre>{@code
+     * List<StreamEntry<String, String>> all = client.xrange("events", "-", "+");
+     * }</pre>
+     *
+     * @param key the stream key
+     * @param start the first id, inclusive; {@code -} for the beginning
+     * @param end the last id, inclusive; {@code +} for the end
+     * @return the entries, empty for a missing key
+     * @throws RuvioServerException {@code ERR} for an invalid id; {@code WRONGTYPE} for a non-stream
+     */
     public List<StreamEntry<K, V>> xrange(K key, String start, String end) {
         return await(async.xrange(key, start, end));
     }
 
+    /**
+     * Sends {@code XRANGE key start end COUNT n}.
+     *
+     * @param key the stream key
+     * @param start the first id, inclusive ({@code -} for the beginning)
+     * @param end the last id, inclusive ({@code +} for the end)
+     * @param count the most entries to return
+     * @return the entries, oldest first
+     * @throws RuvioServerException {@code ERR} for an invalid id; {@code WRONGTYPE} for a non-stream
+     */
     public List<StreamEntry<K, V>> xrange(K key, String start, String end, long count) {
         return await(async.xrange(key, start, end, count));
     }
 
-    /** XREVRANGE key end start: the high id comes first. */
+    /**
+     * Sends {@code XREVRANGE key end start}: like {@link #xrange(Object, String, String)} newest first. The high id comes first.
+     *
+     * @param key the stream key
+     * @param end the highest id, inclusive ({@code +} for the end)
+     * @param start the lowest id, inclusive ({@code -} for the beginning)
+     * @return the entries, newest first
+     * @throws RuvioServerException {@code ERR} for an invalid id; {@code WRONGTYPE} for a non-stream
+     */
     public List<StreamEntry<K, V>> xrevrange(K key, String end, String start) {
         return await(async.xrevrange(key, end, start));
     }
 
+    /**
+     * Sends {@code XREVRANGE key end start COUNT n}.
+     *
+     * @param key the stream key
+     * @param end the highest id, inclusive
+     * @param start the lowest id, inclusive
+     * @param count the most entries to return
+     * @return the entries, newest first
+     * @throws RuvioServerException {@code ERR} for an invalid id; {@code WRONGTYPE} for a non-stream
+     */
     public List<StreamEntry<K, V>> xrevrange(K key, String end, String start, long count) {
         return await(async.xrevrange(key, end, start, count));
     }
 
-    /** XREAD STREAMS key id: entries after {@code id} ("0", "$" or ms-seq). */
+    /**
+     * Sends {@code XREAD STREAMS key id}: entries added after {@code id}, without waiting.
+     *
+     * @param key the stream key
+     * @param id read entries with a greater id: {@code 0} for everything, {@code $} for "nothing yet" (use it only with blocking reads), or a stored id
+     * @return a map from the stream key to its new entries; empty when there is nothing new
+     * @throws RuvioServerException {@code ERR} for an invalid id; {@code WRONGTYPE} for a non-stream
+     */
     public Map<K, List<StreamEntry<K, V>>> xread(K key, String id) {
         return await(async.xread(key, id));
     }
 
-    /** XREAD [COUNT n] [BLOCK ms] STREAMS key... id... ({@code streams} maps key -> id, in order). */
+    /**
+     * Sends {@code XREAD [COUNT n] [BLOCK ms] STREAMS key [key ...] id [id ...]}. {@code BLOCK} waits on the server and holds the shared connection (use {@link io.github.salihcantekin.ruvio.RuvioClient#dedicated()}); a blocked read does not remove entries. All keys must hash to one slot in a cluster.
+     *
+     * <pre>{@code
+     * try (RuvioClient<String, String> reader = client.dedicated()) {
+     *     var got = reader.xread(XReadArgs.builder().block(5_000).count(10), Map.of("events", "$"));
+     * }
+     * }</pre>
+     *
+     * @param options {@code count(n)} and {@code block(ms)} ({@code 0} waits until data arrives or the server stops)
+     * @param streams stream key to last-seen id, in insertion order (use a {@code LinkedHashMap}); {@code $} means the current end
+     * @return a map from stream key to the new entries; empty when the block time passed with nothing new
+     * @throws RuvioServerException {@code ERR} for an invalid id; {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     public Map<K, List<StreamEntry<K, V>>> xread(XReadArgs options, Map<K, String> streams) {
         return await(async.xread(options, streams));
     }
 
+    /**
+     * Sends {@code XDEL key id [id ...]}: deletes entries by id.
+     *
+     * @param key the stream key
+     * @param ids one or more entry ids
+     * @return how many entries existed and were deleted
+     * @throws RuvioServerException {@code ERR} for an invalid id; {@code WRONGTYPE} for a non-stream
+     */
     public Long xdel(K key, String... ids) {
         return await(async.xdel(key, ids));
     }
 
+    /**
+     * Sends {@code XSETID key last-id}: moves the stream's last generated id forward without adding an entry.
+     *
+     * @param key the stream key
+     * @param lastId the new last id; it cannot be lower than the current last id or the highest entry
+     * @throws RuvioServerException {@code ERR} when the id is invalid or would move backward; {@code WRONGTYPE} for a non-stream
+     */
     public void xsetid(K key, String lastId) {
         await(async.xsetid(key, lastId));
     }
 
-    /** XTRIM key MAXLEN [~] n: removed count (Ruvio trims exactly). */
+    /**
+     * Sends {@code XTRIM key MAXLEN [~] n}: keeps at most {@code maxLen} newest entries. Ruvio trims exactly even with {@code ~}; the {@code LIMIT} option is not supported.
+     *
+     * @param key the stream key
+     * @param maxLen the most entries to keep; zero or greater
+     * @param approximate {@code true} sends the {@code ~} flag (accepted for compatibility; the trim is still exact)
+     * @return how many entries were removed
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-stream
+     */
     public Long xtrimMaxlen(K key, long maxLen, boolean approximate) {
         return await(async.xtrimMaxlen(key, maxLen, approximate));
     }
 
-    /** XTRIM key MINID [~] id: drops entries below the id. */
+    /**
+     * Sends {@code XTRIM key MINID [~] id}: removes entries with an id lower than {@code minId}.
+     *
+     * @param key the stream key
+     * @param minId the lowest id to keep
+     * @param approximate {@code true} sends the {@code ~} flag (the trim is still exact)
+     * @return how many entries were removed
+     * @throws RuvioServerException {@code ERR} for an invalid id; {@code WRONGTYPE} for a non-stream
+     */
     public Long xtrimMinid(K key, String minId, boolean approximate) {
         return await(async.xtrimMinid(key, minId, approximate));
     }
 
-    /** XGROUP CREATE key group id ("$", "0" or ms-seq). */
+    /**
+     * Sends {@code XGROUP CREATE key group id}: creates a consumer group. The stream must already exist; see the overload with {@code mkStream}.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @param id where the group starts reading: {@code $} for only new entries, {@code 0} for the whole stream, or a stored id
+     * @throws RuvioServerException {@code BUSYGROUP} when the group exists; {@code ERR} when the stream does not exist; {@code WRONGTYPE} for a non-stream
+     */
     public void xgroupCreate(K key, String group, String id) {
         await(async.xgroupCreate(key, group, id));
     }
 
-    /** XGROUP CREATE key group id MKSTREAM. */
+    /**
+     * Sends {@code XGROUP CREATE key group id [MKSTREAM]}.
+     *
+     * <pre>{@code
+     * client.xgroupCreate("jobs", "workers", "0", true);
+     * }</pre>
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @param id {@code $}, {@code 0} or a stored id
+     * @param mkStream {@code true} to create an empty stream when the key does not exist
+     * @throws RuvioServerException {@code BUSYGROUP} when the group exists; {@code ERR} when the stream is missing and {@code mkStream} is false; {@code WRONGTYPE} for a non-stream
+     */
     public void xgroupCreate(K key, String group, String id, boolean mkStream) {
         await(async.xgroupCreate(key, group, id, mkStream));
     }
 
+    /**
+     * Sends {@code XGROUP CREATECONSUMER key group consumer}: registers a consumer with no pending entries. Consumers are also created by their first read.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @param consumer the consumer name
+     * @return {@code true} when created, {@code false} when it already existed
+     * @throws RuvioServerException {@code NOGROUP} when the stream or group does not exist; {@code WRONGTYPE}
+     */
     public Boolean xgroupCreateconsumer(K key, String group, String consumer) {
         return await(async.xgroupCreateconsumer(key, group, consumer));
     }
 
+    /**
+     * Sends {@code XGROUP DESTROY key group}: deletes a group and its pending entries.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @return {@code true} when the group existed and was removed
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-stream
+     */
     public Boolean xgroupDestroy(K key, String group) {
         return await(async.xgroupDestroy(key, group));
     }
 
+    /**
+     * Sends {@code XGROUP SETID key group id}: moves the group's read position.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @param id {@code $} for the end, {@code 0} for the start, or a stored id
+     * @throws RuvioServerException {@code NOGROUP} when the stream or group does not exist; {@code ERR} for an invalid id
+     */
     public void xgroupSetid(K key, String group, String id) {
         await(async.xgroupSetid(key, group, id));
     }
 
-    /** XGROUP DELCONSUMER: how many pending entries the consumer held. */
+    /**
+     * Sends {@code XGROUP DELCONSUMER key group consumer}: removes a consumer and drops its pending entries.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @param consumer the consumer name
+     * @return how many pending entries the consumer held
+     * @throws RuvioServerException {@code NOGROUP} when the stream or group does not exist
+     */
     public Long xgroupDelconsumer(K key, String group, String consumer) {
         return await(async.xgroupDelconsumer(key, group, consumer));
     }
 
-    /** XREADGROUP GROUP group consumer STREAMS key &gt;. Ruvio reads one stream and the {@code >} id. */
+    /**
+     * Sends {@code XREADGROUP GROUP group consumer STREAMS key >}: delivers entries no consumer of the group has received yet, and marks them pending until {@link #xack}. Ruvio reads exactly one stream per call. Entries added with a {@code DELAY} stay hidden until it passes.
+     *
+     * <pre>{@code
+     * var batch = client.xreadgroup("workers", "w1", "jobs");
+     * }</pre>
+     *
+     * @param group the group name
+     * @param consumer the consumer name (created on first use)
+     * @param key the stream key
+     * @return a map from the stream key to the delivered entries; empty when none are available
+     * @throws RuvioServerException {@code NOGROUP} when the stream or group does not exist; {@code WRONGTYPE}
+     */
     public Map<K, List<StreamEntry<K, V>>> xreadgroup(String group, String consumer, K key) {
         return await(async.xreadgroup(group, consumer, key));
     }
 
-    /** XREADGROUP GROUP group consumer [COUNT n] [BLOCK ms] [NOACK] STREAMS key id. */
+    /**
+     * Sends {@code XREADGROUP GROUP group consumer [COUNT n] [BLOCK ms] [NOACK] STREAMS key id}. {@code BLOCK} holds the shared connection (use {@link io.github.salihcantekin.ruvio.RuvioClient#dedicated()}) and hands the next entry to the longest-waiting consumer.
+     *
+     * @param group the group name
+     * @param consumer the consumer name
+     * @param options {@code count(n)}, {@code block(ms)} ({@code 0} waits without limit) and {@code noAck()} (do not add to the pending list)
+     * @param key the stream key
+     * @param id {@code >} for new entries, or a stored id to re-read this consumer's own pending entries after that id
+     * @return a map from the stream key to the entries; empty when none are available before the block time
+     * @throws RuvioServerException {@code NOGROUP} when the stream or group does not exist; {@code ERR} for an invalid id
+     */
     public Map<K, List<StreamEntry<K, V>>> xreadgroup(String group, String consumer, XReadArgs options, K key, String id) {
         return await(async.xreadgroup(group, consumer, options, key, id));
     }
 
+    /**
+     * Sends {@code XACK key group id [id ...]}: marks entries as processed and removes them from the pending list.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @param ids one or more entry ids
+     * @return how many ids were pending and are now acknowledged
+     * @throws RuvioServerException {@code ERR} for an invalid id; {@code WRONGTYPE}
+     */
     public Long xack(K key, String group, String... ids) {
         return await(async.xack(key, group, ids));
     }
 
-    /** XPENDING key group: the summary form. */
+    /**
+     * Sends {@code XPENDING key group}: summary of unacknowledged entries.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @return the count, the smallest and greatest pending id (null when none) and the per-consumer counts
+     * @throws RuvioServerException {@code NOGROUP} when the stream or group does not exist
+     */
     public PendingSummary xpending(K key, String group) {
         return await(async.xpending(key, group));
     }
 
-    /** XPENDING key group start end count. */
+    /**
+     * Sends {@code XPENDING key group start end count}: lists pending entries.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @param start the first id, inclusive ({@code -} for the lowest)
+     * @param end the last id, inclusive ({@code +} for the highest)
+     * @param count the most rows to return
+     * @return one row per pending entry: id, consumer, idle milliseconds and delivery count
+     * @throws RuvioServerException {@code NOGROUP} when the stream or group does not exist
+     */
     public List<PendingEntry> xpending(K key, String group, String start, String end, long count) {
         return await(async.xpending(key, group, start, end, count));
     }
 
-    /** XPENDING key group [IDLE min_idle] start end count [consumer]; idle &lt;= 0 and null consumer are omitted. */
+    /**
+     * Sends {@code XPENDING key group [IDLE min-idle] start end count [consumer]}.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @param minIdleMillis only entries idle at least this long, in milliseconds; zero or less omits the filter
+     * @param start the first id, inclusive ({@code -} for the lowest)
+     * @param end the last id, inclusive ({@code +} for the highest)
+     * @param count the most rows to return
+     * @param consumer only entries of this consumer; {@code null} for all
+     * @return one row per matching pending entry
+     * @throws RuvioServerException {@code NOGROUP} when the stream or group does not exist
+     */
     public List<PendingEntry> xpending(K key, String group, long minIdleMillis, String start, String end, long count, String consumer) {
         return await(async.xpending(key, group, minIdleMillis, start, end, count, consumer));
     }
 
-    /** XAUTOCLAIM key group consumer min_idle start. */
+    /**
+     * Sends {@code XAUTOCLAIM key group consumer min-idle start}: takes over pending entries that have been idle too long, for example from a crashed consumer. Claims up to 100 entries; call again with {@link AutoClaimResult#nextId()} until it is {@code 0-0}.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @param consumer the consumer that receives the entries
+     * @param minIdleMillis only entries idle at least this many milliseconds
+     * @param start the id to start scanning from; {@code 0-0} at first
+     * @return the next start id, the claimed entries, and ids that no longer exist in the stream
+     * @throws RuvioServerException {@code NOGROUP} when the stream or group does not exist
+     */
     public AutoClaimResult<K, V> xautoclaim(K key, String group, String consumer, long minIdleMillis, String start) {
         return await(async.xautoclaim(key, group, consumer, minIdleMillis, start));
     }
 
-    /** XAUTOCLAIM ... [COUNT n] [JUSTID]; count &lt;= 0 is omitted. */
+    /**
+     * Sends {@code XAUTOCLAIM key group consumer min-idle start [COUNT n] [JUSTID]}.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @param consumer the consumer that receives the entries
+     * @param minIdleMillis only entries idle at least this many milliseconds
+     * @param start the id to start scanning from; {@code 0-0} at first
+     * @param count the most entries to claim; zero or less uses the server default (100)
+     * @param justId {@code true} to return only ids ({@link AutoClaimResult#entries()} is then empty; use {@link AutoClaimResult#claimedIds()})
+     * @return the next start id, the claimed entries or ids, and deleted ids
+     * @throws RuvioServerException {@code NOGROUP} when the stream or group does not exist
+     */
     public AutoClaimResult<K, V> xautoclaim(K key, String group, String consumer, long minIdleMillis, String start, long count, boolean justId) {
         return await(async.xautoclaim(key, group, consumer, minIdleMillis, start, count, justId));
     }
 
-    /** XCLAIM key group consumer min_idle id...: the claimed entries. */
+    /**
+     * Sends {@code XCLAIM key group consumer min-idle id [id ...]}: takes over specific pending entries that have been idle long enough.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @param consumer the consumer that receives the entries
+     * @param minIdleMillis only claim entries idle at least this many milliseconds
+     * @param ids the entry ids to claim
+     * @return the claimed entries
+     * @throws RuvioServerException {@code NOGROUP} when the stream or group does not exist; {@code ERR} for an invalid id
+     */
     public List<StreamEntry<K, V>> xclaim(K key, String group, String consumer, long minIdleMillis, String... ids) {
         return await(async.xclaim(key, group, consumer, minIdleMillis, ids));
     }
 
+    /**
+     * Sends {@code XCLAIM key group consumer min-idle id ... [IDLE ms] [TIME ms] [RETRYCOUNT n] [FORCE] [LASTID id]}.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @param consumer the consumer that receives the entries
+     * @param minIdleMillis only claim entries idle at least this many milliseconds
+     * @param options {@code idle}, {@code time} (Unix ms), {@code retryCount}, {@code force} (claim even entries not in the pending list) and {@code lastId}
+     * @param ids the entry ids to claim
+     * @return the claimed entries
+     * @throws RuvioServerException {@code NOGROUP} when the stream or group does not exist; {@code ERR} for an invalid id
+     */
     public List<StreamEntry<K, V>> xclaim(K key, String group, String consumer, long minIdleMillis, XClaimArgs options, String... ids) {
         return await(async.xclaim(key, group, consumer, minIdleMillis, options, ids));
     }
 
-    /** XCLAIM ... JUSTID: the claimed ids. */
+    /**
+     * Sends {@code XCLAIM ... JUSTID}: like {@link #xclaim(Object, String, String, long, XClaimArgs, String[])} but returns only ids and does not bump the delivery count.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @param consumer the consumer that receives the entries
+     * @param minIdleMillis only claim entries idle at least this many milliseconds
+     * @param options extra claim options
+     * @param ids the entry ids to claim
+     * @return the claimed ids
+     * @throws RuvioServerException {@code NOGROUP} when the stream or group does not exist; {@code ERR} for an invalid id
+     */
     public List<String> xclaimJustid(K key, String group, String consumer, long minIdleMillis, XClaimArgs options, String... ids) {
         return await(async.xclaimJustid(key, group, consumer, minIdleMillis, options, ids));
     }
 
-    /** XINFO STREAM key: field -> value (entries as nested lists of strings). */
+    /**
+     * Sends {@code XINFO STREAM key}: general facts about a stream.
+     *
+     * @param key the stream key
+     * @return a map of field name (such as {@code length}, {@code last-generated-id}, {@code groups}) to value; entries are nested lists of strings
+     * @throws RuvioServerException {@code ERR no such key} when the stream does not exist; {@code WRONGTYPE}
+     */
     public Map<String, Object> xinfoStream(K key) {
         return await(async.xinfoStream(key));
     }
 
+    /**
+     * Sends {@code XINFO GROUPS key}.
+     *
+     * @param key the stream key
+     * @return one map per group (name, consumers, pending, last-delivered-id)
+     * @throws RuvioServerException {@code ERR no such key} when the stream does not exist; {@code WRONGTYPE}
+     */
     public List<Map<String, Object>> xinfoGroups(K key) {
         return await(async.xinfoGroups(key));
     }
 
+    /**
+     * Sends {@code XINFO CONSUMERS key group}.
+     *
+     * @param key the stream key
+     * @param group the group name
+     * @return one map per consumer (name, pending, idle)
+     * @throws RuvioServerException {@code NOGROUP} when the stream or group does not exist
+     */
     public List<Map<String, Object>> xinfoConsumers(K key, String group) {
         return await(async.xinfoConsumers(key, group));
     }
 
 
     // ---- JsonCommands ----
-    /** JSON.GET key (root). Null when the key is missing. */
+    /**
+     * Sends the Ruvio command {@code JSON.GET key}: reads a whole JSON document as compact JSON text. JSON is a separate key type ({@code TYPE} reports {@code json}); string commands refuse it with {@code WRONGTYPE}. Paths are limited to {@code $}, {@code .field} and {@code [N]}: no wildcards or filters.
+     *
+     * <pre>{@code
+     * client.jsonSet("user:1", "$", "{\"name\":\"Ada\",\"tags\":[\"a\"]}");
+     * String doc = client.jsonGet("user:1"); // {"name":"Ada","tags":["a"]}
+     * }</pre>
+     *
+     * @param key the JSON key
+     * @return the document text, or {@code null} when the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-JSON value
+     */
     public String jsonGet(K key) {
         return await(async.jsonGet(key));
     }
 
+    /**
+     * Sends {@code JSON.GET key path}: reads the value at a path.
+     *
+     * @param key the JSON key
+     * @param path {@code $} (root), {@code .name}, {@code $.users[0].name}; a path may also start with {@code .} or {@code [}
+     * @return the value as JSON text (strings keep their quotes), or {@code null} when the key or path does not exist
+     * @throws RuvioServerException {@code ERR invalid JSON path} for unsupported syntax; {@code WRONGTYPE}
+     */
     public String jsonGet(K key, String path) {
         return await(async.jsonGet(key, path));
     }
 
-    /** JSON.MGET key... path: one JSON text (or null) per key. */
+    /**
+     * Sends {@code JSON.MGET key [key ...] path}: reads one path from several documents. In a cluster all keys must hash to one slot.
+     *
+     * @param path the path to read from each document
+     * @param keys one or more JSON keys
+     * @return one JSON text per key in order; {@code null} for a key that is missing, is not JSON, or lacks the path
+     * @throws RuvioServerException {@code ERR invalid JSON path}; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final List<String> jsonMget(String path, K... keys) {
         return await(async.jsonMget(path, keys));
     }
 
-    /** JSON.SET key path json. */
+    /**
+     * Sends {@code JSON.SET key path json}: writes a JSON value. A missing key can only be created at {@code $}. A final object field may be created; missing intermediate objects are not. Setting {@code [N]} where {@code N} equals the array length appends. Existing TTLs are kept. The document is limited to 16 MiB.
+     *
+     * <pre>{@code
+     * client.jsonSet("user:1", "$.name", "\"Grace\"");
+     * }</pre>
+     *
+     * @param key the JSON key
+     * @param path where to write: {@code $} for the whole document, or {@code .field}/{@code [N]} paths
+     * @param json the new value as JSON text; it is validated
+     * @return {@code true} when written, {@code false} when the target cannot be reached (missing key at a non-root path, or absent parent)
+     * @throws RuvioServerException {@code ERR invalid JSON value} or {@code ERR invalid JSON path}; {@code WRONGTYPE} when the key holds a non-JSON value
+     */
     public Boolean jsonSet(K key, String path, String json) {
         return await(async.jsonSet(key, path, json));
     }
 
-    /** JSON.SET key path json NX: false when the path already exists. */
+    /**
+     * Sends {@code JSON.SET key path json NX}: writes only when the path does not exist yet.
+     *
+     * @param key the JSON key
+     * @param path where to write
+     * @param json the new value as JSON text
+     * @return {@code true} when written, {@code false} when the path already exists (or cannot be reached)
+     * @throws RuvioServerException {@code ERR invalid JSON value} or {@code ERR invalid JSON path}; {@code WRONGTYPE}
+     */
     public Boolean jsonSetNx(K key, String path, String json) {
         return await(async.jsonSetNx(key, path, json));
     }
 
-    /** JSON.SET key path json XX: false when the path is missing. */
+    /**
+     * Sends {@code JSON.SET key path json XX}: writes only when the path already exists.
+     *
+     * @param key the JSON key
+     * @param path where to write
+     * @param json the new value as JSON text
+     * @return {@code true} when written, {@code false} when the path does not exist
+     * @throws RuvioServerException {@code ERR invalid JSON value} or {@code ERR invalid JSON path}; {@code WRONGTYPE}
+     */
     public Boolean jsonSetXx(K key, String path, String json) {
         return await(async.jsonSetXx(key, path, json));
     }
 
-    /** JSON.MERGE key path patch (RFC 7396). */
+    /**
+     * Sends {@code JSON.MERGE key path patch}: applies an RFC 7396 merge patch. Object members merge recursively, {@code null} members delete fields, and arrays and other values replace the target. This is not RFC 6902 JSON Patch. A missing key can only be created at {@code $}; when the target cannot be reached nothing changes.
+     *
+     * <pre>{@code
+     * client.jsonMerge("user:1", "$", "{\"city\":\"London\",\"tags\":null}");
+     * }</pre>
+     *
+     * @param key the JSON key
+     * @param path the target path, usually {@code $}
+     * @param patch the patch as JSON text
+     * @throws RuvioServerException {@code ERR invalid JSON value} or {@code ERR invalid JSON path}; {@code WRONGTYPE}
+     */
     public void jsonMerge(K key, String path, String patch) {
         await(async.jsonMerge(key, path, patch));
     }
 
-    /** JMERGE: alias of JSON.MERGE. */
+    /**
+     * Sends {@code JMERGE key path patch}: the short alias of {@link #jsonMerge(Object, String, String)}.
+     *
+     * @param key the JSON key
+     * @param path the target path, usually {@code $}
+     * @param patch the patch as JSON text
+     * @throws RuvioServerException {@code ERR invalid JSON value} or {@code ERR invalid JSON path}; {@code WRONGTYPE}
+     */
     public void jmerge(K key, String path, String patch) {
         await(async.jmerge(key, path, patch));
     }
 
+    /**
+     * Sends {@code JSON.DEL key}: deletes the whole JSON key.
+     *
+     * @param key the JSON key
+     * @return {@code 1} when the key was removed, {@code 0} when it did not exist
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-JSON value
+     */
     public Long jsonDel(K key) {
         return await(async.jsonDel(key));
     }
 
+    /**
+     * Sends {@code JSON.DEL key path}: deletes an object field or array element, or the whole key for {@code $}.
+     *
+     * @param key the JSON key
+     * @param path the path to remove
+     * @return {@code 1} when something was removed, {@code 0} when the key or path does not exist
+     * @throws RuvioServerException {@code ERR invalid JSON path}; {@code WRONGTYPE}
+     */
     public Long jsonDel(K key, String path) {
         return await(async.jsonDel(key, path));
     }
 
-    /** JSON.FORGET: alias of JSON.DEL. */
+    /**
+     * Sends {@code JSON.FORGET key path}: alias of {@link #jsonDel(Object, String)}.
+     *
+     * @param key the JSON key
+     * @param path the path to remove
+     * @return {@code 1} when something was removed, {@code 0} otherwise
+     * @throws RuvioServerException {@code ERR invalid JSON path}; {@code WRONGTYPE}
+     */
     public Long jsonForget(K key, String path) {
         return await(async.jsonForget(key, path));
     }
 
-    /** JSON.TYPE: object, array, string, integer, number, boolean or null; null when absent. */
+    /**
+     * Sends {@code JSON.TYPE key path}.
+     *
+     * @param key the JSON key
+     * @param path the path to inspect
+     * @return {@code object}, {@code array}, {@code string}, {@code integer}, {@code number}, {@code boolean} or {@code null}; Java {@code null} when the key or path does not exist
+     * @throws RuvioServerException {@code ERR invalid JSON path}; {@code WRONGTYPE}
+     */
     public String jsonType(K key, String path) {
         return await(async.jsonType(key, path));
     }
 
+    /**
+     * Sends {@code JSON.STRLEN key path}.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON string
+     * @return the string length in UTF-8 bytes, or {@code null} when the key or path does not exist
+     * @throws RuvioServerException {@code WRONGTYPE JSON value is not a string}
+     */
     public Long jsonStrlen(K key, String path) {
         return await(async.jsonStrlen(key, path));
     }
 
+    /**
+     * Sends {@code JSON.ARRLEN key path}.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON array
+     * @return the number of elements, or {@code null} when the key or path does not exist
+     * @throws RuvioServerException {@code WRONGTYPE JSON value is not an array}
+     */
     public Long jsonArrlen(K key, String path) {
         return await(async.jsonArrlen(key, path));
     }
 
+    /**
+     * Sends {@code JSON.OBJKEYS key path}.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON object
+     * @return the member names in document order; empty when the key or path does not exist
+     * @throws RuvioServerException {@code WRONGTYPE JSON value is not an object}
+     */
     public List<String> jsonObjkeys(K key, String path) {
         return await(async.jsonObjkeys(key, path));
     }
 
+    /**
+     * Sends {@code JSON.OBJLEN key path}.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON object
+     * @return the number of members, or {@code null} when the key or path does not exist
+     * @throws RuvioServerException {@code WRONGTYPE JSON value is not an object}
+     */
     public Long jsonObjlen(K key, String path) {
         return await(async.jsonObjlen(key, path));
     }
 
-    /** JSON.NUMINCRBY: the new number as JSON text (exact, integer or double). */
+    /**
+     * Sends {@code JSON.NUMINCRBY key path delta}: adds to a number. Whole numbers stay exact integers when both sides are integers.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON number
+     * @param delta the amount to add (may be negative)
+     * @return the new number as JSON text, or {@code null} when the key or path does not exist
+     * @throws RuvioServerException {@code WRONGTYPE JSON value is not a number}; {@code ERR result is not a finite number}
+     */
     public String jsonNumincrby(K key, String path, double delta) {
         return await(async.jsonNumincrby(key, path, delta));
     }
 
+    /**
+     * Sends {@code JSON.NUMMULTBY key path factor}: multiplies a number.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON number
+     * @param factor the multiplier
+     * @return the new number as JSON text, or {@code null} when the key or path does not exist
+     * @throws RuvioServerException {@code WRONGTYPE JSON value is not a number}; {@code ERR result is not a finite number}
+     */
     public String jsonNummultby(K key, String path, double factor) {
         return await(async.jsonNummultby(key, path, factor));
     }
 
-    /** JSON.TOGGLE: the new boolean. */
+    /**
+     * Sends {@code JSON.TOGGLE key path}: flips a boolean.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON boolean
+     * @return the new value; {@code false} also when the key or path does not exist
+     * @throws RuvioServerException {@code WRONGTYPE JSON value is not a boolean}
+     */
     public Boolean jsonToggle(K key, String path) {
         return await(async.jsonToggle(key, path));
     }
 
-    /** JSON.ARRAPPEND key path json...: the new length. */
+    /**
+     * Sends {@code JSON.ARRAPPEND key path json [json ...]}: appends values to an array. The cost grows with the array length; for append-heavy data use a list.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON array
+     * @param jsonValues one or more values as JSON text
+     * @return the array length after the append, or {@code null} when the key or path does not exist
+     * @throws RuvioServerException {@code WRONGTYPE JSON value is not an array}; {@code ERR invalid JSON value}
+     */
     public Long jsonArrappend(K key, String path, String... jsonValues) {
         return await(async.jsonArrappend(key, path, jsonValues));
     }
 
+    /**
+     * Sends {@code JSON.ARRINSERT key path index json [json ...]}: inserts values before an index.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON array
+     * @param index the position to insert at; negative counts from the end; must not exceed the length
+     * @param jsonValues one or more values as JSON text
+     * @return the array length after the insert, or {@code null} when the key or path does not exist
+     * @throws RuvioServerException {@code ERR index out of range}; {@code WRONGTYPE JSON value is not an array}; {@code ERR invalid JSON value}
+     */
     public Long jsonArrinsert(K key, String path, long index, String... jsonValues) {
         return await(async.jsonArrinsert(key, path, index, jsonValues));
     }
 
-    /** JSON.ARRPOP key: pops the last element of the root array (JSON text, null when empty). */
+    /**
+     * Sends {@code JSON.ARRPOP key}: removes and returns the last element of the root array.
+     *
+     * @param key the JSON key
+     * @return the removed element as JSON text, or {@code null} when the array is empty or the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE JSON value is not an array}
+     */
     public String jsonArrpop(K key) {
         return await(async.jsonArrpop(key));
     }
 
+    /**
+     * Sends {@code JSON.ARRPOP key path}: removes and returns the last element of an array.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON array
+     * @return the removed element as JSON text, or {@code null} when the array is empty or the key or path does not exist
+     * @throws RuvioServerException {@code WRONGTYPE JSON value is not an array}
+     */
     public String jsonArrpop(K key, String path) {
         return await(async.jsonArrpop(key, path));
     }
 
+    /**
+     * Sends {@code JSON.ARRPOP key path index}: removes and returns the element at an index.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON array
+     * @param index the position; negative counts from the end; out-of-range values are clamped to the array
+     * @return the removed element as JSON text, or {@code null} when the array is empty or the key or path does not exist
+     * @throws RuvioServerException {@code WRONGTYPE JSON value is not an array}
+     */
     public String jsonArrpop(K key, String path, long index) {
         return await(async.jsonArrpop(key, path, index));
     }
 
+    /**
+     * Sends {@code JSON.ARRTRIM key path start stop}: keeps only the elements in a range.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON array
+     * @param start the first element to keep; negative counts from the end
+     * @param stop the last element to keep, inclusive; negative counts from the end
+     * @return the array length after trimming, or {@code null} when the key or path does not exist
+     * @throws RuvioServerException {@code WRONGTYPE JSON value is not an array}
+     */
     public Long jsonArrtrim(K key, String path, long start, long stop) {
         return await(async.jsonArrtrim(key, path, start, stop));
     }
 
-    /** JSON.ARRINDEX key path scalar: index or -1. {@code scalarJson} is JSON text, e.g. {@code "\"a\""} or {@code 3}. */
+    /**
+     * Sends {@code JSON.ARRINDEX key path scalar}: finds a scalar in an array.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON array
+     * @param scalarJson the value to find as JSON text, for example {@code "\"a\""} or {@code 3}; objects and arrays are refused
+     * @return the index of the first match, {@code -1} when not found, or {@code null} when the key or path does not exist
+     * @throws RuvioServerException {@code ERR JSON value is not a scalar}; {@code WRONGTYPE JSON value is not an array}
+     */
     public Long jsonArrindex(K key, String path, String scalarJson) {
         return await(async.jsonArrindex(key, path, scalarJson));
     }
 
+    /**
+     * Sends {@code JSON.ARRINDEX key path scalar start stop}: like {@link #jsonArrindex(Object, String, String)} within a range.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON array
+     * @param scalarJson the value to find as JSON text
+     * @param start the first index to look at; negative counts from the end
+     * @param stop the index to stop before; {@code 0} means the end of the array; negative counts from the end
+     * @return the index of the first match, {@code -1} when not found, or {@code null} when the key or path does not exist
+     * @throws RuvioServerException {@code ERR JSON value is not a scalar}; {@code WRONGTYPE JSON value is not an array}
+     */
     public Long jsonArrindex(K key, String path, String scalarJson, long start, long stop) {
         return await(async.jsonArrindex(key, path, scalarJson, start, stop));
     }
 
+    /**
+     * Sends {@code JSON.CLEAR key path}: empties an array or object, or sets a number to 0.
+     *
+     * @param key the JSON key
+     * @param path the path to clear
+     * @return {@code 1} when something was cleared, {@code 0} when the value was already empty, is another type (string, boolean, null) or the path does not exist
+     * @throws RuvioServerException {@code ERR invalid JSON path}; {@code WRONGTYPE}
+     */
     public Long jsonClear(K key, String path) {
         return await(async.jsonClear(key, path));
     }
 
+    /**
+     * Sends {@code JSON.STRAPPEND key path json-string}: appends to a JSON string.
+     *
+     * @param key the JSON key
+     * @param path the path of a JSON string
+     * @param jsonString the text to append, as a JSON string literal including the quotes, for example {@code "\"abc\""}
+     * @return the string length in bytes after the append, or {@code null} when the key or path does not exist
+     * @throws RuvioServerException {@code WRONGTYPE JSON value is not a string}
+     */
     public Long jsonStrappend(K key, String path, String jsonString) {
         return await(async.jsonStrappend(key, path, jsonString));
     }
 
     /**
-     * JSON.INDEX CREATE name PREFIX prefix PATH path [TYPE string|number|bool]. Database 0 only;
-     * {@code type} may be null.
+     * Sends the Ruvio command {@code JSON.INDEX CREATE name PREFIX prefix PATH path [TYPE type]}: builds an exact-match index on one scalar field of every JSON key that starts with {@code prefix}. It is built in the background, then follows every write, delete and expiry; postings live in memory and are rebuilt at startup. Database 0 only. With several shards, each shard indexes its own keys ({@code JSON.INDEX LIST} prints one line per shard).
+     *
+     * <pre>{@code
+     * client.jsonIndexCreate("by_status", "order:", "$.status", "string");
+     * }</pre>
+     *
+     * @param name the index name
+     * @param prefix only keys starting with this text are indexed
+     * @param path the field to index, for example {@code $.status}; the root {@code $} is refused
+     * @param type {@code string}, {@code number} or {@code bool}; {@code null} for the default
+     * @throws RuvioServerException {@code ERR index already exists}; {@code ERR invalid JSON path}; {@code ERR TYPE must be string, number or bool}; {@code ERR JSON.INDEX CREATE must run in database 0}
      */
     public void jsonIndexCreate(String name, String prefix, String path, String type) {
         await(async.jsonIndexCreate(name, prefix, path, type));
     }
 
-    /** JSON.INDEX DROP name: 1 when dropped. */
+    /**
+     * Sends {@code JSON.INDEX DROP name}.
+     *
+     * @param name the index name
+     * @return {@code 1} when dropped, {@code 0} when no such index existed
+     * @throws RuvioServerException {@code ERR JSON.INDEX DROP must run in database 0}
+     */
     public Long jsonIndexDrop(String name) {
         return await(async.jsonIndexDrop(name));
     }
 
-    /** JSON.INDEX LIST: one description line per index. */
+    /**
+     * Sends {@code JSON.INDEX LIST}.
+     *
+     * @return one description line per index (per shard), empty when there are none
+     */
     public List<String> jsonIndexList() {
         return await(async.jsonIndexList());
     }
 
-    /** JSON.FIND name VALUE v: matching keys in ascending order (fails with "index is building" at first). */
+    /**
+     * Sends the Ruvio command {@code JSON.FIND name VALUE v}: finds JSON keys whose indexed field equals a value. Returns at most 100 keys; use the overload with {@code count} and {@code after} to page.
+     *
+     * <pre>{@code
+     * List<String> keys = client.jsonFind("by_status", "shipped");
+     * }</pre>
+     *
+     * @param index the index name
+     * @param value the value to match, as plain text ({@code true}/{@code false} for bool indexes, a number for number indexes)
+     * @return matching keys in ascending order, empty when none
+     * @throws RuvioServerException {@code ERR no such index}; {@code ERR index is building} until the first build finishes; {@code ERR VALUE does not match the index type}
+     */
     public List<K> jsonFind(String index, String value) {
         return await(async.jsonFind(index, value));
     }
 
-    /** JSON.FIND name VALUE v COUNT n [AFTER key]; {@code after} may be null. */
+    /**
+     * Sends {@code JSON.FIND name VALUE v COUNT n [AFTER key]}: paged lookup.
+     *
+     * @param index the index name
+     * @param value the value to match
+     * @param count the page size, from 1 to 1000
+     * @param after the last key of the previous page, or {@code null} for the first page
+     * @return up to {@code count} matching keys in ascending order, starting after {@code after}
+     * @throws RuvioServerException {@code ERR COUNT must be between 1 and 1000}; {@code ERR no such index}; {@code ERR index is building}; {@code ERR VALUE does not match the index type}
+     */
     public List<K> jsonFind(String index, String value, long count, K after) {
         return await(async.jsonFind(index, value, count, after));
     }
 
+    /**
+     * Sends {@code BF.RESERVE key error capacity}: creates an empty scalable Bloom filter. When it fills up, a larger layer with a lower false-positive rate is added (default growth factor 2).
+     *
+     * <pre>{@code
+     * client.bfReserve("seen:urls", 0.01, 100_000);
+     * }</pre>
+     *
+     * @param key the filter key
+     * @param errorRate target false-positive rate between 0 and 1 exclusive, for example {@code 0.01}
+     * @param capacity expected number of items; greater than zero
+     * @throws RuvioServerException {@code ERR item exists} when the key already exists; {@code ERR invalid Bloom configuration} for a bad rate or capacity (a layer above 64 MiB is refused)
+     */
     public void bfReserve(K key, double errorRate, long capacity) {
         await(async.bfReserve(key, errorRate, capacity));
     }
 
-    /** BF.RESERVE key error capacity [EXPANSION n | NONSCALING]; expansion &lt;= 0 is omitted. */
+    /**
+     * Sends {@code BF.RESERVE key error capacity [EXPANSION n | NONSCALING]}.
+     *
+     * @param key the filter key
+     * @param errorRate target false-positive rate between 0 and 1 exclusive
+     * @param capacity expected number of items; greater than zero
+     * @param expansion growth factor of each new layer; zero or less omits it (default 2)
+     * @param nonScaling {@code true} to keep one layer: adds then fail with {@code ERR non scaling filter is full} once it is full
+     * @throws RuvioServerException {@code ERR item exists}; {@code ERR invalid Bloom configuration}
+     */
     public void bfReserve(K key, double errorRate, long capacity, long expansion, boolean nonScaling) {
         await(async.bfReserve(key, errorRate, capacity, expansion, nonScaling));
     }
 
-    /** BF.ADD: true when the item was new. */
+    /**
+     * Sends {@code BF.ADD key item}: adds an item; a missing key is created with error rate 0.01 and capacity 100.
+     *
+     * @param key the filter key
+     * @param item the item
+     * @return {@code true} when the item was new, {@code false} when it was probably already present
+     * @throws RuvioServerException {@code ERR non scaling filter is full}; {@code WRONGTYPE} when the key holds another type
+     */
     public Boolean bfAdd(K key, V item) {
         return await(async.bfAdd(key, item));
     }
 
+    /**
+     * Sends {@code BF.MADD key item [item ...]}: adds several items (one log record).
+     *
+     * @param key the filter key
+     * @param items one or more items
+     * @return one flag per item: {@code true} when new, {@code false} when probably already present
+     * @throws RuvioServerException {@code ERR non scaling filter is full}; {@code WRONGTYPE}
+     */
     @SafeVarargs
     public final List<Boolean> bfMadd(K key, V... items) {
         return await(async.bfMadd(key, items));
     }
 
-    /** BF.INSERT key [options] ITEMS item... */
+    /**
+     * Sends {@code BF.INSERT key [CAPACITY c] [ERROR e] [EXPANSION n] [NOCREATE] [NONSCALING] ITEMS item ...}: adds items, creating the filter with the given settings when missing.
+     *
+     * @param key the filter key
+     * @param options creation settings; {@code null} for defaults ({@code noCreate()} fails instead of creating)
+     * @param items one or more items
+     * @return one flag per item: {@code true} when new, {@code false} when probably already present
+     * @throws RuvioServerException {@code ERR not found} with {@code noCreate()} on a missing key; {@code ERR non scaling filter is full}; {@code ERR invalid Bloom configuration}
+     */
     @SafeVarargs
     public final List<Boolean> bfInsert(K key, BfInsertArgs options, V... items) {
         return await(async.bfInsert(key, options, items));
     }
 
+    /**
+     * Sends {@code BF.EXISTS key item}.
+     *
+     * @param key the filter key
+     * @param item the item
+     * @return {@code true} when the item is probably present (false positives are possible), {@code false} when it is certainly absent or the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE}
+     */
     public Boolean bfExists(K key, V item) {
         return await(async.bfExists(key, item));
     }
 
+    /**
+     * Sends {@code BF.MEXISTS key item [item ...]}.
+     *
+     * @param key the filter key
+     * @param items one or more items
+     * @return one flag per item: {@code true} when probably present, {@code false} when certainly absent
+     * @throws RuvioServerException {@code WRONGTYPE}
+     */
     @SafeVarargs
     public final List<Boolean> bfMexists(K key, V... items) {
         return await(async.bfMexists(key, items));
     }
 
+    /**
+     * Sends {@code BF.CARD key}.
+     *
+     * @param key the filter key
+     * @return the number of items added, {@code 0} when the key does not exist
+     * @throws RuvioServerException {@code WRONGTYPE}
+     */
     public Long bfCard(K key) {
         return await(async.bfCard(key));
     }
 
-    /** BF.INFO key: Capacity, Size, Number of filters, Number of items inserted, Expansion rate. */
+    /**
+     * Sends {@code BF.INFO key}.
+     *
+     * @param key the filter key
+     * @return a map with {@code Capacity}, {@code Size}, {@code Number of filters}, {@code Number of items inserted} and {@code Expansion rate}
+     * @throws RuvioServerException {@code ERR not found} when the key does not exist; {@code WRONGTYPE}
+     */
     public Map<String, Object> bfInfo(K key) {
         return await(async.bfInfo(key));
     }
 
-    /** BF.INFO key CAPACITY|SIZE|FILTERS|ITEMS|EXPANSION. */
+    /**
+     * Sends {@code BF.INFO key field}: one value of the info.
+     *
+     * @param key the filter key
+     * @param field {@code CAPACITY}, {@code SIZE}, {@code FILTERS}, {@code ITEMS} or {@code EXPANSION}
+     * @return the value, or {@code null} for {@code EXPANSION} on a non-scaling filter
+     * @throws RuvioServerException {@code ERR not found} when the key does not exist; {@code ERR} for an unknown field
+     */
     public Long bfInfo(K key, String field) {
         return await(async.bfInfo(key, field));
     }
 
 
     // ---- ScriptingCommands ----
-    /** EVAL script numkeys key... arg...: result tree (bulk strings decoded with the value codec). */
+    /**
+     * Sends {@code EVAL script numkeys key [key ...] arg [arg ...]}: runs a Lua 5.1 script on the server, atomically. Inside the script, {@code KEYS} and {@code ARGV} hold the arguments and {@code ruvio.call(...)} / {@code ruvio.pcall(...)} run commands, but only on the declared keys. Every declared key must hash to one slot (use a {@code {tag}}); a script with no keys runs on the shard the connection reaches. Writes are applied as one batch; a Lua error or a refused batch restores the declared keys. Scripts cannot run inside a transaction. Runtime limits (instructions, time, memory) are set in the server configuration.
+     *
+     * <pre>{@code
+     * Object n = client.eval("return ruvio.call('INCR', KEYS[1])", new String[] {"hits"});
+     * }</pre>
+     *
+     * @param script the Lua source
+     * @param keys the keys the script may touch (pass an empty array for none)
+     * @param arguments extra values available as {@code ARGV}
+     * @return the script result converted to Java: a bulk string is decoded with the value codec, an integer is a {@code Long}, an array is a {@code List}, {@code nil} is {@code null}
+     * @throws RuvioServerException {@code ERR} for a Lua error or a limit that was hit; {@code CROSSSLOT} when the keys span slots; {@code NOPERM} when the user may not run a command the script calls
+     */
     @SafeVarargs
     public final Object eval(String script, K[] keys, V... arguments) {
         return await(async.eval(script, keys, arguments));
     }
 
+    /**
+     * Sends {@code EVALSHA sha1 numkeys key ... arg ...}: runs a script already stored by {@link #scriptLoad(String)} or {@code eval}, without sending its source again. The cache is memory only and per shard, so it is empty after a restart.
+     *
+     * @param sha1 the 40-character hex digest of the script
+     * @param keys the keys the script may touch (empty array for none)
+     * @param arguments extra values available as {@code ARGV}
+     * @return the script result, converted as for {@link #eval}
+     * @throws RuvioServerException {@code NOSCRIPT} when the digest is not cached on that shard; {@code ERR} for a Lua error; {@code CROSSSLOT}
+     */
     @SafeVarargs
     public final Object evalsha(String sha1, K[] keys, V... arguments) {
         return await(async.evalsha(sha1, keys, arguments));
     }
 
-    /** SCRIPT LOAD: the SHA1 (cache is per shard, memory only). */
+    /**
+     * Sends {@code SCRIPT LOAD script}: compiles a script into the cache of the shard the command reaches, without running it. In a cluster, load it on every node you call {@code evalsha} on (see {@link io.github.salihcantekin.ruvio.RuvioClient#onNode}).
+     *
+     * @param script the Lua source
+     * @return the SHA1 digest to use with {@link #evalsha}
+     * @throws RuvioServerException {@code ERR} when the script does not compile
+     */
     public String scriptLoad(String script) {
         return await(async.scriptLoad(script));
     }
 
+    /**
+     * Sends {@code SCRIPT EXISTS sha1 [sha1 ...]}.
+     *
+     * @param sha1s one or more digests
+     * @return one flag per digest: {@code true} when that script is cached on the shard
+     */
     public List<Boolean> scriptExists(String... sha1s) {
         return await(async.scriptExists(sha1s));
     }
 
+    /**
+     * Sends {@code SCRIPT FLUSH}: empties the script cache of the shard the command reaches.
+     */
     public void scriptFlush() {
         await(async.scriptFlush());
     }
 
-    /** SCRIPT KILL: fails with NOTBUSY when no script is running. */
+    /**
+     * Sends {@code SCRIPT KILL}. Ruvio cannot interrupt a script this way; it stops runaway scripts with its instruction and time limits instead, so this always fails.
+     *
+     * @throws RuvioServerException {@code NOTBUSY} always
+     */
     public void scriptKill() {
         await(async.scriptKill());
     }
 
-    /** FCALL function numkeys key... arg... */
+    /**
+     * Sends {@code FCALL function numkeys key ... arg ...}: runs a function stored with {@link #functionLoad}. The body runs like an {@link #eval} script, with {@code KEYS} and {@code ARGV}.
+     *
+     * @param function the function name
+     * @param keys the keys the function may touch (empty array for none)
+     * @param arguments extra values available as {@code ARGV}
+     * @return the result, converted as for {@link #eval}
+     * @throws RuvioServerException {@code ERR function not found}; {@code ERR} for a Lua error; {@code CROSSSLOT}
+     */
     @SafeVarargs
     public final Object fcall(String function, K[] keys, V... arguments) {
         return await(async.fcall(function, keys, arguments));
     }
 
-    /** FUNCTION LOAD name body: stores one named Lua body on the shard (memory only). */
+    /**
+     * Sends the Ruvio form of {@code FUNCTION LOAD name body}: stores a named Lua body in the memory of the shard the command reaches. It is not replayed after a restart, and it is refused while replication is on. Loading a name again replaces it.
+     *
+     * @param name the function name
+     * @param body the Lua source, written like an {@link #eval} script
+     * @throws RuvioServerException {@code ERR} when the body does not compile or the server forbids it
+     */
     public void functionLoad(String name, String body) {
         await(async.functionLoad(name, body));
     }
 
-    /** FUNCTION LIST: loaded function names in byte order. */
+    /**
+     * Sends {@code FUNCTION LIST}.
+     *
+     * @return the names of the functions loaded on that shard, in byte order
+     */
     public List<String> functionList() {
         return await(async.functionList());
     }
 
+    /**
+     * Sends {@code FUNCTION DELETE name}.
+     *
+     * @param name the function name
+     * @return {@code true} when the function existed and was removed
+     */
     public Boolean functionDelete(String name) {
         return await(async.functionDelete(name));
     }
 
-    /** SETBIT key offset 0|1: the previous bit. */
+    /**
+     * Sends {@code SETBIT key offset value}: sets one bit of a string, growing it with zero bytes as needed. Rewrites the whole value (cost grows with its size); an existing TTL is kept. Bitmaps are plain strings of at most 16 MiB.
+     *
+     * <pre>{@code
+     * long before = client.setbit("online", 1042, true);
+     * }</pre>
+     *
+     * @param key the bitmap key
+     * @param offset the bit position, from 0 to 134,217,727; bit 0 is the most significant bit of the first byte
+     * @param value the new bit
+     * @return the previous bit, {@code 0} or {@code 1}
+     * @throws RuvioServerException {@code ERR bit offset is not an integer or out of range}; {@code WRONGTYPE} for a non-string
+     */
     public Long setbit(K key, long offset, boolean value) {
         return await(async.setbit(key, offset, value));
     }
 
+    /**
+     * Sends {@code GETBIT key offset}.
+     *
+     * @param key the bitmap key
+     * @param offset the bit position, zero or greater
+     * @return {@code 0} or {@code 1}; {@code 0} when the key is missing or the offset is past the end
+     * @throws RuvioServerException {@code ERR bit offset is not an integer or out of range}; {@code WRONGTYPE}
+     */
     public Long getbit(K key, long offset) {
         return await(async.getbit(key, offset));
     }
 
+    /**
+     * Sends {@code BITCOUNT key}: counts the bits set to 1 in the whole string.
+     *
+     * @param key the bitmap key
+     * @return the number of set bits, {@code 0} when the key is missing
+     * @throws RuvioServerException {@code WRONGTYPE}
+     */
     public Long bitcount(K key) {
         return await(async.bitcount(key));
     }
 
-    /** BITCOUNT key start end (byte offsets). */
+    /**
+     * Sends {@code BITCOUNT key start end}: counts set bits in a byte range.
+     *
+     * @param key the bitmap key
+     * @param start the first byte, inclusive; negative counts from the end
+     * @param end the last byte, inclusive; negative counts from the end
+     * @return the number of set bits in the range
+     * @throws RuvioServerException {@code WRONGTYPE}
+     */
     public Long bitcount(K key, long start, long end) {
         return await(async.bitcount(key, start, end));
     }
 
-    /** BITCOUNT key start end BIT|BYTE. */
+    /**
+     * Sends {@code BITCOUNT key start end BIT|BYTE}.
+     *
+     * @param key the bitmap key
+     * @param start the first position, inclusive; negative counts from the end
+     * @param end the last position, inclusive; negative counts from the end
+     * @param bitUnits {@code true} reads {@code start}/{@code end} as bit positions ({@code BIT}); {@code false} as byte positions ({@code BYTE})
+     * @return the number of set bits in the range
+     * @throws RuvioServerException {@code WRONGTYPE}
+     */
     public Long bitcount(K key, long start, long end, boolean bitUnits) {
         return await(async.bitcount(key, start, end, bitUnits));
     }
@@ -1608,45 +4562,124 @@ public abstract class RuvioSyncCommands<K, V> {
         return await(async.bitcount(key, start, end, unit));
     }
 
+    /**
+     * Sends {@code BITPOS key bit}: the position of the first bit with the given value.
+     *
+     * @param key the bitmap key
+     * @param bit the bit value to look for
+     * @return the bit position, or {@code -1} when a {@code 1} is not found; for a missing key, {@code 0} when looking for {@code 0}
+     * @throws RuvioServerException {@code WRONGTYPE}
+     */
     public Long bitpos(K key, boolean bit) {
         return await(async.bitpos(key, bit));
     }
 
+    /**
+     * Sends {@code BITPOS key bit start}: like {@link #bitpos(Object, boolean)} starting at a byte.
+     *
+     * @param key the bitmap key
+     * @param bit the bit value to look for
+     * @param start the first byte to look at; negative counts from the end
+     * @return the bit position (counted from the start of the string), or {@code -1} when not found
+     * @throws RuvioServerException {@code WRONGTYPE}
+     */
     public Long bitpos(K key, boolean bit, long start) {
         return await(async.bitpos(key, bit, start));
     }
 
+    /**
+     * Sends {@code BITPOS key bit start end}: looks only in a byte range.
+     *
+     * @param key the bitmap key
+     * @param bit the bit value to look for
+     * @param start the first byte, inclusive; negative counts from the end
+     * @param end the last byte, inclusive; negative counts from the end
+     * @return the bit position (counted from the start of the string), or {@code -1} when not found in the range
+     * @throws RuvioServerException {@code WRONGTYPE}
+     */
     public Long bitpos(K key, boolean bit, long start, long end) {
         return await(async.bitpos(key, bit, start, end));
     }
 
-    /** BITOP AND|OR|XOR|NOT destination key...: the result length. */
+    /**
+     * Sends {@code BITOP op destination key [key ...]}: combines strings bit by bit (shorter ones are padded with zeros) and stores the result. An empty result deletes {@code destination}. In a cluster all keys must hash to one slot.
+     *
+     * @param op {@code AND}, {@code OR}, {@code XOR}, or {@code NOT} (which takes exactly one source key)
+     * @param destination the key that receives the result
+     * @param keys one or more source keys
+     * @return the length of the result in bytes
+     * @throws RuvioServerException {@code ERR} for {@code NOT} with several keys; {@code WRONGTYPE}; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final Long bitop(BitOp op, K destination, K... keys) {
         return await(async.bitop(op, destination, keys));
     }
 
-    /** BITFIELD key ops...: one value per GET/SET/INCRBY (null when OVERFLOW FAIL stopped it). */
+    /**
+     * Sends {@code BITFIELD key GET|SET|INCRBY ... [OVERFLOW WRAP|SAT|FAIL]}: reads and writes integer fields packed inside a string. Types are {@code i1} to {@code i64} (signed) and {@code u1} to {@code u63} (unsigned); an offset is a bit number or {@code #n} (n times the type width). A write grows the string and rewrites the value.
+     *
+     * <pre>{@code
+     * List<Long> r = client.bitfield("stats", BitFieldArgs.builder().set("u8", 0, 200).incrBy("u8", 0, 100));
+     * }</pre>
+     *
+     * @param key the key of the string
+     * @param operations the operations to run in order, built with {@link BitFieldArgs}
+     * @return one value per {@code GET}/{@code SET}/{@code INCRBY}: the field value, the old value for {@code SET}, the new value for {@code INCRBY}; {@code null} for an {@code INCRBY} stopped by {@code OVERFLOW FAIL}
+     * @throws RuvioServerException {@code ERR} for a bad type or offset; {@code WRONGTYPE}
+     */
     public List<Long> bitfield(K key, BitFieldArgs operations) {
         return await(async.bitfield(key, operations));
     }
 
-    /** BITFIELD_RO key GET ...: GET operations only. */
+    /**
+     * Sends {@code BITFIELD_RO key GET type offset ...}: read-only fields; any write operation is refused.
+     *
+     * @param key the key of the string
+     * @param getOperations only {@code get} operations
+     * @return one value per {@code GET}
+     * @throws RuvioServerException {@code ERR} when the operations include a write; {@code WRONGTYPE}
+     */
     public List<Long> bitfieldRo(K key, BitFieldArgs getOperations) {
         return await(async.bitfieldRo(key, getOperations));
     }
 
-    /** PFADD: true when the estimate changed. */
+    /**
+     * Sends {@code PFADD key [element ...]}: adds elements to a HyperLogLog, which counts distinct items in about 12 KB however many there are. A HyperLogLog is a string with a {@code HYLL} header; Ruvio always writes the dense form and rewrites the whole value on each change. With no elements it only creates an empty HyperLogLog.
+     *
+     * <pre>{@code
+     * client.pfadd("visitors:2026-10-17", "u1", "u2");
+     * long n = client.pfcount("visitors:2026-10-17");
+     * }</pre>
+     *
+     * @param key the HyperLogLog key
+     * @param elements zero or more elements
+     * @return {@code true} when the estimate changed (or the key was created), {@code false} otherwise
+     * @throws RuvioServerException {@code WRONGTYPE} when the key is not a valid HyperLogLog
+     */
     @SafeVarargs
     public final Boolean pfadd(K key, V... elements) {
         return await(async.pfadd(key, elements));
     }
 
+    /**
+     * Sends {@code PFCOUNT key [key ...]}: estimated number of distinct elements; with several keys, of their union (same slot in a cluster). The error is about 0.8%.
+     *
+     * @param keys one or more HyperLogLog keys
+     * @return the estimate, {@code 0} for missing keys
+     * @throws RuvioServerException {@code WRONGTYPE} when a key is not a valid HyperLogLog; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final Long pfcount(K... keys) {
         return await(async.pfcount(keys));
     }
 
+    /**
+     * Sends {@code PFMERGE destination sourcekey [sourcekey ...]}: stores the union of HyperLogLogs in {@code destination} (which is also part of the union). All keys must hash to one slot in a cluster.
+     *
+     * @param destination the key that receives the union
+     * @param sources one or more HyperLogLog keys
+     * @throws RuvioServerException {@code WRONGTYPE} when a key is not a valid HyperLogLog; {@code CROSSSLOT} in a cluster
+     */
     @SafeVarargs
     public final void pfmerge(K destination, K... sources) {
         await(async.pfmerge(destination, sources));
@@ -1654,233 +4687,523 @@ public abstract class RuvioSyncCommands<K, V> {
 
 
     // ---- RuvioCommands ----
-    /** RUVIO: "PONG is taken". */
+    /**
+     * Sends {@code RUVIO}: a Ruvio-only greeting.
+     *
+     * @return the text {@code PONG is taken}
+     */
     public String ruvio() {
         return await(async.ruvio());
     }
 
-    /** RUVIO OWNER (or another single word): server-defined text. */
+    /**
+     * Sends {@code RUVIO argument}. Only {@code OWNER} is accepted.
+     *
+     * @param argument {@code OWNER} (any case)
+     * @return a one-line description of the shard rule: {@code the core that owns the slot does the work}
+     * @throws RuvioServerException {@code ERR RUVIO expects zero arguments or OWNER} for any other word
+     */
     public String ruvio(String argument) {
         return await(async.ruvio(argument));
     }
 
+    /**
+     * Sends {@code PING}: checks that the server answers.
+     *
+     * <pre>{@code
+     * String pong = client.ping();
+     * }</pre>
+     *
+     * @return {@code PONG}
+     */
     public String ping() {
         return await(async.ping());
     }
 
+    /**
+     * Sends {@code PING message}.
+     *
+     * @param message the text to echo back
+     * @return the same message
+     */
     public V ping(V message) {
         return await(async.ping(message));
     }
 
+    /**
+     * Sends {@code ECHO message}.
+     *
+     * @param message the value to echo back
+     * @return the same message
+     */
     public V echo(V message) {
         return await(async.echo(message));
     }
 
     /**
-     * HELLO protover: switches this connection's protocol (2 or 3) and returns the server map.
-     * The reader understands both protocols; RESP3 pushes go to the push listener.
+     * Sends {@code HELLO protover}: chooses the protocol of this connection. The default is RESP2; {@code 3} enables RESP3 (null, boolean and map types, and push frames for {@code CLIENT TRACKING}, which go to the {@code pushListener} of the options). The client reads both. On the shared connection this changes the protocol for every caller.
+     *
+     * @param protocol {@code 2} or {@code 3}
+     * @return the server properties (name, version, protocol, mode, role and so on) as a map
+     * @throws RuvioServerException {@code NOPROTO} for any other protocol number (nothing changes)
      */
     public Map<String, Object> hello(int protocol) {
         return await(async.hello(protocol));
     }
 
-    /** HELLO protover AUTH username password. */
+    /**
+     * Sends {@code HELLO protover AUTH username password}: chooses the protocol and authenticates in one step.
+     *
+     * @param protocol {@code 2} or {@code 3}
+     * @param username the ACL user name (use {@code default} for the default user)
+     * @param password the password
+     * @return the server properties as a map
+     * @throws RuvioServerException {@code NOPROTO} for a bad protocol; {@code WRONGPASS} for bad credentials (the previous protocol stays)
+     */
     public Map<String, Object> hello(int protocol, String username, String password) {
         return await(async.hello(protocol, username, password));
     }
 
+    /**
+     * Sends {@code AUTH password}: authenticates as the default user. The client already sends the password from {@code RuvioOptions} on every (re)connect; call this only to change identity later.
+     *
+     * @param password the password
+     * @throws RuvioServerException {@code WRONGPASS} for a wrong password; {@code ERR} when the server has no password configured
+     */
     public void auth(String password) {
         await(async.auth(password));
     }
 
+    /**
+     * Sends {@code AUTH username password}: authenticates as an ACL user.
+     *
+     * @param username the ACL user name
+     * @param password the password
+     * @throws RuvioServerException {@code WRONGPASS} for bad credentials; {@code ERR max number of connections for this user reached} when the user's connection limit is full
+     */
     public void auth(String username, String password) {
         await(async.auth(username, password));
     }
 
-    /** SELECT db. On the shared client this changes the database for every caller. */
+    /**
+     * Sends {@code SELECT db}: switches the logical database of the connection. On the shared client this changes the database for every caller, and the client selects it again after a reconnect. For one fixed database use {@code RuvioOptions.Builder#database}. Cluster mode allows only database 0.
+     *
+     * @param database the index, from 0 to {@code databases - 1} (16 by default)
+     * @throws RuvioServerException {@code ERR DB index is out of range}
+     */
     public void select(int database) {
         await(async.select(database));
     }
 
-    /** COMMAND: the command table (Redis 7 shape), UTF-8 text. */
+    /**
+     * Sends {@code COMMAND}: describes every command the server knows (Redis 7 shape).
+     *
+     * @return one entry per command (name, arity, flags, key positions), with text decoded as strings
+     */
     public List<Object> command() {
         return await(async.command());
     }
 
+    /**
+     * Sends {@code COMMAND COUNT}.
+     *
+     * @return how many commands the server supports
+     */
     public Long commandCount() {
         return await(async.commandCount());
     }
 
+    /**
+     * Sends {@code COMMAND INFO name [name ...]}.
+     *
+     * @param names command names such as {@code get}
+     * @return one entry per name, in the shape of {@link #command()}; {@code null} for an unknown name
+     */
     public List<Object> commandInfo(String... names) {
         return await(async.commandInfo(names));
     }
 
+    /**
+     * Sends {@code COMMAND DOCS [name ...]}.
+     *
+     * @param names command names; none returns all
+     * @return the documentation tree as the server sends it
+     */
     public Object commandDocs(String... names) {
         return await(async.commandDocs(names));
     }
 
-    /** CLIENT GETNAME: null when unnamed. */
+    /**
+     * Sends {@code CLIENT GETNAME}.
+     *
+     * @return the connection name, or {@code null} when none is set
+     */
     public String clientGetname() {
         return await(async.clientGetname());
     }
 
+    /**
+     * Sends {@code CLIENT SETNAME name}. The name is per connection. The options' {@code clientName} sets it on every (re)connect.
+     *
+     * @param name a name without spaces
+     * @throws RuvioServerException {@code ERR} when the name contains spaces or newlines
+     */
     public void clientSetname(String name) {
         await(async.clientSetname(name));
     }
 
-    /** CLIENT TRACKING ON|OFF (ON requires RESP3: call {@code hello(3)} first). */
+    /**
+     * Sends {@code CLIENT TRACKING ON|OFF}: server-assisted client caching. While on, the server remembers the keys this connection read with {@code GET}/{@code MGET} (also misses) and sends one {@code invalidate} push when such a key is written. It works on one shard only. Requires RESP3, so call {@link #hello(int)} with {@code 3} first and set a {@code pushListener} in the options to receive the frames. The options {@code REDIRECT}, {@code BCAST}, {@code PREFIX}, {@code OPTIN}, {@code OPTOUT} and {@code NOLOOP} are not supported.
+     *
+     * @param on {@code true} to start tracking, {@code false} to stop and forget the keys
+     * @throws RuvioServerException {@code ERR} when the connection is not RESP3
+     */
     public void clientTracking(boolean on) {
         await(async.clientTracking(on));
     }
 
+    /**
+     * Sends {@code CLIENT ID}.
+     *
+     * @return the id the server gave this connection
+     */
     public Long clientId() {
         return await(async.clientId());
     }
 
+    /**
+     * Sends {@code CLIENT LIST}.
+     *
+     * @return one text line per connection ({@code key=value} fields), lines separated by newlines
+     */
     public String clientList() {
         return await(async.clientList());
     }
 
+    /**
+     * Sends {@code CLIENT INFO}.
+     *
+     * @return one text line with the fields of this connection
+     */
     public String clientInfo() {
         return await(async.clientInfo());
     }
 
-    /** CLIENT KILL with ID / ADDR / SKIPME filters: the number of killed connections. */
+    /**
+     * Sends {@code CLIENT KILL [ID id] [ADDR ip:port] [SKIPME yes|no]}: closes connections that match.
+     *
+     * <pre>{@code
+     * long closed = client.clientKill(ClientKillArgs.id(42));
+     * }</pre>
+     *
+     * @param filter the connection id and/or address to match; {@code skipMe(false)} also allows closing the caller's own connection
+     * @return how many connections were closed
+     * @throws RuvioServerException {@code ERR} for a syntax error
+     */
     public Long clientKill(ClientKillArgs filter) {
         return await(async.clientKill(filter));
     }
 
-    /** Legacy CLIENT KILL addr:port. */
+    /**
+     * Sends the old form {@code CLIENT KILL addr}: closes one connection by address.
+     *
+     * @param addr the client address as {@code ip:port}
+     * @throws RuvioServerException {@code ERR No such client} when nothing matches
+     */
     public void clientKill(String addr) {
         await(async.clientKill(addr));
     }
 
-    /** SLOWLOG GET: entries as text lists. */
+    /**
+     * Sends {@code SLOWLOG GET}: the slowest recent commands of the shard that answers.
+     *
+     * @return entries as lists (id, time, duration in microseconds, command arguments), newest first
+     */
     public List<Object> slowlogGet() {
         return await(async.slowlogGet());
     }
 
+    /**
+     * Sends {@code SLOWLOG GET count}.
+     *
+     * @param count the most entries to return
+     * @return the newest entries, as in {@link #slowlogGet()}
+     */
     public List<Object> slowlogGet(long count) {
         return await(async.slowlogGet(count));
     }
 
+    /**
+     * Sends {@code SLOWLOG LEN}.
+     *
+     * @return the number of entries kept
+     */
     public Long slowlogLen() {
         return await(async.slowlogLen());
     }
 
+    /**
+     * Sends {@code SLOWLOG RESET}: empties the slow log.
+     */
     public void slowlogReset() {
         await(async.slowlogReset());
     }
 
-    /** LATENCY LATEST: always empty on Ruvio. */
+    /**
+     * Sends {@code LATENCY LATEST}. Ruvio keeps no latency events, so the answer is always empty.
+     *
+     * @return an empty list
+     */
     public List<Object> latencyLatest() {
         return await(async.latencyLatest());
     }
 
+    /**
+     * Sends {@code ACL WHOAMI}.
+     *
+     * @return the user name of this connection
+     */
     public String aclWhoami() {
         return await(async.aclWhoami());
     }
 
+    /**
+     * Sends {@code ACL USERS}.
+     *
+     * @return the names of all ACL users
+     */
     public List<String> aclUsers() {
         return await(async.aclUsers());
     }
 
+    /**
+     * Sends {@code ACL LIST}.
+     *
+     * @return one rule line per user; passwords are not shown
+     */
     public List<String> aclList() {
         return await(async.aclList());
     }
 
-    /** ACL GETUSER: flat fields as a map (null user gives an empty map). */
+    /**
+     * Sends {@code ACL GETUSER user}.
+     *
+     * @param user the user name
+     * @return the user's flags, passwords (hashed), key patterns and command rules as a map; empty when the user does not exist
+     * @throws RuvioServerException {@code NOPERM} when the caller may not run {@code ACL}
+     */
     public Map<String, Object> aclGetuser(String user) {
         return await(async.aclGetuser(user));
     }
 
+    /**
+     * Sends {@code ACL CAT}.
+     *
+     * @return the command categories
+     */
     public List<String> aclCat() {
         return await(async.aclCat());
     }
 
+    /**
+     * Sends {@code ACL CAT category}.
+     *
+     * @param category a category name such as {@code write}
+     * @return the commands in that category
+     * @throws RuvioServerException {@code ERR} for an unknown category
+     */
     public List<String> aclCat(String category) {
         return await(async.aclCat(category));
     }
 
-    /** ACL SETUSER user rule... (for example "on", "&gt;password", "~app:*", "+get"). */
+    /**
+     * Sends {@code ACL SETUSER user rule [rule ...]}: creates or changes a user. Refused while replication is on. An open connection keeps the rules from its last {@code AUTH}.
+     *
+     * <pre>{@code
+     * client.aclSetuser("app", "on", ">s3cret", "~app:*", "+@read", "+@write");
+     * }</pre>
+     *
+     * @param user the user name
+     * @param rules rule tokens such as {@code on}, {@code >password}, {@code ~app:*} (key pattern), {@code +get}, {@code -flushall}, {@code +@read}
+     * @throws RuvioServerException {@code ERR} for an unknown rule; {@code NOPERM}
+     */
     public void aclSetuser(String user, String... rules) {
         await(async.aclSetuser(user, rules));
     }
 
+    /**
+     * Sends {@code ACL LOAD}: replaces the live users with the ones in the ACL file.
+     *
+     * @throws RuvioServerException {@code ERR} when no ACL file is configured or it is invalid
+     */
     public void aclLoad() {
         await(async.aclLoad());
     }
 
+    /**
+     * Sends {@code ACL SAVE}: writes the live users to the ACL file (passwords stored as hashes).
+     *
+     * @throws RuvioServerException {@code ERR} when no ACL file is configured
+     */
     public void aclSave() {
         await(async.aclSave());
     }
 
+    /**
+     * Sends {@code INFO}: server statistics of the shard that answers, as {@code key:value} lines grouped under {@code # Server}, {@code # Stats}, {@code # Buffers}, {@code # Memory} and {@code # Keyspace}. With several shards each shard reports itself ({@code ruvio_shard_id}, {@code ruvio_shard_count}).
+     *
+     * @return the report text
+     */
     public String info() {
         return await(async.info());
     }
 
-    /** INFO section ("prometheus" returns Prometheus text). */
+    /**
+     * Sends {@code INFO section}. Only {@code prometheus} changes the output (Prometheus text format for the shard); other section names return the same report as {@link #info()}.
+     *
+     * @param section {@code prometheus} for metrics text
+     * @return the report text
+     */
     public String info(String section) {
         return await(async.info(section));
     }
 
-    /** CONFIG GET pattern: name -> value (requirepass is redacted). */
+    /**
+     * Sends {@code CONFIG GET pattern}: reads settings. {@code CONFIG SET} is not supported; change settings in the config file, environment or flags. The password ({@code requirepass}) is redacted.
+     *
+     * @param pattern a glob such as {@code max*} or {@code *}
+     * @return setting name to value
+     */
     public Map<String, String> configGet(String pattern) {
         return await(async.configGet(pattern));
     }
 
+    /**
+     * Sends {@code SAVE}: writes a snapshot now and waits for it.
+     *
+     * @throws RuvioServerException {@code ERR} when the server has no snapshot storage ({@code memory} profile) or the write fails
+     */
     public void save() {
         await(async.save());
     }
 
-    /** BGSAVE: the status text ("Background saving started"). */
+    /**
+     * Sends {@code BGSAVE}: starts a snapshot in the background (in the server process, no fork).
+     *
+     * @return the status text {@code Background saving started}
+     */
     public String bgsave() {
         return await(async.bgsave());
     }
 
-    /** WAIT numreplicas timeout_ms: replicas that reached this shard's WAL sequence. */
+    /**
+     * Sends {@code WAIT numreplicas timeout}: blocks until replicas have synced the shard's WAL sequence to disk. With {@code port_mode = "per-shard"} it covers the shard the connection reaches plus shards its writes were forwarded to. A write is never undone when the wait times out. Not allowed inside a transaction or a script.
+     *
+     * @param replicas how many replicas must catch up
+     * @param timeoutMillis the longest wait in milliseconds; {@code 0} waits until shutdown
+     * @return how many replicas reached the sequence
+     */
     public Long waitReplicas(long replicas, long timeoutMillis) {
         return await(async.waitReplicas(replicas, timeoutMillis));
     }
 
+    /**
+     * Sends {@code CLUSTER SLOTS}: the slot ranges and the node that serves each. The cluster client uses it for routing. Ruvio's topology is static: every shard of the process is a primary with no replicas.
+     *
+     * @return one entry per range (start slot, end slot, node host and port, node id)
+     * @throws RuvioServerException {@code ERR cluster mode is disabled} on a server with one shard
+     */
     public List<Object> clusterSlots() {
         return await(async.clusterSlots());
     }
 
+    /**
+     * Sends {@code CLUSTER NODES}.
+     *
+     * @return one text line per node
+     * @throws RuvioServerException {@code ERR cluster mode is disabled} on a server with one shard
+     */
     public String clusterNodes() {
         return await(async.clusterNodes());
     }
 
+    /**
+     * Sends {@code CLUSTER SHARDS}.
+     *
+     * @return one entry per shard (slots and nodes)
+     * @throws RuvioServerException {@code ERR cluster mode is disabled} on a server with one shard
+     */
     public List<Object> clusterShards() {
         return await(async.clusterShards());
     }
 
+    /**
+     * Sends {@code CLUSTER INFO}.
+     *
+     * @return {@code key:value} lines about the cluster state
+     * @throws RuvioServerException {@code ERR cluster mode is disabled} on a server with one shard
+     */
     public String clusterInfo() {
         return await(async.clusterInfo());
     }
 
+    /**
+     * Sends {@code CLUSTER MYID}.
+     *
+     * @return the id of the node that answers
+     * @throws RuvioServerException {@code ERR cluster mode is disabled} on a server with one shard
+     */
     public String clusterMyid() {
         return await(async.clusterMyid());
     }
 
+    /**
+     * Sends {@code CLUSTER KEYSLOT key}: the hash slot (0 to 16383) of a key, with {@code {tag}} support. Works on any server. To compute it without a round trip use {@link io.github.salihcantekin.ruvio.RuvioClient#hashSlot(String)}.
+     *
+     * @param key the key
+     * @return the slot number
+     */
     public Long clusterKeyslot(K key) {
         return await(async.clusterKeyslot(key));
     }
 
+    /**
+     * Sends {@code READONLY}. Every Ruvio shard is a primary, so this only answers OK.
+     *
+     * @throws RuvioServerException {@code ERR cluster mode is disabled} on a server with one shard
+     */
     public void readonly() {
         await(async.readonly());
     }
 
+    /**
+     * Sends {@code READWRITE}. Only answers OK.
+     *
+     * @throws RuvioServerException {@code ERR cluster mode is disabled} on a server with one shard
+     */
     public void readwrite() {
         await(async.readwrite());
     }
 
-    /** PUBLISH channel message: receivers on this shard. */
+    /**
+     * Sends {@code PUBLISH channel message}: delivers a message to the subscribers of a channel. Subscribers on every shard of the server process get it, but the reply counts only receivers on the shard that took the command. Messages are not stored, not written to the log, and delivery to other shards is best effort. To receive, use {@link io.github.salihcantekin.ruvio.RuvioClient#pubSub}.
+     *
+     * @param channel the channel name
+     * @param message the payload
+     * @return the number of receivers on the shard that took the command
+     * @throws RuvioServerException {@code ERR} when refused inside a transaction on a multi-shard server
+     */
     public Long publish(String channel, V message) {
         return await(async.publish(channel, message));
     }
 
-    /** SPUBLISH shardchannel message. */
+    /**
+     * Sends {@code SPUBLISH shardchannel message}: like {@link #publish} for a sharded channel. The channel is routed by its hash slot, and only subscribers on the shard that owns the slot receive it. A server never forwards it: a wrong shard answers {@code MOVED}, which the cluster client follows.
+     *
+     * @param channel the sharded channel name
+     * @param message the payload
+     * @return the number of receivers on the owning shard
+     */
     public Long spublish(String channel, V message) {
         return await(async.spublish(channel, message));
     }
