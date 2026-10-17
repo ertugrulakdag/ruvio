@@ -20,15 +20,6 @@ Notable changes to the Rust client crate `ruvio-client`. New entries go under "U
   - `scan` has a fourth argument, `Option<KeyType>`, for the `TYPE` filter; pass `None` for the old behaviour.
   - `BitOperation`, `BitUnit` and `Aggregate` gain `as_str` / `as_bytes`.
 
-- **Breaking:** keyword arguments are typed enums that map to constant strings, so no keyword is formatted or allocated per call.
-  - `geo_dist`, `geo_search`, `geo_search_store`, `geo_radius` and `geo_radius_by_member` take a `GeoUnit` (`Meters`, `Kilometers`, `Feet`, `Miles`) instead of `&str`; `GeoSearch.unit` is a `GeoUnit` and `GeoSearch::radius` takes one.
-  - `GeoSearch.descending: Option<bool>` is now `order: Option<GeoOrder>` (`Asc`, `Desc`).
-  - `linsert` takes an `InsertPosition` (`Before`, `After`) instead of `before: bool`.
-  - `lmove`, `blmove`, `lmpop` and `blmpop` take a `ListSide` (`Left`, `Right`) instead of `from_left` / `to_left` booleans.
-  - `bitfield` and `bitfield_ro` take `&[BitFieldOp]` (`Get`, `Set`, `IncrBy`, `Overflow`) with `BitFieldType`, `BitFieldOffset` and `BitFieldOverflow` instead of `&[&str]` words.
-  - `scan` has a fourth argument, `Option<KeyType>`, for the `TYPE` filter; pass `None` for the old behaviour.
-  - `BitOperation`, `BitUnit` and `Aggregate` gain `as_str` / `as_bytes`.
-
 ## 0.3.2 - 2026-10-17
 
 - `Client::sharded_subscriber(channel)`: a Pub/Sub socket to the shard that owns a sharded channel, for `ssubscribe` on a cluster (a `subscriber()` socket reaches one shard only, so `SSUBSCRIBE` of a channel on another shard got `MOVED`).
