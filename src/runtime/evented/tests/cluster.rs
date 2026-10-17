@@ -1528,26 +1528,28 @@ fn evented_two_shards_back_to_back_saves_do_not_wait_out_the_retry_throttle() {
 
     assert_eq!(request(left_addr, &resp(&[&[b"SAVE"]])), b"+OK\r\n");
     // Each SAVE is a new request: the other shard starts its file at once instead of after
-    // the one-second throttle that spaces out retries of a failed one. Six SAVEs that each
-    // waited it out take six seconds; an average far below that tells them apart from a
-    // slow disk.
-    let saves = 6;
-    let started = Instant::now();
+    // the one-second throttle that spaces out retries of a failed one. A SAVE that waited it
+    // out takes at least about a second however fast the disk is; the fastest of six tells
+    // that floor apart from a slow disk, which only makes some SAVEs slower.
+    let fastest = (0..6)
+        .map(|_| {
+            let started = Instant::now();
 
-    for _ in 0..saves {
-        assert_eq!(
-            request_connected(left_addr, &resp(&[&[b"SAVE"]])),
-            b"+OK\r\n"
-        );
-    }
-    let elapsed = started.elapsed();
+            assert_eq!(
+                request_connected(left_addr, &resp(&[&[b"SAVE"]])),
+                b"+OK\r\n"
+            );
+            started.elapsed()
+        })
+        .min()
+        .unwrap();
 
     stop.request();
     join_within(left_server, PATIENCE).unwrap();
     join_within(right_server, PATIENCE).unwrap();
     assert!(
-        elapsed < Duration::from_millis(500) * saves,
-        "{saves} idle SAVEs took {elapsed:?}"
+        fastest < Duration::from_millis(800),
+        "the fastest of six idle SAVEs took {fastest:?}"
     );
 }
 
@@ -1602,33 +1604,39 @@ fn evented_two_shards_save_during_an_open_round_does_not_wait_out_the_throttle()
 
     // Warm up: the first round of an idle pair publishes.
     assert_eq!(request(left_addr, &resp(&[&[b"SAVE"]])), b"+OK\r\n");
-    let mut waited = Duration::ZERO;
-    // A SAVE that waited out the one-second throttle each time would take six seconds in
-    // all; an average far below that tells it apart from a slow disk.
-    let saves = 6;
-
-    // Each SAVE arrives while the round its BGSAVE opened is still waiting for the other
-    // shard. This shard's file is in that round, so it holds back the SAVE's checkpoint;
-    // once the round publishes, that checkpoint starts at once.
-    for _ in 0..saves {
-        let replies = request(left_addr, &resp(&[&[b"BGSAVE"]]));
-
-        assert!(replies.starts_with(b"+"), "{replies:?}");
+    let timed_save = || {
         let started = Instant::now();
 
         assert_eq!(
             request_connected(left_addr, &resp(&[&[b"SAVE"]])),
             b"+OK\r\n"
         );
-        waited += started.elapsed();
-    }
+        started.elapsed()
+    };
+    // One round on this machine's disk: the fastest of a few SAVEs with no round open.
+    let round = (0..3).map(|_| timed_save()).min().unwrap();
+
+    // Each SAVE arrives while the round its BGSAVE opened is still waiting for the other
+    // shard. This shard's file is in that round, so it holds back the SAVE's checkpoint;
+    // once the round publishes, that checkpoint starts at once, so the SAVE takes about two
+    // rounds. One that waited out the one-second throttle takes at least a second plus its
+    // own round. The fastest of six tells the two apart; a slow disk only makes some slower.
+    let fastest = (0..6)
+        .map(|_| {
+            let replies = request(left_addr, &resp(&[&[b"BGSAVE"]]));
+
+            assert!(replies.starts_with(b"+"), "{replies:?}");
+            timed_save()
+        })
+        .min()
+        .unwrap();
 
     stop.request();
     join_within(left_server, PATIENCE).unwrap();
     join_within(right_server, PATIENCE).unwrap();
     assert!(
-        waited < Duration::from_millis(500) * saves,
-        "{saves} SAVEs after a BGSAVE took {waited:?}"
+        fastest < Duration::from_secs(1) + round,
+        "the fastest of six SAVEs after a BGSAVE took {fastest:?} (one round takes {round:?})"
     );
 }
 

@@ -764,9 +764,12 @@ fn run_batch(address: &str, tag: &str, head: &str, frames: &[Vec<String>]) {
     payload.extend(frame(&["PING"]));
     sent.push(vec!["PING".to_owned()]);
 
-    if let Err(error) = conn.send_frame(&payload) {
-        narrow_down(address, tag, head, frames, &format!("send failed: {error}"));
-    }
+    // The batch is written while its replies are read. Written first, a batch whose replies
+    // outgrow the socket buffers (small on Windows) stalls both ways: the server stops reading
+    // while its replies wait, and this side stops reading while its write waits.
+    let mut writer = conn.writer.try_clone().unwrap();
+    let sending = std::thread::spawn(move || writer.write_all(&payload));
+    let mut failure = None;
 
     for (index, words) in sent.iter().enumerate() {
         match conn.read() {
@@ -776,19 +779,23 @@ fn run_batch(address: &str, tag: &str, head: &str, frames: &[Vec<String>]) {
                 }
             }
             Err(error) => {
-                narrow_down(
-                    address,
-                    tag,
-                    head,
-                    frames,
-                    &format!("reading the reply to {words:?}: {error}"),
-                );
+                failure = Some(format!("reading the reply to {words:?}: {error}"));
+                // Unblocks the writer if the server stopped reading.
+                let _ = conn.writer.shutdown(std::net::Shutdown::Both);
+                break;
             }
         }
     }
+
+    let sent_all = sending.join().unwrap();
+
+    if let Some(why) =
+        failure.or_else(|| sent_all.err().map(|error| format!("send failed: {error}")))
+    {
+        narrow_down(address, tag, head, frames, &why);
+    }
 }
 
-/// A batch lost its connection: find the single frame that does it and report it.
 fn narrow_down(address: &str, tag: &str, head: &str, frames: &[Vec<String>], why: &str) -> ! {
     if TcpStream::connect(address).is_err() {
         panic!(
