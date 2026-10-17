@@ -50,7 +50,7 @@ Connecting sends nothing unless configured (`AUTH`, `SELECT`, `CLIENT SETNAME`, 
 ## Install
 
 ```sh
-go get github.com/salihcantekin/ruvio/clients/go@v0.1.0
+go get github.com/salihcantekin/ruvio/clients/go@v0.1.1
 ```
 
 Releases are git tags named `clients/go/vX.Y.Z`.
