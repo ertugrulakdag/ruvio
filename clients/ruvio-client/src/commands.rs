@@ -24,13 +24,65 @@ macro_rules! args {
 }
 
 impl Client {
-    /// Sends `MGET`. A missing key is `None`.
+    /// Sends `MGET`: reads several string keys in one round trip.
+    ///
+    /// # Arguments
+    /// * `keys` - keys to read. On a sharded server keys in different slots are fetched per
+    ///   shard and merged back in the original order (not atomic).
+    ///
+    /// # Returns
+    /// One entry per key, in order: `Some(text)` or `None` when the key is missing **or holds a
+    /// non-string type** (no `WRONGTYPE` here).
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] if a value is not UTF-8; [`Error::Io`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let values = client.mget(&["a", "b"])?;
+    /// assert_eq!(values.len(), 2);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn mget(&mut self, keys: &[&str]) -> Result<Vec<Option<String>>, Error> {
         self.optional_strings(join("MGET", keys))
     }
 
-    /// Sends `LIMIT`. `None` means this call did not fit in the window.
-    /// `Some` is how many calls remain after this one.
+    /// Sends `LIMIT key max window_ms` (Ruvio): a fixed-window rate limiter held in one key.
+    ///
+    /// The first call on a missing key opens a window of `window_ms` and counts as call 1. Up to
+    /// `max` calls are allowed until the window ends; after that every call is refused until the
+    /// key expires and a new window starts. See [`Client::rate_limit`] for a friendlier wrapper.
+    ///
+    /// # Arguments
+    /// * `key` - limiter key (for example `"rl:user:42"`).
+    /// * `max` - calls allowed per window.
+    /// * `window_ms` - window length in milliseconds.
+    ///
+    /// # Returns
+    /// `Some(remaining)` - calls still available in this window after this one (`max - 1` on the
+    /// first call, `0` on the last allowed one); `None` when this call did not fit.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` if the key holds another type.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// match client.limit("rl:user:42", 100, 60_000)? {
+    ///     Some(left) => println!("ok, {left} left"),
+    ///     None => println!("slow down"),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn limit(&mut self, key: &str, max: u64, window_ms: u64) -> Result<Option<i64>, Error> {
         let value = self.run([
             "LIMIT",
@@ -49,12 +101,49 @@ impl Client {
             .ok_or_else(|| unexpected("LIMIT", &value))
     }
 
-    /// Sends `ONCE`. `1` is the first call. `0` means the key is already taken.
+    /// Sends `ONCE key ttl_ms` (Ruvio): a "do this only once until the deadline" marker.
+    ///
+    /// # Arguments
+    /// * `key` - marker key.
+    /// * `ttl_ms` - how long the marker stays, in milliseconds.
+    ///
+    /// # Returns
+    /// `1` for the first caller (the marker was created); `0` for every later caller until
+    /// `ttl_ms` has passed. For request de-duplication with a result, see [`Client::idem_begin`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// if client.once("welcome-email:42", 86_400_000)? == 1 {
+    ///     // send the email
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn once(&mut self, key: &str, ttl_ms: u64) -> Result<i64, Error> {
         self.integer(["ONCE", key, Num::uint(ttl_ms).as_str()])
     }
 
-    /// Native reservation: `[acquired]`, `[pending]`, `[conflict]`, or `[completed, binary result]`. See [`Client::idem_begin`] for a decoded form.
+    /// Sends `IDEM key BEGIN fingerprint owner ttl_ms`: reserves an operation for de-duplication
+    /// and returns the raw reply. [`Client::idem_begin`] decodes it into an
+    /// [`IdemState`](crate::IdemState).
+    ///
+    /// # Arguments
+    /// * `key` - operation key, scoped to the tenant and operation.
+    /// * `fingerprint` - 1-128 bytes identifying the request content (a digest of its inputs).
+    /// * `owner` - 1-128 bytes unique to this attempt (see [`new_token`](crate::new_token)).
+    /// * `ttl_ms` - retention, 1 to 604,800,000 ms (7 days).
+    ///
+    /// # Returns
+    /// An array: `["acquired"]` (you own it, run the work), `["pending"]` (same fingerprint, not
+    /// completed; do not run again), `["conflict"]` (live record has another fingerprint) or
+    /// `["completed", result]` (replay the saved result).
+    ///
+    /// # Errors
+    /// [`Error::Server`] for out-of-range arguments or `WRONGTYPE`.
     pub fn idempotency_begin(
         &mut self,
         key: &str,
@@ -72,7 +161,17 @@ impl Client {
         ])
     }
 
-    /// Publishes a result only for the matching live owner, without renewing retention.
+    /// Sends `IDEM key COMPLETE fingerprint owner result`: stores the result of a reserved
+    /// operation. See [`Client::idem_complete`] for the typed wrapper.
+    ///
+    /// # Arguments
+    /// * `key`, `fingerprint`, `owner` - as passed to [`Client::idempotency_begin`].
+    /// * `result` - text to replay later, at most 4 MiB.
+    ///
+    /// # Returns
+    /// `1` when published (or an identical repeat); `0` when the record is missing/expired, the
+    /// owner or fingerprint differs, or a different result is already stored. Completion never
+    /// extends retention.
     pub fn idempotency_complete(
         &mut self,
         key: &str,
@@ -83,7 +182,32 @@ impl Client {
         self.integer(["IDEM", key, "COMPLETE", fingerprint, owner, result])
     }
 
-    /// Sends `TAKE`. `None` means the key did not hold enough and was left unchanged.
+    /// Sends `TAKE key count` (Ruvio): subtracts from an integer only if the key holds enough.
+    ///
+    /// # Arguments
+    /// * `key` - integer counter (for example stock).
+    /// * `count` - amount to subtract.
+    ///
+    /// # Returns
+    /// `Some(new_value)`; `None` when the key is missing or holds less than `count` (nothing is
+    /// changed).
+    ///
+    /// # Errors
+    /// [`Error::Server`] if the value is not an integer or the key has another type.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// match client.take("stock:sku1", 2)? {
+    ///     Some(left) => println!("reserved, {left} left"),
+    ///     None => println!("not enough stock"),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn take(&mut self, key: &str, count: i64) -> Result<Option<i64>, Error> {
         let value = self.run(["TAKE", key, Num::int(count).as_str()])?;
 
@@ -97,12 +221,59 @@ impl Client {
             .ok_or_else(|| unexpected("TAKE", &value))
     }
 
-    /// Sends `GETEX`. Returns the string and sets its TTL to `ttl_ms`.
+    /// Sends `GETEX key PX ttl_ms`: returns the string and sets a new TTL in one step (sliding
+    /// expiry). Plain `GET` does not move the deadline.
+    ///
+    /// # Arguments
+    /// * `ttl_ms` - new time to live in milliseconds.
+    ///
+    /// # Returns
+    /// The value, or `None` when the key is missing (nothing is created).
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` for a non-string.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let session = client.getex("session:abc", 1_800_000)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn getex(&mut self, key: &str, ttl_ms: u64) -> Result<Option<String>, Error> {
         self.bulk_or_null(["GETEX", key, Num::uint(ttl_ms).as_str()])
     }
 
-    /// Sends `LEASE`. `None` means another holder still has the lease.
+    /// Sends `LEASE key ttl_ms` (Ruvio): takes an exclusive lease with a fencing token.
+    ///
+    /// # Arguments
+    /// * `ttl_ms` - how long the lease lasts, in milliseconds.
+    ///
+    /// # Returns
+    /// `Some(token)`: you hold the lease; the token grows with every grant (also after expiry or
+    /// `RELEASE`) so a stale holder can be fenced off. `None` while another holder still has it.
+    /// Free it with [`Client::release`]. See [`Client::lease_guard`] for an automatic release.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` if the key holds another type (`GET` of a lease is
+    /// `WRONGTYPE` too).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// if let Some(token) = client.lease("job:nightly", 30_000)? {
+    ///     // do the work, passing `token` to downstream writes
+    ///     client.release("job:nightly", token as u64)?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn lease(&mut self, key: &str, ttl_ms: u64) -> Result<Option<i64>, Error> {
         let value = self.run(["LEASE", key, Num::uint(ttl_ms).as_str()])?;
 
@@ -116,8 +287,31 @@ impl Client {
             .ok_or_else(|| unexpected("LEASE", &value))
     }
 
-    /// Sends `SEMAPHORE key max ttl_ms`. `Some(token)` while fewer than `max` holders are
-    /// live; `None` when full. Pass the token to [`Client::release`].
+    /// Sends `SEMAPHORE key max ttl_ms` (Ruvio): takes one of `max` slots.
+    ///
+    /// # Arguments
+    /// * `max` - most holders allowed at once.
+    /// * `ttl_ms` - this holder's lifetime in milliseconds; each holder expires on its own, so a
+    ///   crashed holder frees its slot.
+    ///
+    /// # Returns
+    /// `Some(token)` while fewer than `max` holders are live; `None` when full. Pass the token to
+    /// [`Client::release`]. The key disappears when the last holder is gone. See
+    /// [`Client::semaphore_permit`] for an automatic release.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// if let Some(token) = client.semaphore("pool:db", 10, 5_000)? {
+    ///     // use the resource
+    ///     client.release("pool:db", token as u64)?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn semaphore(&mut self, key: &str, max: u64, ttl_ms: u64) -> Result<Option<i64>, Error> {
         let value = self.run([
             "SEMAPHORE",
@@ -136,8 +330,29 @@ impl Client {
             .ok_or_else(|| unexpected("SEMAPHORE", &value))
     }
 
-    /// Sends `INCRBY key delta MAX limit`. `None` means the result would pass `limit`, and the
-    /// key was left unchanged.
+    /// Sends `INCRBY key delta MAX limit` (Ruvio): a capped counter.
+    ///
+    /// # Arguments
+    /// * `delta` - amount to add (may be negative).
+    /// * `limit` - the result may not go above this.
+    ///
+    /// # Returns
+    /// `Some(new_value)`; `None` when the result would pass `limit`, in which case nothing is
+    /// written.
+    ///
+    /// # Errors
+    /// [`Error::Server`] if the value is not an integer or `WRONGTYPE`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let seats = client.incr_by_max("seats:taken", 1, 100)?; // None once 100 are taken
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn incr_by_max(&mut self, key: &str, delta: i64, limit: i64) -> Result<Option<i64>, Error> {
         let value = self.run([
             "INCRBY",
@@ -157,12 +372,45 @@ impl Client {
             .ok_or_else(|| unexpected("INCRBY", &value))
     }
 
-    /// Sends `RELEASE`. Returns 1 when the token matched the holder of a lease or a semaphore.
+    /// Sends `RELEASE key token`: frees a lease or a semaphore slot.
+    ///
+    /// # Arguments
+    /// * `token` - the value returned by [`Client::lease`] or [`Client::semaphore`].
+    ///
+    /// # Returns
+    /// `1` when the token matched a current holder and was released; `0` for a stale or wrong
+    /// token (nothing changes).
     pub fn release(&mut self, key: &str, token: u64) -> Result<i64, Error> {
         self.integer(["RELEASE", key, Num::uint(token).as_str()])
     }
 
-    /// Sends `SETV`. Omit `version` to create version 1.
+    /// Sends `SETV key value [version]` (Ruvio): optimistic-locking write of a versioned string.
+    ///
+    /// # Arguments
+    /// * `value` - new value.
+    /// * `version` - `None` creates the key (or replaces a plain string) as version 1. `Some(v)`
+    ///   writes only if the current version is exactly `v`.
+    ///
+    /// # Returns
+    /// The new version number (current + 1).
+    ///
+    /// # Errors
+    /// [`Error::Server`] `ERR version mismatch` when `version` is not current or the key is
+    /// missing; `WRONGTYPE` for a non-string. A plain `SET` replaces a versioned string with a
+    /// plain one, and `INCR` refuses a versioned string.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let v1 = client.setv("doc", "draft", None)?;
+    /// let v2 = client.setv("doc", "final", Some(v1 as u64))?;
+    /// assert_eq!(v2, v1 + 1);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn setv(&mut self, key: &str, value: &str, version: Option<u64>) -> Result<i64, Error> {
         let mut arguments = vec!["SETV".to_owned(), key.to_owned(), value.to_owned()];
 
@@ -173,12 +421,42 @@ impl Client {
         self.integer(arguments)
     }
 
-    /// Sends `CHANGES START` and returns the cursor to read after.
+    /// Sends `CHANGES START` (Ruvio): turns on this shard's in-memory change feed (later `SET`,
+    /// `SETV`, `LEASE`, `RELEASE` notes).
+    ///
+    /// # Returns
+    /// The current sequence number; pass it to [`Client::changes`] to read what happens next.
+    /// Nothing is recorded before this call, and the feed is empty after a server restart. Only
+    /// the last 1,024 notes are kept.
     pub fn changes_start(&mut self) -> Result<i64, Error> {
         self.integer(["CHANGES", "START"])
     }
 
-    /// Sends `CHANGES` and returns `(sequence, text)` notes after `cursor`.
+    /// Sends `CHANGES cursor`: reads change notes recorded after `cursor`.
+    ///
+    /// # Arguments
+    /// * `cursor` - the sequence number returned by [`Client::changes_start`] or by the previous
+    ///   call (the highest sequence seen).
+    ///
+    /// # Returns
+    /// `(sequence, text)` pairs in order; empty when nothing is new or the feed was never
+    /// started. On a sharded server the feed is per shard, so use a client connected to the shard
+    /// you armed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let mut cursor = client.changes_start()? as u64;
+    /// for (sequence, note) in client.changes(cursor)? {
+    ///     cursor = sequence as u64;
+    ///     println!("{note}");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn changes(&mut self, cursor: u64) -> Result<Vec<(i64, String)>, Error> {
         let value = self.run(["CHANGES", Num::uint(cursor).as_str()])?;
         let Some(rows) = value.as_array() else {
@@ -205,67 +483,159 @@ impl Client {
         Ok(notes)
     }
 
-    /// Sends `MSET`.
+    /// Sends `MSET`: sets several string keys, replacing existing values of any type.
+    ///
+    /// On a sharded server pairs are split per slot and sent separately; this is **not atomic**
+    /// across slots.
+    ///
+    /// # Arguments
+    /// * `pairs` - `(key, value)` pairs.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.mset(&[("a", "1"), ("b", "2")])?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn mset(&mut self, pairs: &[(&str, &str)]) -> Result<(), Error> {
         self.ok(with_pairs(args!["MSET"], pairs))
     }
 
-    /// Sends `GETSET` and returns the previous value.
+    /// Sends `GETSET`: stores `value` and returns the old string (`None` if there was none).
+    /// Clears any TTL. Redis deprecates it in favour of `SET ... GET`; see
+    /// [`Client::set_and_get`].
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` for a non-string.
     pub fn getset(&mut self, key: &str, value: &str) -> Result<Option<String>, Error> {
         self.bulk_or_null(["GETSET", key, value])
     }
 
-    /// Sends `APPEND` and returns the new length.
+    /// Sends `APPEND`: adds `value` to the end of the string (creating it when missing) and
+    /// returns the new length in bytes. Keeps an existing TTL.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` for a non-string.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.append("log", "line 1\n")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn append(&mut self, key: &str, value: &str) -> Result<i64, Error> {
         self.integer(["APPEND", key, value])
     }
 
-    /// Sends `STRLEN`.
+    /// Sends `STRLEN`: length of the string in bytes; `0` when the key is missing.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` for a non-string.
     pub fn strlen(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["STRLEN", key])
     }
 
-    /// Sends `DECR`.
+    /// Sends `DECR`: subtracts 1 from the integer at `key` (missing counts as 0) and returns the
+    /// new value. Errors as [`Client::incr`].
     pub fn decr(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["DECR", key])
     }
 
-    /// Sends `INCRBY`.
+    /// Sends `INCRBY`: adds `delta` (may be negative) to the integer at `key` (missing counts as
+    /// 0) and returns the new value. Keeps an existing TTL.
+    ///
+    /// # Errors
+    /// [`Error::Server`] if the stored value is not a 64-bit integer, the result overflows, or
+    /// `WRONGTYPE`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// assert_eq!(client.incr_by("score", 10)?, 10);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn incr_by(&mut self, key: &str, delta: i64) -> Result<i64, Error> {
         self.integer(["INCRBY", key, Num::int(delta).as_str()])
     }
 
-    /// Sends `DECRBY`.
+    /// Sends `DECRBY`: subtracts `delta` from the integer at `key` and returns the new value.
+    /// Errors as [`Client::incr_by`].
     pub fn decr_by(&mut self, key: &str, delta: i64) -> Result<i64, Error> {
         self.integer(["DECRBY", key, Num::int(delta).as_str()])
     }
 
-    /// Sends `UNLINK` for one key.
+    /// Sends `UNLINK` for one key. Returns 1 if removed, 0 if missing. In Ruvio `UNLINK` is
+    /// synchronous, the same as `DEL`.
     pub fn unlink_key(&mut self, key: &str) -> Result<i64, Error> {
         self.unlink(&[key])
     }
 
-    /// Sends `UNLINK` and returns how many keys were removed.
+    /// Sends `UNLINK` for several keys and returns how many existed. Same as [`Client::del`]
+    /// (Ruvio frees the memory synchronously). Split per slot on a sharded server, not atomic.
     pub fn unlink(&mut self, keys: &[&str]) -> Result<i64, Error> {
         self.integer(join("UNLINK", keys))
     }
 
-    /// Sends `EXISTS` for one key.
+    /// Sends `EXISTS` for one key: `1` if it exists, `0` if not (any type).
     pub fn exists_key(&mut self, key: &str) -> Result<i64, Error> {
         self.exists(&[key])
     }
 
-    /// Sends `EXISTS` and returns how many of the keys exist.
+    /// Sends `EXISTS` and returns how many of the keys exist; a key listed twice counts twice.
+    /// Split per slot on a sharded server (counts are summed).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let present = client.exists(&["a", "b"])?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn exists(&mut self, keys: &[&str]) -> Result<i64, Error> {
         self.integer(join("EXISTS", keys))
     }
 
-    /// Sends `TYPE`: `string`, `list`, `set`, `hash`, `zset`, `stream`, or `none`.
+    /// Sends `TYPE`.
+    ///
+    /// # Returns
+    /// `"string"`, `"list"`, `"set"`, `"hash"`, `"zset"` or `"stream"`, or `"none"` for a
+    /// missing key. Ruvio also reports `"json"`, `"bloomfilter"`, `"lease"`, `"limit"`,
+    /// `"semaphore"` and `"once"` for its own types; geo indexes are `"zset"`.
     pub fn key_type(&mut self, key: &str) -> Result<String, Error> {
         self.text(["TYPE", key])
     }
 
-    /// Sends `RENAME`.
+    /// Sends `RENAME`: moves `key` to `new_key`, overwriting it and keeping the TTL.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `ERR no such key` when `key` is missing. On a sharded server both keys
+    /// must share a slot (use a hash tag), otherwise `CROSSSLOT`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.rename("draft:1", "final:1")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn rename(&mut self, key: &str, new_key: &str) -> Result<(), Error> {
         self.ok(["RENAME", key, new_key])
     }
@@ -286,12 +656,24 @@ impl Client {
         Ok(ScanPage { cursor, keys })
     }
 
-    /// Sends `DBSIZE` for the selected database.
+    /// Sends `DBSIZE`: number of keys in the selected database.
+    ///
+    /// A routing client asks every shard and sums the answers. A client opened with
+    /// `discover_cluster: false` on a `port_mode = "per-shard"` server counts that shard only.
     pub fn dbsize(&mut self) -> Result<i64, Error> {
         self.integer(["DBSIZE"])
     }
 
-    /// Sends `EXPIREAT`, or `PEXPIREAT` when `when` is not a whole second.
+    /// Sets an absolute expiry. Sends `EXPIREAT`, or `PEXPIREAT` when `when` is not a whole second.
+    ///
+    /// # Arguments
+    /// * `when` - wall-clock deadline; a time in the past deletes the key.
+    ///
+    /// # Returns
+    /// `true` when set; `false` if the key does not exist.
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] when `when` is before the Unix epoch.
     pub fn expire_at(&mut self, key: &str, when: SystemTime) -> Result<bool, Error> {
         let millis = unix_millis(when)?;
 
@@ -302,78 +684,128 @@ impl Client {
         self.flag(args!["PEXPIREAT", key, millis])
     }
 
-    /// Sends `PEXPIRE`. False when the key does not exist.
+    /// Sends `PEXPIRE`: TTL in milliseconds (rounded up from `ttl`). Returns `false` when the key
+    /// does not exist.
     pub fn pexpire(&mut self, key: &str, ttl: Duration) -> Result<bool, Error> {
         self.flag(args!["PEXPIRE", key, duration_millis(ttl)])
     }
 
-    /// Sends `TTL`: seconds left, -1 without an expiry, -2 when the key is missing.
+    /// Sends `TTL`: remaining life in seconds. `-1` if the key has no expiry, `-2` if it does
+    /// not exist.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let left = client.ttl("session:abc")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn ttl(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["TTL", key])
     }
 
-    /// Sends `PTTL`: milliseconds left, -1 without an expiry, -2 when the key is missing.
+    /// Sends `PTTL`: remaining life in milliseconds, `-1` without an expiry, `-2` when missing.
     pub fn pttl(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["PTTL", key])
     }
 
-    /// Sends `PERSIST`. False when the key is missing or has no expiry.
+    /// Sends `PERSIST`: removes the expiry. `true` if a TTL was removed; `false` when the key is
+    /// missing or had none.
     pub fn persist(&mut self, key: &str) -> Result<bool, Error> {
         self.flag(["PERSIST", key])
     }
 
-    /// Sends `LPUSH` and returns the new length.
+    /// Sends `LPUSH`: pushes values to the head, one after the other (so the last argument ends
+    /// up first). Creates the list. Returns the new length.
+    ///
+    /// # Arguments
+    /// * `values` - at least one element.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` for a non-list.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.lpush("queue", &["a", "b"])?; // list is now b, a
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn lpush(&mut self, key: &str, values: &[&str]) -> Result<i64, Error> {
         self.integer(with(args!["LPUSH", key], values))
     }
 
-    /// Sends `RPUSH` and returns the new length.
+    /// Sends `RPUSH`: appends values to the tail in order. Creates the list. Returns the new
+    /// length. Errors as [`Client::lpush`].
     pub fn rpush(&mut self, key: &str, values: &[&str]) -> Result<i64, Error> {
         self.integer(with(args!["RPUSH", key], values))
     }
 
-    /// Sends `LPOP` for one element.
+    /// Sends `LPOP`: removes and returns the head element, `None` when the list is missing or
+    /// empty. `WRONGTYPE` for a non-list.
     pub fn lpop(&mut self, key: &str) -> Result<Option<String>, Error> {
         self.bulk_or_null(["LPOP", key])
     }
 
-    /// Sends `LPOP` with a count. A missing list returns an empty vector.
+    /// Sends `LPOP key count`: removes up to `count` elements from the head. An empty vector for
+    /// a missing list. `count` must be positive.
     pub fn lpop_count(&mut self, key: &str, count: u64) -> Result<Vec<String>, Error> {
         self.strings(args!["LPOP", key, count])
     }
 
-    /// Sends `RPOP` for one element.
+    /// Sends `RPOP`: removes and returns the tail element, `None` for a missing or empty list.
     pub fn rpop(&mut self, key: &str) -> Result<Option<String>, Error> {
         self.bulk_or_null(["RPOP", key])
     }
 
-    /// Sends `RPOP` with a count. A missing list returns an empty vector.
+    /// Sends `RPOP key count`: removes up to `count` elements from the tail, last element first.
+    /// Empty vector for a missing list.
     pub fn rpop_count(&mut self, key: &str, count: u64) -> Result<Vec<String>, Error> {
         self.strings(args!["RPOP", key, count])
     }
 
-    /// Sends `LLEN`.
+    /// Sends `LLEN`: list length, `0` for a missing key. `WRONGTYPE` for a non-list.
     pub fn llen(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["LLEN", key])
     }
 
-    /// Sends `LINDEX`.
+    /// Sends `LINDEX`: element at `index` (0 is the head, `-1` the tail). `None` when the index is
+    /// out of range or the key is missing.
     pub fn lindex(&mut self, key: &str, index: i64) -> Result<Option<String>, Error> {
         self.bulk_or_null(args!["LINDEX", key, index])
     }
 
-    /// Sends `LRANGE`. `stop` is inclusive and negative indexes count from the tail.
+    /// Sends `LRANGE`: elements from `start` to `stop`, both **inclusive**; negative indexes
+    /// count from the tail (`-1` is the last). Out-of-range bounds are clamped; a missing list
+    /// gives an empty vector.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let all = client.lrange("queue", 0, -1)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn lrange(&mut self, key: &str, start: i64, stop: i64) -> Result<Vec<String>, Error> {
         self.strings(args!["LRANGE", key, start, stop])
     }
 
-    /// Sends `LTRIM`.
+    /// Sends `LTRIM`: keeps only elements `start..=stop` (negative counts from the tail) and
+    /// removes the rest. An empty result deletes the key. Handy for capped logs.
     pub fn ltrim(&mut self, key: &str, start: i64, stop: i64) -> Result<(), Error> {
         self.ok(args!["LTRIM", key, start, stop])
     }
 
-    /// Sends `BLPOP` for one key. Returns `(key, value)`, or `None` when
-    /// `timeout` passes. `Duration::ZERO` waits forever.
+    /// Sends `BLPOP` for one key. See [`Client::blpop`].
     pub fn blpop_key(
         &mut self,
         key: &str,
@@ -382,8 +814,31 @@ impl Client {
         self.blpop(&[key], timeout)
     }
 
-    /// Sends `BLPOP`. Returns `(key, value)`, or `None` when `timeout` passes.
-    /// `Duration::ZERO` waits forever. The timeout rounds up to whole seconds.
+    /// Sends `BLPOP`: pops from the head of the first non-empty list, waiting if all are empty.
+    ///
+    /// # Arguments
+    /// * `keys` - lists checked in order (one slot on a sharded server).
+    /// * `timeout` - how long to wait, rounded up to whole seconds. `Duration::ZERO` waits
+    ///   forever.
+    ///
+    /// # Returns
+    /// `Some((key, value))`, or `None` when the timeout passes.
+    ///
+    /// The connection is busy while it waits; set a read timeout longer than `timeout` (or none)
+    /// with [`Client::set_read_timeout`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// if let Some((queue, job)) = client.blpop(&["jobs"], Duration::from_secs(5))? {
+    ///     println!("{queue}: {job}");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn blpop(
         &mut self,
         keys: &[&str],
@@ -392,8 +847,7 @@ impl Client {
         self.blocking_pop("BLPOP", keys, timeout)
     }
 
-    /// Sends `BRPOP` for one key. Returns `(key, value)`, or `None` when
-    /// `timeout` passes.
+    /// Sends `BRPOP` for one key. See [`Client::brpop`].
     pub fn brpop_key(
         &mut self,
         key: &str,
@@ -402,7 +856,7 @@ impl Client {
         self.brpop(&[key], timeout)
     }
 
-    /// Sends `BRPOP`. Returns `(key, value)`, or `None` when `timeout` passes.
+    /// Sends `BRPOP`: like [`Client::blpop`] but pops from the tail.
     pub fn brpop(
         &mut self,
         keys: &[&str],
@@ -411,93 +865,143 @@ impl Client {
         self.blocking_pop("BRPOP", keys, timeout)
     }
 
-    /// Sends `SADD` and returns how many members were new.
+    /// Sends `SADD`: adds members, creating the set. Returns how many were new.
+    /// `WRONGTYPE` for a non-set.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.sadd("tags", &["rust", "db"])?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn sadd(&mut self, key: &str, members: &[&str]) -> Result<i64, Error> {
         self.integer(with(args!["SADD", key], members))
     }
 
-    /// Sends `SREM` and returns how many members were removed.
+    /// Sends `SREM`: removes members; returns how many were present. A set emptied this way is
+    /// deleted.
     pub fn srem(&mut self, key: &str, members: &[&str]) -> Result<i64, Error> {
         self.integer(with(args!["SREM", key], members))
     }
 
-    /// Sends `SISMEMBER`.
+    /// Sends `SISMEMBER`: `true` if `member` is in the set (`false` also for a missing key).
     pub fn sismember(&mut self, key: &str, member: &str) -> Result<bool, Error> {
         self.flag(["SISMEMBER", key, member])
     }
 
-    /// Sends `SCARD`.
+    /// Sends `SCARD`: number of members, `0` for a missing key.
     pub fn scard(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["SCARD", key])
     }
 
-    /// Sends `SMEMBERS`.
+    /// Sends `SMEMBERS`: all members (a missing key gives an empty vector). Ruvio returns them
+    /// sorted. Use [`Client::sscan_iter`] for big sets.
     pub fn smembers(&mut self, key: &str) -> Result<Vec<String>, Error> {
         self.strings(["SMEMBERS", key])
     }
 
-    /// Sends `SINTER`.
+    /// Sends `SINTER`: members present in every set. A missing key counts as an empty set. On a
+    /// sharded server all keys must share a slot (`CROSSSLOT` otherwise).
     pub fn sinter(&mut self, keys: &[&str]) -> Result<Vec<String>, Error> {
         self.strings(join("SINTER", keys))
     }
 
-    /// Sends `SUNION`.
+    /// Sends `SUNION`: members present in any of the sets. Same-slot rule as [`Client::sinter`].
     pub fn sunion(&mut self, keys: &[&str]) -> Result<Vec<String>, Error> {
         self.strings(join("SUNION", keys))
     }
 
-    /// Sends `SDIFF`.
+    /// Sends `SDIFF`: members of the first set that are in none of the others. Same-slot rule as
+    /// [`Client::sinter`].
     pub fn sdiff(&mut self, keys: &[&str]) -> Result<Vec<String>, Error> {
         self.strings(join("SDIFF", keys))
     }
 
-    /// Sends `SINTERSTORE` and returns the size of `destination`.
+    /// Sends `SINTERSTORE`: stores the intersection in `destination` (overwriting it) and
+    /// returns its size. An empty result deletes `destination`. All keys in one slot.
     pub fn sinterstore(&mut self, destination: &str, keys: &[&str]) -> Result<i64, Error> {
         self.integer(with(args!["SINTERSTORE", destination], keys))
     }
 
-    /// Sends `SUNIONSTORE` and returns the size of `destination`.
+    /// Sends `SUNIONSTORE`: stores the union in `destination` and returns its size. All keys in
+    /// one slot.
     pub fn sunionstore(&mut self, destination: &str, keys: &[&str]) -> Result<i64, Error> {
         self.integer(with(args!["SUNIONSTORE", destination], keys))
     }
 
-    /// Sends `SDIFFSTORE` and returns the size of `destination`.
+    /// Sends `SDIFFSTORE`: stores the difference in `destination` and returns its size. All keys
+    /// in one slot.
     pub fn sdiffstore(&mut self, destination: &str, keys: &[&str]) -> Result<i64, Error> {
         self.integer(with(args!["SDIFFSTORE", destination], keys))
     }
 
-    /// Sends `SMOVE`. False when `member` was not in `source`.
+    /// Sends `SMOVE`: moves `member` from `source` to `destination`. `false` when it was not in
+    /// `source` (nothing happens). Both keys in one slot.
     pub fn smove(&mut self, source: &str, destination: &str, member: &str) -> Result<bool, Error> {
         self.flag(["SMOVE", source, destination, member])
     }
 
-    /// Sends `SPOP` for one member.
+    /// Sends `SPOP`: removes and returns one random member; `None` for a missing or empty set.
     pub fn spop(&mut self, key: &str) -> Result<Option<String>, Error> {
         self.bulk_or_null(["SPOP", key])
     }
 
-    /// Sends `SPOP` with a count and returns the removed members.
+    /// Sends `SPOP key count`: removes and returns up to `count` random members (empty for a
+    /// missing set).
     pub fn spop_count(&mut self, key: &str, count: u64) -> Result<Vec<String>, Error> {
         self.strings(args!["SPOP", key, count])
     }
 
-    /// Sends `SRANDMEMBER` for one member.
+    /// Sends `SRANDMEMBER`: one random member without removing it; `None` for a missing set.
     pub fn srandmember(&mut self, key: &str) -> Result<Option<String>, Error> {
         self.bulk_or_null(["SRANDMEMBER", key])
     }
 
-    /// Sends `SRANDMEMBER` with a count. A positive count returns distinct members;
-    /// a negative count may repeat members.
+    /// Sends `SRANDMEMBER key count`. A positive `count` returns up to `count` distinct members;
+    /// a negative count returns exactly `|count|` members and may repeat them (limited to
+    /// 1,048,576).
     pub fn srandmember_count(&mut self, key: &str, count: i64) -> Result<Vec<String>, Error> {
         self.strings(args!["SRANDMEMBER", key, count])
     }
 
-    /// Sends `JSON.GET`. `None` when the key or path is absent. Pass `"$"` for the whole document.
+    /// Sends `JSON.GET`: reads part of a JSON document.
+    ///
+    /// # Arguments
+    /// * `key` - JSON key.
+    /// * `path` - `"$"` for the whole document, or a simple path such as `$.user.name` or
+    ///   `$.items[0]`. Ruvio supports plain `.field` and `[N]` steps only (no filters or
+    ///   wildcards).
+    ///
+    /// # Returns
+    /// The value as JSON text, or `None` when the key or path is absent.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.json_set("user:1", "$", r#"{"name":"Ada","age":36}"#)?;
+    /// let name = client.json_get("user:1", "$.name")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn json_get(&mut self, key: &str, path: &str) -> Result<Option<String>, Error> {
         self.bulk_or_null(["JSON.GET", key, path])
     }
 
-    /// Sends `JSON.MGET`: one path from several keys of one slot. A missing key is `None`.
+    /// Sends `JSON.MGET`: reads one path from several keys.
+    ///
+    /// # Arguments
+    /// * `keys` - JSON keys, all in one slot on a sharded server.
+    /// * `path` - path read from each.
+    ///
+    /// # Returns
+    /// One entry per key; `None` for a missing key or a key that is not JSON.
     pub fn json_mget(&mut self, keys: &[&str], path: &str) -> Result<Vec<Option<String>>, Error> {
         let mut arguments = join("JSON.MGET", keys);
 
@@ -505,7 +1009,31 @@ impl Client {
         self.optional_strings(arguments)
     }
 
-    /// Sends `JSON.SET`. `false` when the path cannot be reached and nothing was written.
+    /// Sends `JSON.SET`: writes JSON text at a path.
+    ///
+    /// # Arguments
+    /// * `key` - JSON key.
+    /// * `path` - `"$"` for the whole document (creates the key); or a path inside an existing
+    ///   document. An array path whose index equals the array length appends.
+    /// * `json` - valid JSON text for the new value.
+    ///
+    /// # Returns
+    /// `true` when written; `false` when the path cannot be reached.
+    ///
+    /// # Errors
+    /// [`Error::Server`] if `json` is not valid JSON or the key holds another type.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.json_set("cfg", "$", r#"{"debug":false}"#)?;
+    /// client.json_set("cfg", "$.debug", "true")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn json_set(&mut self, key: &str, path: &str, json: &str) -> Result<bool, Error> {
         Ok(!matches!(
             self.run(["JSON.SET", key, path, json])?,
@@ -513,7 +1041,10 @@ impl Client {
         ))
     }
 
-    /// Sends `JSON.MERGE` (RFC 7396). `false` when the path cannot be reached.
+    /// Sends `JSON.MERGE`: merges a patch into the value at `path` following RFC 7396 (objects
+    /// merge recursively, `null` deletes a member, other values replace).
+    ///
+    /// `true` when applied, `false` when the path cannot be reached. `patch` must be valid JSON.
     pub fn json_merge(&mut self, key: &str, path: &str, patch: &str) -> Result<bool, Error> {
         Ok(!matches!(
             self.run(["JSON.MERGE", key, path, patch])?,
@@ -521,32 +1052,36 @@ impl Client {
         ))
     }
 
-    /// Sends `JSON.DEL` and returns 1 when a field, element or the whole key was removed.
+    /// Sends `JSON.DEL`: deletes a member, an array element, or the whole key (path `"$"`).
+    /// Returns `1` if something was removed, `0` otherwise.
     pub fn json_del(&mut self, key: &str, path: &str) -> Result<i64, Error> {
         self.integer(["JSON.DEL", key, path])
     }
 
-    /// Sends `JSON.TYPE`: object, array, string, integer, number, boolean or null; `None` when absent.
+    /// Sends `JSON.TYPE`: the JSON type at `path` (`object`, `array`, `string`, `integer`,
+    /// `number`, `boolean`, `null`), or `None` when the key or path is absent.
     pub fn json_type(&mut self, key: &str, path: &str) -> Result<Option<String>, Error> {
         self.bulk_or_null(["JSON.TYPE", key, path])
     }
 
-    /// Sends `JSON.STRLEN`. `None` when the key or path is absent.
+    /// Sends `JSON.STRLEN`: length of the JSON string at `path`; `None` when absent.
     pub fn json_strlen(&mut self, key: &str, path: &str) -> Result<Option<i64>, Error> {
         self.json_integer(["JSON.STRLEN", key, path])
     }
 
-    /// Sends `JSON.ARRLEN`. `None` when the key or path is absent.
+    /// Sends `JSON.ARRLEN`: number of elements of the array at `path`; `None` when absent.
     pub fn json_arrlen(&mut self, key: &str, path: &str) -> Result<Option<i64>, Error> {
         self.json_integer(["JSON.ARRLEN", key, path])
     }
 
-    /// Sends `JSON.OBJKEYS`. Empty when the key or path is absent.
+    /// Sends `JSON.OBJKEYS`: member names of the object at `path`, in stored order. Empty when
+    /// absent.
     pub fn json_objkeys(&mut self, key: &str, path: &str) -> Result<Vec<String>, Error> {
         self.strings(["JSON.OBJKEYS", key, path])
     }
 
-    /// Sends `JSON.NUMINCRBY` and returns the new number as JSON text; `None` when absent.
+    /// Sends `JSON.NUMINCRBY`: adds `by` to the number at `path` and returns the new number as
+    /// JSON text; `None` when absent.
     pub fn json_numincrby(
         &mut self,
         key: &str,
@@ -556,14 +1091,16 @@ impl Client {
         self.bulk_or_null(["JSON.NUMINCRBY", key, path, Num::json_number(by).as_str()])
     }
 
-    /// Sends `JSON.TOGGLE` and returns the new boolean; `None` when absent.
+    /// Sends `JSON.TOGGLE`: flips the boolean at `path` and returns the new value; `None` when
+    /// absent.
     pub fn json_toggle(&mut self, key: &str, path: &str) -> Result<Option<bool>, Error> {
         Ok(self
             .json_integer(["JSON.TOGGLE", key, path])?
             .map(|value| value != 0))
     }
 
-    /// Sends `JSON.ARRAPPEND` with one JSON value and returns the new length; `None` when absent.
+    /// Sends `JSON.ARRAPPEND` with one JSON value and returns the array's new length; `None`
+    /// when the key or path is absent. See [`Client::json_arrappend_many`] for several values.
     pub fn json_arrappend(
         &mut self,
         key: &str,
@@ -573,7 +1110,8 @@ impl Client {
         self.json_integer(["JSON.ARRAPPEND", key, path, json])
     }
 
-    /// Sends `JSON.CLEAR` and returns how many values changed.
+    /// Sends `JSON.CLEAR`: empties arrays and objects and zeroes numbers at `path`. Returns how
+    /// many values changed (0 when absent).
     pub fn json_clear(&mut self, key: &str, path: &str) -> Result<i64, Error> {
         Ok(self.json_integer(["JSON.CLEAR", key, path])?.unwrap_or(0))
     }
@@ -591,78 +1129,114 @@ impl Client {
             .ok_or_else(|| unexpected("JSON", &value))
     }
 
-    /// Sends `HSET` and returns how many fields were new.
+    /// Sends `HSET`: sets fields, creating the hash. Returns how many fields were **new**
+    /// (overwritten fields are not counted). Drops a field's TTL.
+    ///
+    /// # Arguments
+    /// * `fields` - `(field, value)` pairs, at least one.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` for a non-hash.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.hset("user:1", &[("name", "Ada"), ("city", "London")])?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn hset(&mut self, key: &str, fields: &[(&str, &str)]) -> Result<i64, Error> {
         self.integer(with_pairs(args!["HSET", key], fields))
     }
 
-    /// Sends `HGET`.
+    /// Sends `HGET`: the field's value, or `None` when the field or key is missing.
     pub fn hget(&mut self, key: &str, field: &str) -> Result<Option<String>, Error> {
         self.bulk_or_null(["HGET", key, field])
     }
 
-    /// Sends `HDEL` and returns how many fields were removed.
+    /// Sends `HDEL`: removes fields and returns how many existed. An emptied hash is deleted.
     pub fn hdel(&mut self, key: &str, fields: &[&str]) -> Result<i64, Error> {
         self.integer(with(args!["HDEL", key], fields))
     }
 
-    /// Sends `HLEN`.
+    /// Sends `HLEN`: number of fields, `0` for a missing key.
     pub fn hlen(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["HLEN", key])
     }
 
-    /// Sends `HGETALL`.
+    /// Sends `HGETALL`: every field and value as a map (empty for a missing key). Field order is
+    /// not defined. Use [`Client::hscan_iter`] for very large hashes.
     pub fn hgetall(&mut self, key: &str) -> Result<HashMap<String, String>, Error> {
         let pairs = pairs(&self.run(["HGETALL", key])?)?;
 
         Ok(pairs.into_iter().collect())
     }
 
-    /// Sends `HMGET`. A missing field is `None`.
+    /// Sends `HMGET`: values of several fields, in order; `None` for a missing field (or key).
     pub fn hmget(&mut self, key: &str, fields: &[&str]) -> Result<Vec<Option<String>>, Error> {
         self.optional_strings(with(args!["HMGET", key], fields))
     }
 
-    /// Sends `HEXISTS`.
+    /// Sends `HEXISTS`: `true` if the field exists.
     pub fn hexists(&mut self, key: &str, field: &str) -> Result<bool, Error> {
         self.flag(["HEXISTS", key, field])
     }
 
-    /// Sends `HKEYS`.
+    /// Sends `HKEYS`: field names (order not defined).
     pub fn hkeys(&mut self, key: &str) -> Result<Vec<String>, Error> {
         self.strings(["HKEYS", key])
     }
 
-    /// Sends `HVALS`.
+    /// Sends `HVALS`: values (order not defined).
     pub fn hvals(&mut self, key: &str) -> Result<Vec<String>, Error> {
         self.strings(["HVALS", key])
     }
 
-    /// Sends `HINCRBY` and returns the new value.
+    /// Sends `HINCRBY`: adds `delta` to the integer in `field` (missing counts as 0) and returns
+    /// the new value. Keeps the field's TTL. See [`Client::hincr_by_float`] for decimals.
+    ///
+    /// # Errors
+    /// [`Error::Server`] if the field is not an integer or overflows.
     pub fn hincr_by(&mut self, key: &str, field: &str, delta: i64) -> Result<i64, Error> {
         self.integer(args!["HINCRBY", key, field, delta])
     }
 
-    /// Sends `HSETNX`. False when the field already existed.
+    /// Sends `HSETNX`: sets `field` only if it does not exist. `false` when it already existed.
     pub fn hsetnx(&mut self, key: &str, field: &str, value: &str) -> Result<bool, Error> {
         self.flag(["HSETNX", key, field, value])
     }
 
-    /// Sends `HSTRLEN`.
+    /// Sends `HSTRLEN`: length in bytes of the field's value; `0` if missing.
     pub fn hstrlen(&mut self, key: &str, field: &str) -> Result<i64, Error> {
         self.integer(["HSTRLEN", key, field])
     }
 
     /// Sets a TTL on hash fields. Sends `HEXPIRE` for whole seconds, otherwise `HPEXPIRE`.
-    /// One reply per field: `1` set, `0` condition not met, `2` deleted by a zero TTL,
-    /// `-2` no such field or key.
+    ///
+    /// # Arguments
+    /// * `ttl` - time to live from now. Zero deletes the fields at once.
+    /// * `fields` - fields to expire (at least one).
+    ///
+    /// # Returns
+    /// One integer per field, in order: `1` TTL set, `0` condition not met, `2` the field was
+    /// deleted (zero TTL), `-2` no such field or key.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` for a non-hash.
+    ///
+    /// # Examples
     ///
     /// ```no_run
+    /// # use ruvio_client::*;
     /// # use std::time::Duration;
-    /// # let mut db = ruvio_client::Client::connect("127.0.0.1", 6379)?;
-    /// db.hset("session:42", &[("token", "abc"), ("user", "ada")])?;
-    /// db.hexpire("session:42", Duration::from_secs(900), &["token"])?;
-    /// # Ok::<(), ruvio_client::Error>(())
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.hset("session:42", &[("token", "abc"), ("user", "ada")])?;
+    /// client.hexpire("session:42", Duration::from_secs(900), &["token"])?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn hexpire(
         &mut self,
@@ -673,7 +1247,8 @@ impl Client {
         self.hexpire_with(key, ttl, FieldExpireCondition::Always, fields)
     }
 
-    /// Like [`Client::hexpire`] with `NX`, `XX`, `GT`, or `LT`.
+    /// Like [`Client::hexpire`] with a [`FieldExpireCondition`] (`NX`, `XX`, `GT` or `LT`).
+    /// A field without a TTL counts as an infinite TTL for `GT` and `LT`.
     pub fn hexpire_with(
         &mut self,
         key: &str,
@@ -690,7 +1265,7 @@ impl Client {
         self.integers(field_block(arguments, condition, fields))
     }
 
-    /// Sends `HPEXPIRE`: a TTL in milliseconds on hash fields.
+    /// Sends `HPEXPIRE`: TTL in milliseconds on hash fields. Returns as [`Client::hexpire`].
     pub fn hpexpire(
         &mut self,
         key: &str,
@@ -704,8 +1279,12 @@ impl Client {
         ))
     }
 
-    /// Sets an absolute deadline on hash fields. Sends `HEXPIREAT` for a whole second,
-    /// otherwise `HPEXPIREAT`. A time in the past deletes the field (reply `2`).
+    /// Sets an absolute deadline on hash fields. Sends `HEXPIREAT` for a whole second, otherwise
+    /// `HPEXPIREAT`. A time in the past deletes the fields (reply `2`). Replies per field as
+    /// [`Client::hexpire`].
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] if `when` is before the Unix epoch.
     pub fn hexpire_at(
         &mut self,
         key: &str,
@@ -722,7 +1301,7 @@ impl Client {
         self.integers(field_block(arguments, FieldExpireCondition::Always, fields))
     }
 
-    /// Sends `HTTL`: seconds left per field, `-1` without a TTL, `-2` when missing.
+    /// Sends `HTTL`: seconds left per field. `-1` the field has no TTL, `-2` field or key missing.
     pub fn httl(&mut self, key: &str, fields: &[&str]) -> Result<Vec<i64>, Error> {
         self.integers(field_block(
             args!["HTTL", key],
@@ -740,7 +1319,7 @@ impl Client {
         ))
     }
 
-    /// Sends `HEXPIRETIME`: the Unix second each field expires at, `-1` or `-2` as `HTTL`.
+    /// Sends `HEXPIRETIME`: the Unix second each field expires at; `-1`/`-2` as [`Client::httl`].
     pub fn hexpiretime(&mut self, key: &str, fields: &[&str]) -> Result<Vec<i64>, Error> {
         self.integers(field_block(
             args!["HEXPIRETIME", key],
@@ -749,7 +1328,8 @@ impl Client {
         ))
     }
 
-    /// Sends `HPEXPIRETIME`: the Unix millisecond each field expires at.
+    /// Sends `HPEXPIRETIME`: the Unix millisecond each field expires at; `-1`/`-2` as
+    /// [`Client::httl`].
     pub fn hpexpiretime(&mut self, key: &str, fields: &[&str]) -> Result<Vec<i64>, Error> {
         self.integers(field_block(
             args!["HPEXPIRETIME", key],
@@ -758,7 +1338,8 @@ impl Client {
         ))
     }
 
-    /// Sends `HPERSIST`: `1` removed a TTL, `-1` the field had none, `-2` it is missing.
+    /// Sends `HPERSIST`: removes field TTLs. Per field: `1` TTL removed, `-1` the field had none,
+    /// `-2` field or key missing.
     pub fn hpersist(&mut self, key: &str, fields: &[&str]) -> Result<Vec<i64>, Error> {
         self.integers(field_block(
             args!["HPERSIST", key],
@@ -767,7 +1348,15 @@ impl Client {
         ))
     }
 
-    /// Sends `HSCAN` with an optional `MATCH` pattern and `COUNT` hint.
+    /// Sends `HSCAN`: one page of a hash walk.
+    ///
+    /// # Arguments
+    /// * `cursor` - `0` to start, then the cursor of the previous page.
+    /// * `pattern` - optional glob on field names. `count` - page-size hint (default 10).
+    ///
+    /// # Returns
+    /// A [`HashScanPage`]; the scan is finished when `cursor` is `0`. Prefer
+    /// [`Client::hscan_iter`], which loops for you.
     pub fn hscan(
         &mut self,
         key: &str,
@@ -790,19 +1379,46 @@ impl Client {
         Ok(HashScanPage { cursor, fields })
     }
 
-    /// Sends `ZADD` with `(member, score)` pairs and returns how many members were new.
+    /// Sends `ZADD` with `(member, score)` pairs and returns how many members were **new**
+    /// (updated scores are not counted). Creates the set.
+    ///
+    /// # Arguments
+    /// * `entries` - `(member, score)` pairs; scores are finite or infinite `f64` (not NaN).
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` for a non-zset; a NaN score is rejected.
+    ///
+    /// # Examples
     ///
     /// ```no_run
-    /// # let mut db = ruvio_client::Client::connect("127.0.0.1", 6379)?;
-    /// db.zadd("board", &[("ada", 100.0), ("bob", 50.0)])?;
-    /// # Ok::<(), ruvio_client::Error>(())
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.zadd("board", &[("ada", 100.0), ("bob", 50.0)])?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn zadd(&mut self, key: &str, entries: &[(&str, f64)]) -> Result<i64, Error> {
         self.zadd_with(key, SortedSetAddOptions::default(), entries)
     }
 
-    /// Sends `ZADD` with `NX`, `XX`, `GT`, `LT`, or `CH`.
-    /// Without [`SortedSetAddOptions::changed`] the reply counts new members.
+    /// Sends `ZADD` with [`SortedSetAddOptions`] (`NX`, `XX`, `GT`, `LT`, `CH`).
+    ///
+    /// Returns the number of new members, or with `changed` set the number of new **and**
+    /// updated members. The server rejects `NX` with `XX`/`GT`/`LT`, and `GT` with `LT`
+    /// ([`Error::Server`]).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let options = SortedSetAddOptions { greater_than: true, changed: true, ..Default::default() };
+    /// let changed = client.zadd_with("board", options, &[("ada", 120.0)])?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn zadd_with(
         &mut self,
         key: &str,
@@ -837,7 +1453,9 @@ impl Client {
         self.integer(arguments)
     }
 
-    /// Sends `ZADD ... INCR`. Returns the new score, or `None` when an option skipped the update.
+    /// Sends `ZADD ... INCR`: adds `delta` to one member's score (creating it).
+    ///
+    /// Returns the new score, or `None` when `options` (`NX`/`XX`/`GT`/`LT`) skipped the update.
     pub fn zadd_incr(
         &mut self,
         key: &str,
@@ -853,12 +1471,40 @@ impl Client {
             .transpose()
     }
 
-    /// Sends `ZINCRBY` and returns the new score.
+    /// Sends `ZINCRBY`: adds `delta` to `member`'s score (creating the member with `delta`) and
+    /// returns the new score.
     pub fn zincr_by(&mut self, key: &str, member: &str, delta: f64) -> Result<f64, Error> {
         parse_score(&self.text(args!["ZINCRBY", key, delta, member])?)
     }
 
-    /// Sends `GEOADD`. Each place is longitude, latitude, then member.
+    /// Sends `GEOADD`: adds places to a geo index (stored as a sorted set).
+    ///
+    /// # Arguments
+    /// * `key` - geo index.
+    /// * `places` - `(longitude, latitude, member)` tuples. **Longitude comes first.**
+    ///   Longitude must be within -180 to 180 and latitude within -85.05112878 to 85.05112878
+    ///   degrees (WGS84, the Web Mercator limit); anything else is refused.
+    ///   An existing member is moved to the new position.
+    ///
+    /// # Returns
+    /// How many members were newly added (moved members are not counted). Use
+    /// [`Client::geo_add_with`] for `NX`/`XX`/`CH`.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `ERR invalid longitude,latitude pair ...` for out-of-range coordinates;
+    /// `WRONGTYPE` for a non-zset.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let added = client.geo_add("shops", &[(13.361389, 38.115556, "palermo"), (15.087269, 37.502669, "catania")])?;
+    /// assert_eq!(added, 2);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn geo_add(&mut self, key: &str, places: &[(f64, f64, &str)]) -> Result<i64, Error> {
         let mut arguments = args!["GEOADD", key];
 
@@ -890,7 +1536,8 @@ impl Client {
             .transpose()
     }
 
-    /// Sends `GEOHASH`. A missing member is `None`.
+    /// Sends `GEOHASH`: the 11-character Geohash string of each member; `None` for a missing
+    /// member.
     pub fn geo_hash(&mut self, key: &str, members: &[&str]) -> Result<Vec<Option<String>>, Error> {
         let mut arguments = args!["GEOHASH", key];
 
@@ -898,7 +1545,9 @@ impl Client {
         self.optional_strings(arguments)
     }
 
-    /// Sends `GEOPOS`. A missing member is `None`.
+    /// Sends `GEOPOS`: `(longitude, latitude)` per member, `None` for a missing member. The
+    /// position is the centre of the stored 52-bit cell, so it can differ from the input by a
+    /// fraction of a metre.
     pub fn geo_pos(
         &mut self,
         key: &str,
@@ -1013,17 +1662,31 @@ impl Client {
         ])
     }
 
-    /// Sends `ZRANGE` by rank. `stop` is inclusive.
+    /// Sends `ZRANGE` by rank (0 is the lowest score). `stop` is **inclusive**; negative ranks
+    /// count from the end (`-1` is the highest). Members are returned without scores; see
+    /// [`Client::zrange_with_scores`]. Missing key gives an empty vector.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let top_three = client.zrevrange("board", 0, 2)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn zrange(&mut self, key: &str, start: i64, stop: i64) -> Result<Vec<String>, Error> {
         self.strings(args!["ZRANGE", key, start, stop])
     }
 
-    /// Sends `ZREVRANGE` by rank. `stop` is inclusive.
+    /// Sends `ZREVRANGE` by rank, highest score first. `stop` is inclusive; negative ranks count
+    /// from the end.
     pub fn zrevrange(&mut self, key: &str, start: i64, stop: i64) -> Result<Vec<String>, Error> {
         self.strings(args!["ZREVRANGE", key, start, stop])
     }
 
-    /// Sends `ZRANGE ... WITHSCORES`.
+    /// Sends `ZRANGE ... WITHSCORES`: members in rank order with their scores.
     pub fn zrange_with_scores(
         &mut self,
         key: &str,
@@ -1033,7 +1696,7 @@ impl Client {
         sorted_set(&self.run(args!["ZRANGE", key, start, stop, "WITHSCORES"])?)
     }
 
-    /// Sends `ZREVRANGE ... WITHSCORES`.
+    /// Sends `ZREVRANGE ... WITHSCORES`: highest first, with scores.
     pub fn zrevrange_with_scores(
         &mut self,
         key: &str,
@@ -1043,12 +1706,21 @@ impl Client {
         sorted_set(&self.run(args!["ZREVRANGE", key, start, stop, "WITHSCORES"])?)
     }
 
-    /// Sends `ZRANGE min max BYLEX`. Bounds are `-`, `+`, `[member`, or `(member`.
+    /// Sends `ZRANGE min max BYLEX`: members in a lexicographic range. Meaningful when all
+    /// members share a score.
+    ///
+    /// # Arguments
+    /// * `min`, `max` - `-` (lowest), `+` (highest), `[member` (inclusive), `(member`
+    ///   (exclusive).
     pub fn zrange_by_lex(&mut self, key: &str, min: &str, max: &str) -> Result<Vec<String>, Error> {
         self.strings(["ZRANGE", key, min, max, "BYLEX"])
     }
 
-    /// Sends `ZRANGEBYSCORE ... WITHSCORES`. `min` and `max` accept `-inf`, `+inf`, and `(` for exclusive bounds.
+    /// Sends `ZRANGEBYSCORE ... WITHSCORES`.
+    ///
+    /// # Arguments
+    /// * `min`, `max` - scores as text: `"10"`, `"-inf"`, `"+inf"`; prefix `(` for an exclusive
+    ///   bound, e.g. `"(10"`.
     pub fn zrange_by_score_with_scores(
         &mut self,
         key: &str,
@@ -1058,7 +1730,7 @@ impl Client {
         sorted_set(&self.run(["ZRANGEBYSCORE", key, min, max, "WITHSCORES"])?)
     }
 
-    /// Sends `ZREM` and returns how many members were removed.
+    /// Sends `ZREM`: removes members; returns how many existed. An emptied set is deleted.
     pub fn zrem(&mut self, key: &str, members: &[&str]) -> Result<i64, Error> {
         self.integer(with(args!["ZREM", key], members))
     }
@@ -1073,8 +1745,15 @@ impl Client {
         sorted_set(&self.run(args!["ZPOPMAX", key, count])?)
     }
 
-    /// Sends `BZPOPMIN`. Returns the key and the popped member, or `None` when `timeout`
-    /// passes. `Duration::ZERO` waits forever. The timeout rounds up to whole seconds.
+    /// Sends `BZPOPMIN`: waits for the lowest-scored member of the first non-empty set.
+    ///
+    /// # Arguments
+    /// * `keys` - sorted sets checked in order (one slot).
+    /// * `timeout` - wait time rounded up to whole seconds; `Duration::ZERO` waits forever.
+    ///
+    /// # Returns
+    /// `Some((key, entry))`, or `None` on timeout. Set a read timeout longer than `timeout`
+    /// (see [`Client::set_read_timeout`]).
     pub fn bzpopmin(
         &mut self,
         keys: &[&str],
@@ -1092,59 +1771,92 @@ impl Client {
         self.blocking_sorted_pop("BZPOPMAX", keys, timeout)
     }
 
-    /// Sends `ZREMRANGEBYRANK`. `stop` is inclusive; negative ranks count from the end.
+    /// Sends `ZREMRANGEBYRANK`: removes members with ranks `start..=stop` (negative counts from
+    /// the end). Returns how many were removed.
     pub fn zremrangebyrank(&mut self, key: &str, start: i64, stop: i64) -> Result<i64, Error> {
         self.integer(args!["ZREMRANGEBYRANK", key, start, stop])
     }
 
-    /// Sends `ZREMRANGEBYSCORE`. Bounds accept `-inf`, `+inf`, and `(` for exclusive.
+    /// Sends `ZREMRANGEBYSCORE`: removes members by score. `min`/`max` are score text: `-inf`,
+    /// `+inf`, `(` prefix for exclusive. Returns how many were removed.
     pub fn zremrangebyscore(&mut self, key: &str, min: &str, max: &str) -> Result<i64, Error> {
         self.integer(["ZREMRANGEBYSCORE", key, min, max])
     }
 
-    /// Sends `ZREMRANGEBYLEX`. Bounds are `-`, `+`, `[member`, or `(member`.
+    /// Sends `ZREMRANGEBYLEX`: removes members in a lex range (`-`, `+`, `[member`, `(member`).
+    /// Returns how many were removed.
     pub fn zremrangebylex(&mut self, key: &str, min: &str, max: &str) -> Result<i64, Error> {
         self.integer(["ZREMRANGEBYLEX", key, min, max])
     }
 
-    /// Sends `ZCARD`.
+    /// Sends `ZCARD`: number of members, `0` for a missing key.
     pub fn zcard(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["ZCARD", key])
     }
 
-    /// Sends `ZSCORE`.
+    /// Sends `ZSCORE`: the member's score, or `None` for a missing member or key.
     pub fn zscore(&mut self, key: &str, member: &str) -> Result<Option<f64>, Error> {
         self.bulk_or_null(["ZSCORE", key, member])?
             .map(|text| parse_score(&text))
             .transpose()
     }
 
-    /// Sends `ZRANK`: the 0-based rank from the lowest score.
+    /// Sends `ZRANK`: 0-based rank from the lowest score; `None` if the member or key is missing.
     pub fn zrank(&mut self, key: &str, member: &str) -> Result<Option<i64>, Error> {
         self.optional_integer(["ZRANK", key, member])
     }
 
-    /// Sends `ZREVRANK`: the 0-based rank from the highest score.
+    /// Sends `ZREVRANK`: 0-based rank from the highest score; `None` if missing.
     pub fn zrevrank(&mut self, key: &str, member: &str) -> Result<Option<i64>, Error> {
         self.optional_integer(["ZREVRANK", key, member])
     }
 
-    /// Sends `BF.RESERVE`.
+    /// Sends `BF.RESERVE`: creates a Bloom filter.
+    ///
+    /// # Arguments
+    /// * `error_rate` - wanted false-positive rate between 0 and 1 (for example `0.01`).
+    /// * `capacity` - items the first layer is sized for. By default the filter scales: when full
+    ///   it adds a layer twice as large with half the error rate. See
+    ///   [`Client::bf_reserve_with`] for `EXPANSION` / `NONSCALING`.
+    ///
+    /// # Errors
+    /// [`Error::Server`] if the key already exists or the values are out of range.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.bf_reserve("seen:emails", 0.01, 100_000)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn bf_reserve(&mut self, key: &str, error_rate: f64, capacity: u64) -> Result<(), Error> {
         self.ok(args!["BF.RESERVE", key, error_rate, capacity])
     }
 
-    /// Sends `BF.ADD`. False when the item may already have been added.
+    /// Sends `BF.ADD`: adds an item (creating a filter with error 0.01 and capacity 100 if the
+    /// key is missing). `true` when the item was new; `false` when it may already have been
+    /// added.
     pub fn bf_add(&mut self, key: &str, item: &str) -> Result<bool, Error> {
         self.flag(["BF.ADD", key, item])
     }
 
-    /// Sends `BF.EXISTS`. True means "maybe added"; false means "never added".
+    /// Sends `BF.EXISTS`: `true` means "probably added" (false positives possible), `false`
+    /// means "definitely never added".
     pub fn bf_exists(&mut self, key: &str, item: &str) -> Result<bool, Error> {
         self.flag(["BF.EXISTS", key, item])
     }
 
-    /// Sends `XADD NOMKSTREAM`. A missing key stays absent and the reply is nil.
+    /// Sends `XADD ... NOMKSTREAM`: appends only to an existing stream.
+    ///
+    /// # Arguments
+    /// * `id` - `*` to auto-generate, `ms-*` to fix the millisecond, or a full `ms-seq`.
+    /// * `fields` - field/value pairs (at least one).
+    ///
+    /// # Returns
+    /// The new entry id, or `None` when the stream does not exist (it is not created).
     pub fn xadd_nomkstream(
         &mut self,
         key: &str,
@@ -1154,7 +1866,8 @@ impl Client {
         self.bulk_or_null(with_pairs(args!["XADD", key, "NOMKSTREAM", id], fields))
     }
 
-    /// Sends `XADD key DELAY ms`. The entry stays hidden from `XREADGROUP` until the delay passes.
+    /// Sends `XADD key DELAY ms ...` (Ruvio): the entry is added but hidden from `XREADGROUP`
+    /// until `delay_ms` milliseconds have passed (a scheduled job). Returns the entry id.
     pub fn xadd_delay(
         &mut self,
         key: &str,
@@ -1168,12 +1881,32 @@ impl Client {
         ))
     }
 
-    /// Sends `XADD` and returns the entry id. Use `*` for `id` to let the server pick one. `ms-*` fixes the millisecond.
+    /// Sends `XADD`: appends an entry to a stream (creating it) and returns its id.
+    ///
+    /// # Arguments
+    /// * `id` - `*` lets the server pick `<ms>-<seq>`; `ms-*` fixes the millisecond part; a full
+    ///   `ms-seq` must be greater than the last id.
+    /// * `fields` - field/value pairs (at least one).
+    ///
+    /// # Errors
+    /// [`Error::Server`] if the id is not greater than the stream's last id; `WRONGTYPE`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let id = client.xadd("events", "*", &[("type", "login"), ("user", "ada")])?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn xadd(&mut self, key: &str, id: &str, fields: &[(&str, &str)]) -> Result<String, Error> {
         self.text(with_pairs(args!["XADD", key, id], fields))
     }
 
-    /// Sends `XADD key MAXLEN n`: the stream keeps exactly the newest `max_len` entries.
+    /// Sends `XADD key MAXLEN n`: appends and then trims so the stream keeps exactly the newest
+    /// `max_len` entries (Ruvio trims exactly, also for `~`). Returns the new id.
     pub fn xadd_maxlen(
         &mut self,
         key: &str,
@@ -1187,32 +1920,43 @@ impl Client {
         ))
     }
 
-    /// Sends `XLEN`.
+    /// Sends `XLEN`: number of entries, `0` for a missing key.
     pub fn xlen(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["XLEN", key])
     }
 
-    /// Sends `XINFO STREAM`.
+    /// Sends `XINFO STREAM`: raw reply with length, first/last entry and group count. Error if the
+    /// stream is missing.
     pub fn xinfo_stream(&mut self, key: &str) -> Result<RespValue, Error> {
         self.run(["XINFO", "STREAM", key])
     }
 
-    /// Sends `XINFO GROUPS`.
+    /// Sends `XINFO GROUPS`: raw reply, one array per consumer group.
     pub fn xinfo_groups(&mut self, key: &str) -> Result<RespValue, Error> {
         self.run(["XINFO", "GROUPS", key])
     }
 
-    /// Sends `XINFO CONSUMERS`.
+    /// Sends `XINFO CONSUMERS`: raw reply, one array per consumer in `group`.
     pub fn xinfo_consumers(&mut self, key: &str, group: &str) -> Result<RespValue, Error> {
         self.run(["XINFO", "CONSUMERS", key, group])
     }
 
-    /// Sends `XSETID`. The id must be `ms-seq` and at least the stream's current top id.
+    /// Sends `XSETID`: sets the stream's last generated id without adding an entry. `id` must be
+    /// `ms-seq` and not lower than the current top id.
     pub fn xsetid(&mut self, key: &str, id: &str) -> Result<(), Error> {
         self.ok(["XSETID", key, id])
     }
 
-    /// Sends `XAUTOCLAIM`. `start` is exclusive (`0-0` scans from the beginning).
+    /// Sends `XAUTOCLAIM`: claims pending entries idle for at least `min_idle_ms` for `consumer`.
+    ///
+    /// # Arguments
+    /// * `start` - id to scan from, exclusive; `0-0` starts at the beginning. Use the returned
+    ///   next-start id for the next call.
+    /// * `min_idle_ms` - minimum idle time in milliseconds.
+    ///
+    /// # Returns
+    /// Raw reply `[next_start, claimed_entries, deleted_ids]`. Without `COUNT` up to 100 entries
+    /// are claimed.
     pub fn xautoclaim(
         &mut self,
         key: &str,
@@ -1231,7 +1975,22 @@ impl Client {
         ])
     }
 
-    /// Sends `XRANGE` from `start` to `end` (`-` and `+` for the ends), with an optional `COUNT`.
+    /// Sends `XRANGE`: entries from `start` to `end`, both inclusive, oldest first.
+    ///
+    /// # Arguments
+    /// * `start`, `end` - ids, or `-` / `+` for the ends. `(id` makes a bound exclusive.
+    /// * `count` - optional cap on returned entries.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let entries = client.xrange("events", "-", "+", Some(10))?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn xrange(
         &mut self,
         key: &str,
@@ -1248,7 +2007,8 @@ impl Client {
         stream_entries(&self.run(arguments)?)
     }
 
-    /// Sends `XREVRANGE` from `end` down to `start`, with an optional `COUNT`.
+    /// Sends `XREVRANGE`: entries newest first, from `end` down to `start`. Note the argument
+    /// order: the high id comes first. `count` caps the result.
     pub fn xrevrange(
         &mut self,
         key: &str,
@@ -1265,22 +2025,49 @@ impl Client {
         stream_entries(&self.run(arguments)?)
     }
 
-    /// Sends `XDEL` and returns how many entries were removed.
+    /// Sends `XDEL`: deletes entries by id; returns how many existed.
     pub fn xdel(&mut self, key: &str, ids: &[&str]) -> Result<i64, Error> {
         self.integer(with(args!["XDEL", key], ids))
     }
 
-    /// Sends `XTRIM MINID`. Entries below `id` are removed. `~` is trimmed exactly.
+    /// Sends `XTRIM MINID`: removes entries with ids below `id`; returns how many. Ruvio trims
+    /// exactly even though no `~` is sent.
     pub fn xtrim_minid(&mut self, key: &str, id: &str) -> Result<i64, Error> {
         self.integer(args!["XTRIM", key, "MINID", id])
     }
 
-    /// Sends `XTRIM MAXLEN` and returns how many entries were removed.
+    /// Sends `XTRIM MAXLEN`: trims the stream to the newest `max_len` entries and returns how
+    /// many were removed.
     pub fn xtrim_maxlen(&mut self, key: &str, max_len: u64) -> Result<i64, Error> {
         self.integer(args!["XTRIM", key, "MAXLEN", max_len])
     }
 
-    /// Sends `XREAD` for `(key, id)` pairs. A block that times out returns an empty vector.
+    /// Sends `XREAD`: reads entries newer than the given ids.
+    ///
+    /// # Arguments
+    /// * `options` - [`StreamReadOptions`]: `count` caps entries per stream; `block` waits for
+    ///   new data (`Duration::ZERO` waits forever). `no_ack` is not allowed here.
+    /// * `streams` - `(key, last_seen_id)` pairs; use `$` to mean "only entries added from now".
+    ///   All keys in one slot.
+    ///
+    /// # Returns
+    /// One [`StreamReadResult`] per stream with data; empty when `block` timed out or nothing is
+    /// new.
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] if `no_ack` is set.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let options = StreamReadOptions { count: Some(10), block: Some(Duration::from_secs(5)), ..Default::default() };
+    /// let batches = client.xread(&options, &[("events", "$")])?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn xread(
         &mut self,
         options: &StreamReadOptions,
@@ -1299,7 +2086,8 @@ impl Client {
         stream_read(&self.run(arguments)?)
     }
 
-    /// Sends `XGROUP CREATECONSUMER`. Returns 1 when the consumer name is new.
+    /// Sends `XGROUP CREATECONSUMER`: registers a consumer in a group. `1` if new, `0` if it
+    /// already existed.
     pub fn xgroup_create_consumer(
         &mut self,
         key: &str,
@@ -1309,7 +2097,27 @@ impl Client {
         self.integer(args!["XGROUP", "CREATECONSUMER", key, group, consumer])
     }
 
-    /// Sends `XGROUP CREATE`. With `make_stream` it adds `MKSTREAM`.
+    /// Sends `XGROUP CREATE`: creates a consumer group.
+    ///
+    /// # Arguments
+    /// * `id` - where the group starts reading: `0` for the whole stream, `$` for new entries
+    ///   only.
+    /// * `make_stream` - create an empty stream when the key is missing (`MKSTREAM`).
+    ///
+    /// # Errors
+    /// [`Error::Server`] `BUSYGROUP` if the group exists; error if the stream is missing and
+    /// `make_stream` is false.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.xgroup_create("events", "workers", "0", true)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn xgroup_create(
         &mut self,
         key: &str,
@@ -1326,8 +2134,28 @@ impl Client {
         self.ok(arguments)
     }
 
-    /// Sends `XREADGROUP GROUP` with `COUNT`, `BLOCK`, and `NOACK` from `options`.
-    /// Use `>` as the id for entries never delivered to the group.
+    /// Sends `XREADGROUP`: reads entries as a consumer of a group.
+    ///
+    /// # Arguments
+    /// * `group`, `consumer` - group and consumer names (the consumer is created on first use).
+    /// * `options` - [`StreamReadOptions`]: `count`, `block` and `no_ack` (advance without adding
+    ///   to the pending list).
+    /// * `streams` - `(key, id)`; id `>` means "entries never delivered to this group"; an
+    ///   explicit id re-reads this consumer's pending entries.
+    ///
+    /// # Returns
+    /// Entries per stream; empty when none or when `block` timed out.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let batches = client.xreadgroup("workers", "w1", &StreamReadOptions::default(), &[("events", ">")])?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn xreadgroup(
         &mut self,
         group: &str,
@@ -1347,17 +2175,18 @@ impl Client {
         stream_read(&self.run(arguments)?)
     }
 
-    /// Sends `XGROUP DESTROY`. False when the group did not exist.
+    /// Sends `XGROUP DESTROY`: `true` if the group existed.
     pub fn xgroup_destroy(&mut self, key: &str, group: &str) -> Result<bool, Error> {
         self.flag(["XGROUP", "DESTROY", key, group])
     }
 
-    /// Sends `XGROUP SETID`.
+    /// Sends `XGROUP SETID`: moves the group's cursor to `id` (`$` for the end).
     pub fn xgroup_setid(&mut self, key: &str, group: &str, id: &str) -> Result<(), Error> {
         self.ok(["XGROUP", "SETID", key, group, id])
     }
 
-    /// Sends `XGROUP DELCONSUMER` and returns how many pending entries the consumer had.
+    /// Sends `XGROUP DELCONSUMER`: removes a consumer and drops its pending entries; returns how
+    /// many pending entries it had.
     pub fn xgroup_delconsumer(
         &mut self,
         key: &str,
@@ -1367,18 +2196,23 @@ impl Client {
         self.integer(["XGROUP", "DELCONSUMER", key, group, consumer])
     }
 
-    /// Sends `XACK` and returns how many entries were acknowledged.
+    /// Sends `XACK`: marks entries as processed; returns how many were acknowledged.
     pub fn xack(&mut self, key: &str, group: &str, ids: &[&str]) -> Result<i64, Error> {
         self.integer(with(args!["XACK", key, group], ids))
     }
 
-    /// Sends the summary form of `XPENDING`: count, smallest id, largest id, and per-consumer counts.
+    /// Sends the summary form of `XPENDING`: raw reply `[count, smallest_id, largest_id,
+    /// [[consumer, count], ...]]`.
     pub fn xpending_summary(&mut self, key: &str, group: &str) -> Result<RespValue, Error> {
         self.run(["XPENDING", key, group])
     }
 
-    /// Sends the extended `XPENDING` form: ids from `start` to `end` (inclusive), at most `count`,
-    /// narrowed by `filter`.
+    /// Sends the extended `XPENDING`: lists pending entries.
+    ///
+    /// # Arguments
+    /// * `start`, `end` - id range, inclusive (`-` and `+` for all).
+    /// * `count` - maximum rows.
+    /// * `filter` - [`StreamPendingFilter`]: restrict to one consumer and/or a minimum idle time.
     pub fn xpending(
         &mut self,
         key: &str,
@@ -1419,7 +2253,18 @@ impl Client {
         Ok(rows)
     }
 
-    /// Sends `XCLAIM` with `IDLE`, `TIME`, `RETRYCOUNT`, `FORCE`, or `LASTID` from `options`.
+    /// Sends `XCLAIM`: moves pending entries idle for at least `min_idle` to `consumer`.
+    ///
+    /// # Arguments
+    /// * `ids` - entry ids to claim.
+    /// * `options` - [`StreamClaimOptions`] (`idle`, `time`, `retry_count`, `force`, `last_id`).
+    ///   `idle` and `time` cannot both be set.
+    ///
+    /// # Returns
+    /// The claimed entries (those still in the stream).
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] if both `idle` and `time` are set.
     pub fn xclaim(
         &mut self,
         key: &str,
@@ -1434,7 +2279,7 @@ impl Client {
         stream_entries(&self.run(arguments)?)
     }
 
-    /// Sends `XCLAIM ... JUSTID` and returns only the claimed ids.
+    /// Sends `XCLAIM ... JUSTID`: like [`Client::xclaim`] but returns only the claimed ids.
     pub fn xclaim_ids(
         &mut self,
         key: &str,
@@ -1458,48 +2303,85 @@ impl Client {
         }
     }
 
-    /// Sends `CONFIG GET` and returns `(parameter, value)` pairs.
+    /// Sends `CONFIG GET`: returns `(parameter, value)` pairs matching a name or glob. Ruvio
+    /// lists its own settings and redacts `requirepass`; `CONFIG SET` is not supported.
     pub fn config_get(&mut self, parameter: &str) -> Result<Vec<(String, String)>, Error> {
         pairs(&self.run(["CONFIG", "GET", parameter])?)
     }
 
-    /// Sends `SAVE`.
+    /// Sends `SAVE`: writes a snapshot now and waits.
     pub fn save(&mut self) -> Result<(), Error> {
         self.ok(["SAVE"])
     }
 
-    /// Sends `BGSAVE`.
+    /// Sends `BGSAVE`: starts a snapshot in the server process (not a fork).
     pub fn bgsave(&mut self) -> Result<(), Error> {
         self.ok(["BGSAVE"])
     }
 
-    /// Sends `FLUSHDB`. Only the selected database is emptied.
+    /// Sends `FLUSHDB`: deletes every key of the selected database.
+    ///
+    /// A routing client sends it to every shard. A client opened with `discover_cluster: false`
+    /// on a `port_mode = "per-shard"` server clears **only that shard's** keys. `ASYNC` is not
+    /// used (the server runs it synchronously). Irreversible.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.flushdb()?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn flushdb(&mut self) -> Result<(), Error> {
         self.ok(["FLUSHDB"])
     }
 
-    /// Sends `FLUSHALL`. Every database is emptied.
+    /// Sends `FLUSHALL`: deletes the keys of every database. Same shard caveat as
+    /// [`Client::flushdb`]. Irreversible.
     pub fn flushall(&mut self) -> Result<(), Error> {
         self.ok(["FLUSHALL"])
     }
 
-    /// Sends `SWAPDB`.
+    /// Sends `SWAPDB`: swaps two logical databases for all connections (O(1)). Refused on a
+    /// sharded server; indexes must be valid database numbers.
     pub fn swapdb(&mut self, first: u32, second: u32) -> Result<(), Error> {
         self.ok(args!["SWAPDB", first, second])
     }
 
-    /// Sends `MOVE`. False when the key is missing or already exists in `database`.
+    /// Sends `MOVE`: moves `key` to another logical database. `false` when the key is missing or
+    /// already exists there. Refused on a sharded server.
     pub fn move_key(&mut self, key: &str, database: u32) -> Result<bool, Error> {
         self.flag(args!["MOVE", key, database])
     }
 
-    /// Sends `MULTI`. Until [`Self::exec`], the server answers `QUEUED`, so queue commands
-    /// with [`Client::execute`] rather than the typed methods.
+    /// Sends `MULTI`: starts a transaction. Until [`Client::exec`] the server answers `QUEUED`,
+    /// so queue commands with [`Client::execute`] rather than the typed methods (which expect
+    /// real replies). On a sharded server all keys of the transaction must share a slot.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.multi()?;
+    /// client.execute(&["INCR", "{acct}:a"])?;
+    /// client.execute(&["INCR", "{acct}:b"])?;
+    /// let results = client.exec()?; // Some(vec![..]) or None if a WATCHed key changed
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn multi(&mut self) -> Result<(), Error> {
         self.ok(["MULTI"])
     }
 
-    /// Sends `EXEC`. `None` when a watched key changed and the transaction was aborted.
+    /// Sends `EXEC`: runs the queued commands atomically.
+    ///
+    /// Returns `Some(replies)` (one per queued command) or `None` when a `WATCH`ed key changed
+    /// and nothing ran. At most 1,024 commands can be queued.
     pub fn exec(&mut self) -> Result<Option<Vec<RespValue>>, Error> {
         match self.run(["EXEC"])? {
             RespValue::Null => Ok(None),
@@ -1508,27 +2390,53 @@ impl Client {
         }
     }
 
-    /// Sends `DISCARD`.
+    /// Sends `DISCARD`: drops the queued commands and leaves the transaction.
     pub fn discard(&mut self) -> Result<(), Error> {
         self.ok(["DISCARD"])
     }
 
-    /// Sends `WATCH` for one key.
+    /// Sends `WATCH` for one key. See [`Client::watch`].
     pub fn watch_key(&mut self, key: &str) -> Result<(), Error> {
         self.watch(&[key])
     }
 
-    /// Sends `WATCH`.
+    /// Sends `WATCH`: makes the next `EXEC` fail (return `None`) if any of these keys changes
+    /// before it. Call it before `MULTI`; up to 128 keys. Keys must share a slot on a sharded
+    /// server.
     pub fn watch(&mut self, keys: &[&str]) -> Result<(), Error> {
         self.ok(join("WATCH", keys))
     }
 
-    /// Sends `UNWATCH`.
+    /// Sends `UNWATCH`: forgets all watched keys.
     pub fn unwatch(&mut self) -> Result<(), Error> {
         self.ok(["UNWATCH"])
     }
 
-    /// Sends `EVAL`. The key count is `keys.len()`.
+    /// Sends `EVAL`: runs a Lua script.
+    ///
+    /// # Arguments
+    /// * `script` - Lua source (Lua 5.1 sandbox). Read `KEYS` and `ARGV`; call commands with
+    ///   `ruvio.call`.
+    /// * `keys` - key names the script touches, passed as `KEYS`; they must share a slot. A
+    ///   script with no keys runs on the connection's shard.
+    /// * `arguments` - extra values, passed as `ARGV`.
+    ///
+    /// # Returns
+    /// The script result as a raw [`RespValue`].
+    ///
+    /// # Errors
+    /// [`Error::Server`] for script errors, undeclared keys or `CROSSSLOT`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let reply = client.eval("return redis.call('GET', KEYS[1])", &["k"], &[])?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn eval(
         &mut self,
         script: &str,
@@ -1538,7 +2446,9 @@ impl Client {
         self.run(script_arguments("EVAL", script, keys, arguments))
     }
 
-    /// Sends `EVALSHA`. The key count is `keys.len()`.
+    /// Sends `EVALSHA`: runs a cached script by its SHA1 from [`Client::script_load`]. Arguments
+    /// as [`Client::eval`]. Error `NOSCRIPT` if the shard does not have it (the cache is per
+    /// shard and lost on restart).
     pub fn evalsha(
         &mut self,
         sha: &str,
@@ -1548,12 +2458,12 @@ impl Client {
         self.run(script_arguments("EVALSHA", sha, keys, arguments))
     }
 
-    /// Sends `SCRIPT LOAD` and returns the SHA1 for [`Self::evalsha`].
+    /// Sends `SCRIPT LOAD`: caches a script and returns its SHA1 for [`Client::evalsha`].
     pub fn script_load(&mut self, script: &str) -> Result<String, Error> {
         self.text(["SCRIPT", "LOAD", script])
     }
 
-    /// Sends `SCRIPT EXISTS`, one flag per hash.
+    /// Sends `SCRIPT EXISTS`: one flag per SHA1, `true` if cached.
     pub fn script_exists(&mut self, hashes: &[&str]) -> Result<Vec<bool>, Error> {
         let reply = self.run(with(args!["SCRIPT", "EXISTS"], hashes))?;
 
@@ -1565,17 +2475,19 @@ impl Client {
             .collect())
     }
 
-    /// Sends `SCRIPT FLUSH`.
+    /// Sends `SCRIPT FLUSH`: clears the script cache.
     pub fn script_flush(&mut self) -> Result<(), Error> {
         self.ok(["SCRIPT", "FLUSH"])
     }
 
-    /// Sends `SCRIPT KILL`.
+    /// Sends `SCRIPT KILL`. In Ruvio this answers `NOTBUSY` ([`Error::Server`]); long scripts are
+    /// stopped by the instruction and time limits instead.
     pub fn script_kill(&mut self) -> Result<(), Error> {
         self.ok(["SCRIPT", "KILL"])
     }
 
-    /// Sends `FCALL`. The key count is `keys.len()`.
+    /// Sends `FCALL`: calls a function loaded with [`Client::function_load`]. Arguments as
+    /// [`Client::eval`].
     pub fn fcall(
         &mut self,
         name: &str,
@@ -1585,167 +2497,219 @@ impl Client {
         self.run(script_arguments("FCALL", name, keys, arguments))
     }
 
-    /// Sends `FUNCTION LOAD name body`. The body is plain Lua, not a Redis library shebang,
-    /// and is lost when the server restarts.
+    /// Sends `FUNCTION LOAD name body`: registers a Lua function under `name`. `body` is plain
+    /// Lua (not a Redis library shebang). Held in memory only: lost on restart.
     pub fn function_load(&mut self, name: &str, body: &str) -> Result<(), Error> {
         self.ok(["FUNCTION", "LOAD", name, body])
     }
 
-    /// Sends `FUNCTION LIST`.
+    /// Sends `FUNCTION LIST`: raw reply listing loaded functions.
     pub fn function_list(&mut self) -> Result<RespValue, Error> {
         self.run(["FUNCTION", "LIST"])
     }
 
-    /// Sends `FUNCTION DELETE`. False when no function had that name.
+    /// Sends `FUNCTION DELETE`: `true` if a function with that name existed.
     pub fn function_delete(&mut self, name: &str) -> Result<bool, Error> {
         self.flag(["FUNCTION", "DELETE", name])
     }
 
-    /// Sends `ACL WHOAMI`.
+    /// Sends `ACL WHOAMI`: name of the user this connection is authenticated as.
     pub fn acl_whoami(&mut self) -> Result<String, Error> {
         self.text(["ACL", "WHOAMI"])
     }
 
-    /// Sends `ACL USERS`.
+    /// Sends `ACL USERS`: names of all configured users.
     pub fn acl_users(&mut self) -> Result<Vec<String>, Error> {
         self.strings(["ACL", "USERS"])
     }
 
-    /// Sends `ACL LIST`.
+    /// Sends `ACL LIST`: one rule line per user (passwords redacted).
     pub fn acl_list(&mut self) -> Result<Vec<String>, Error> {
         self.strings(["ACL", "LIST"])
     }
 
-    /// Sends `ACL GETUSER`.
+    /// Sends `ACL GETUSER`: raw description of one user.
     pub fn acl_getuser(&mut self, user: &str) -> Result<RespValue, Error> {
         self.run(["ACL", "GETUSER", user])
     }
 
-    /// Sends `ACL CAT`.
+    /// Sends `ACL CAT`: names of the command categories.
     pub fn acl_cat(&mut self) -> Result<Vec<String>, Error> {
         self.strings(["ACL", "CAT"])
     }
 
-    /// Sends `ACL SETUSER user rule...`.
+    /// Sends `ACL SETUSER user rule...`: creates or updates a user.
+    ///
+    /// # Arguments
+    /// * `rules` - ACL rule tokens such as `on`, `>password`, `~prefix:*`, `+@read`, `-@dangerous`.
     pub fn acl_setuser(&mut self, user: &str, rules: &[&str]) -> Result<(), Error> {
         self.ok(with(args!["ACL", "SETUSER", user], rules))
     }
 
-    /// Sends `ACL LOAD`.
+    /// Sends `ACL LOAD`: replaces the live users from `security.acl_file`. Error if no file is
+    /// configured.
     pub fn acl_load(&mut self) -> Result<(), Error> {
         self.ok(["ACL", "LOAD"])
     }
 
-    /// Sends `ACL SAVE`.
+    /// Sends `ACL SAVE`: writes the users to `security.acl_file` (stored as hashes). Error if no
+    /// file is configured.
     pub fn acl_save(&mut self) -> Result<(), Error> {
         self.ok(["ACL", "SAVE"])
     }
 
-    /// Sends `CLUSTER SLOTS`.
+    /// Sends `CLUSTER SLOTS`: raw slot map. A single-shard server answers "cluster mode is
+    /// disabled". This is what [`Client::connect`] uses to discover shards.
     pub fn cluster_slots(&mut self) -> Result<RespValue, Error> {
         self.run(["CLUSTER", "SLOTS"])
     }
 
-    /// Sends `CLUSTER NODES`.
+    /// Sends `CLUSTER NODES`: node list in the Redis text format.
     pub fn cluster_nodes(&mut self) -> Result<String, Error> {
         self.text(["CLUSTER", "NODES"])
     }
 
-    /// Sends `CLUSTER SHARDS`.
+    /// Sends `CLUSTER SHARDS`: raw shard description.
     pub fn cluster_shards(&mut self) -> Result<RespValue, Error> {
         self.run(["CLUSTER", "SHARDS"])
     }
 
-    /// Sends `CLUSTER INFO`.
+    /// Sends `CLUSTER INFO`: cluster state text.
     pub fn cluster_info(&mut self) -> Result<String, Error> {
         self.text(["CLUSTER", "INFO"])
     }
 
-    /// Sends `CLUSTER MYID`.
+    /// Sends `CLUSTER MYID`: the id of the answering node.
     pub fn cluster_myid(&mut self) -> Result<String, Error> {
         self.text(["CLUSTER", "MYID"])
     }
 
-    /// Sends `CLUSTER KEYSLOT`.
+    /// Sends `CLUSTER KEYSLOT`: the hash slot (0-16383) the **server** computes for `key`. The
+    /// client can compute the same locally with [`hash_slot`](crate::hash_slot).
     pub fn cluster_keyslot(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["CLUSTER", "KEYSLOT", key])
     }
 
-    /// Sends `READONLY`. Ruvio has no replicas; the reply is still `OK` in cluster mode.
+    /// Sends `READONLY`. Ruvio has no replicas; it replies `OK` in cluster mode and does nothing.
     pub fn readonly(&mut self) -> Result<(), Error> {
         self.ok(["READONLY"])
     }
 
-    /// Sends `READWRITE`.
+    /// Sends `READWRITE`. A no-op `OK` in Ruvio (no replicas).
     pub fn readwrite(&mut self) -> Result<(), Error> {
         self.ok(["READWRITE"])
     }
 
-    /// Sends `CLIENT GETNAME`.
+    /// Sends `CLIENT GETNAME`: the name set with [`Client::client_setname`], or `None`.
     pub fn client_getname(&mut self) -> Result<Option<String>, Error> {
         self.bulk_or_null(["CLIENT", "GETNAME"])
     }
 
-    /// Sends `CLIENT SETNAME`.
+    /// Sends `CLIENT SETNAME`: names this connection (shown in `CLIENT LIST`). No spaces.
     pub fn client_setname(&mut self, name: &str) -> Result<(), Error> {
         self.ok(["CLIENT", "SETNAME", name])
     }
 
-    /// Sends `CLIENT TRACKING ON` or `OFF`.
+    /// Sends `CLIENT TRACKING ON|OFF` for this shard. Invalidation pushes are RESP3 and this
+    /// client decodes RESP2 only, so this is of limited use here.
     pub fn client_tracking(&mut self, enabled: bool) -> Result<(), Error> {
         self.ok(["CLIENT", "TRACKING", if enabled { "ON" } else { "OFF" }])
     }
 
-    /// Sends `HELLO protocol`. Connecting itself does not send this, and this client
-    /// only decodes RESP2 replies.
+    /// Sends `HELLO protocol` (2 or 3). Connecting does not send it, and this client only
+    /// decodes RESP2 replies, so do not switch to 3. Returns the server info map as a raw value.
     pub fn hello(&mut self, protocol: u8) -> Result<RespValue, Error> {
         self.run(args!["HELLO", protocol])
     }
 
-    /// Sends `PUBLISH` and returns how many subscribers received the message.
+    /// Sends `PUBLISH`: delivers `message` to subscribers of `channel` on every shard.
+    ///
+    /// Returns the number of receivers **on the shard that took the command** (as a Redis
+    /// Cluster node does). Not durable. With several shards `PUBLISH` is refused inside `MULTI`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let receivers = client.publish("news", "hello")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn publish(&mut self, channel: &str, message: &str) -> Result<i64, Error> {
         self.integer(["PUBLISH", channel, message])
     }
 
-    /// Sends `SPUBLISH` and returns how many subscribers received the message.
+    /// Sends `SPUBLISH`: publishes to a sharded channel (same slot as the channel name; use a
+    /// hash tag to group channels). Returns the number of receivers.
     pub fn spublish(&mut self, channel: &str, message: &str) -> Result<i64, Error> {
         self.integer(["SPUBLISH", channel, message])
     }
 
     /// Sends `SUBSCRIBE` and reads one confirmation per channel.
-    /// Opens a dedicated Pub/Sub socket so `PING` and `PUBLISH` stay on the
-    /// command connection. Then read deliveries with [`Self::next_message`].
+    ///
+    /// Opens a dedicated Pub/Sub socket the first time, so `PING` and `PUBLISH` keep using the
+    /// command connection. Read deliveries with [`Client::next_message`] or
+    /// [`Client::listen`]. Subscriptions are restored after a reconnect.
+    ///
+    /// # Arguments
+    /// * `channels` - at least one channel name.
+    ///
+    /// # Returns
+    /// The raw confirmation replies, one `["subscribe", channel, count]` per channel.
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] for an empty list.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.subscribe(&["news", "alerts"])?;
+    /// let message = client.next_message()?;
+    /// println!("{}: {}", message.channel, String::from_utf8_lossy(&message.payload));
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn subscribe(&mut self, channels: &[&str]) -> Result<Vec<RespValue>, Error> {
         self.subscription("SUBSCRIBE", channels, false)
     }
 
-    /// Sends `UNSUBSCRIBE`. No channels drops every exact subscription on this connection.
+    /// Sends `UNSUBSCRIBE`. An empty list drops every exact-channel subscription.
     pub fn unsubscribe(&mut self, channels: &[&str]) -> Result<Vec<RespValue>, Error> {
         self.subscription("UNSUBSCRIBE", channels, true)
     }
 
-    /// Sends `PSUBSCRIBE` and reads one confirmation per pattern.
+    /// Sends `PSUBSCRIBE`: subscribes to glob patterns (`*` and `?` only, e.g. `news.*`).
+    /// Deliveries are `pmessage` and carry the matching pattern. At least one pattern.
     pub fn psubscribe(&mut self, patterns: &[&str]) -> Result<Vec<RespValue>, Error> {
         self.subscription("PSUBSCRIBE", patterns, false)
     }
 
-    /// Sends `PUNSUBSCRIBE`. No patterns drops every pattern subscription on this connection.
+    /// Sends `PUNSUBSCRIBE`. An empty list drops every pattern subscription.
     pub fn punsubscribe(&mut self, patterns: &[&str]) -> Result<Vec<RespValue>, Error> {
         self.subscription("PUNSUBSCRIBE", patterns, true)
     }
 
-    /// Sends `SSUBSCRIBE` and reads one confirmation per channel.
+    /// Sends `SSUBSCRIBE`: subscribes to sharded channels (`smessage`). All channels must share
+    /// a slot; on a sharded server use [`Client::sharded_subscriber`] to reach the right shard.
     pub fn ssubscribe(&mut self, channels: &[&str]) -> Result<Vec<RespValue>, Error> {
         self.subscription("SSUBSCRIBE", channels, false)
     }
 
-    /// Sends `SUNSUBSCRIBE`. No channels drops every sharded subscription on this connection.
+    /// Sends `SUNSUBSCRIBE`. An empty list drops every sharded subscription.
     pub fn sunsubscribe(&mut self, channels: &[&str]) -> Result<Vec<RespValue>, Error> {
         self.subscription("SUNSUBSCRIBE", channels, true)
     }
 
-    /// Reads replies until a `message`, `pmessage`, or `smessage` arrives, skipping
-    /// subscribe confirmations. Blocks until [`Self::set_read_timeout`] passes.
+    /// Reads until a `message`, `pmessage` or `smessage` arrives, skipping subscribe
+    /// confirmations, and returns it as a [`PubSubMessage`].
+    ///
+    /// Blocks until a message arrives; with [`Client::set_read_timeout`] a quiet channel returns
+    /// [`Error::Io`] (and the client stays usable).
     pub fn next_message(&mut self) -> Result<PubSubMessage, Error> {
         loop {
             let reply = self.read_message()?;
@@ -1756,8 +2720,8 @@ impl Client {
         }
     }
 
-    /// Calls `on_message` for each delivery. Safe on the command client after
-    /// `subscribe`; deliveries are read from the dedicated Pub/Sub socket.
+    /// Calls `on_message` for each delivery, forever. Returns only on an error (including a read
+    /// timeout). Safe on the command client after [`Client::subscribe`].
     pub fn listen<F>(&mut self, mut on_message: F) -> Result<(), Error>
     where
         F: FnMut(PubSubMessage),
@@ -1834,38 +2798,44 @@ impl Client {
 }
 
 impl Client {
-    /// Sends `KEYS`. The server refuses to return more than 100,000 keys.
+    /// Sends `KEYS`: all key names matching a glob (`*`, `?`, `[a-z]`). O(keyspace): use
+    /// [`Client::scan_iter`] in production. The server refuses to return more than 100,000 keys.
+    /// A routing client asks every shard.
     pub fn keys(&mut self, pattern: &str) -> Result<Vec<String>, Error> {
         self.strings(["KEYS", pattern])
     }
 
-    /// Sends `RANDOMKEY`. `None` when the database is empty.
+    /// Sends `RANDOMKEY`: a random key, `None` when the database is empty.
     pub fn random_key(&mut self) -> Result<Option<String>, Error> {
         self.bulk_or_null(["RANDOMKEY"])
     }
 
-    /// Sends `TOUCH` and returns how many of the keys exist.
+    /// Sends `TOUCH`: returns how many of the keys exist (updates their last-access time).
+    /// Split per slot on a sharded server.
     pub fn touch(&mut self, keys: &[&str]) -> Result<i64, Error> {
         self.integer(join("TOUCH", keys))
     }
 
-    /// Sends `RENAMENX`. False when `new_key` already exists.
+    /// Sends `RENAMENX`: renames only if `new_key` does not exist; `false` otherwise. Error if
+    /// `key` is missing. Same slot on a sharded server.
     pub fn rename_nx(&mut self, key: &str, new_key: &str) -> Result<bool, Error> {
         self.flag(["RENAMENX", key, new_key])
     }
 
-    /// Sends `EXPIRETIME`: unix seconds, -1 without a TTL, -2 for a missing key.
+    /// Sends `EXPIRETIME`: absolute expiry as Unix seconds; `-1` without TTL, `-2` missing.
     pub fn expire_time(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["EXPIRETIME", key])
     }
 
-    /// Sends `PEXPIRETIME`: unix milliseconds, -1 without a TTL, -2 for a missing key.
+    /// Sends `PEXPIRETIME`: absolute expiry as Unix milliseconds; `-1` without TTL, `-2` missing.
     pub fn pexpire_time(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["PEXPIRETIME", key])
     }
 
-    /// Sends `COPY`. False when the source is missing or the target exists and
-    /// `replace` is false.
+    /// Sends `COPY`: duplicates a key (including its TTL; JSON documents too).
+    ///
+    /// `false` when the source is missing or the destination exists and `replace` is false.
+    /// Same slot on a sharded server.
     pub fn copy(&mut self, source: &str, destination: &str, replace: bool) -> Result<bool, Error> {
         let mut arguments = args!["COPY", source, destination];
 
@@ -1876,42 +2846,42 @@ impl Client {
         self.flag(arguments)
     }
 
-    /// Sends `ECHO`.
+    /// Sends `ECHO`: returns `message` unchanged.
     pub fn echo(&mut self, message: &str) -> Result<String, Error> {
         self.text(["ECHO", message])
     }
 
-    /// Sends `OBJECT ENCODING`. `None` for a missing key.
+    /// Sends `OBJECT ENCODING`: internal encoding name; `None` for a missing key.
     pub fn object_encoding(&mut self, key: &str) -> Result<Option<String>, Error> {
         self.bulk_or_null(["OBJECT", "ENCODING", key])
     }
 
-    /// Sends `OBJECT IDLETIME` in seconds. `None` for a missing key.
+    /// Sends `OBJECT IDLETIME`: seconds since last access; `None` for a missing key.
     pub fn object_idletime(&mut self, key: &str) -> Result<Option<i64>, Error> {
         self.optional_integer(["OBJECT", "IDLETIME", key])
     }
 
-    /// Sends `OBJECT FREQ`. `None` for a missing key.
+    /// Sends `OBJECT FREQ`: access-frequency counter; `None` for a missing key.
     pub fn object_freq(&mut self, key: &str) -> Result<Option<i64>, Error> {
         self.optional_integer(["OBJECT", "FREQ", key])
     }
 
-    /// Sends `MEMORY USAGE`. `None` for a missing key.
+    /// Sends `MEMORY USAGE`: bytes used by the key; `None` for a missing key.
     pub fn memory_usage(&mut self, key: &str) -> Result<Option<i64>, Error> {
         self.optional_integer(["MEMORY", "USAGE", key])
     }
 
-    /// Sends `SLOWLOG LEN`.
+    /// Sends `SLOWLOG LEN`: number of entries in the slow log.
     pub fn slowlog_len(&mut self) -> Result<i64, Error> {
         self.integer(["SLOWLOG", "LEN"])
     }
 
-    /// Sends `SLOWLOG RESET`.
+    /// Sends `SLOWLOG RESET`: clears the slow log.
     pub fn slowlog_reset(&mut self) -> Result<(), Error> {
         self.ok(["SLOWLOG", "RESET"])
     }
 
-    /// Sends `SLOWLOG GET` for up to `count` entries. Each entry is returned as the raw reply.
+    /// Sends `SLOWLOG GET count`: the newest `count` entries, each as the raw reply.
     pub fn slowlog_get(&mut self, count: u64) -> Result<Vec<RespValue>, Error> {
         match self.run(args!["SLOWLOG", "GET", count])? {
             RespValue::Array(items) => Ok(items),
@@ -1919,22 +2889,22 @@ impl Client {
         }
     }
 
-    /// Sends `CLIENT ID`.
+    /// Sends `CLIENT ID`: this connection's id.
     pub fn client_id(&mut self) -> Result<i64, Error> {
         self.integer(["CLIENT", "ID"])
     }
 
-    /// Sends `CLIENT INFO`: one line for this connection.
+    /// Sends `CLIENT INFO`: one text line describing this connection.
     pub fn client_info(&mut self) -> Result<String, Error> {
         self.text(["CLIENT", "INFO"])
     }
 
-    /// Sends `CLIENT LIST`: one line per connection on the answering shard.
+    /// Sends `CLIENT LIST`: one text line per connection on the answering shard.
     pub fn client_list(&mut self) -> Result<String, Error> {
         self.text(["CLIENT", "LIST"])
     }
 
-    /// Sends `CLIENT KILL ID` and returns how many connections were closed.
+    /// Sends `CLIENT KILL ID`: closes the connection with that id; returns how many were closed.
     pub fn client_kill_id(&mut self, id: i64) -> Result<i64, Error> {
         self.integer(args!["CLIENT", "KILL", "ID", id])
     }
@@ -1952,27 +2922,38 @@ impl Client {
         self.integer(["LINSERT", key, side, pivot, value])
     }
 
-    /// Sends `LSET`.
+    /// Sends `LSET`: overwrites the element at `index` (negative counts from the tail).
+    ///
+    /// # Errors
+    /// [`Error::Server`] `ERR no such key` or `ERR index out of range`.
     pub fn lset(&mut self, key: &str, index: i64, value: &str) -> Result<(), Error> {
         self.ok(args!["LSET", key, index, value])
     }
 
-    /// Sends `LREM` and returns how many elements were removed.
+    /// Sends `LREM`: removes occurrences of `value`.
+    ///
+    /// # Arguments
+    /// * `count` - `> 0` removes up to `count` from the head, `< 0` from the tail, `0` removes
+    ///   all.
+    ///
+    /// Returns how many were removed.
     pub fn lrem(&mut self, key: &str, count: i64, value: &str) -> Result<i64, Error> {
         self.integer(args!["LREM", key, count, value])
     }
 
-    /// Sends `LPOS` for the first match. `None` when the value is not in the list.
+    /// Sends `LPOS`: index of the first element equal to `value`; `None` if absent. See
+    /// [`Client::lpos_with`] for `RANK`/`MAXLEN`.
     pub fn lpos(&mut self, key: &str, value: &str) -> Result<Option<i64>, Error> {
         self.optional_integer(["LPOS", key, value])
     }
 
-    /// Sends `LPUSHX`. Returns 0 and writes nothing when the list does not exist.
+    /// Sends `LPUSHX`: pushes to the head only if the list exists. Returns the new length, or `0`
+    /// (nothing written) when the list does not exist.
     pub fn lpushx(&mut self, key: &str, values: &[&str]) -> Result<i64, Error> {
         self.integer(with(args!["LPUSHX", key], values))
     }
 
-    /// Sends `RPUSHX`. Returns 0 and writes nothing when the list does not exist.
+    /// Sends `RPUSHX`: appends only if the list exists; `0` when it does not.
     pub fn rpushx(&mut self, key: &str, values: &[&str]) -> Result<i64, Error> {
         self.integer(with(args!["RPUSHX", key], values))
     }
@@ -1988,7 +2969,8 @@ impl Client {
         self.bulk_or_null(["LMOVE", source, destination, side(from_left), side(to_left)])
     }
 
-    /// Sends `RPOPLPUSH`. `None` when the source is empty.
+    /// Sends `RPOPLPUSH`: pops the tail of `source` and pushes it on the head of `destination`;
+    /// returns the element, `None` if `source` is empty. Same slot on a sharded server.
     pub fn rpoplpush(&mut self, source: &str, destination: &str) -> Result<Option<String>, Error> {
         self.bulk_or_null(["RPOPLPUSH", source, destination])
     }
@@ -2067,14 +3049,35 @@ impl Client {
         }
     }
 
-    /// Sends `FILLGET`: one caller gets `Fill` and builds the value, the rest get
-    /// `Hit`, `Busy`, or `Stale`. `fill` is how long the fill marker lives.
+    /// Sends `FILLGET` (Ruvio): cache read with stampede protection. See [`FillOutcome`].
+    ///
+    /// # Arguments
+    /// * `fill` - how long the "someone is filling" marker lives; after that another caller may
+    ///   take over.
+    ///
+    /// # Returns
+    /// * `Hit(value)` - fresh value stored.
+    /// * `Fill(token)` - nothing stored and **you** must build the value, then call
+    ///   [`Client::fill_set`] with the token.
+    /// * `Busy` - someone else is building it.
+    /// * `Stale { value, token }` - past its soft TTL; `token` is `Some` when you should refresh.
+    ///
+    /// Markers are kept in memory and lapse after `fill`. See [`Client::get_or_create`] for a
+    /// ready-made loop.
     pub fn fill_get(&mut self, key: &str, fill: Duration) -> Result<FillOutcome, Error> {
         parse_fill(self.run(args!["FILLGET", key, duration_millis(fill)])?)
     }
 
-    /// Sends `FILLSET`. True when `token` was valid and the value was written.
-    /// `stale` keeps the old value readable for that long after `ttl` (stale-while-revalidate).
+    /// Sends `FILLSET` (Ruvio): stores the value built after a `Fill` result.
+    ///
+    /// # Arguments
+    /// * `value` - the built value. `ttl` - its lifetime.
+    /// * `token` - the token from [`Client::fill_get`]; stale tokens are refused.
+    /// * `stale` - `Some(d)` keeps the old value readable for `d` after `ttl` (stale-while-
+    ///   revalidate).
+    ///
+    /// # Returns
+    /// `true` when written; `false` when the token was no longer valid.
     pub fn fill_set(
         &mut self,
         key: &str,
