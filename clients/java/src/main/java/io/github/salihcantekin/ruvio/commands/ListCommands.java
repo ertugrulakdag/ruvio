@@ -3,6 +3,7 @@ package io.github.salihcantekin.ruvio.commands;
 
 import io.github.salihcantekin.ruvio.RuvioCodec;
 import io.github.salihcantekin.ruvio.args.LPosArgs;
+import io.github.salihcantekin.ruvio.args.InsertPosition;
 import io.github.salihcantekin.ruvio.args.ListDirection;
 import io.github.salihcantekin.ruvio.internal.Args;
 import io.github.salihcantekin.ruvio.internal.Cmd;
@@ -120,7 +121,12 @@ public abstract class ListCommands<K, V> extends HashCommands<K, V> {
 
     /** LINSERT key BEFORE|AFTER pivot value. -1 when the pivot is missing. */
     public CompletableFuture<Long> linsert(K key, boolean before, V pivot, V value) {
-        return send(args().w(Cmd.LINSERT).k(key).s(before ? "BEFORE" : "AFTER").v(pivot).v(value), Reply.LONG);
+        return linsert(key, before ? InsertPosition.BEFORE : InsertPosition.AFTER, pivot, value);
+    }
+
+    /** LINSERT key BEFORE|AFTER pivot value with an enum position, for example {@code InsertPosition.AFTER}. */
+    public CompletableFuture<Long> linsert(K key, InsertPosition position, V pivot, V value) {
+        return send(args().w(Cmd.LINSERT).k(key).w(position.fragment()).v(pivot).v(value), Reply.LONG);
     }
 
     public CompletableFuture<Void> lset(K key, long index, V value) {
@@ -154,7 +160,7 @@ public abstract class ListCommands<K, V> extends HashCommands<K, V> {
     }
 
     public CompletableFuture<V> lmove(K source, K destination, ListDirection from, ListDirection to) {
-        return send(args().w(Cmd.LMOVE).k(source).k(destination).s(from.name()).s(to.name()), r(Reply.VALUE));
+        return send(args().w(Cmd.LMOVE).k(source).k(destination).w(from.fragment()).w(to.fragment()), r(Reply.VALUE));
     }
 
     public CompletableFuture<V> rpoplpush(K source, K destination) {
@@ -163,13 +169,13 @@ public abstract class ListCommands<K, V> extends HashCommands<K, V> {
 
     /** BLMOVE ... timeout_seconds. Null on timeout. Use a dedicated client. */
     public CompletableFuture<V> blmove(K source, K destination, ListDirection from, ListDirection to, double timeoutSeconds) {
-        return send(args().w(Cmd.BLMOVE).k(source).k(destination).s(from.name()).s(to.name()).d(timeoutSeconds), r(Reply.VALUE));
+        return send(args().w(Cmd.BLMOVE).k(source).k(destination).w(from.fragment()).w(to.fragment()).d(timeoutSeconds), r(Reply.VALUE));
     }
 
     /** LMPOP numkeys key... LEFT|RIGHT [COUNT n]. Null when every list is empty. */
     @SafeVarargs
     public final CompletableFuture<KeyValue<K, List<V>>> lmpop(ListDirection direction, long count, K... keys) {
-        Args a = args().w(Cmd.LMPOP).l(keys.length).keys(keys).s(direction.name());
+        Args a = args().w(Cmd.LMPOP).l(keys.length).keys(keys).w(direction.fragment());
         if (count > 0) {
             a.w(Cmd.COUNT).l(count);
         }
@@ -179,7 +185,7 @@ public abstract class ListCommands<K, V> extends HashCommands<K, V> {
     /** BLMPOP timeout numkeys key... LEFT|RIGHT [COUNT n]. Null on timeout. Use a dedicated client. */
     @SafeVarargs
     public final CompletableFuture<KeyValue<K, List<V>>> blmpop(double timeoutSeconds, ListDirection direction, long count, K... keys) {
-        Args a = args().w(Cmd.BLMPOP).d(timeoutSeconds).l(keys.length).keys(keys).s(direction.name());
+        Args a = args().w(Cmd.BLMPOP).d(timeoutSeconds).l(keys.length).keys(keys).w(direction.fragment());
         if (count > 0) {
             a.w(Cmd.COUNT).l(count);
         }

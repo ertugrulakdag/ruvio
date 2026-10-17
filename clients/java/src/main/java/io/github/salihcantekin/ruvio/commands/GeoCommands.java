@@ -93,7 +93,7 @@ public abstract class GeoCommands<K, V> extends SortedSetCommands<K, V> {
     }
 
     public CompletableFuture<Double> geodist(K key, V member1, V member2, GeoUnit unit) {
-        return send(args().w(Cmd.GEODIST).k(key).v(member1).v(member2).s(unit.name()), Reply.DOUBLE);
+        return send(args().w(Cmd.GEODIST).k(key).v(member1).v(member2).w(unit.fragment()), Reply.DOUBLE);
     }
 
     @SafeVarargs
@@ -130,14 +130,14 @@ public abstract class GeoCommands<K, V> extends SortedSetCommands<K, V> {
     }
 
     public CompletableFuture<List<GeoResult<V>>> georadius(K key, double longitude, double latitude, double radius, GeoUnit unit, GeoSearchArgs options) {
-        Args a = args().w(Cmd.GEORADIUS).k(key).d(longitude).d(latitude).d(radius).s(unit.name());
+        Args a = args().w(Cmd.GEORADIUS).k(key).d(longitude).d(latitude).d(radius).w(unit.fragment());
         options.writeTail(a, true);
         return send(a, r(GEO_RESULTS));
     }
 
     /** GEORADIUS ... STORE|STOREDIST destination. Returns the stored count. */
     public CompletableFuture<Long> georadiusStore(K key, double longitude, double latitude, double radius, GeoUnit unit, K destination, boolean storeDist) {
-        Args a = args().w(Cmd.GEORADIUS).k(key).d(longitude).d(latitude).d(radius).s(unit.name());
+        Args a = args().w(Cmd.GEORADIUS).k(key).d(longitude).d(latitude).d(radius).w(unit.fragment());
         a.s(storeDist ? "STOREDIST" : "STORE").k(destination);
         return send(a, Reply.LONG);
     }
@@ -147,13 +147,13 @@ public abstract class GeoCommands<K, V> extends SortedSetCommands<K, V> {
     }
 
     public CompletableFuture<List<GeoResult<V>>> georadiusbymember(K key, V member, double radius, GeoUnit unit, GeoSearchArgs options) {
-        Args a = args().w(Cmd.GEORADIUSBYMEMBER).k(key).v(member).d(radius).s(unit.name());
+        Args a = args().w(Cmd.GEORADIUSBYMEMBER).k(key).v(member).d(radius).w(unit.fragment());
         options.writeTail(a, true);
         return send(a, r(GEO_RESULTS));
     }
 
     public CompletableFuture<Long> georadiusbymemberStore(K key, V member, double radius, GeoUnit unit, K destination, boolean storeDist) {
-        Args a = args().w(Cmd.GEORADIUSBYMEMBER).k(key).v(member).d(radius).s(unit.name());
+        Args a = args().w(Cmd.GEORADIUSBYMEMBER).k(key).v(member).d(radius).w(unit.fragment());
         a.s(storeDist ? "STOREDIST" : "STORE").k(destination);
         return send(a, Reply.LONG);
     }

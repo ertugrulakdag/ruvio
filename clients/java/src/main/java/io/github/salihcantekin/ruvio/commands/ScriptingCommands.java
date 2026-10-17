@@ -4,6 +4,7 @@ package io.github.salihcantekin.ruvio.commands;
 import io.github.salihcantekin.ruvio.RuvioCodec;
 import io.github.salihcantekin.ruvio.args.BitFieldArgs;
 import io.github.salihcantekin.ruvio.args.BitOp;
+import io.github.salihcantekin.ruvio.args.BitUnit;
 import io.github.salihcantekin.ruvio.internal.Args;
 import io.github.salihcantekin.ruvio.internal.Cmd;
 import io.github.salihcantekin.ruvio.internal.Reply;
@@ -131,7 +132,12 @@ public abstract class ScriptingCommands<K, V> extends JsonCommands<K, V> {
 
     /** BITCOUNT key start end BIT|BYTE. */
     public CompletableFuture<Long> bitcount(K key, long start, long end, boolean bitUnits) {
-        return send(args().w(Cmd.BITCOUNT).k(key).l(start).l(end).s(bitUnits ? "BIT" : "BYTE"), Reply.LONG);
+        return bitcount(key, start, end, bitUnits ? BitUnit.BIT : BitUnit.BYTE);
+    }
+
+    /** BITCOUNT key start end BYTE|BIT with an enum unit, for example {@code BitUnit.BIT}. */
+    public CompletableFuture<Long> bitcount(K key, long start, long end, BitUnit unit) {
+        return send(args().w(Cmd.BITCOUNT).k(key).l(start).l(end).w(unit.fragment()), Reply.LONG);
     }
 
     public CompletableFuture<Long> bitpos(K key, boolean bit) {
@@ -149,7 +155,7 @@ public abstract class ScriptingCommands<K, V> extends JsonCommands<K, V> {
     /** BITOP AND|OR|XOR|NOT destination key...: the result length. */
     @SafeVarargs
     public final CompletableFuture<Long> bitop(BitOp op, K destination, K... keys) {
-        return send(args().w(Cmd.BITOP).s(op.name()).k(destination).keys(keys), Reply.LONG);
+        return send(args().w(Cmd.BITOP).w(op.fragment()).k(destination).keys(keys), Reply.LONG);
     }
 
     /** BITFIELD key ops...: one value per GET/SET/INCRBY (null when OVERFLOW FAIL stopped it). */

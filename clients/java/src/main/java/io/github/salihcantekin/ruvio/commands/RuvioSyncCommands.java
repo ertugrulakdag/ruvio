@@ -8,10 +8,12 @@ import io.github.salihcantekin.ruvio.RuvioServerException;
 import io.github.salihcantekin.ruvio.args.BfInsertArgs;
 import io.github.salihcantekin.ruvio.args.BitFieldArgs;
 import io.github.salihcantekin.ruvio.args.BitOp;
+import io.github.salihcantekin.ruvio.args.BitUnit;
 import io.github.salihcantekin.ruvio.args.ClientKillArgs;
 import io.github.salihcantekin.ruvio.args.ExpireCondition;
 import io.github.salihcantekin.ruvio.args.GeoSearchArgs;
 import io.github.salihcantekin.ruvio.args.GeoUnit;
+import io.github.salihcantekin.ruvio.args.InsertPosition;
 import io.github.salihcantekin.ruvio.args.LPosArgs;
 import io.github.salihcantekin.ruvio.args.ListDirection;
 import io.github.salihcantekin.ruvio.args.RestoreArgs;
@@ -682,6 +684,11 @@ public abstract class RuvioSyncCommands<K, V> {
     /** LINSERT key BEFORE|AFTER pivot value. -1 when the pivot is missing. */
     public Long linsert(K key, boolean before, V pivot, V value) {
         return await(async.linsert(key, before, pivot, value));
+    }
+
+    /** LINSERT key BEFORE|AFTER pivot value with an enum position, for example {@code InsertPosition.AFTER}. */
+    public Long linsert(K key, InsertPosition position, V pivot, V value) {
+        return await(async.linsert(key, position, pivot, value));
     }
 
     public void lset(K key, long index, V value) {
@@ -1594,6 +1601,11 @@ public abstract class RuvioSyncCommands<K, V> {
     /** BITCOUNT key start end BIT|BYTE. */
     public Long bitcount(K key, long start, long end, boolean bitUnits) {
         return await(async.bitcount(key, start, end, bitUnits));
+    }
+
+    /** BITCOUNT key start end BYTE|BIT with an enum unit, for example {@code BitUnit.BIT}. */
+    public Long bitcount(K key, long start, long end, BitUnit unit) {
+        return await(async.bitcount(key, start, end, unit));
     }
 
     public Long bitpos(K key, boolean bit) {

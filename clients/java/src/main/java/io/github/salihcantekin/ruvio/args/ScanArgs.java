@@ -9,6 +9,7 @@ public final class ScanArgs {
     private String match;
     private long count;
     private String type;
+    private KeyType keyType;
 
     public static ScanArgs match(String pattern) {
         return new ScanArgs().matching(pattern);
@@ -31,6 +32,17 @@ public final class ScanArgs {
     /** SCAN only: the value type (string, list, set, zset, hash, stream). */
     public ScanArgs type(String type) {
         this.type = type;
+        this.keyType = null;
+        return this;
+    }
+
+    /**
+     * SCAN only: the value type as an enum, written from pre-encoded bytes. Example:
+     * {@code ScanArgs.count(100).type(KeyType.HASH)}.
+     */
+    public ScanArgs type(KeyType type) {
+        this.keyType = type;
+        this.type = null;
         return this;
     }
 
@@ -41,7 +53,9 @@ public final class ScanArgs {
         if (count > 0) {
             a.w(Cmd.COUNT).l(count);
         }
-        if (allowType && type != null) {
+        if (allowType && keyType != null) {
+            a.w(Cmd.TYPE).w(keyType.fragment());
+        } else if (allowType && type != null) {
             a.w(Cmd.TYPE).s(type);
         }
     }

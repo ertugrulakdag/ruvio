@@ -70,6 +70,12 @@ public final class GeoSearchArgs {
         return this;
     }
 
+    /** Sets the result order from an enum, for example {@code order(GeoOrder.DESC)}; same as {@link #asc()} / {@link #desc()}. */
+    public GeoSearchArgs order(GeoOrder order) {
+        asc = order == GeoOrder.ASC ? Boolean.TRUE : Boolean.FALSE;
+        return this;
+    }
+
     public GeoSearchArgs count(long count) {
         this.count = count;
         return this;
@@ -105,16 +111,16 @@ public final class GeoSearchArgs {
             throw new IllegalArgumentException("GEOSEARCH needs fromMember or fromLonLat");
         }
         if (byBox) {
-            a.s("BYBOX").d(width).d(height).s(unit.name());
+            a.s("BYBOX").d(width).d(height).w(unit.fragment());
         } else {
-            a.s("BYRADIUS").d(radius).s(unit.name());
+            a.s("BYRADIUS").d(radius).w(unit.fragment());
         }
         writeTail(a, includeWith);
     }
 
     public void writeTail(Args a, boolean includeWith) {
         if (asc != null) {
-            a.s(asc ? "ASC" : "DESC");
+            a.w(asc ? GeoOrder.ASC.fragment() : GeoOrder.DESC.fragment());
         }
         if (count > 0) {
             a.w(Cmd.COUNT).l(count);

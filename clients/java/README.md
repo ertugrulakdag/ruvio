@@ -103,6 +103,18 @@ matrix name to a method and fails otherwise), including the Ruvio options: `SET 
 `BF.*`, `JSON.*` incl. `JSON.INDEX/FIND`, `IDEM BEGIN/COMPLETE`, `LEASE/RELEASE`, `SEMAPHORE`, `ONCE`,
 `TAKE`, `SETV`, `CHANGES`, `LIMIT`. Not typed (use `execute`): `FLUSHDB ASYNC`, `HELLO ... SETNAME`.
 
+## Typed keywords
+
+Keywords are enums that write pre-encoded bytes (no per-call string encoding); the older boolean and string forms still work.
+
+```java
+c.linsert("list", InsertPosition.BEFORE, "pivot", "value");           // instead of linsert(key, true, ...)
+c.bitcount("bits", 0, 7, BitUnit.BIT);                                // instead of the boolean overload
+c.scan("0", ScanArgs.count(100).type(KeyType.HASH));                  // instead of .type("hash")
+c.georadius("geo", 13.4, 52.5, 10, GeoUnit.KM, GeoSearchArgs.options().order(GeoOrder.ASC));
+c.bitfield("bits", BitFieldArgs.builder().get(BitFieldArgs.Type.unsigned(8), 0));
+```
+
 ## Helpers
 
 | Helper | Built on |
