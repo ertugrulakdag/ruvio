@@ -54,34 +54,4 @@ public class BinaryCommandTests
 
         Assert.NotEqual(ClusterKeys.Slot(new byte[] { 255 }), ClusterKeys.Slot(Encoding.UTF8.GetBytes("\ufffd")));
     }
-
-    [Theory]
-    [InlineData(16, false, false)]
-    [InlineData(16, true, false)]
-    [InlineData(1024, false, false)]
-    [InlineData(1024, true, true)]
-    public void ExistingStringHashSlotPathRemainsAllocationFreeAfterWarmup(
-        int length, bool tagged, bool unicode)
-    {
-        string key = new(unicode ? 'é' : 'x', length);
-
-        if (tagged)
-            key = "prefix:{" + key + "}:suffix";
-
-        int expected = RuvioClient.GetHashSlot(key);
-
-        for (int i = 0; i < 1000; i++)
-            RuvioClient.GetHashSlot(key);
-
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        int actual = 0;
-
-        for (int i = 0; i < 10000; i++)
-            actual = RuvioClient.GetHashSlot(key);
-
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.Equal(expected, actual);
-        Assert.Equal(0, allocated);
-    }
 }

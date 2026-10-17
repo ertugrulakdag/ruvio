@@ -222,9 +222,18 @@ public class PubSubRecoveryTests
         await pipe.Reply("*3\r\n$8\r\nsmessage\r\n$2\r\ns1\r\n$1\r\nS\r\n");
         await pipe.Reply("*3\r\n$8\r\nsmessage\r\n$22\r\n__keyevent@0__:expired\r\n$1\r\nE\r\n");
 
-        for (int i = 0; i < 100 && hits.Count < 4; i++)
+        // Three deliveries were sent; wait for all of them.
+        DateTime deadline = DateTime.UtcNow + TestDeadlines.Bound;
+
+        while (true)
         {
-            await Task.Delay(20);
+            lock (hits)
+            {
+                if (hits.Count >= 3 || DateTime.UtcNow >= deadline)
+                    break;
+            }
+
+            await Task.Delay(10);
         }
 
         lock (hits)

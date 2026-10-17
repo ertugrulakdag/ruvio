@@ -21,8 +21,8 @@ public class PubSubHandlerTests
         await subscriber.Reply("*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:2\r\n");
         await extra;
         await Push(subscriber, "news", "hi");
-        Assert.Equal("hi", await first.Task.WaitAsync(TimeSpan.FromSeconds(2)));
-        Assert.Equal("hi", await second.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal("hi", await first.Task.WaitAsync(TestDeadlines.Bound));
+        Assert.Equal("hi", await second.Task.WaitAsync(TestDeadlines.Bound));
     }
 
     [Fact(Timeout = 15000)]
@@ -37,7 +37,7 @@ public class PubSubHandlerTests
         await Confirm(subscriber, "SUBSCRIBE", "keep", subscribe);
         session.Client.RegisterHandler("other", message => wrong.TrySetResult(message.Payload));
         await Push(subscriber, "keep", "only");
-        Assert.Equal("only", await right.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal("only", await right.Task.WaitAsync(TestDeadlines.Bound));
         Assert.False(wrong.Task.IsCompleted);
     }
 
@@ -55,7 +55,7 @@ public class PubSubHandlerTests
         await using SubscriberPipe subscriber = await session.AcceptSubscriberAsync();
         await Confirm(subscriber, "SUBSCRIBE", "news", subscribe);
         await Push(subscriber, "news", "later");
-        Assert.Equal("later", await seen.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal("later", await seen.Task.WaitAsync(TestDeadlines.Bound));
     }
 
     [Fact(Timeout = 15000)]
@@ -94,8 +94,8 @@ public class PubSubHandlerTests
         await second;
         await Push(subscriber, "b", "bee");
         await Push(subscriber, "a", "aye");
-        Assert.Equal("bee", await b.Task.WaitAsync(TimeSpan.FromSeconds(2)));
-        Assert.Equal("aye", await a.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Equal("bee", await b.Task.WaitAsync(TestDeadlines.Bound));
+        Assert.Equal("aye", await a.Task.WaitAsync(TestDeadlines.Bound));
     }
 
     [Fact(Timeout = 15000)]
@@ -110,7 +110,7 @@ public class PubSubHandlerTests
         await subscriber.Reply("*3\r\n$10\r\nssubscribe\r\n$4\r\nslot\r\n:1\r\n");
         await subscribe;
         await subscriber.Reply("*3\r\n$8\r\nsmessage\r\n$4\r\nslot\r\n$3\r\nxyz\r\n");
-        PubSubMessage message = await seen.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        PubSubMessage message = await seen.Task.WaitAsync(TestDeadlines.Bound);
 
         Assert.Equal("smessage", message.Kind);
         Assert.Equal("xyz", message.Payload);
@@ -130,7 +130,7 @@ public class PubSubHandlerTests
         await subscribeExpired;
         await subscriber.Reply("*3\r\n$8\r\nsmessage\r\n$22\r\n__keyevent@3__:expired\r\n$3\r\nkey\r\n");
 
-        Assert.Equal("key", (await expired.Task.WaitAsync(TimeSpan.FromSeconds(2))).Payload);
+        Assert.Equal("key", (await expired.Task.WaitAsync(TestDeadlines.Bound)).Payload);
 
         var evicted = new TaskCompletionSource<PubSubMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
         ValueTask subscribeEvicted = session.Client.SubscribeEvictedAsync(evicted.SetResult);
@@ -139,7 +139,7 @@ public class PubSubHandlerTests
         await subscribeEvicted;
         await subscriber.Reply("*3\r\n$8\r\nsmessage\r\n$22\r\n__keyevent@3__:evicted\r\n$3\r\nkey\r\n");
 
-        Assert.Equal("key", (await evicted.Task.WaitAsync(TimeSpan.FromSeconds(2))).Payload);
+        Assert.Equal("key", (await evicted.Task.WaitAsync(TestDeadlines.Bound)).Payload);
     }
 
     [Fact(Timeout = 15000)]
@@ -154,7 +154,7 @@ public class PubSubHandlerTests
         await using SubscriberPipe subscriber = await session.AcceptSubscriberAsync();
         await Confirm(subscriber, "SUBSCRIBE", "news", subscribe);
         subscriber.Close();
-        Assert.NotNull(await failed.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.NotNull(await failed.Task.WaitAsync(TestDeadlines.Bound));
     }
 
     [Fact(Timeout = 15000)]
@@ -220,7 +220,7 @@ public class PubSubHandlerTests
 
                 _waiters.Enqueue(waiter);
 
-                return waiter.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                return waiter.Task.WaitAsync(TestDeadlines.Bound);
             }
         }
     }

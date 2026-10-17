@@ -467,7 +467,8 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
             Assert.Contains(await zero.JsonListIndexesAsync(), line => line.StartsWith(index + " ", StringComparison.Ordinal));
             IReadOnlyList<string> found = [];
 
-            for (int attempt = 0; attempt < 200; attempt++)
+            // The first build runs in the background; 15 s is far beyond what it takes.
+            for (DateTime deadline = DateTime.UtcNow.AddSeconds(15); DateTime.UtcNow < deadline;)
             {
                 try
                 {

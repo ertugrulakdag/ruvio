@@ -182,7 +182,8 @@ public class PooledRequestTests
                         _sessions.Add(ServeAsync(client));
                 }
             }
-            catch (OperationCanceledException)
+            // Stopping the listener can surface as a socket or disposal error instead of the cancellation.
+            catch (Exception exception) when (exception is OperationCanceledException || _stop.IsCancellationRequested)
             {
             }
         }
@@ -203,7 +204,10 @@ public class PooledRequestTests
                         await stream.WriteAsync(Encoding.UTF8.GetBytes($"${Encoding.UTF8.GetByteCount(value)}\r\n{value}\r\n"), _stop.Token);
                     }
                 }
-                catch (Exception exception) when (exception is OperationCanceledException or IOException or RuvioException)
+                // Once the server stops, any error from the closing socket ends the session quietly:
+                // the test has already passed or failed on what the client saw.
+                catch (Exception exception) when (exception is OperationCanceledException or IOException or RuvioException
+                    || _stop.IsCancellationRequested)
                 {
                 }
             }

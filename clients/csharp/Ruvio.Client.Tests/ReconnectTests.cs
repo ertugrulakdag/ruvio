@@ -190,6 +190,7 @@ public class ReconnectTests
     {
         private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
         private TcpClient? _accepted;
+        private Socket? _closed;
 
         public DropServer()
         {
@@ -223,7 +224,7 @@ public class ReconnectTests
 
         public void StopListening()
         {
-            _listener.Stop();
+            _closed ??= ClosedPort.Stop(_listener);
         }
 
         public void CloseAccepted()
@@ -269,7 +270,7 @@ public class ReconnectTests
 
             _accepted.Dispose();
             _accepted = null;
-            _listener.Stop();
+            _closed ??= ClosedPort.Stop(_listener);
         }
 
         public async Task Pong()
@@ -286,6 +287,7 @@ public class ReconnectTests
         {
             _accepted?.Dispose();
             _listener.Stop();
+            _closed?.Dispose();
             await ValueTask.CompletedTask;
         }
     }

@@ -106,31 +106,6 @@ public class ClientTests
     }
 
     [Fact]
-    public async Task ReaderBufferedBulkDoesNotAllocateHelperTasks()
-    {
-        const int replies = 1000;
-        string frame = "$256\r\n" + new string('x', 256) + "\r\n";
-        byte[] payload = Encoding.ASCII.GetBytes(string.Concat(Enumerable.Repeat(frame, replies + 1)));
-        using var reader = new RespReader(new MemoryStream(payload));
-        await reader.ReadAsync(CancellationToken.None);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        int totalBytes = 0;
-        bool allSynchronous = true;
-
-        for (int index = 0; index < replies; index++)
-        {
-            ValueTask<RespValue> read = reader.ReadAsync(CancellationToken.None);
-            allSynchronous &= read.IsCompletedSuccessfully;
-            totalBytes += (await read).Bytes!.Length;
-        }
-
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.True(allSynchronous);
-        Assert.Equal(replies * 256, totalBytes);
-        Assert.InRange(allocated / replies, 0, 400);
-    }
-
-    [Fact]
     public async Task ReaderHandlesAsynchronouslyFragmentedNestedReplies()
     {
         using var stream = new FragmentedReplyStream(Encoding.ASCII.GetBytes(

@@ -12,19 +12,25 @@ namespace Ruvio.Client.Tests;
 internal sealed class FakeServer : IDisposable
 {
     private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+    private Socket? _closed;
 
     public FakeServer()
     {
         _listener.Start();
+        Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
     }
 
-    public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
+    public int Port { get; }
 
     public async Task<FakeConn> AcceptAsync() => new(await TestDeadlines.AcceptAsync(_listener));
 
-    public void StopListening() => _listener.Stop();
+    public void StopListening() => _closed ??= ClosedPort.Stop(_listener);
 
-    public void Dispose() => _listener.Stop();
+    public void Dispose()
+    {
+        _listener.Stop();
+        _closed?.Dispose();
+    }
 
     public RuvioClientOptions Options(Action<RuvioClientOptions>? configure = null)
     {

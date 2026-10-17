@@ -7,7 +7,7 @@ namespace Ruvio.Client.Tests;
 public class NativeAotTests
 {
     [Fact]
-    public void TourPublishesANativeBinaryWithoutTheManagedClientDll()
+    public async Task TourPublishesANativeBinaryWithoutTheManagedClientDll()
     {
         if (Environment.GetEnvironmentVariable("RUVIO_AOT_PUBLISH") != "1")
         {
@@ -26,14 +26,26 @@ public class NativeAotTests
         };
 
         using Process process = Process.Start(start) ?? throw new InvalidOperationException("dotnet did not start");
-        string stdout = process.StandardOutput.ReadToEnd();
-        string stderr = process.StandardError.ReadToEnd();
+        // Both streams are drained at once: reading one to its end first can block for good while
+        // the process waits on a full pipe for the other, and the exit timeout would never apply.
+        Task<string> stdoutRead = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderrRead = process.StandardError.ReadToEndAsync();
 
-        if (!process.WaitForExit(180_000))
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+
+        catch (OperationCanceledException)
         {
             process.Kill(entireProcessTree: true);
             throw new TimeoutException("NativeAOT publish did not finish");
         }
+
+        string stdout = await stdoutRead;
+        string stderr = await stderrRead;
 
         Assert.True(
             process.ExitCode == 0,

@@ -41,7 +41,7 @@ public class PubSubCommandTests
         await subscribe;
 
         await subscriber.Reply("*3\r\n$7\r\nmessage\r\n$9\r\nfeat-news\r\n$11\r\nhello-ruvio\r\n");
-        PubSubMessage message = await seen.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        PubSubMessage message = await seen.Task.WaitAsync(TestDeadlines.Bound);
 
         Assert.Equal("feat-news", message.Channel);
         Assert.Equal("hello-ruvio", message.Payload);
@@ -79,7 +79,7 @@ public class PubSubCommandTests
         await subscriber.Reply("*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n");
         await subscribe;
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = new CancellationTokenSource(TestDeadlines.Bound);
         IAsyncEnumerator<PubSubMessage> listen = session.Client.ListenAsync(timeout.Token).GetAsyncEnumerator();
         ValueTask<bool> move = listen.MoveNextAsync();
 
@@ -101,7 +101,7 @@ public class PubSubCommandTests
         await subscriber.Reply("*3\r\n$10\r\npsubscribe\r\n$2\r\nn*\r\n:1\r\n");
         await pattern;
         await subscriber.Reply("*4\r\n$8\r\npmessage\r\n$2\r\nn*\r\n$4\r\nnews\r\n$2\r\nhi\r\n");
-        Assert.Equal("hi", (await seen.Task.WaitAsync(TimeSpan.FromSeconds(2))).Payload);
+        Assert.Equal("hi", (await seen.Task.WaitAsync(TestDeadlines.Bound)).Payload);
     }
 
     [Fact(Timeout = 15000)]

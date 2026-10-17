@@ -3,6 +3,8 @@ using Xunit;
 
 namespace Ruvio.Client.Tests;
 
+// It flushes the cluster and counts its keys, so it must not run beside another cluster test.
+[Collection("Live")]
 public class ClusterLiveTests
 {
     [Fact(Timeout = 15000)]
