@@ -4,6 +4,10 @@ Notable changes to the Go client `github.com/salihcantekin/ruvio/clients/go`. A 
 
 ## Unreleased
 
+## v0.2.0 - 2026-10-17
+
+Breaking for callers that pass a plain `string` variable where a typed keyword is now expected (see the first item); string literals still compile.
+
 - Typed keyword constants (string types, so string literals still compile): `GeoUnit`, `GeoOrder`, `ListSide`, `ListPosition`, `ScanType`, `BitOperation`, `BitUnit`, `Aggregate`, `BitFieldOpName`, plus `BitSigned`/`BitUnsigned` helpers. They encode through pre-built RESP fragments (no per-call allocation). New `LInsertAt` and `BitCountUnit`; `LInsert(bool)` and `BitCountRange(bool)` are unchanged. Callers that pass a plain `string` variable to `GeoDist`, `LMove`, `BLMove`, `LMPop`, `BLMPop` or `BitOp`, or assign one to `GeoSearchQuery.Unit/Sort`, `GeoRadiusQuery.Unit/Sort`, `ZStore.Aggregate`, `ScanOptions.Type` or `BitFieldOp.Op`, need a conversion such as `ruvio.GeoUnit(s)`.
 - Typed keywords, wave 2: `StreamTrim` (`TrimStrategy` MAXLEN/MINID, `TrimMode` `=`/`~`, `TrimMaxLen.Of`, `TrimMinID.OfID`) used by new `XAddArgs.Trim` and `XTrimBy` (`XTrim` unchanged); `InfoSection` with `InfoOf`; `ClientType` with `ClientListType`; constants `StreamIDNew/LastDelivered/NewMessages/Min/Max`, `ScoreNegInf/PosInf`, `LexMin/Max` and helpers `ScoreExclusive`, `LexInclusive`, `LexExclusive`. All encode through pre-built RESP fragments. The Go client has no `CHANGES SUBSCRIBE` API, so no change-type set was added.
 
