@@ -30,6 +30,9 @@ import type {
   StreamReadResult,
   XAddOptions,
   XTrimOptions,
+  StreamTrim,
+  InfoSection,
+  ClientType,
   XReadOptions,
   XReadGroupOptions,
   XClaimOptions,
@@ -47,7 +50,7 @@ import type {
   InsertPosition,
   BitfieldType,
 } from './types.js';
-import { KW_AGGREGATE, KW_BITOP, KW_BITUNIT, KW_GEO_UNIT, KW_ORDER, KW_SCAN_TYPE, KW_SIDE, KW_WHERE, kw } from './keywords.js';
+import { KW_AGGREGATE, KW_BITOP, KW_BITUNIT, KW_CLIENT_TYPE, KW_GEO_UNIT, KW_INFO_SECTION, KW_ORDER, KW_SCAN_TYPE, KW_SIDE, KW_TRIM_MODE, KW_TRIM_STRATEGY, KW_WHERE, kw } from './keywords.js';
 
 
 // Option words as Buffers: encoded with a single copy, no string scan.
@@ -140,6 +143,10 @@ function pushZStore(a: Arg[], keys: readonly Key[], o?: ZStoreOptions): Arg[] {
 }
 
 function pushStreamId(a: Arg[], o: XTrimOptions | XAddOptions): void {
+  if (o.trim !== undefined) {
+    pushTrim(a, o.trim);
+    return;
+  }
   if (o.maxLen !== undefined) {
     a.push(W.MAXLEN);
     if (o.approximate) a.push(W.TILDE);
@@ -149,6 +156,12 @@ function pushStreamId(a: Arg[], o: XTrimOptions | XAddOptions): void {
     if (o.approximate) a.push(W.TILDE);
     a.push(o.minId);
   }
+}
+
+function pushTrim(a: Arg[], t: StreamTrim): void {
+  a.push(kw(KW_TRIM_STRATEGY, t.strategy));
+  if (t.mode !== undefined) a.push(kw(KW_TRIM_MODE, t.mode));
+  a.push(t.threshold);
 }
 
 function pushFields(a: Arg[], fields: Record<string, Value> | readonly Value[]): Arg[] {
@@ -579,16 +592,17 @@ export abstract class Commands {
    * Lists connections (`CLIENT LIST [TYPE type]`).
    * Each shard knows only its own connections, so on a multi-shard server the list covers the shard that got the command and ids can repeat across shards. `type` is validated but not used as a filter.
    *
-   * @param type Connection type word, e.g. `'normal'`.
+   * @param type Connection type word, see {@link ClientType}: `normal`, `master`, `replica` or `pubsub`.
    * @returns One line of `key=value` fields per connection.
    *
    * @example
    * ```ts
    * const text = await client.clientList();
+   * const pubsub = await client.clientList(ClientType.PubSub);
    * ```
    */
-  clientList(type?: string): R<string> {
-    return type === undefined ? this._0(T.lines, C.CLIENT_LIST) : this._2(T.lines, C.CLIENT_LIST, W.TYPE, type);
+  clientList(type?: ClientType | (string & {})): R<string> {
+    return type === undefined ? this._0(T.lines, C.CLIENT_LIST) : this._2(T.lines, C.CLIENT_LIST, W.TYPE, kw(KW_CLIENT_TYPE, type));
   }
   /**
    * Returns the calling connection's `CLIENT LIST` line (`CLIENT INFO`).
@@ -4887,7 +4901,7 @@ export abstract class Commands {
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param id `'*'` for an automatic id, `'ms-*'` for an automatic sequence, or an explicit `'ms-seq'`.
    * @param fields Object `{ field: value }` or a flat array `[field, value, ...]`.
-   * @param opts {@link XAddOptions}: `noMkStream`, `maxLen`, `minId`, `approximate`, and Ruvio's `delayMs` which hides the entry from {@link xreadgroup} for that long.
+   * @param opts {@link XAddOptions}: `noMkStream`, `trim` (a {@link StreamTrim}) or the older `maxLen`, `minId`, `approximate`, and Ruvio's `delayMs` which hides the entry from {@link xreadgroup} for that long.
    * @returns The entry id, or `null` when `noMkStream` is set and the key does not exist.
    * @throws {@link RuvioError} `ERR` for an id not above the top id or a bad trim option; `WRONGTYPE`.
    *
@@ -5022,18 +5036,20 @@ export abstract class Commands {
    * Trims a stream (`XTRIM`). Trimming is always exact; the `~` option is accepted. `LIMIT` is not supported.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
-   * @param opts {@link XTrimOptions}: `maxLen` keeps at most that many entries; `minId` drops entries below the id and keeps that id. Not both.
+   * @param opts {@link XTrimOptions} (`maxLen` keeps at most that many entries; `minId` drops entries below the id and keeps that id; not both), or a {@link StreamTrim} such as `StreamTrim.maxLen(1000, TrimMode.Approximate)`.
    * @returns The number of entries removed.
    * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
    *
    * @example
    * ```ts
    * await client.xtrim('events', { maxLen: 1000 });
+   * await client.xtrim('events', StreamTrim.maxLen(1000, TrimMode.Approximate));
    * ```
    */
-  xtrim(key: Key, opts: XTrimOptions): R<number> {
+  xtrim(key: Key, opts: XTrimOptions | StreamTrim): R<number> {
     const a: Arg[] = [key];
-    pushStreamId(a, opts);
+    if ('strategy' in opts) pushTrim(a, opts);
+    else pushStreamId(a, opts);
     return this._v(null, C.XTRIM, a);
   }
   /**
@@ -5307,16 +5323,16 @@ export abstract class Commands {
   /**
    * Server information (`INFO [section]`).
    *
-   * @param section Optional section name, e.g. `'memory'`, `'latencystats'`; `'prometheus'` returns Prometheus text.
+   * @param section Optional section name, see {@link InfoSection}, e.g. `InfoSection.Memory`; `'prometheus'` returns Prometheus text. An unknown name gives an empty reply.
    * @returns The text report.
    *
    * @example
    * ```ts
-   * const text = await client.info('memory');
+   * const text = await client.info(InfoSection.Memory);
    * ```
    */
-  info(section?: string): R<string> {
-    return section === undefined ? this._0(T.lines, C.INFO) : this._1(T.lines, C.INFO, section);
+  info(section?: InfoSection | (string & {})): R<string> {
+    return section === undefined ? this._0(T.lines, C.INFO) : this._1(T.lines, C.INFO, kw(KW_INFO_SECTION, section));
   }
   /**
    * Reads server settings (`CONFIG GET pattern`). `requirepass` is redacted; `CONFIG SET` is not supported.

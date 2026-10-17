@@ -5,9 +5,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   Aggregate, BitOp, BitUnit, BitfieldOp, BitfieldOverflow, Encoder, GeoOrder, GeoUnit, InsertPosition, ListSide,
-  ScanType, cmd,
+  ScanType, ClientType, InfoSection, LexBound, ScoreBound, StreamId, StreamTrim, TrimMode, TrimStrategy, cmd,
 } from '../src/index.js';
-import { KW_BITOP, KW_GEO_UNIT, KW_SCAN_TYPE, KW_SIDE, KW_WHERE, kw } from '../src/keywords.js';
+import {
+  KW_BITOP, KW_CLIENT_TYPE, KW_GEO_UNIT, KW_INFO_SECTION, KW_SCAN_TYPE, KW_SIDE, KW_TRIM_MODE, KW_TRIM_STRATEGY, KW_WHERE, kw,
+} from '../src/keywords.js';
 import { Commands } from '../src/commands.js';
 
 test('value tables match the server keywords', () => {
@@ -59,4 +61,41 @@ test('BitfieldOp builders produce the raw words', () => {
 
 test('typed constants are accepted by the commands', () => {
   assert.equal(typeof Commands.prototype.lmove, 'function');
+});
+
+const frameOf = (name: string, args: unknown[]): string => {
+  const enc = new Encoder();
+  enc.begin(cmd(name), args.length);
+  for (const a of args) enc.arg(a as string | Buffer | number);
+  return Buffer.from(enc.take()).toString('latin1');
+};
+
+test('stream trim, info and client type encode like the string path', () => {
+  const typed: [StreamTrim, unknown[]][] = [
+    [StreamTrim.maxLen(10), ['MAXLEN', 10]],
+    [StreamTrim.maxLen(10, TrimMode.Approximate), ['MAXLEN', '~', 10]],
+    [StreamTrim.minId('5-0', TrimMode.Exact), ['MINID', '=', '5-0']],
+    [StreamTrim.of(TrimStrategy.MinId, '5-0'), ['MINID', '5-0']],
+  ];
+  for (const [t, words] of typed) {
+    const a: unknown[] = ['s', kw(KW_TRIM_STRATEGY, t.strategy)];
+    if (t.mode) a.push(kw(KW_TRIM_MODE, t.mode));
+    a.push(t.threshold);
+    assert.equal(frameOf('XTRIM', a), frameOf('XTRIM', ['s', ...words]));
+  }
+  for (const v of Object.values(InfoSection)) assert.equal((kw(KW_INFO_SECTION, v) as Buffer).toString('latin1'), v);
+  assert.equal(kw(KW_INFO_SECTION, 'Memory'), 'Memory', 'unknown spelling passes through');
+  for (const v of Object.values(ClientType)) assert.equal((kw(KW_CLIENT_TYPE, v) as Buffer).toString('latin1'), v);
+  assert.equal(frameOf('INFO', [kw(KW_INFO_SECTION, InfoSection.MemoryBreakdown)]), frameOf('INFO', ['memorybreakdown']));
+});
+
+test('stream id and range bound helpers', () => {
+  assert.deepEqual(Object.values(StreamId), ['*', '$', '>', '-', '+']);
+  assert.equal(ScoreBound.NegativeInfinity, '-inf');
+  assert.equal(ScoreBound.PositiveInfinity, '+inf');
+  assert.equal(ScoreBound.inclusive(1.5), '1.5');
+  assert.equal(ScoreBound.exclusive(100), '(100');
+  assert.equal(LexBound.inclusive('a'), '[a');
+  assert.equal(LexBound.exclusive('b'), '(b');
+  assert.equal(LexBound.Min + LexBound.Max, '-+');
 });

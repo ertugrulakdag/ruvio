@@ -35,6 +35,17 @@ export const KW_SCAN_TYPE = table([
 ]);
 /** `BITFIELD` operation words. */
 export const KW_BITFIELD_OP = table(['GET', 'SET', 'INCRBY', 'OVERFLOW']);
+/** `XADD` / `XTRIM` trim strategies. */
+export const KW_TRIM_STRATEGY = table(['MAXLEN', 'MINID']);
+/** `XADD` / `XTRIM` trim modes: exact `=` or approximate `~`. */
+export const KW_TRIM_MODE = table(['=', '~']);
+/** `INFO` section names (lower case, spaces removed, as the server matches them). */
+export const KW_INFO_SECTION = table([
+  'server', 'stats', 'buffers', 'memory', 'memorybreakdown', 'keyspace', 'snapshot', 'cluster', 'replication',
+  'commandcounters', 'latencystats', 'logs', 'slabs', 'all', 'default', 'prometheus',
+]);
+/** `CLIENT LIST TYPE` names. */
+export const KW_CLIENT_TYPE = table(['normal', 'master', 'replica', 'pubsub']);
 
 /** The pre-encoded Buffer for `v` when it is a known keyword, else `v` itself. */
 export function kw<T extends string>(t: ReadonlyMap<string, Buffer>, v: T): Buffer | T {

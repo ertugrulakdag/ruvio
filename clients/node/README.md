@@ -81,6 +81,7 @@ including the Ruvio options: `set(k, v, { ifEq })`, `incrbyMax`, `fillget`/`fill
 | `c.idempotent(key, fingerprint, ttlMs, fn)` | `IDEM BEGIN/COMPLETE` |
 | `c.scanIterator()`, `hscanIterator`, `sscanIterator`, `zscanIterator` | cursor-driven async generators |
 | `GeoUnit`, `GeoOrder`, `ListSide`, `InsertPosition`, `BitOp`, `BitUnit`, `Aggregate`, `ScanType`, `BitfieldOp` | named keyword constants and `BITFIELD` builders, e.g. `c.geodist('g', 'a', 'b', GeoUnit.Km)`, `c.scan(0, { type: ScanType.Hash })`, `c.bitfield(k, ...BitfieldOp.get('u8', 0))`; plain string literals still work, and the keywords are sent pre-encoded |
+| `StreamTrim`, `TrimMode`, `InfoSection`, `ClientType`, `StreamId`, `ScoreBound`, `LexBound` | one typed trim rule for `XADD` and `XTRIM`, `INFO` and `CLIENT LIST TYPE` names, stream id markers and range bound builders, e.g. `c.xtrim('s', StreamTrim.maxLen(1000, TrimMode.Approximate))`, `c.xadd('s', StreamId.New, f, { trim: StreamTrim.minId(id) })`, `c.info(InfoSection.Memory)`, `c.zrangebyscore(k, ScoreBound.NegativeInfinity, ScoreBound.exclusive(100))`, `c.zrangebylex(k, LexBound.inclusive('a'), LexBound.Max)` |
 | `c.jsonGetAs<T>()`, `c.jsonSetAs()` | `JSON.GET/SET` + `JSON.parse/stringify` |
 | `c.pushRecent(key, cap, ...)`, `c.recent(key, n)` | `LPUSHCAP` |
 | `c.seenBefore(key, ...items)`, `c.mightContain` | `BF.MADD` / `BF.MEXISTS` |

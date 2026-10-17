@@ -269,8 +269,165 @@ export interface StreamReadResult {
   entries: StreamEntry[];
 }
 
+/** Which limit a stream trim applies: `MAXLEN` (entry count) or `MINID` (lowest id kept). */
+export type TrimStrategy = 'MAXLEN' | 'MINID' | 'maxlen' | 'minid';
+/** Named {@link TrimStrategy} values, e.g. `StreamTrim.of(TrimStrategy.MaxLen, 1000)`. */
+export const TrimStrategy = { MaxLen: 'MAXLEN', MinId: 'MINID' } as const;
+/** How a stream trim is applied: `'='` exact or `'~'` approximate. Ruvio trims exactly either way. */
+export type TrimMode = '=' | '~';
+/** Named {@link TrimMode} values, e.g. `StreamTrim.maxLen(1000, TrimMode.Approximate)`. */
+export const TrimMode = { Exact: '=', Approximate: '~' } as const;
+
+/**
+ * One stream trim rule, accepted by `XADD` (`opts.trim`) and `XTRIM`.
+ * `LIMIT` is not supported by the server. Build it with {@link StreamTrim.maxLen} or {@link StreamTrim.minId}.
+ *
+ * @example
+ * ```ts
+ * await client.xadd('events', StreamId.New, { type: 'signup' }, { trim: StreamTrim.maxLen(10_000, TrimMode.Approximate) });
+ * await client.xtrim('events', StreamTrim.minId('1700000000000-0'));
+ * ```
+ */
+export interface StreamTrim {
+  /** `MAXLEN` or `MINID`. */
+  strategy: TrimStrategy;
+  /** `'='` or `'~'`; omit to send neither. */
+  mode?: TrimMode;
+  /** An entry count for `MAXLEN`, an id such as `'1700000000000-0'` for `MINID`. */
+  threshold: number | string;
+}
+
+/** Builders for {@link StreamTrim}. */
+export const StreamTrim = {
+  /**
+   * Keep at most `count` entries (`MAXLEN [=|~] count`).
+   *
+   * @example
+   * ```ts
+   * StreamTrim.maxLen(1000);
+   * ```
+   */
+  maxLen(count: number, mode?: TrimMode): StreamTrim {
+    return { strategy: TrimStrategy.MaxLen, mode, threshold: count };
+  },
+  /**
+   * Drop entries with ids below `id` (`MINID [=|~] id`).
+   *
+   * @example
+   * ```ts
+   * StreamTrim.minId('1700000000000-0', TrimMode.Exact);
+   * ```
+   */
+  minId(id: string, mode?: TrimMode): StreamTrim {
+    return { strategy: TrimStrategy.MinId, mode, threshold: id };
+  },
+  /**
+   * Any strategy, mode and threshold.
+   *
+   * @example
+   * ```ts
+   * StreamTrim.of(TrimStrategy.MaxLen, 500, TrimMode.Approximate);
+   * ```
+   */
+  of(strategy: TrimStrategy, threshold: number | string, mode?: TrimMode): StreamTrim {
+    return { strategy, mode, threshold };
+  },
+} as const;
+
+/** `INFO` section names the server recognises. An unknown name gives an empty reply. */
+export type InfoSection =
+  | 'server' | 'stats' | 'buffers' | 'memory' | 'memorybreakdown' | 'keyspace' | 'snapshot' | 'cluster'
+  | 'replication' | 'commandcounters' | 'latencystats' | 'logs' | 'slabs' | 'all' | 'default' | 'prometheus';
+/**
+ * Named {@link InfoSection} values, e.g. `client.info(InfoSection.Memory)`.
+ * `MemoryBreakdown` and `CommandCounters` are sent as one word. `Prometheus` returns Prometheus text.
+ */
+export const InfoSection = {
+  Server: 'server', Stats: 'stats', Buffers: 'buffers', Memory: 'memory', MemoryBreakdown: 'memorybreakdown',
+  Keyspace: 'keyspace', Snapshot: 'snapshot', Cluster: 'cluster', Replication: 'replication',
+  CommandCounters: 'commandcounters', LatencyStats: 'latencystats', Logs: 'logs', Slabs: 'slabs',
+  All: 'all', Default: 'default', Prometheus: 'prometheus',
+} as const;
+
+/** Connection kind filter for `CLIENT LIST TYPE`: `normal`, `master`, `replica` or `pubsub`. */
+export type ClientType = 'normal' | 'master' | 'replica' | 'pubsub';
+/** Named {@link ClientType} values, e.g. `client.clientList(ClientType.PubSub)`. */
+export const ClientType = { Normal: 'normal', Master: 'master', Replica: 'replica', PubSub: 'pubsub' } as const;
+
+/**
+ * Stream id markers for the stream commands; plain strings, so they work wherever an id is accepted.
+ *
+ * @example
+ * ```ts
+ * await client.xrange('events', StreamId.Min, StreamId.Max, 100);
+ * await client.xadd('events', StreamId.New, { a: 1 });
+ * ```
+ */
+export const StreamId = {
+  /** Automatic id for `XADD` (`*`). */
+  New: '*',
+  /** Only entries added after the call, for `XREAD` / `XGROUP CREATE` (`$`). */
+  LastDelivered: '$',
+  /** Only entries never delivered to the group, for `XREADGROUP` (`>`). */
+  NewMessages: '>',
+  /** Lowest possible id for ranges (`-`). */
+  Min: '-',
+  /** Highest possible id for ranges (`+`). */
+  Max: '+',
+} as const;
+
+/**
+ * Bounds for score ranges (`ZRANGEBYSCORE`, `ZCOUNT`, `ZREMRANGEBYSCORE`...); each returns the string the commands accept.
+ *
+ * @example
+ * ```ts
+ * await client.zrangebyscore('board', ScoreBound.inclusive(80), ScoreBound.exclusive(100));
+ * await client.zcount('board', ScoreBound.NegativeInfinity, ScoreBound.PositiveInfinity);
+ * ```
+ */
+export const ScoreBound = {
+  /** `-inf`. */
+  NegativeInfinity: '-inf',
+  /** `+inf`. */
+  PositiveInfinity: '+inf',
+  /** Includes `score` (`score`). */
+  inclusive(score: number): string {
+    return String(score);
+  },
+  /** Excludes `score` (`(score`). */
+  exclusive(score: number): string {
+    return `(${score}`;
+  },
+} as const;
+
+/**
+ * Bounds for lexicographic ranges (`ZRANGEBYLEX`, `ZLEXCOUNT`...); each returns the string the commands accept.
+ *
+ * @example
+ * ```ts
+ * await client.zrangebylex('words', LexBound.inclusive('a'), LexBound.exclusive('b'));
+ * await client.zrangebylex('words', LexBound.Min, LexBound.Max);
+ * ```
+ */
+export const LexBound = {
+  /** Before every member (`-`). */
+  Min: '-',
+  /** After every member (`+`). */
+  Max: '+',
+  /** Includes `member` (`[member`). */
+  inclusive(member: string): string {
+    return `[${member}`;
+  },
+  /** Excludes `member` (`(member`). */
+  exclusive(member: string): string {
+    return `(${member}`;
+  },
+} as const;
+
 /** Options for {@link Commands.xadd}. `maxLen` and `minId` are exclusive. */
 export interface XAddOptions {
+  /** A typed trim rule ({@link StreamTrim}); used instead of `maxLen`, `minId` and `approximate` when set. */
+  trim?: StreamTrim;
   /** Do not create the stream: return `null` when the key is missing (`NOMKSTREAM`). */
   noMkStream?: boolean;
   /** Keep at most this many entries (`MAXLEN`). */
@@ -285,6 +442,8 @@ export interface XAddOptions {
 
 /** Options for {@link Commands.xtrim}. Give `maxLen` or `minId`, not both. */
 export interface XTrimOptions {
+  /** A typed trim rule ({@link StreamTrim}); used instead of `maxLen`, `minId` and `approximate` when set. */
+  trim?: StreamTrim;
   /** Keep at most this many entries (`MAXLEN`). */
   maxLen?: number;
   /** Drop entries with ids below this one; that id is kept (`MINID`). */
