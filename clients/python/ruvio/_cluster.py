@@ -32,7 +32,20 @@ _crc16 = binascii.crc_hqx  # CRC-CCITT with poly 0x1021 and init 0 == CRC16/XMOD
 
 
 def key_slot(key: Union[str, bytes]) -> int:
-    """Hash slot of ``key``: CRC16-XMODEM of the key, or of its first non-empty ``{hashtag}``, mod 16384."""
+    """Hash slot (0 to 16383) of a key: CRC16-XMODEM of the key, or of its first non-empty ``{hash tag}``.
+
+    Same rule as the server and ``CLUSTER KEYSLOT``, computed locally. Keys sharing a hash tag share a
+    slot, which multi-key commands and transactions need on a multi-shard server.
+
+    Args:
+        key: The key (``str`` is encoded as UTF-8).
+
+    Returns:
+        The slot number.
+
+    Example:
+        key_slot("{user:1}:profile") == key_slot("{user:1}:cart")   # -> True
+    """
     if type(key) is not bytes:
         key = key.encode("utf-8", "surrogateescape") if isinstance(key, str) else bytes(key)
     o = key.find(b"{")

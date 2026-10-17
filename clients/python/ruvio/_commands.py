@@ -2193,7 +2193,9 @@ class Commands:
         return self._c(None, "LMOVE", src, dst, wherefrom, whereto)
 
     def rpoplpush(self, src: KeyT, dst: KeyT) -> Any:
-        """``RPOPLPUSH src dst`` - pops the tail of ``src`` and pushes it to the head of ``dst`` (same as ``lmove(src, dst, "RIGHT", "LEFT")``).
+        """``RPOPLPUSH src dst`` - moves the tail of ``src`` to the head of ``dst``.
+
+Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
 
         Args:
             src: Source list.
@@ -3628,7 +3630,10 @@ class Commands:
         withdist: bool = False,
         withhash: bool = False,
     ) -> Any:
-        """``GEOSEARCH key FROMMEMBER m|FROMLONLAT lon lat BYRADIUS r unit|BYBOX w h unit [ASC|DESC] [COUNT n [ANY]] [WITH...]`` - finds members in an area.
+        """``GEOSEARCH`` - finds members inside a circle or box around a member or a point.
+
+Sends ``GEOSEARCH key FROMMEMBER m|FROMLONLAT lon lat BYRADIUS r unit|BYBOX w h unit [ASC|DESC]
+[COUNT n [ANY]] [WITHCOORD] [WITHDIST] [WITHHASH]``.
 
         Give exactly one center (``member`` or ``longitude`` + ``latitude``) and exactly one shape
         (``radius`` or ``width`` + ``height``).
@@ -3688,7 +3693,9 @@ class Commands:
         any: bool = False,  # noqa: A002
         storedist: bool = False,
     ) -> Any:
-        """``GEOSEARCHSTORE dst src FROM... BY... [ASC|DESC] [COUNT n [ANY]] [STOREDIST]`` - like :meth:`geosearch`, stores the result.
+        """``GEOSEARCHSTORE`` - like :meth:`geosearch`, but stores the matches in ``dst``.
+
+Sends ``GEOSEARCHSTORE dst src FROM... BY... [ASC|DESC] [COUNT n [ANY]] [STOREDIST]``.
 
         The destination is replaced with a geo sorted set of the matches.
 
@@ -3764,7 +3771,9 @@ class Commands:
         store: Optional[KeyT] = None,
         storedist: Optional[KeyT] = None,
     ) -> Any:
-        """``GEORADIUS key longitude latitude radius unit [WITH...] [COUNT n [ANY]] [ASC|DESC] [STORE k] [STOREDIST k]`` - legacy radius search; prefer :meth:`geosearch`.
+        """``GEORADIUS`` - legacy radius search around a point; prefer :meth:`geosearch`.
+
+Sends ``GEORADIUS key lon lat radius unit [WITH...] [COUNT n [ANY]] [ASC|DESC] [STORE k] [STOREDIST k]``.
 
         Args:
             key: The geo key.
@@ -3908,7 +3917,9 @@ class Commands:
         nocreate: bool = False,
         nonscaling: bool = False,
     ) -> Any:
-        """``BF.INSERT key [CAPACITY c] [ERROR e] [EXPANSION n] [NOCREATE] [NONSCALING] ITEMS item...`` - adds items, optionally creating the filter.
+        """``BF.INSERT`` - adds items, optionally creating the filter with given options.
+
+Sends ``BF.INSERT key [CAPACITY c] [ERROR e] [EXPANSION n] [NOCREATE] [NONSCALING] ITEMS item...``.
 
         The creation options apply only when the key is new.
 
@@ -4423,7 +4434,9 @@ class Commands:
         return self._c(None, "JSON.STRAPPEND", key, path, json_string)
 
     def json_index_create(self, name: str, prefix: str, path: str, type: Optional[str] = None) -> Any:  # noqa: A002
-        """``JSON.INDEX CREATE name PREFIX p PATH $.field [TYPE string|number|bool]`` - creates an exact-match field index. Ruvio extension.
+        """``JSON.INDEX CREATE`` - creates an exact-match field index. Ruvio extension.
+
+Sends ``JSON.INDEX CREATE name PREFIX p PATH $.field [TYPE string|number|bool]``.
 
         The index covers JSON keys starting with ``prefix`` and lets :meth:`json_find` look up documents
         by the value of one field. Only exact equality on one field, database 0 only. The definition is
@@ -4623,7 +4636,9 @@ class Commands:
         block: Optional[int] = None,
         noack: bool = False,
     ) -> Any:
-        """``XREADGROUP GROUP group consumer [COUNT n] [BLOCK ms] [NOACK] STREAMS key >`` - reads new entries as a group consumer.
+        """``XREADGROUP`` - reads new entries as a consumer of a group.
+
+Sends ``XREADGROUP GROUP group consumer [COUNT n] [BLOCK ms] [NOACK] STREAMS key >``.
 
         Ruvio reads one stream per call and only the ``>`` id (entries never delivered to the group). Each
         delivered entry becomes pending until acknowledged with :meth:`xack`. Entries added with
@@ -4900,7 +4915,10 @@ class Commands:
         justid: bool = False,
         lastid: Optional[str] = None,
     ) -> Any:
-        """``XCLAIM key group consumer min_idle_ms id... [IDLE ms] [TIME ms] [RETRYCOUNT n] [FORCE] [JUSTID] [LASTID id]`` - claims pending entries.
+        """``XCLAIM`` - claims pending entries for a consumer.
+
+Sends ``XCLAIM key group consumer min_idle_ms id... [IDLE ms] [TIME ms] [RETRYCOUNT n] [FORCE] [JUSTID]
+[LASTID id]``.
 
         Args:
             key: The stream key.

@@ -550,7 +550,9 @@ class Ruvio(Commands):
     def lock(
         self, name: KeyT, ttl_ms: int = 30000, blocking: bool = True, timeout: Optional[float] = None, retry_ms: int = 50
     ) -> "Lock":
-        """Creates a distributed lock on key ``name`` (``SET NX PX``, renew with ``SET IFEQ PX``, release with ``DELEX IFEQ``).
+        """Creates a distributed lock on key ``name``.
+
+Acquire is ``SET NX PX``, renew is ``SET IFEQ PX`` and release is ``DELEX IFEQ``.
 
         The lock holds a random token, so releasing never deletes another holder's lock. Use it as a
         context manager (``with client.lock("job"):``) or call :meth:`Lock.acquire` and :meth:`Lock.release`.

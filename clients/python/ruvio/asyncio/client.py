@@ -1,13 +1,34 @@
 # MIT License - Copyright (c) 2026 Salih Cantekin. See LICENSE.
 """asyncio Ruvio client: one multiplexed, pipelined connection shared by all coroutines.
 
-* Every command appends ``(future, converter, decode)`` to a FIFO deque and writes its
-  pre-encoded frame. Replies arrive in order, so the reader pops the deque.
-* The reader is an :class:`asyncio.BufferedProtocol`: the event loop reads straight into
-  the parser's reusable buffer (no per-read ``bytes`` objects, no StreamReader).
-* Writes: on an idle connection the frame is written immediately (no added latency).
-  While replies are in flight, frames queued in the same loop iteration are joined and
-  written once (``call_soon`` flush, no timer), capped at 64 KiB per write.
+Main entry points (also exported from :mod:`ruvio.asyncio`):
+
+* :class:`Ruvio` - the client; every server command is a method returning an awaitable
+  (``value = await client.get("k")``). The commands are documented on
+  :class:`ruvio._commands.Commands`; their examples are written without ``await``.
+* :class:`Pipeline` - batches commands into one write, optionally as ``MULTI``/``EXEC``.
+* :class:`PubSub` - a Pub/Sub session on its own connection.
+* :class:`Lock` - a distributed lock.
+
+How it works:
+
+* Every command appends ``(future, converter, decode)`` to a FIFO queue and writes its encoded
+  frame. Replies arrive in order, so the reader resolves the futures in order.
+* The reader is an :class:`asyncio.BufferedProtocol`: the event loop reads straight into the parser's
+  reusable buffer.
+* On an idle connection a frame is written at once. While replies are in flight, frames queued in the
+  same loop iteration are joined and written together (capped at 64 KiB per write).
+
+Example:
+    import asyncio
+    from ruvio.asyncio import Ruvio
+
+    async def main():
+        async with Ruvio("127.0.0.1", 6379) as client:
+            await client.set("greeting", "hello")
+            print(await client.get("greeting"))
+
+    asyncio.run(main())
 """
 
 from __future__ import annotations
@@ -193,18 +214,44 @@ async def _open(opts: _Options, on_push: Optional[Callable[[Any], None]] = None)
 
 
 class Ruvio(Commands):
-    """asyncio client. ``await client.get("k")``; safe to share between coroutines.
+    """asyncio Ruvio client: ``await client.get("k")``. One connection is shared by every coroutine.
 
-    Blocking commands (BLPOP, XREAD BLOCK, FILLGET WAIT ...) hold the shared connection;
-    run them on :meth:`dedicated`. A lost connection fails the in-flight commands and is
-    reopened by the next command. ``cluster=True`` routes by key over one connection per node
-    (:class:`ruvio.asyncio.cluster.ClusterRuvio`); a standalone server is detected on the first command.
+    Commands from different tasks are pipelined on the shared connection, so one client serves a whole
+    application. Blocking commands (``blpop``, ``xread`` with ``block``, ``fillget`` with ``wait_ms`` ...)
+    hold the shared connection for everyone; run them on :meth:`dedicated`. A lost connection fails the
+    in-flight commands with :class:`ruvio.ConnectionError` and is reopened by the next command (the failed
+    commands are never re-sent).
+
+    Args:
+        host: Server host (default ``127.0.0.1``); the seed address when ``cluster=True``.
+        port: Server port (default 6379).
+        db: Logical database selected on connect (default 0).
+        password: Password for ``AUTH``, sent on every (re)connect.
+        username: ACL user for ``AUTH``; omit for the default user.
+        client_name: Name sent with ``CLIENT SETNAME`` on connect.
+        connect_timeout: Seconds allowed to open the connection (default 5.0, ``None`` for no limit). There is
+            no per-command socket timeout; wrap calls in :func:`asyncio.wait_for` instead.
+        decode_responses: ``True`` (default) returns ``str``, ``False`` returns ``bytes``.
+        unix_socket_path: Connect to this Unix socket instead of host/port.
+        parser: ``"auto"`` (hiredis when installed), ``"python"`` or ``"hiredis"``.
+        on_push: Callback for RESP3 push messages (for example client-tracking ``invalidate``).
+        cluster: ``True`` returns :class:`ruvio.asyncio.ClusterRuvio`, which routes each key to its shard over
+            one connection per node. A standalone server is detected on the first command.
+
+    The connection opens on the first command, or on ``await client.connect()`` / ``async with``.
+
+    Example:
+        client = Ruvio("127.0.0.1", 6379)
+        await client.set("k", "v", ex=60)
+        values = await asyncio.gather(client.get("k"), client.get("other"))
+        await client.aclose()
     """
 
     __slots__ = ("_st", "_decode")
 
     def __new__(cls, *args: Any, cluster: bool = False, **kwargs: Any) -> "Ruvio":
         # ``Ruvio(..., cluster=True)`` builds the cluster-routing subclass; the plain class is untouched.
+        """Builds the cluster-routing subclass when ``cluster=True`` is passed, a plain client otherwise."""
         if cluster and cls is Ruvio:
             from .cluster import ClusterRuvio
 
@@ -226,6 +273,22 @@ class Ruvio(Commands):
         on_push: Optional[Callable[[List[Any]], None]] = None,
         cluster: bool = False,
     ) -> None:
+        """Creates the client (nothing is connected yet). See the class docstring for every argument.
+
+        Args:
+            host: Server host.
+            port: Server port.
+            db: Database selected on connect.
+            password: Password for ``AUTH``.
+            username: ACL user for ``AUTH``.
+            client_name: Connection name set on connect.
+            connect_timeout: Seconds to open the connection; ``None`` for no limit.
+            decode_responses: Return ``str`` (``True``) or ``bytes`` (``False``).
+            unix_socket_path: Unix socket to use instead of host/port.
+            parser: ``"auto"``, ``"python"`` or ``"hiredis"``.
+            on_push: Callback for RESP3 push messages.
+            cluster: Route by key over several shards.
+        """
         self._st = _State(
             _Options(
                 host=host,
@@ -244,6 +307,18 @@ class Ruvio(Commands):
 
     @classmethod
     def from_url(cls, url: str, **kwargs: Any) -> "Ruvio":
+        """Creates a client from a URL, see :func:`ruvio.parse_url` for the accepted forms.
+
+        Args:
+            url: For example ``"ruvio://:secret@localhost:6379/1"`` or ``"unix:///tmp/ruvio.sock"``.
+            **kwargs: Any other constructor argument; these override values taken from the URL.
+
+        Returns:
+            The new client (connects on first use).
+
+        Raises:
+            ValueError: Unsupported URL scheme.
+        """
         opts = parse_url(url)
         opts.update(kwargs)
         return cls(**opts)
@@ -263,6 +338,17 @@ class Ruvio(Commands):
         return await self._x(conv, data, decode)
 
     async def connect(self) -> "Ruvio":
+        """Opens the connection (and runs ``AUTH``/``SELECT``/``CLIENT SETNAME``) if it is not open yet.
+
+        Safe to call from several tasks at once; one of them opens it.
+
+        Returns:
+            The client itself.
+
+        Raises:
+            ConnectionError: The server is unreachable or rejects the handshake.
+            TimeoutError: ``connect_timeout`` elapsed.
+        """
         st = self._st
         if st.proto is not None:
             return self
@@ -301,17 +387,49 @@ class Ruvio(Commands):
         return await self._batch(payload)
 
     async def select(self, db: int) -> Any:  # type: ignore[override]
-        """``SELECT`` for the whole shared connection; remembered for reconnects."""
+        """``SELECT db`` - switches the database of the whole shared connection; remembered for reconnects.
+
+        Every coroutine using this client sees the change, so prefer passing ``db`` to the constructor.
+
+        Args:
+            db: Database number, ``0`` to ``databases - 1``.
+
+        Returns:
+            ``True`` (awaitable).
+
+        Raises:
+            ResponseError: ``db`` is out of range or the server has several shards.
+        """
         ok = await super().select(db)
         self._st.opts.db = db
         return ok
 
     async def client_setname(self, name: str) -> Any:  # type: ignore[override]
+        """``CLIENT SETNAME name`` - names the shared connection; remembered for reconnects.
+
+        Args:
+            name: The name (empty clears it).
+
+        Returns:
+            ``True`` (awaitable).
+        """
         ok = await super().client_setname(name)
         self._st.opts.client_name = name
         return ok
 
     async def auth(self, password: str, username: Optional[str] = None) -> Any:  # type: ignore[override]
+        """``AUTH [username] password`` - authenticates the shared connection; remembered for reconnects.
+
+        Args:
+            password: The password.
+            username: ACL user; omit for the default user.
+
+        Returns:
+            ``True`` (awaitable).
+
+        Raises:
+            ResponseError: Wrong credentials.
+        """
         ok = await super().auth(password, username)
         self._st.opts.password = password
         self._st.opts.username = username
@@ -319,13 +437,22 @@ class Ruvio(Commands):
 
     @property
     def raw(self) -> "Ruvio":
-        """A view on the same connection whose replies are ``bytes``."""
+        """A view on the same connection whose replies are ``bytes`` (binary safe).
+
+        The view shares the connection, so commands from both objects stay ordered.
+
+        Example:
+            blob = await client.raw.get("blob")
+        """
         view = Ruvio.__new__(Ruvio)
         view._st = self._st
         view._decode = False
         return view
 
     async def aclose(self) -> None:
+        """Closes the connection. Commands in flight fail with :class:`ruvio.ConnectionError`; the client can
+        be used again (the next command reconnects). ``close`` is an alias.
+        """
         proto = self._st.proto
         self._st.proto = None
         if proto is not None and proto.transport is not None:
@@ -335,19 +462,61 @@ class Ruvio(Commands):
     close = aclose
 
     async def __aenter__(self) -> "Ruvio":
+        """Connects and returns the client, so ``async with Ruvio(...) as client:`` closes it on exit."""
         return await self.connect()
 
     async def __aexit__(self, *exc: Any) -> None:
+        """Closes the connection."""
         await self.aclose()
 
     def dedicated(self) -> "Ruvio":
-        """A new client (own connection) with the same options - for WATCH and blocking commands."""
+        """Creates a new client with its own connection and the same options.
+
+        Use it for blocking commands and ``WATCH`` so they do not hold the shared connection.
+
+        Returns:
+            A new, not yet connected client. Close it with ``await worker.aclose()`` or ``async with``.
+
+        Example:
+            async with client.dedicated() as worker:
+                item = await worker.blpop("jobs", timeout=30)
+        """
         return Ruvio(decode_responses=self._decode, **{k: v for k, v in self._st.opts.as_dict().items() if k != "socket_timeout"})
 
     def pipeline(self, transaction: bool = False) -> "Pipeline":
+        """Creates a pipeline: commands are queued locally and sent in one write.
+
+        Command methods on the pipeline are not awaited; they return the pipeline. ``await pipe.execute()``
+        sends the batch. Use ``transaction=True`` for ``MULTI``/``EXEC`` (keys must share a slot).
+
+        Args:
+            transaction: ``True`` to run the batch as ``MULTI``/``EXEC``.
+
+        Returns:
+            A :class:`Pipeline`.
+
+        Example:
+            results = await client.pipeline().set("a", 1).incr("a").get("a").execute()
+            # -> [True, 2, "2"]
+        """
         return Pipeline(self, transaction)
 
     async def pubsub(self, ignore_subscribe_messages: bool = False) -> "PubSub":
+        """Creates and connects a Pub/Sub session on its own connection.
+
+This is a coroutine: ``ps = await client.pubsub()``.
+
+        Args:
+            ignore_subscribe_messages: Hide the ``subscribe``/``unsubscribe`` confirmation messages.
+
+        Returns:
+            A connected :class:`PubSub`.
+
+        Example:
+            async with await client.pubsub() as ps:
+                await ps.subscribe("news")
+                msg = await ps.get_message(timeout=1.0)
+        """
         ps = PubSub(self._st.opts, self._decode, ignore_subscribe_messages)
         await ps.connect()
         return ps
@@ -356,13 +525,56 @@ class Ruvio(Commands):
     def lock(
         self, name: KeyT, ttl_ms: int = 30000, blocking: bool = True, timeout: Optional[float] = None, retry_ms: int = 50
     ) -> "Lock":
-        """``async with client.lock("job", 10000) as lk:`` - SET NX PX / SET IFEQ PX / DELEX IFEQ."""
+        """Creates a distributed lock on key ``name``: ``async with client.lock("job", 10000) as lk:``.
+
+        Uses ``SET NX PX`` to acquire, ``SET IFEQ PX`` to renew and ``DELEX IFEQ`` to release, with a random
+        token, so releasing never deletes another holder's lock.
+
+        Args:
+            name: Lock key.
+            ttl_ms: Lifetime in milliseconds if never released (default 30000).
+            blocking: Wait for the lock when it is held (default ``True``).
+            timeout: Seconds to wait when blocking; ``None`` waits forever.
+            retry_ms: Milliseconds between attempts (default 50).
+
+        Returns:
+            A :class:`Lock` (not yet acquired).
+        """
         return Lock(self, name, ttl_ms, blocking, timeout, retry_ms)
 
     def lease_scope(self, key: KeyT, ttl_ms: int) -> "_Scope":
+        """Async context manager around ``LEASE``: takes the lease on enter and ``RELEASE`` on exit.
+
+        Args:
+            key: Lease key.
+            ttl_ms: Lease duration in milliseconds.
+
+        Returns:
+            An async context manager whose ``as`` value is the fencing token (``int``).
+
+        Raises:
+            LockError: (on enter) the lease is held by someone else.
+
+        Example:
+            async with client.lease_scope("job:nightly", 30000) as token:
+                await run_job(token)
+        """
         return _Scope(self, key, lambda: self.lease(key, ttl_ms), "lease")
 
     def semaphore_scope(self, key: KeyT, max: int, ttl_ms: int) -> "_Scope":  # noqa: A002
+        """Async context manager around ``SEMAPHORE``: takes a slot on enter and ``RELEASE`` on exit.
+
+        Args:
+            key: Semaphore key.
+            max: Number of concurrent holders allowed.
+            ttl_ms: Hold time of the slot in milliseconds.
+
+        Returns:
+            An async context manager whose ``as`` value is the holder token (``int``).
+
+        Raises:
+            LockError: (on enter) all slots are taken.
+        """
         return _Scope(self, key, lambda: self.semaphore(key, max, ttl_ms), "semaphore")
 
     async def get_or_create(
@@ -375,8 +587,30 @@ class Ruvio(Commands):
         timeout: float = 10.0,
         poll_ms: float = 5.0,
     ) -> Any:
-        """Cache-aside on FILLGET/FILLSET; ``factory`` may be sync or async. Waiters poll plain
-        FILLGET with backoff (``WAIT`` would park the shared connection)."""
+        """Cache-aside with stampede protection on ``FILLGET``/``FILLSET``; ``factory`` may be sync or async.
+
+        On a miss one caller runs ``factory``; the others poll plain ``FILLGET`` with a growing delay
+        (``WAIT`` would park the shared connection) until the value appears. If the winner fails, its marker
+        lapses after ``fill_ms`` and another caller takes over.
+
+        Args:
+            key: Cache key.
+            factory: Zero-argument function or coroutine function returning the value (``str`` or ``bytes``).
+            ttl_ms: Fresh lifetime of the cached value in milliseconds.
+            fill_ms: How long the winner may take to build the value (default 10000).
+            swr_ms: Optional stale-while-revalidate window in milliseconds.
+            timeout: Seconds to wait for another caller's value (default 10.0).
+            poll_ms: First polling delay in milliseconds (default 5; doubles up to 100).
+
+        Returns:
+            The cached or newly built value.
+
+        Raises:
+            TimeoutError: Another caller still holds the fill after ``timeout`` seconds.
+
+        Example:
+            page = await client.get_or_create("page:home", render_home, ttl_ms=60000)
+        """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         delay = poll_ms / 1000.0
@@ -406,7 +640,20 @@ class Ruvio(Commands):
         fn: Callable[[], Union[str, bytes, Awaitable[Union[str, bytes]]]],
         owner: Optional[str] = None,
     ) -> Tuple[str, Any]:
-        """See :meth:`ruvio.Ruvio.idempotent`."""
+        """Runs ``fn`` (sync or async) at most once per key, using ``IDEM BEGIN``/``COMPLETE``.
+
+        See :meth:`ruvio.Ruvio.idempotent`. If ``fn`` raises, the record stays pending until ``ttl_ms``.
+
+        Args:
+            key: Operation key, scoped to the tenant and operation.
+            fingerprint: Digest of the request inputs.
+            ttl_ms: Retention in milliseconds, 1 to 604800000.
+            fn: Zero-argument function or coroutine function returning the result (``str`` or ``bytes``).
+            owner: Attempt token; random when omitted.
+
+        Returns:
+            ``("executed", result)``, ``("completed", stored_result)``, ``("pending", None)`` or ``("conflict", None)``.
+        """
         owner = owner or uuid.uuid4().hex
         r = await self.idem_begin(key, fingerprint, owner, ttl_ms)
         if r.state == "acquired":
@@ -418,7 +665,31 @@ class Ruvio(Commands):
         return r.state, r.result
 
     async def transaction(self, fn: Callable[["Pipeline"], Any], *watch: KeyT, retries: int = 16) -> List[Any]:
-        """WATCH + MULTI/EXEC with retries, on a dedicated connection (WATCH is per connection)."""
+        """``WATCH`` + ``MULTI``/``EXEC`` with retries, on a private dedicated connection (``WATCH`` is per connection).
+
+        ``fn`` gets a transaction pipeline bound to that private connection and may be sync or async. Read
+        current values through this client (a different connection), then queue the writes on the pipeline;
+        if a watched key changed before ``EXEC`` the function runs again.
+
+        Args:
+            fn: Callable (or coroutine function) taking the pipeline.
+            *watch: Keys to ``WATCH`` (same slot on a cluster).
+            retries: Maximum attempts (default 16).
+
+        Returns:
+            The results of the executed pipeline.
+
+        Raises:
+            RuvioError: Retries exhausted.
+            ExecAbortError: A queued command was refused.
+
+        Example:
+            async def add_credit(pipe):
+                balance = int(await client.get("balance") or 0)
+                pipe.set("balance", balance + 10)
+
+            await client.transaction(add_credit, "balance")
+        """
         conn = self.dedicated()
         try:
             for _ in range(retries):
@@ -439,6 +710,20 @@ class Ruvio(Commands):
     async def scan_iter(
         self, match: Optional[str] = None, count: Optional[int] = None, type: Optional[KeyTypeT] = None  # noqa: A002
     ) -> AsyncIterator[Any]:
+        """Async iterator over all keys, calling :meth:`scan` page by page.
+
+        Args:
+            match: Glob pattern for key names.
+            count: Work hint per page.
+            type: Only keys of this type, as ``TYPE`` reports it.
+
+        Yields:
+            Key names (a key may repeat if the table was rebuilt during the walk).
+
+        Example:
+            async for key in client.scan_iter(match="user:*"):
+                ...
+        """
         cursor = 0
         while True:
             cursor, keys = await self.scan(cursor, match, count, type)
@@ -448,6 +733,16 @@ class Ruvio(Commands):
                 return
 
     async def hscan_iter(self, key: KeyT, match: Optional[str] = None, count: Optional[int] = None) -> AsyncIterator[Tuple[Any, Any]]:
+        """Async iterator over the fields of a hash, calling :meth:`hscan` page by page.
+
+        Args:
+            key: The hash key.
+            match: Glob pattern for field names.
+            count: Work hint per page.
+
+        Yields:
+            ``(field, value)`` tuples.
+        """
         cursor = 0
         while True:
             cursor, page = await self.hscan(key, cursor, match, count)
@@ -457,6 +752,16 @@ class Ruvio(Commands):
                 return
 
     async def sscan_iter(self, key: KeyT, match: Optional[str] = None, count: Optional[int] = None) -> AsyncIterator[Any]:
+        """Async iterator over the members of a set, calling :meth:`sscan` page by page.
+
+        Args:
+            key: The set key.
+            match: Glob pattern for members.
+            count: Work hint per page.
+
+        Yields:
+            Members.
+        """
         cursor = 0
         while True:
             cursor, page = await self.sscan(key, cursor, match, count)
@@ -466,6 +771,16 @@ class Ruvio(Commands):
                 return
 
     async def zscan_iter(self, key: KeyT, match: Optional[str] = None, count: Optional[int] = None) -> AsyncIterator[Tuple[Any, float]]:
+        """Async iterator over a sorted set, calling :meth:`zscan` page by page.
+
+        Args:
+            key: The sorted-set key.
+            match: Glob pattern for members.
+            count: Work hint per page.
+
+        Yields:
+            ``(member, score)`` tuples.
+        """
         cursor = 0
         while True:
             cursor, page = await self.zscan(key, cursor, match, count)
@@ -476,11 +791,35 @@ class Ruvio(Commands):
 
 
 class Pipeline(PipelineBase):
-    """``pipe = client.pipeline(); pipe.set(k, v).get(k); results = await pipe.execute()``."""
+    """A batch of queued commands sent in one write; created by :meth:`Ruvio.pipeline`.
+
+    Command methods queue the command and return the pipeline (do not ``await`` them); only
+    :meth:`execute` is awaited. ``async with client.pipeline() as pipe:`` clears unexecuted commands on exit.
+
+    Example:
+        async with client.pipeline(transaction=True) as pipe:
+            pipe.incr("a").incr("b")
+            a, b = await pipe.execute()
+    """
 
     __slots__ = ()
 
     async def execute(self, raise_on_error: bool = True) -> List[Any]:
+        """Sends the queued commands and returns their results.
+
+        Args:
+            raise_on_error: ``True`` (default) raises the first error after all replies were read. ``False``
+                returns exception objects in place of failed results.
+
+        Returns:
+            One converted result per command, in order ([] for an empty pipeline).
+
+        Raises:
+            WatchError: Transaction only - a watched key changed, nothing ran.
+            ExecAbortError: Transaction only - a queued command was refused, nothing ran.
+            ResponseError: A command failed (``raise_on_error=True``).
+            CrossSlotError: Cluster client - keys span several slots (checked before sending).
+        """
         if not self._cmds:
             return []
         payload = self._payload()
@@ -491,20 +830,40 @@ class Pipeline(PipelineBase):
             self.reset()
 
     async def __aenter__(self) -> "Pipeline":
+        """Returns the pipeline for use in an ``async with`` block."""
         return self
 
     async def __aexit__(self, *exc: Any) -> None:
+        """Clears queued commands that were not executed."""
         self.reset()
 
 
 class Lock:
-    """Async distributed lock; release never deletes another holder's lock."""
+    """Async distributed lock with a random token; created by :meth:`Ruvio.lock`.
+
+    Release never deletes another holder's lock. The lock expires after ``ttl_ms``: renew it with
+    :meth:`renew` during long work.
+
+    Example:
+        async with client.lock("report", ttl_ms=10000, timeout=5):
+            await build_report()
+    """
 
     __slots__ = ("client", "name", "ttl_ms", "blocking", "timeout", "retry_ms", "token")
 
     def __init__(
         self, client: Ruvio, name: KeyT, ttl_ms: int, blocking: bool = True, timeout: Optional[float] = None, retry_ms: int = 50
     ) -> None:
+        """Creates a lock object (does not acquire).
+
+        Args:
+            client: The asyncio client.
+            name: Lock key.
+            ttl_ms: Lifetime in milliseconds if never released.
+            blocking: Default for :meth:`acquire`.
+            timeout: Default maximum seconds to wait.
+            retry_ms: Milliseconds between attempts.
+        """
         self.client = client
         self.name = name
         self.ttl_ms = ttl_ms
@@ -514,6 +873,15 @@ class Lock:
         self.token: Optional[str] = None
 
     async def acquire(self, blocking: Optional[bool] = None, timeout: Optional[float] = None) -> bool:
+        """Tries to take the lock (``SET NX PX``), retrying every ``retry_ms`` while blocking.
+
+        Args:
+            blocking: Wait until the lock is free; defaults to the value given at creation.
+            timeout: Maximum seconds to wait; defaults to the creation value (``None`` waits forever).
+
+        Returns:
+            ``True`` when acquired, ``False`` otherwise.
+        """
         blocking = self.blocking if blocking is None else blocking
         timeout = self.timeout if timeout is None else timeout
         token = uuid.uuid4().hex
@@ -527,25 +895,49 @@ class Lock:
             await asyncio.sleep(self.retry_ms / 1000.0)
 
     async def renew(self, ttl_ms: Optional[int] = None) -> bool:
+        """Extends the TTL, only while this token still holds the lock.
+
+        Args:
+            ttl_ms: New lifetime in milliseconds (default: the lock's ``ttl_ms``).
+
+        Returns:
+            ``True`` when extended, ``False`` when the lock is not held by this token.
+        """
         if self.token is None:
             return False
         return bool(await self.client.set(self.name, self.token, ifeq=self.token, px=ttl_ms or self.ttl_ms))
 
     async def release(self) -> bool:
+        """``DELEX name IFEQ token`` - releases the lock.
+
+        Returns:
+            ``True`` when released, ``False`` when it expired, belongs to someone else, or was never acquired.
+        """
         token, self.token = self.token, None
         if token is None:
             return False
         return bool(await self.client.delex(self.name, token))
 
     async def owned(self) -> bool:
+        """Tells whether the key still holds this lock's token (one ``GET``).
+
+        Returns:
+            ``True`` if this lock object still owns the key.
+        """
         return self.token is not None and (await self.client.get(self.name)) == self.token
 
     async def __aenter__(self) -> "Lock":
+        """Acquires the lock (blocking) for an ``async with`` block.
+
+        Raises:
+            LockError: The lock could not be acquired within ``timeout``.
+        """
         if not await self.acquire():
             raise LockError(f"could not acquire lock {self.name!r}")
         return self
 
     async def __aexit__(self, *exc: Any) -> None:
+        """Releases the lock."""
         await self.release()
 
 
@@ -573,9 +965,33 @@ class _Scope:
 
 
 class PubSub:
-    """Pub/Sub on its own connection. ``async for msg in ps.listen(): ...``"""
+    """Pub/Sub session on its own connection; created by ``await client.pubsub()``.
+
+    Received messages are queued; read them with :meth:`get_message` or ``async for msg in ps.listen()``.
+    After a reconnect the subscriptions in :attr:`channels`, :attr:`patterns` and :attr:`shard_channels` are
+    sent again. Messages are not stored. Patterns use ``*`` and ``?``.
+
+    Attributes:
+        channels: Channels subscribed with :meth:`subscribe` (a dict used as an ordered set).
+        patterns: Patterns subscribed with :meth:`psubscribe`.
+        shard_channels: Channels subscribed with :meth:`ssubscribe`.
+        ignore_subscribe_messages: When ``True``, confirmation messages are skipped.
+
+    Example:
+        async with await client.pubsub() as ps:
+            await ps.subscribe("news")
+            async for msg in ps.listen():
+                print(msg.channel, msg.data)
+    """
 
     def __init__(self, opts: _Options, decode: bool, ignore_subscribe_messages: bool = False) -> None:
+        """Creates a session. Use ``await client.pubsub()`` instead of calling this directly.
+
+        Args:
+            opts: Connection options of the client.
+            decode: Return ``str`` (``True``) or ``bytes``.
+            ignore_subscribe_messages: Skip subscribe/unsubscribe confirmations.
+        """
         self._opts = opts
         self._decode = decode
         self.ignore_subscribe_messages = ignore_subscribe_messages
@@ -586,6 +1002,11 @@ class PubSub:
         self.shard_channels: Dict[Any, None] = {}
 
     async def connect(self) -> None:
+        """Opens the connection (if not open) and sends the stored subscriptions again.
+
+        Raises:
+            ConnectionError: The server is unreachable.
+        """
         if self._proto is not None and not self._proto.closed:
             return
         proto = await _open(self._opts, self._queue.put_nowait)
@@ -602,37 +1023,84 @@ class PubSub:
         self._proto.transport.write(encode(name, args))  # type: ignore[union-attr]
 
     async def subscribe(self, *channels: Any) -> None:
+        """``SUBSCRIBE channel [channel ...]`` - listens to exact channels.
+
+        Args:
+            *channels: Channel names. Confirmations arrive as ``subscribe`` messages.
+        """
         await self._send("SUBSCRIBE", channels)
         self.channels.update(dict.fromkeys(channels))
 
     async def unsubscribe(self, *channels: Any) -> None:
+        """``UNSUBSCRIBE [channel ...]`` - stops listening to channels.
+
+        Args:
+            *channels: Channel names; none means every exact channel (patterns stay).
+        """
         for c in channels or list(self.channels):
             self.channels.pop(c, None)
         await self._send("UNSUBSCRIBE", channels)
 
     async def psubscribe(self, *patterns: Any) -> None:
+        """``PSUBSCRIBE pattern [pattern ...]`` - listens to channels matching glob patterns (``*``, ``?``).
+
+        Args:
+            *patterns: Patterns. Matches arrive as ``pmessage`` messages with ``pattern`` set.
+        """
         await self._send("PSUBSCRIBE", patterns)
         self.patterns.update(dict.fromkeys(patterns))
 
     async def punsubscribe(self, *patterns: Any) -> None:
+        """``PUNSUBSCRIBE [pattern ...]`` - stops pattern subscriptions.
+
+        Args:
+            *patterns: Patterns; none means every pattern.
+        """
         for p in patterns or list(self.patterns):
             self.patterns.pop(p, None)
         await self._send("PUNSUBSCRIBE", patterns)
 
     async def ssubscribe(self, *channels: Any) -> None:
+        """``SSUBSCRIBE channel [channel ...]`` - listens to sharded channels (sent with ``spublish``).
+
+        All channels of one call must hash to the same slot. Messages arrive as ``smessage``.
+
+        Args:
+            *channels: Channel names.
+        """
         await self._send("SSUBSCRIBE", channels)
         self.shard_channels.update(dict.fromkeys(channels))
 
     async def sunsubscribe(self, *channels: Any) -> None:
+        """``SUNSUBSCRIBE [channel ...]`` - stops sharded subscriptions.
+
+        Args:
+            *channels: Channel names; none means all sharded channels.
+        """
         for c in channels or list(self.shard_channels):
             self.shard_channels.pop(c, None)
         await self._send("SUNSUBSCRIBE", channels)
 
     async def ping(self, message: Optional[str] = None) -> None:
+        """``PING [message]`` - sends a ping on the subscription connection.
+
+        Args:
+            message: Optional text echoed back. The answer arrives as a ``pong`` message.
+        """
         await self._send("PING", () if message is None else (message,))
 
     async def get_message(self, timeout: Optional[float] = None) -> Optional[Message]:
-        """Next message, or None after ``timeout`` seconds (None waits forever)."""
+        """Waits for the next message.
+
+        Args:
+            timeout: Seconds to wait; ``None`` (default) waits forever, ``0`` only checks the queue.
+
+        Returns:
+            A :class:`Message` ``(kind, channel, data, pattern)``, or ``None`` on timeout.
+
+        Raises:
+            ConnectionError: The connection was lost.
+        """
         loop = asyncio.get_running_loop()
         deadline = None if timeout is None else loop.time() + timeout
         while True:
@@ -650,12 +1118,21 @@ class PubSub:
             return m
 
     async def listen(self) -> AsyncIterator[Message]:
+        """Async generator over messages; ends only when you stop iterating or the connection fails.
+
+        Yields:
+            :class:`Message` objects.
+
+        Raises:
+            ConnectionError: The connection was lost.
+        """
         while True:
             m = await self.get_message()
             if m is not None:
                 yield m
 
     async def aclose(self) -> None:
+        """Closes the subscription connection. ``close`` is an alias."""
         proto, self._proto = self._proto, None
         if proto is not None and proto.transport is not None:
             proto.on_lost = None
@@ -664,9 +1141,11 @@ class PubSub:
     close = aclose
 
     async def __aenter__(self) -> "PubSub":
+        """Connects and returns the session for an ``async with`` block."""
         await self.connect()
         return self
 
     async def __aexit__(self, *exc: Any) -> None:
+        """Closes the session."""
         await self.aclose()
 

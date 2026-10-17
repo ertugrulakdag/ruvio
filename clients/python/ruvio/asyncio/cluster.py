@@ -1,11 +1,11 @@
 # MIT License - Copyright (c) 2026 Salih Cantekin. See LICENSE.
-"""asyncio cluster client: ``Ruvio(host, port, cluster=True)``.
+"""asyncio cluster client: ``Ruvio(host, port, cluster=True)`` or :class:`ClusterRuvio`.
 
 Same routing rules as the sync :class:`ruvio.cluster.ClusterRuvio`. Every node gets one lazily
-opened, multiplexed connection (the same pipelined protocol object as the standalone client), so
-many coroutines share each node connection. Commands that park a connection (``BLPOP``,
-``XREAD ... BLOCK``, ``FILLGET ... WAIT`` ...) run on a short-lived dedicated connection to the
-owning node so they never stall the shared one.
+opened, multiplexed connection (the same pipelined protocol object as the standalone client), so many
+coroutines share each node connection. Commands that park a connection (``blpop``, ``xread`` with
+``block``, ``fillget`` with ``wait_ms`` ...) run on a short-lived dedicated connection to the owning
+node so they never stall the shared one.
 """
 
 from __future__ import annotations
@@ -76,14 +76,45 @@ def _is_blocking(name: bytes, args: List[bytes]) -> bool:
 
 
 class ClusterRuvio(Ruvio):
-    """Cluster-aware asyncio client (see :class:`ruvio.cluster.ClusterRuvio` for the rules).
+    """Cluster-aware asyncio client. Same methods as :class:`ruvio.asyncio.Ruvio`; routing is automatic.
 
-    The slot table is discovered on the first command or ``await client.connect()``; a standalone
-    server is detected there and used as a plain single connection."""
+    Create it with ``ClusterRuvio(host, port)`` or ``Ruvio(host, port, cluster=True)``; ``host``/``port`` is any
+    one shard (the seed). The slot table is discovered on the first command or ``await client.connect()``; a
+    standalone server is detected there and used as a plain single connection.
+
+    Routing rules (the same as :class:`ruvio.ClusterRuvio`):
+
+    * Single-key commands go to the owner of the key's slot; keyless commands go to the seed node.
+    * ``mget``/``mset``/``delete``/``unlink``/``exists``/``touch`` over several slots are split per node, run
+      concurrently and merged in your order. Not atomic across shards.
+    * Any other command whose keys span slots raises :class:`ruvio.CrossSlotError` before sending; use a
+      ``{hash tag}`` to keep related keys in one slot.
+    * ``dbsize`` adds up all shards, ``keys`` joins them, ``flushdb``/``flushall`` run on every shard,
+      ``auth``/``select``/``client_setname`` apply to every node, ``scan`` walks shards in turn (opaque cursor).
+    * Pipelines are grouped per node; transactions must use one slot.
+    * ``MOVED`` is followed up to 3 times per command. Failed node connections are reopened by the next
+      command; a failed command is never re-sent.
+
+    Note:
+        ``is_cluster`` and ``nodes`` are coroutines here (``await client.nodes()``), unlike the sync client
+        where they are properties.
+
+    Example:
+        from ruvio.asyncio import ClusterRuvio
+
+        async with ClusterRuvio("127.0.0.1", 7000) as client:
+            await client.set("user:1", "Ada")
+            print(await client.dbsize())
+    """
 
     __slots__ = ("_cl",)
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Creates the client. Arguments are those of :class:`ruvio.asyncio.Ruvio` (``cluster`` is implied).
+
+        Raises:
+            ValueError: ``unix_socket_path`` was given; cluster mode needs ``host``/``port``.
+        """
         super().__init__(*args, **kwargs)
         o = self._st.opts
         if o.unix_socket_path:
@@ -240,19 +271,31 @@ class ClusterRuvio(Ruvio):
         return False
 
     async def refresh_slots(self) -> None:
-        """Re-reads ``CLUSTER SLOTS`` and rebuilds the slot table."""
+        """Re-reads ``CLUSTER SLOTS`` and rebuilds the slot table.
+
+        Normally not needed: ``MOVED`` replies patch or reload the table. Does nothing on a standalone server.
+        """
         if self._cl.mode == 0:
             await self._discover()
         elif self._cl.mode == 1:
             await self._refresh()
 
     async def is_cluster(self) -> bool:
+        """Tells whether the seed answered ``CLUSTER SLOTS`` with a multi-node map (discovers on first use).
+
+        Returns:
+            ``True`` for a multi-shard server, ``False`` for a standalone or single-shard one.
+        """
         if self._cl.mode == 0:
             await self._discover()
         return self._cl.mode == 1
 
     async def nodes(self) -> List[Tuple[str, int]]:
-        """``(host, port)`` of the known nodes in slot order (empty in standalone fallback)."""
+        """``(host, port)`` of the known nodes in slot order (discovers on first use).
+
+        Returns:
+            A list of tuples; empty on a standalone server.
+        """
         if self._cl.mode == 0:
             await self._discover()
         return [(n.host, n.port) for n in self._cl.nodes]
@@ -550,22 +593,48 @@ class ClusterRuvio(Ruvio):
             no.password, no.username, no.db, no.client_name = o.password, o.username, o.db, o.client_name
 
     async def select(self, db: int) -> Any:  # type: ignore[override]
+        """``SELECT db`` on every node; remembered for reconnects. A multi-shard server only has database 0.
+
+        Args:
+            db: Database number.
+
+        Returns:
+            ``True`` (awaitable).
+        """
         ok = await super().select(db)
         self._share_opts()
         return ok
 
     async def client_setname(self, name: str) -> Any:  # type: ignore[override]
+        """``CLIENT SETNAME name`` on every node; remembered for reconnects.
+
+        Args:
+            name: The name.
+
+        Returns:
+            ``True`` (awaitable).
+        """
         ok = await super().client_setname(name)
         self._share_opts()
         return ok
 
     async def auth(self, password: str, username: Optional[str] = None) -> Any:  # type: ignore[override]
+        """``AUTH [username] password`` on every node; remembered for reconnects.
+
+        Args:
+            password: The password.
+            username: ACL user; omit for the default user.
+
+        Returns:
+            ``True`` (awaitable).
+        """
         ok = await super().auth(password, username)
         self._share_opts()
         return ok
 
     @property
     def raw(self) -> "ClusterRuvio":
+        """A view on the same nodes and slot table whose replies are ``bytes``."""
         view = ClusterRuvio.__new__(ClusterRuvio)
         view._st = self._st
         view._cl = self._cl
@@ -573,6 +642,14 @@ class ClusterRuvio(Ruvio):
         return view
 
     async def connect(self) -> "ClusterRuvio":
+        """Discovers the slot table (opening the seed connection).
+
+        Returns:
+            The client itself.
+
+        Raises:
+            ConnectionError: The seed is unreachable.
+        """
         if self._cl.mode == 0:
             await self._discover()
         elif self._cl.mode == 2:
@@ -580,6 +657,7 @@ class ClusterRuvio(Ruvio):
         return self
 
     async def aclose(self) -> None:
+        """Closes every node connection. The client can be used again. ``close`` is an alias."""
         c = self._cl
         for n in {id(x): x for x in [c.seed, *c.nodes, *c.by_addr.values()]}.values():
             proto, n.proto = n.proto, None
@@ -591,13 +669,26 @@ class ClusterRuvio(Ruvio):
     close = aclose
 
     def dedicated(self) -> "ClusterRuvio":
-        """A new cluster client (own connections) with the same options - for WATCH and blocking commands."""
+        """A new cluster client (own connections) with the same options, for ``WATCH`` and blocking commands.
+
+        Returns:
+            A new :class:`ClusterRuvio`; close it with ``await worker.aclose()``.
+        """
         opts = {k: v for k, v in self._st.opts.as_dict().items() if k != "socket_timeout"}
         return ClusterRuvio(decode_responses=self._decode, cluster=True, **opts)
 
     async def pubsub(self, ignore_subscribe_messages: bool = False) -> "ClusterPubSub":  # type: ignore[override]
-        """Pub/Sub on one node: classic channels/patterns on the owner of slot 0 (where ``PUBLISH``
-        goes); ``ssubscribe`` before anything else connects to the owner of the channel's slot."""
+        """Creates and connects a Pub/Sub session on one node (``session = await client.pubsub()``).
+
+        Classic channels and patterns meet on the owner of slot 0 (where ``publish`` goes). A first
+        ``ssubscribe`` connects to the owner of the channel's slot.
+
+        Args:
+            ignore_subscribe_messages: Hide subscription confirmations.
+
+        Returns:
+            A connected :class:`ruvio.asyncio.PubSub`.
+        """
         if self._cl.mode == 0:
             await self._discover()
         ps = ClusterPubSub(self, ignore_subscribe_messages)
@@ -606,7 +697,17 @@ class ClusterRuvio(Ruvio):
 
 
 class ClusterPubSub(PubSub):
+    """Pub/Sub session of an asyncio cluster client.
+
+Classic subscriptions live on the owner of slot 0, sharded ones on the channel's owner.
+    """
     def __init__(self, client: ClusterRuvio, ignore_subscribe_messages: bool = False) -> None:
+        """Creates the session. Use ``await ClusterRuvio.pubsub()`` instead.
+
+        Args:
+            client: The cluster client.
+            ignore_subscribe_messages: Hide subscription confirmations.
+        """
         c = client._cl
         node = client._owner(0) if c.mode == 1 else c.seed
         opts = _Options(**client._st.opts.as_dict())
@@ -615,6 +716,15 @@ class ClusterPubSub(PubSub):
         self._client = client
 
     async def ssubscribe(self, *channels: Any) -> None:
+        """``SSUBSCRIBE`` on the node that owns the channels' slot.
+
+        Args:
+            *channels: Channel names; all must hash to the same slot.
+
+        Raises:
+            CrossSlotError: The channels are in different slots.
+            RuvioError: The session already has subscriptions on another node; open a second ``pubsub()``.
+        """
         c = self._client._cl
         if c.mode == 1 and channels:
             slots = {cl.key_slot(ch) for ch in channels}
