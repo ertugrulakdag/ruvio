@@ -3824,6 +3824,29 @@ class Commands:
     def bf_reserve(
         self, key: KeyT, error_rate: float, capacity: int, expansion: Optional[int] = None, nonscaling: bool = False
     ) -> Any:
+        """``BF.RESERVE key error_rate capacity [EXPANSION n | NONSCALING]`` - creates a Bloom filter.
+
+        A Bloom filter answers "possibly present" or "definitely absent" in very little memory. By
+        default the filter scales: when the last layer holds its capacity a layer ``expansion`` times
+        larger with half the false-positive rate is added. Wire shape follows RedisBloom; it is not
+        certified module compatibility.
+
+        Args:
+            key: The filter key (must not exist).
+            error_rate: Target false-positive rate, between 0 and 1 (for example ``0.01``).
+            capacity: Expected number of items (positive integer).
+            expansion: Growth factor of each new layer (default 2).
+            nonscaling: Keep a single layer; adding to a full filter then raises an error.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: ``ERR item exists`` - the key exists; invalid rate/capacity; a layer above 64 MiB.
+
+        Example:
+            client.bf_reserve("seen", 0.01, 100000)
+        """
         args: List[Any] = [key, error_rate, capacity]
         if expansion is not None:
             args += ["EXPANSION", expansion]
@@ -3832,10 +3855,34 @@ class Commands:
         return self._c(_ok, "BF.RESERVE", *args)
 
     def bf_add(self, key: KeyT, item: Arg) -> Any:
+        """``BF.ADD key item`` - adds one item (creates a default filter if the key is missing).
+
+        A missing key becomes a scalable filter with error rate 0.01 and capacity 100.
+
+        Args:
+            key: The filter key.
+            item: The item.
+
+        Returns:
+            ``True`` if the item was newly added, ``False`` if it was (probably) already present.
+
+        Raises:
+            ResponseError: The filter is non-scaling and full.
+            WrongTypeError: The key holds a non-filter type.
+        """
         return self._c(_bool, "BF.ADD", key, item)
 
     def bf_madd(self, key: KeyT, *items: Arg) -> Any:
-        """One bool per item (True = newly added). A full non-scaling filter gives an error element."""
+        """``BF.MADD key item [item ...]`` - adds several items in one record.
+
+        Args:
+            key: The filter key.
+            *items: Items to add.
+
+        Returns:
+            A list of booleans in order (``True`` newly added). An element is an exception object (not
+            raised) for an item a full non-scaling filter refused.
+        """
         return self._c(lambda r: [x if isinstance(x, Exception) else x == 1 for x in r], "BF.MADD", key, *items)
 
     def bf_insert(
@@ -3848,6 +3895,25 @@ class Commands:
         nocreate: bool = False,
         nonscaling: bool = False,
     ) -> Any:
+        """``BF.INSERT key [CAPACITY c] [ERROR e] [EXPANSION n] [NOCREATE] [NONSCALING] ITEMS item...`` - adds items, optionally creating the filter.
+
+        The creation options apply only when the key is new.
+
+        Args:
+            key: The filter key.
+            items: Items to add.
+            capacity: Capacity for a new filter.
+            error: False-positive rate for a new filter (0 to 1).
+            expansion: Growth factor for a new filter.
+            nocreate: Fail instead of creating the filter.
+            nonscaling: Create a non-scaling filter.
+
+        Returns:
+            A list of booleans as in :meth:`bf_madd`.
+
+        Raises:
+            ResponseError: ``ERR not found`` - ``nocreate`` and the key is missing.
+        """
         args: List[Any] = [key]
         if capacity is not None:
             args += ["CAPACITY", capacity]
@@ -3864,32 +3930,121 @@ class Commands:
         return self._c(lambda r: [x if isinstance(x, Exception) else x == 1 for x in r], "BF.INSERT", *args)
 
     def bf_info(self, key: KeyT, field: Optional[str] = None) -> Any:
-        """A dict of all fields, or one field's value (e.g. ``"CAPACITY"``)."""
+        """``BF.INFO key [field]`` - filter statistics.
+
+        Args:
+            key: The filter key.
+            field: One of ``"CAPACITY"``, ``"SIZE"``, ``"FILTERS"``, ``"ITEMS"``, ``"EXPANSION"`` to get a
+                single value. Omit for all.
+
+        Returns:
+            A dict with keys ``Capacity``, ``Size``, ``Number of filters``, ``Number of items inserted`` and
+            ``Expansion rate`` (``None`` when non-scaling), or the single requested value.
+
+        Raises:
+            ResponseError: ``ERR not found`` - the key is missing.
+        """
         if field is None:
             return self._c(_bf_info, "BF.INFO", key)
         return self._c(lambda r: r[0] if type(r) is list and len(r) == 1 else r, "BF.INFO", key, field)
 
     def bf_card(self, key: KeyT) -> Any:
+        """``BF.CARD key`` - number of items added (counted when an item sets a new bit).
+
+        Args:
+            key: The filter key.
+
+        Returns:
+            The count; ``0`` when the key is missing.
+        """
         return self._c(None, "BF.CARD", key)
 
     def bf_exists(self, key: KeyT, item: Arg) -> Any:
+        """``BF.EXISTS key item`` - tests an item.
+
+        Args:
+            key: The filter key.
+            item: The item.
+
+        Returns:
+            ``True`` if possibly present (false positives happen), ``False`` if definitely absent or the
+            key is missing.
+        """
         return self._c(_bool, "BF.EXISTS", key, item)
 
     def bf_mexists(self, key: KeyT, *items: Arg) -> Any:
+        """``BF.MEXISTS key item [item ...]`` - tests several items.
+
+        Args:
+            key: The filter key.
+            *items: Items.
+
+        Returns:
+            A list of booleans in order; all ``False`` when the key is missing.
+        """
         return self._c(_bools, "BF.MEXISTS", key, *items)
 
     def seen_before(self, key: KeyT, *items: Arg) -> Any:
-        """Bloom "seen before" helper: marks the items and answers, per item, whether it was
-        (probably) seen before this call (``BF.MADD`` returned 0)."""
+        """Bloom "seen before" helper: marks the items and reports which were already there (``BF.MADD``).
+
+        Args:
+            key: The filter key (created with defaults if missing, see :meth:`bf_add`).
+            *items: Items to check and add.
+
+        Returns:
+            A list of booleans: ``True`` when the item was (probably) seen before this call.
+
+        Example:
+            client.seen_before("events", "id-1")   # -> [False]
+            client.seen_before("events", "id-1")   # -> [True]
+        """
         return self._c(_bloom_seen, "BF.MADD", key, *items)
 
     # ======================================================= json
     def json_get(self, key: KeyT, path: Optional[str] = None) -> Any:
-        """``JSON.GET`` - the JSON text, or None. See :meth:`json_get_obj`."""
+        """``JSON.GET key [path]`` - reads a JSON document or part of it as text.
+
+        Paths are limited to ``$``, ``.field`` and zero-based ``[N]`` segments (for example
+        ``$.users[0].name``); there are no wildcards or filters.
+
+        Args:
+            key: The JSON key.
+            path: Path to read (default ``$``, the whole document).
+
+        Returns:
+            Compact JSON text, or ``None`` when the key or path does not exist. See :meth:`json_get_obj`
+            for a decoded value.
+
+        Raises:
+            WrongTypeError: The key does not hold JSON.
+            ResponseError: Invalid path.
+        """
         return self._c(None, "JSON.GET", key) if path is None else self._c(None, "JSON.GET", key, path)
 
     def json_set(self, key: KeyT, path: str, value: Arg, nx: bool = False, xx: bool = False) -> Any:
-        """``JSON.SET key path json [NX|XX]`` with ``value`` already JSON text. True when written."""
+        """``JSON.SET key path json [NX|XX]`` - writes JSON text at a path.
+
+        A missing key can only be created at ``$``. The document is limited to 16 MiB. Only existing
+        intermediate nodes are used; a final object field may be created. Keeps the key's TTL.
+
+        Args:
+            key: The JSON key.
+            path: Path to write (``$`` for the whole document).
+            value: The value as JSON text, e.g. ``'{"a":1}'``, ``'"text"'``, ``'42'``.
+            nx: Write only when the path does not exist.
+            xx: Write only when the path exists.
+
+        Returns:
+            ``True`` when written, ``False`` when the path could not be reached or ``nx``/``xx`` refused.
+
+        Raises:
+            ResponseError: ``invalid JSON value`` or ``invalid JSON path``.
+            WrongTypeError: The key holds a non-JSON type.
+
+        Example:
+            client.json_set("user:1", "$", '{"name":"Ada","tags":[]}')
+            client.json_set("user:1", "$.name", '"Grace"')
+        """
         if nx:
             return self._c(_ok, "JSON.SET", key, path, value, "NX")
         if xx:
@@ -3897,67 +4052,291 @@ class Commands:
         return self._c(_ok, "JSON.SET", key, path, value)
 
     def json_get_obj(self, key: KeyT, path: Optional[str] = None) -> Any:
-        """Typed JSON helper: ``JSON.GET`` decoded with :func:`json.loads` (None when missing)."""
+        """Typed JSON helper: :meth:`json_get` decoded with :func:`json.loads`.
+
+        Args:
+            key: The JSON key.
+            path: Path to read (default ``$``).
+
+        Returns:
+            The decoded Python value, or ``None`` when the key or path is missing (also for a JSON ``null``).
+
+        Example:
+            client.json_get_obj("user:1", "$.tags")   # -> []
+        """
         return self._c(_json_load, "JSON.GET", key) if path is None else self._c(_json_load, "JSON.GET", key, path)
 
     def json_set_obj(self, key: KeyT, obj: Any, path: str = "$", nx: bool = False, xx: bool = False) -> Any:
-        """Typed JSON helper: :func:`json.dumps` then ``JSON.SET``."""
+        """Typed JSON helper: encodes ``obj`` with :func:`json.dumps` (compact) and calls :meth:`json_set`.
+
+        Args:
+            key: The JSON key.
+            obj: Any JSON-serializable Python value.
+            path: Path to write (default ``$``).
+            nx: Write only when the path does not exist.
+            xx: Write only when the path exists.
+
+        Returns:
+            ``True`` when written, ``False`` otherwise (see :meth:`json_set`).
+
+        Raises:
+            TypeError: ``obj`` is not JSON serializable.
+        """
         return self.json_set(key, path, _json.dumps(obj, separators=(",", ":")), nx=nx, xx=xx)
 
     def json_mget_obj(self, keys: Sequence[KeyT], path: str = "$") -> Any:
+        """Typed JSON helper: :meth:`json_mget` with every value decoded by :func:`json.loads`.
+
+        Args:
+            keys: The JSON keys (same slot on a cluster).
+            path: The path read from each (default ``$``).
+
+        Returns:
+            A list of decoded values, ``None`` for a missing key or path.
+
+        Raises:
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._c(lambda r: [_json_load(x) for x in r], "JSON.MGET", *keys, path)
 
     def json_mget(self, keys: Sequence[KeyT], path: str = "$") -> Any:
+        """``JSON.MGET key [key ...] path`` - the same path from several documents.
+
+        Args:
+            keys: The JSON keys (all in one slot on a cluster).
+            path: The path read from each (default ``$``).
+
+        Returns:
+            A list of JSON texts, ``None`` for a missing key, missing path or non-JSON key.
+
+        Raises:
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._c(None, "JSON.MGET", *keys, path)
 
     def json_del(self, key: KeyT, path: Optional[str] = None) -> Any:
+        """``JSON.DEL key [path]`` - deletes a path, or the whole key.
+
+        Args:
+            key: The JSON key.
+            path: Path to delete (default ``$``, the whole key).
+
+        Returns:
+            ``1`` when a field, element or the root was removed, ``0`` when the key or path is absent.
+        """
         return self._c(None, "JSON.DEL", key) if path is None else self._c(None, "JSON.DEL", key, path)
 
     def json_forget(self, key: KeyT, path: Optional[str] = None) -> Any:
+        """``JSON.FORGET key [path]`` - alias of :meth:`json_del`.
+
+        Args:
+            key: The JSON key.
+            path: Path to delete (default ``$``).
+
+        Returns:
+            ``1`` when something was removed, ``0`` otherwise.
+        """
         return self._c(None, "JSON.FORGET", key) if path is None else self._c(None, "JSON.FORGET", key, path)
 
     def json_merge(self, key: KeyT, path: str, patch: Arg) -> Any:
-        """RFC 7396 merge patch (``patch`` is JSON text)."""
+        """``JSON.MERGE key path patch`` - applies an RFC 7396 merge patch.
+
+        Object members merge recursively, ``null`` members delete fields, arrays and scalars replace the
+        target. It is not RFC 6902 JSON Patch. A missing key can only be created at ``$``.
+
+        Args:
+            key: The JSON key.
+            path: Target path (``$`` for the root).
+            patch: The patch as JSON text.
+
+        Returns:
+            ``True`` when merged.
+
+        Example:
+            client.json_merge("user:1", "$", '{"city":"London","tags":null}')
+        """
         return self._c(_ok, "JSON.MERGE", key, path, patch)
 
     def jmerge(self, key: KeyT, path: str, patch: Arg) -> Any:
+        """``JMERGE key path patch`` - alias of :meth:`json_merge`.
+
+        Args:
+            key: The JSON key.
+            path: Target path.
+            patch: The patch as JSON text.
+
+        Returns:
+            ``True`` when merged.
+        """
         return self._c(_ok, "JMERGE", key, path, patch)
 
     def json_type(self, key: KeyT, path: Optional[str] = None) -> Any:
+        """``JSON.TYPE key [path]`` - type of the value at a path.
+
+        Args:
+            key: The JSON key.
+            path: Path (default ``$``).
+
+        Returns:
+            ``"object"``, ``"array"``, ``"string"``, ``"integer"``, ``"number"``, ``"boolean"`` or
+            ``"null"``; ``None`` when the key or path is absent.
+        """
         return self._c(_text, "JSON.TYPE", key) if path is None else self._c(_text, "JSON.TYPE", key, path)
 
     def json_strlen(self, key: KeyT, path: Optional[str] = None) -> Any:
+        """``JSON.STRLEN key [path]`` - byte length of a JSON string.
+
+        Args:
+            key: The JSON key.
+            path: Path (default ``$``).
+
+        Returns:
+            The length, or ``None`` when absent.
+
+        Raises:
+            ResponseError: The value is not a string (``WRONGTYPE``).
+        """
         return self._c(None, "JSON.STRLEN", key) if path is None else self._c(None, "JSON.STRLEN", key, path)
 
     def json_arrlen(self, key: KeyT, path: Optional[str] = None) -> Any:
+        """``JSON.ARRLEN key [path]`` - number of elements of a JSON array.
+
+        Args:
+            key: The JSON key.
+            path: Path (default ``$``).
+
+        Returns:
+            The length, or ``None`` when absent.
+
+        Raises:
+            ResponseError: The value is not an array (``WRONGTYPE``).
+        """
         return self._c(None, "JSON.ARRLEN", key) if path is None else self._c(None, "JSON.ARRLEN", key, path)
 
     def json_objkeys(self, key: KeyT, path: Optional[str] = None) -> Any:
+        """``JSON.OBJKEYS key [path]`` - member names of a JSON object, in document order.
+
+        Args:
+            key: The JSON key.
+            path: Path (default ``$``).
+
+        Returns:
+            A list of names, or ``None`` when absent.
+
+        Raises:
+            ResponseError: The value is not an object (``WRONGTYPE``).
+        """
         return self._c(None, "JSON.OBJKEYS", key) if path is None else self._c(None, "JSON.OBJKEYS", key, path)
 
     def json_objlen(self, key: KeyT, path: Optional[str] = None) -> Any:
+        """``JSON.OBJLEN key [path]`` - number of members of a JSON object.
+
+        Args:
+            key: The JSON key.
+            path: Path (default ``$``).
+
+        Returns:
+            The count, or ``None`` when the key or path is missing.
+        """
         return self._c(None, "JSON.OBJLEN", key) if path is None else self._c(None, "JSON.OBJLEN", key, path)
 
     def json_numincrby(self, key: KeyT, path: str, number: float) -> Any:
-        """Returns the new number (int or float)."""
+        """``JSON.NUMINCRBY key path number`` - adds to a JSON number.
+
+        Integer arithmetic when both are integers that do not overflow, otherwise a finite double.
+
+        Args:
+            key: The JSON key.
+            path: Path of the number (required).
+            number: Amount to add.
+
+        Returns:
+            The new value (``int`` or ``float``), or ``None`` when absent.
+
+        Raises:
+            ResponseError: The value is not a number.
+        """
         return self._c(_number, "JSON.NUMINCRBY", key, path, number)
 
     def json_nummultby(self, key: KeyT, path: str, number: float) -> Any:
+        """``JSON.NUMMULTBY key path number`` - multiplies a JSON number.
+
+        Integers stay integers unless the product overflows; a non-finite result is refused.
+
+        Args:
+            key: The JSON key.
+            path: Path of the number (required).
+            number: Multiplier.
+
+        Returns:
+            The new value (``int`` or ``float``), or ``None`` when absent.
+
+        Raises:
+            ResponseError: The value is not a number or the result is not finite.
+        """
         return self._c(_number, "JSON.NUMMULTBY", key, path, number)
 
     def json_toggle(self, key: KeyT, path: str) -> Any:
-        """Returns the new boolean."""
+        """``JSON.TOGGLE key path`` - flips a JSON boolean.
+
+        Args:
+            key: The JSON key.
+            path: Path of the boolean (required).
+
+        Returns:
+            The new value as ``bool``.
+
+        Raises:
+            ResponseError: The value is not a boolean.
+        """
         return self._c(_bool, "JSON.TOGGLE", key, path)
 
     def json_arrappend(self, key: KeyT, path: str, *values: Arg) -> Any:
-        """``values`` are JSON texts (``'1'``, ``'"s"'``). Returns the new length."""
+        """``JSON.ARRAPPEND key path value [value ...]`` - appends values to a JSON array.
+
+        Cost grows with the array length; for append-heavy data use a list (:meth:`rpush`).
+
+        Args:
+            key: The JSON key.
+            path: Path of the array (required).
+            *values: JSON texts such as ``'1'`` or ``'"s"'``.
+
+        Returns:
+            The new array length, or ``None`` when the key or path is absent.
+
+        Raises:
+            ResponseError: The value is not an array or a value is not valid JSON.
+        """
         return self._c(None, "JSON.ARRAPPEND", key, path, *values)
 
     def json_arrinsert(self, key: KeyT, path: str, index: int, *values: Arg) -> Any:
+        """``JSON.ARRINSERT key path index value [value ...]`` - inserts values into a JSON array.
+
+        Args:
+            key: The JSON key.
+            path: Path of the array (required).
+            index: Insert position; negative counts from the end; must be within ``0..length``.
+            *values: JSON texts.
+
+        Returns:
+            The new array length.
+
+        Raises:
+            ResponseError: Index out of range or not an array.
+        """
         return self._c(None, "JSON.ARRINSERT", key, path, index, *values)
 
     def json_arrpop(self, key: KeyT, path: Optional[str] = None, index: Optional[int] = None) -> Any:
-        """The popped element as JSON text, or None."""
+        """``JSON.ARRPOP key [path [index]]`` - removes and returns an array element.
+
+        Args:
+            key: The JSON key.
+            path: Path of the array (default ``$``).
+            index: Position to pop (default ``-1``, the last); an index outside the array is clamped.
+
+        Returns:
+            The popped element as JSON text, or ``None`` when the array is empty or absent.
+        """
         if path is None:
             return self._c(None, "JSON.ARRPOP", key)
         if index is None:
@@ -3965,12 +4344,36 @@ class Commands:
         return self._c(None, "JSON.ARRPOP", key, path, index)
 
     def json_arrtrim(self, key: KeyT, path: str, start: int, stop: int) -> Any:
+        """``JSON.ARRTRIM key path start stop`` - keeps only a range of a JSON array.
+
+        Args:
+            key: The JSON key.
+            path: Path of the array (required).
+            start: First index to keep; negative counts from the end.
+            stop: Last index to keep, inclusive. A reversed or past-the-end range empties the array.
+
+        Returns:
+            The new array length.
+        """
         return self._c(None, "JSON.ARRTRIM", key, path, start, stop)
 
     def json_arrindex(
         self, key: KeyT, path: str, scalar: Arg, start: Optional[int] = None, stop: Optional[int] = None
     ) -> Any:
-        """``scalar`` is JSON text (``'2'``, ``'"x"'``). -1 when absent."""
+        """``JSON.ARRINDEX key path scalar [start [stop]]`` - position of a scalar in a JSON array.
+
+        Only scalars are compared; ``1`` and ``1.0`` are different values.
+
+        Args:
+            key: The JSON key.
+            path: Path of the array (required).
+            scalar: The value as JSON text (``'2'``, ``'"x"'``).
+            start: First index to search (needed to give ``stop``).
+            stop: End index (``0`` means the end).
+
+        Returns:
+            The index, or ``-1`` when absent.
+        """
         args: List[Any] = [key, path, scalar]
         if start is not None:
             args.append(start)
@@ -3979,26 +4382,95 @@ class Commands:
         return self._c(None, "JSON.ARRINDEX", *args)
 
     def json_clear(self, key: KeyT, path: Optional[str] = None) -> Any:
+        """``JSON.CLEAR key [path]`` - empties an array or object, or sets a number to 0.
+
+        Args:
+            key: The JSON key.
+            path: Path (default ``$``).
+
+        Returns:
+            The number of values changed (``0`` when already empty or not clearable).
+        """
         return self._c(None, "JSON.CLEAR", key) if path is None else self._c(None, "JSON.CLEAR", key, path)
 
     def json_strappend(self, key: KeyT, path: str, json_string: Arg) -> Any:
-        """``json_string`` is a JSON string literal, e.g. ``'"abc"'``."""
+        """``JSON.STRAPPEND key path json_string`` - appends to a JSON string.
+
+        Args:
+            key: The JSON key.
+            path: Path of the string (required).
+            json_string: A JSON string literal, e.g. ``'"abc"'`` (with the quotes).
+
+        Returns:
+            The new string length in bytes.
+
+        Raises:
+            ResponseError: The value is not a string.
+        """
         return self._c(None, "JSON.STRAPPEND", key, path, json_string)
 
     def json_index_create(self, name: str, prefix: str, path: str, type: Optional[str] = None) -> Any:  # noqa: A002
-        """``JSON.INDEX CREATE name PREFIX p PATH $.field [TYPE string|number|bool]`` (database 0 only)."""
+        """``JSON.INDEX CREATE name PREFIX p PATH $.field [TYPE string|number|bool]`` - creates an exact-match field index. Ruvio extension.
+
+        The index covers JSON keys starting with ``prefix`` and lets :meth:`json_find` look up documents
+        by the value of one field. Only exact equality on one field, database 0 only. The definition is
+        a reserved key (it shows up in ``keys()`` and ``dbsize()``) and is removed by ``FLUSHDB``.
+
+        Args:
+            name: Index name (1-64 bytes).
+            prefix: Key prefix of the documents to index.
+            path: Field path, such as ``"$.email"`` (not ``$`` alone).
+            type: Field type: ``"string"`` (default), ``"number"`` or ``"bool"``.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: Index exists, invalid name/path/type, or not in database 0.
+
+        Note:
+            The index lives on the shard that receives the command. On a per-shard cluster ``ClusterRuvio``
+            sends it to its seed node only.
+        """
         if type is None:
             return self._c(_ok, "JSON.INDEX", "CREATE", name, "PREFIX", prefix, "PATH", path)
         return self._c(_ok, "JSON.INDEX", "CREATE", name, "PREFIX", prefix, "PATH", path, "TYPE", type)
 
     def json_index_drop(self, name: str) -> Any:
+        """``JSON.INDEX DROP name`` - removes an index.
+
+        Args:
+            name: Index name.
+
+        Returns:
+            ``1`` when dropped, ``0`` when no such index.
+        """
         return self._c(None, "JSON.INDEX", "DROP", name)
 
     def json_index_list(self) -> Any:
+        """``JSON.INDEX LIST`` - lists the indexes.
+
+        Returns:
+            One text line per index: ``name prefix=... path=... type=... state=ready|building keys=N memory=B``.
+        """
         return self._c(None, "JSON.INDEX", "LIST")
 
     def json_find(self, index: str, value: Arg, count: Optional[int] = None, after: Optional[KeyT] = None) -> Any:
-        """``JSON.FIND name VALUE v [COUNT n] [AFTER key]`` - matching keys in ascending order."""
+        """``JSON.FIND name VALUE v [COUNT n] [AFTER key]`` - keys whose indexed field equals a value. Ruvio extension.
+
+        Args:
+            index: Index name from :meth:`json_index_create`.
+            value: The value to match; it must fit the index type (number text for ``number``, ...).
+            count: Page size, 1 to 1000 (default 100).
+            after: Return keys after this key (for the next page).
+
+        Returns:
+            Matching keys in ascending order. Continue with ``after=<last key>`` until fewer than ``count`` come back.
+
+        Raises:
+            ResponseError: ``no such index``, ``index is building`` (until the first build finishes), or
+                ``VALUE does not match the index type``.
+        """
         args: List[Any] = [index, "VALUE", value]
         if count is not None:
             args += ["COUNT", count]
@@ -4018,8 +4490,30 @@ class Commands:
         nomkstream: bool = False,
         delay_ms: Optional[int] = None,
     ) -> Any:
-        """``XADD`` - the new id, or None with ``nomkstream`` on a missing key.
-        ``delay_ms`` (Ruvio) hides the entry from XREADGROUP for that long."""
+        """``XADD key [NOMKSTREAM] [DELAY ms] [MAXLEN|MINID [~] n] id field value [...]`` - appends an entry to a stream.
+
+        Args:
+            key: The stream key (created unless ``nomkstream``).
+            fields: ``{field: value}`` or iterable of pairs (at least one).
+            id: ``"*"`` (auto, default), ``"<ms>-*"`` (auto sequence) or an explicit ``"<ms>-<seq>"`` greater
+                than the last id.
+            maxlen: Trim the stream to this many entries after adding.
+            minid: Trim entries with an id lower than this. Not combinable with ``maxlen``.
+            approximate: Sends ``~`` with the trim option; Ruvio trims exactly either way.
+            nomkstream: Do not create a missing stream.
+            delay_ms: Ruvio extension - hide the entry from :meth:`xreadgroup` for this many milliseconds
+                (delayed jobs). ``xread`` and ``xrange`` still see it.
+
+        Returns:
+            The new entry id as text, or ``None`` with ``nomkstream`` on a missing key.
+
+        Raises:
+            ResponseError: Id not greater than the top id, or invalid options.
+            WrongTypeError: The key holds a non-stream type.
+
+        Example:
+            client.xadd("events", {"type": "signup", "user": "7"}, maxlen=10000)
+        """
         args: List[Any] = [key]
         if nomkstream:
             args.append("NOMKSTREAM")
@@ -4034,21 +4528,69 @@ class Commands:
         return self._c(_text, "XADD", *args)
 
     def xlen(self, key: KeyT) -> Any:
+        """``XLEN key`` - number of entries.
+
+        Args:
+            key: The stream key.
+
+        Returns:
+            The count; ``0`` when the key is missing.
+        """
         return self._c(None, "XLEN", key)
 
     def xrange(self, key: KeyT, start: str = "-", end: str = "+", count: Optional[int] = None) -> Any:
-        """``[StreamEntry(id, fields)]``."""
+        """``XRANGE key start end [COUNT n]`` - entries between two ids, oldest first.
+
+        Args:
+            key: The stream key.
+            start: ``"-"`` (oldest) or an id (``"<ms>"`` or ``"<ms>-<seq>"``), inclusive. No exclusive bounds.
+            end: ``"+"`` (newest) or an id, inclusive.
+            count: Maximum number of entries.
+
+        Returns:
+            A list of :class:`StreamEntry` ``(id, fields)``; empty when the key is missing.
+        """
         if count is None:
             return self._c(_entries, "XRANGE", key, start, end)
         return self._c(_entries, "XRANGE", key, start, end, "COUNT", count)
 
     def xrevrange(self, key: KeyT, end: str = "+", start: str = "-", count: Optional[int] = None) -> Any:
+        """``XREVRANGE key end start [COUNT n]`` - entries between two ids, newest first.
+
+        Args:
+            key: The stream key.
+            end: ``"+"`` or an id (the high bound, first!), inclusive.
+            start: ``"-"`` or an id (the low bound), inclusive.
+            count: Maximum number of entries (the newest matches).
+
+        Returns:
+            A list of :class:`StreamEntry`, newest first.
+        """
         if count is None:
             return self._c(_entries, "XREVRANGE", key, end, start)
         return self._c(_entries, "XREVRANGE", key, end, start, "COUNT", count)
 
     def xread(self, streams: Mapping[Any, str], count: Optional[int] = None, block: Optional[int] = None) -> Any:
-        """``[(key, [StreamEntry])]`` or None on timeout. ``block`` blocks the connection."""
+        """``XREAD [COUNT n] [BLOCK ms] STREAMS key... id...`` - reads new entries from one or more streams.
+
+        The id is exclusive: only entries after it are returned. ``"0"`` reads from the start, ``"$"``
+        means the current end (only entries added after the call). ``block`` waits on the server for
+        a later entry without removing it. All keys must be in one shard/slot.
+
+        Args:
+            streams: ``{key: last_id}``.
+            count: Maximum entries per stream.
+            block: Milliseconds to wait when nothing is available; ``0`` waits until data (or shutdown).
+                Blocks the connection (asyncio: use :meth:`dedicated`). Omit for no waiting.
+
+        Returns:
+            A list of ``(key, [StreamEntry, ...])``, or ``None`` when nothing was available.
+
+        Example:
+            last = "0"
+            for key, entries in client.xread({"events": last}, count=100, block=5000) or []:
+                last = entries[-1].id
+        """
         args: List[Any] = []
         if count is not None:
             args += ["COUNT", count]
@@ -4068,7 +4610,30 @@ class Commands:
         block: Optional[int] = None,
         noack: bool = False,
     ) -> Any:
-        """Ruvio reads one stream with the ``>`` id."""
+        """``XREADGROUP GROUP group consumer [COUNT n] [BLOCK ms] [NOACK] STREAMS key >`` - reads new entries as a group consumer.
+
+        Ruvio reads one stream per call and only the ``>`` id (entries never delivered to the group). Each
+        delivered entry becomes pending until acknowledged with :meth:`xack`. Entries added with
+        ``delay_ms`` stay hidden until their time.
+
+        Args:
+            group: Consumer group name.
+            consumer: This consumer's name.
+            streams: ``{key: ">"}`` with exactly one stream.
+            count: Maximum entries.
+            block: Milliseconds to wait for a later entry; ``0`` waits until one arrives. Blocks the
+                connection (asyncio: use :meth:`dedicated`).
+            noack: Advance the group without adding pending entries.
+
+        Returns:
+            A list of ``(key, [StreamEntry, ...])``, or ``None`` when nothing was available.
+
+        Raises:
+            NoGroupError: The group or stream does not exist.
+
+        Example:
+            res = client.xreadgroup("workers", "w1", {"jobs": ">"}, count=10, block=2000)
+        """
         args: List[Any] = ["GROUP", group, consumer]
         if count is not None:
             args += ["COUNT", count]
@@ -4082,38 +4647,157 @@ class Commands:
         return self._c(_xread, "XREADGROUP", *args)
 
     def xdel(self, key: KeyT, *ids: str) -> Any:
+        """``XDEL key id [id ...]`` - deletes entries by id.
+
+        Args:
+            key: The stream key.
+            *ids: Entry ids. A repeated id counts once.
+
+        Returns:
+            The number of entries deleted. The stream key and its last id remain.
+        """
         return self._c(None, "XDEL", key, *ids)
 
     def xsetid(self, key: KeyT, last_id: str) -> Any:
+        """``XSETID key last_id`` - sets the last generated id without adding an entry.
+
+        Args:
+            key: The stream key (must exist).
+            last_id: New last id; must be greater than or equal to the current top id.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: The key is missing or the id would move backward.
+        """
         return self._c(_ok, "XSETID", key, last_id)
 
     def xtrim(self, key: KeyT, maxlen: Optional[int] = None, minid: Optional[str] = None, approximate: bool = False) -> Any:
+        """``XTRIM key MAXLEN|MINID [~] threshold`` - trims a stream.
+
+        Give exactly one of ``maxlen`` and ``minid``. Ruvio trims exactly even with ``~`` and does not accept ``LIMIT``.
+
+        Args:
+            key: The stream key.
+            maxlen: Keep at most this many newest entries.
+            minid: Drop entries with an id lower than this (that id is kept).
+            approximate: Send ``~`` (no effect on the result in Ruvio).
+
+        Returns:
+            The number of entries removed.
+        """
         if maxlen is not None:
             return self._c(None, "XTRIM", key, "MAXLEN", *(("~", maxlen) if approximate else (maxlen,)))
         return self._c(None, "XTRIM", key, "MINID", *(("~", minid) if approximate else (minid,)))
 
     def xgroup_create(self, key: KeyT, group: str, id: str = "$", mkstream: bool = False) -> Any:  # noqa: A002
+        """``XGROUP CREATE key group id [MKSTREAM]`` - creates a consumer group.
+
+        Args:
+            key: The stream key.
+            group: Group name.
+            id: Where the group starts: ``"$"`` (only new entries, default), ``"0"`` (everything) or an id.
+            mkstream: Create an empty stream if the key is missing.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            BusyError: ``BUSYGROUP`` - the group already exists.
+            ResponseError: The stream is missing and ``mkstream`` is not set.
+        """
         if mkstream:
             return self._c(_ok, "XGROUP CREATE", key, group, id, "MKSTREAM")
         return self._c(_ok, "XGROUP CREATE", key, group, id)
 
     def xgroup_createconsumer(self, key: KeyT, group: str, consumer: str) -> Any:
+        """``XGROUP CREATECONSUMER key group consumer`` - registers a consumer before it has pending entries.
+
+        Args:
+            key: The stream key.
+            group: Group name.
+            consumer: Consumer name.
+
+        Returns:
+            ``True`` when new, ``False`` when the group already had it.
+
+        Raises:
+            NoGroupError: The group does not exist.
+        """
         return self._c(_bool, "XGROUP CREATECONSUMER", key, group, consumer)
 
     def xgroup_destroy(self, key: KeyT, group: str) -> Any:
+        """``XGROUP DESTROY key group`` - removes a consumer group. A blocked reader of it gets ``NOGROUP``.
+
+        Args:
+            key: The stream key.
+            group: Group name.
+
+        Returns:
+            ``True`` when removed, ``False`` when it was already gone.
+        """
         return self._c(_bool, "XGROUP DESTROY", key, group)
 
     def xgroup_setid(self, key: KeyT, group: str, id: str) -> Any:  # noqa: A002
+        """``XGROUP SETID key group id`` - moves the group's cursor. Pending entries stay as they are.
+
+        Args:
+            key: The stream key.
+            group: Group name.
+            id: ``"$"``, ``"0"`` or an explicit id.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            NoGroupError: The group does not exist.
+        """
         return self._c(_ok, "XGROUP SETID", key, group, id)
 
     def xgroup_delconsumer(self, key: KeyT, group: str, consumer: str) -> Any:
+        """``XGROUP DELCONSUMER key group consumer`` - removes a consumer and drops its pending entries.
+
+        Args:
+            key: The stream key.
+            group: Group name.
+            consumer: Consumer name.
+
+        Returns:
+            How many pending entries the consumer held (``0`` if it did not exist).
+
+        Raises:
+            NoGroupError: The group does not exist.
+        """
         return self._c(None, "XGROUP DELCONSUMER", key, group, consumer)
 
     def xack(self, key: KeyT, group: str, *ids: str) -> Any:
+        """``XACK key group id [id ...]`` - acknowledges entries so they leave the pending list.
+
+        Args:
+            key: The stream key.
+            group: Group name.
+            *ids: Entry ids. A repeated id counts once.
+
+        Returns:
+            The number of entries acknowledged. The stream entries stay stored.
+        """
         return self._c(None, "XACK", key, group, *ids)
 
     def xpending(self, key: KeyT, group: str) -> Any:
-        """Summary form -> :class:`PendingSummary`."""
+        """``XPENDING key group`` - summary of pending entries.
+
+        Args:
+            key: The stream key.
+            group: Group name.
+
+        Returns:
+            :class:`PendingSummary` ``(count, min_id, max_id, consumers)`` where ``consumers`` is
+            ``[(name, pending_count), ...]``. An empty group gives ``count == 0`` and ``None`` ids.
+
+        Raises:
+            NoGroupError: The group does not exist.
+        """
         return self._c(_xpending, "XPENDING", key, group)
 
     def xpending_range(
@@ -4126,7 +4810,23 @@ class Commands:
         consumer: Optional[str] = None,
         idle: Optional[int] = None,
     ) -> Any:
-        """Extended ``XPENDING`` -> ``[PendingEntry]``."""
+        """``XPENDING key group [IDLE ms] start end count [consumer]`` - details of pending entries.
+
+        Args:
+            key: The stream key.
+            group: Group name.
+            start: First id, inclusive (``"-"`` for the lowest).
+            end: Last id, inclusive (``"+"`` for the highest).
+            count: Maximum rows (default 100).
+            consumer: Only entries held by this consumer.
+            idle: Only entries idle at least this many milliseconds.
+
+        Returns:
+            A list of :class:`PendingEntry` ``(id, consumer, idle_ms, deliveries)``.
+
+        Raises:
+            NoGroupError: The group does not exist.
+        """
         args: List[Any] = [key, group]
         if idle is not None:
             args += ["IDLE", idle]
@@ -4145,6 +4845,27 @@ class Commands:
         count: Optional[int] = None,
         justid: bool = False,
     ) -> Any:
+        """``XAUTOCLAIM key group consumer min_idle_ms start [COUNT n] [JUSTID]`` - takes over idle pending entries.
+
+        Scans pending ids from ``start`` and claims those idle for at least ``min_idle_ms``.
+
+        Args:
+            key: The stream key.
+            group: Group name.
+            consumer: The consumer that takes the entries over.
+            min_idle_ms: Minimum idle time in milliseconds.
+            start: Id to start the scan from (default ``"0-0"``).
+            count: Maximum entries to claim.
+            justid: Return only ids, not entries.
+
+        Returns:
+            :class:`AutoClaimResult` ``(next_id, claimed, deleted)``. ``next_id`` is where to continue
+            (``"0-0"`` when the scan finished), ``claimed`` is a list of :class:`StreamEntry` (or ids with
+            ``justid``), ``deleted`` lists pending ids whose entry no longer exists.
+
+        Raises:
+            NoGroupError: The group does not exist.
+        """
         args: List[Any] = [key, group, consumer, min_idle_ms, start]
         if count is not None:
             args += ["COUNT", count]
@@ -4166,6 +4887,27 @@ class Commands:
         justid: bool = False,
         lastid: Optional[str] = None,
     ) -> Any:
+        """``XCLAIM key group consumer min_idle_ms id... [IDLE ms] [TIME ms] [RETRYCOUNT n] [FORCE] [JUSTID] [LASTID id]`` - claims pending entries.
+
+        Args:
+            key: The stream key.
+            group: Group name.
+            consumer: The new owner.
+            min_idle_ms: Only claim entries idle at least this long.
+            ids: Entry ids to claim.
+            idle: Set the idle time (cannot be combined with ``time``).
+            time: Set the last delivery time as Unix ms.
+            retrycount: Set the delivery counter.
+            force: Claim an id that is in the stream but not pending.
+            justid: Return only ids.
+            lastid: Set the group cursor.
+
+        Returns:
+            A list of :class:`StreamEntry` (or ids with ``justid``). Ids whose entry was deleted are dropped.
+
+        Raises:
+            NoGroupError: The group does not exist.
+        """
         args: List[Any] = [key, group, consumer, min_idle_ms, *ids]
         if idle is not None:
             args += ["IDLE", idle]
@@ -4182,12 +4924,46 @@ class Commands:
         return self._c(_xclaim, "XCLAIM", *args)
 
     def xinfo_stream(self, key: KeyT) -> Any:
+        """``XINFO STREAM key`` - stream summary.
+
+        Args:
+            key: The stream key.
+
+        Returns:
+            A dict with text keys such as ``length``, ``last-generated-id``, ``groups``, ``first-entry`` and
+            ``last-entry`` (the entries are :class:`StreamEntry`).
+
+        Raises:
+            ResponseError: The key is missing.
+        """
         return self._c(_xinfo_stream, "XINFO STREAM", key)
 
     def xinfo_groups(self, key: KeyT) -> Any:
+        """``XINFO GROUPS key`` - consumer groups of a stream.
+
+        Args:
+            key: The stream key.
+
+        Returns:
+            A list of dicts with ``name``, ``consumers``, ``pending``, ``last-delivered-id`` and ``lag``.
+        """
         return self._c(_list_of_dicts, "XINFO GROUPS", key)
 
     def xinfo_consumers(self, key: KeyT, group: str) -> Any:
+        """``XINFO CONSUMERS key group`` - consumers that hold pending entries.
+
+        A consumer with no pending entry is not listed (use :meth:`xgroup_createconsumer` to register one).
+
+        Args:
+            key: The stream key.
+            group: Group name.
+
+        Returns:
+            A list of dicts with ``name``, ``pending`` and ``idle`` (milliseconds since its latest delivery).
+
+        Raises:
+            NoGroupError: The group does not exist.
+        """
         return self._c(_list_of_dicts, "XINFO CONSUMERS", key, group)
 
     # ======================================================= server / introspection
