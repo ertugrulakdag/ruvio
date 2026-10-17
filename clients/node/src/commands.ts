@@ -153,8 +153,37 @@ function pushFields(a: Arg[], fields: Record<string, Value> | readonly Value[]):
 }
 
 /**
- * Every typed command. Subclasses decide what "send" means: the client returns a promise per
- * call, a pipeline queues the frame and returns itself.
+ * Every typed command of the Ruvio server, shared by {@link RuvioClient}, {@link ClusterClient},
+ * {@link Pipeline} and {@link Transaction}.
+ *
+ * On a client each method returns a promise for the reply. On a pipeline or transaction the same
+ * method queues the command and returns the builder for chaining; the replies arrive from `exec()`.
+ *
+ * Conventions that hold for every method:
+ * - A `Key` is a string (UTF-8) or a Buffer; a `Value` may also be a number, sent as ASCII text.
+ * - Bulk strings come back as `string`. Use the `*Buffer` variants or `client.binary` for raw bytes.
+ * - Integer replies are `number`. Integers beyond 2^53 arrive as `bigint` at runtime.
+ * - A missing key usually gives `null` for a single value, `0` for a count and `[]` for a list; each method says which.
+ * - A server error rejects with {@link RuvioError} (`err.code` is `ERR`, `WRONGTYPE`, `NOPERM`, `CROSSSLOT`, ...).
+ *   A connection that fails before the reply rejects with {@link ConnectionError}. Methods only list
+ *   the errors specific to them.
+ * - On a multi-shard server (`shards > 1`), commands naming several keys need all keys in one hash
+ *   slot (use `{tag}` in key names) or the server answers `CROSSSLOT`. {@link ClusterClient} splits
+ *   `MGET`, `MSET`, `DEL`, `EXISTS`, `UNLINK` and `TOUCH` per slot (not atomic) and fails any other
+ *   cross-slot command with `CROSSSLOT` before sending. See `docs/CLIENT_BEHAVIOR.md`.
+ * - Keyless commands such as `DBSIZE`, `KEYS`, `SCAN` and `FLUSHDB` act on one shard only when the
+ *   server runs with `port_mode = "per-shard"` (the default) and the client is a plain
+ *   {@link RuvioClient}. {@link ClusterClient} fans `DBSIZE`, `KEYS`, `FLUSHDB` and `FLUSHALL` out to every node.
+ * - Blocking commands (`BLPOP`, `XREAD ... BLOCK`, `WAIT`, ...) occupy the whole connection: run them on
+ *   `client.duplicate()` or `client.isolated()`.
+ *
+ * @example
+ * ```ts
+ * const client = createClient('redis://127.0.0.1:6379');
+ * await client.set('greeting', 'hello', { ex: 60 });
+ * const value = await client.get('greeting'); // 'hello'
+ * await client.quit();
+ * ```
  */
 export abstract class Commands {
   /** @internal Reply flags for this view: bit 0 = bulk strings as Buffers. */
@@ -4364,82 +4393,377 @@ export abstract class Commands {
 
   // ---- json ------------------------------------------------------------------------------
 
-  /** `JSON.GET key [path]`: the JSON text, or `null`. See {@link jsonGetAs} for parsed values. */
+  /**
+   * Reads a JSON document or part of it (`JSON.GET key [path]`). Only simple `.field` and `[N]` paths are supported (not full RedisJSON).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Optional path; defaults to the root `$`.
+   * @returns The JSON text, or `null` when the key or path does not exist. See {@link jsonGetAs} for a parsed value.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.jsonSet('user:1', '$', '{"name":"Ada","tags":["a"]}');
+   * await client.jsonGet('user:1', '$.name'); // '"Ada"'
+   * ```
+   */
   jsonGet(key: Key, path?: string): R<string | null> {
     return path === undefined ? this._1(null, C.JSON_GET, key) : this._2(null, C.JSON_GET, key, path);
   }
-  /** `JSON.GET` parsed with `JSON.parse`. */
+  /**
+   * Like {@link jsonGet}, but parses the reply with `JSON.parse`.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Optional path; defaults to `$`.
+   * @returns The parsed value (typed as `T`, not checked), or `null` when the key or path does not exist.
+   * @throws SyntaxError when the stored text is not valid JSON for `JSON.parse`.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const user = await client.jsonGetAs<{ name: string }>('user:1');
+   * ```
+   */
   jsonGetAs<T = unknown>(key: Key, path?: string): R<T | null> {
     const tf = (v: string | null) => (v === null ? null : (JSON.parse(v) as T));
     return path === undefined ? this._1(tf, C.JSON_GET, key) : this._2(tf, C.JSON_GET, key, path);
   }
-  /** `JSON.SET key path json [NX|XX]`: false when NX/XX blocked the write. */
+  /**
+   * Writes a JSON value at a path (`JSON.SET key path json [NX|XX]`).
+   * Whole-document updates; only existing intermediate nodes are allowed, and the document is limited to 16 MiB. Writing at `[N]` where N equals the array length appends.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Path to write; `$` for the whole document.
+   * @param json The JSON text to store (a string such as `'{"a":1}'`, `'"text"'` or `'42'`).
+   * @param cond `'NX'` write only when the path is missing; `'XX'` only when it exists.
+   * @returns `true` when written; `false` when `NX`/`XX` blocked the write.
+   * @throws {@link RuvioError} `ERR` for invalid JSON, a missing parent node or an oversized document; `WRONGTYPE`.
+   *
+   * @example
+   * ```ts
+   * await client.jsonSet('user:1', '$', '{"name":"Ada"}');
+   * await client.jsonSet('user:1', '$.age', '36', 'NX');
+   * ```
+   */
   jsonSet(key: Key, path: string, json: Value, cond?: 'NX' | 'XX'): R<boolean> {
     return cond === undefined
       ? this._3(T.okBool, C.JSON_SET, key, path, json)
       : this._4(T.okBool, C.JSON_SET, key, path, json, cond === 'NX' ? W.NX : W.XX);
   }
-  /** `JSON.SET` with `JSON.stringify(value)`. */
+  /**
+   * Like {@link jsonSet}, but serialises `value` with `JSON.stringify`.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Path to write; `$` for the whole document.
+   * @param value Any JSON-serialisable value.
+   * @param cond `'NX'` or `'XX'`.
+   * @returns `true` when written; `false` when `NX`/`XX` blocked the write.
+   * @throws {@link RuvioError} as for {@link jsonSet}.
+   *
+   * @example
+   * ```ts
+   * await client.jsonSetAs('user:1', '$', { name: 'Ada', tags: ['a'] });
+   * ```
+   */
   jsonSetAs<T>(key: Key, path: string, value: T, cond?: 'NX' | 'XX'): R<boolean> {
     return this.jsonSet(key, path, JSON.stringify(value), cond);
   }
+  /**
+   * Deletes a value at a path (`JSON.DEL`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Optional path; defaults to `$` (the whole key).
+   * @returns The number of values removed (`0` when nothing matched).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.jsonDel('user:1', '$.age');
+   * ```
+   */
   jsonDel(key: Key, path?: string): R<number> {
     return path === undefined ? this._1(null, C.JSON_DEL, key) : this._2(null, C.JSON_DEL, key, path);
   }
+  /**
+   * Alias of {@link jsonDel} (`JSON.FORGET`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Optional path; defaults to `$`.
+   * @returns The number of values removed.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.jsonForget('user:1');
+   * ```
+   */
   jsonForget(key: Key, path?: string): R<number> {
     return path === undefined ? this._1(null, C.JSON_FORGET, key) : this._2(null, C.JSON_FORGET, key, path);
   }
+  /**
+   * Reads one path from several documents (`JSON.MGET key... path`). All keys must share a slot.
+   *
+   * @param keys Keys to operate on.
+   * @param path Path to read from every key.
+   * @returns One JSON text per key; `null` for a missing key or a key of another type.
+   * @throws {@link RuvioError} `CROSSSLOT` when the keys are in different slots.
+   *
+   * @example
+   * ```ts
+   * await client.jsonMget(['{u}1', '{u}2'], '$.name');
+   * ```
+   */
   jsonMget(keys: Key[], path: string): R<(string | null)[]> {
     const a: Arg[] = [...keys, path];
     return this._v(null, C.JSON_MGET, a);
   }
-  /** `JSON.MERGE key path patch` (RFC 7396). */
+  /**
+   * Merges a patch into a document (`JSON.MERGE`, RFC 7396 merge patch; not RFC 6902). Fields set to `null` in the patch are removed.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Path to merge at; `$` for the root.
+   * @param patch JSON text of the patch.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `ERR` for invalid JSON.
+   *
+   * @example
+   * ```ts
+   * await client.jsonMerge('user:1', '$', '{"age":37,"tags":null}');
+   * ```
+   */
   jsonMerge(key: Key, path: string, patch: Value): R<'OK'> {
     return this._3(null, C.JSON_MERGE, key, path, patch);
   }
-  /** `JMERGE` alias of JSON.MERGE. */
+  /**
+   * Alias of {@link jsonMerge} (`JMERGE`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Path to merge at.
+   * @param patch JSON text of the patch.
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.jmerge('user:1', '$', '{"age":37}');
+   * ```
+   */
   jmerge(key: Key, path: string, patch: Value): R<'OK'> {
     return this._3(null, C.JMERGE, key, path, patch);
   }
+  /**
+   * Type of the value at a path (`JSON.TYPE`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Optional path; defaults to `$`.
+   * @returns `'object'`, `'array'`, `'string'`, `'integer'`, `'number'`, `'boolean'` or `'null'`; `null` when the key or path is absent.
+   *
+   * @example
+   * ```ts
+   * await client.jsonType('user:1', '$.name'); // 'string'
+   * ```
+   */
   jsonType(key: Key, path?: string): R<string | null> {
     return path === undefined ? this._1(null, C.JSON_TYPE, key) : this._2(null, C.JSON_TYPE, key, path);
   }
+  /**
+   * Length in bytes of a string value (`JSON.STRLEN`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Optional path; defaults to `$`.
+   * @returns The byte length, or `null` when the key or path is absent.
+   * @throws {@link RuvioError} `WRONGTYPE` when the value is not a string.
+   *
+   * @example
+   * ```ts
+   * await client.jsonStrlen('user:1', '$.name');
+   * ```
+   */
   jsonStrlen(key: Key, path?: string): R<number | null> {
     return path === undefined ? this._1(null, C.JSON_STRLEN, key) : this._2(null, C.JSON_STRLEN, key, path);
   }
+  /**
+   * Number of elements of an array (`JSON.ARRLEN`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Optional path; defaults to `$`.
+   * @returns The length, or `null` when the key or path is absent.
+   * @throws {@link RuvioError} `WRONGTYPE` when the value is not an array.
+   *
+   * @example
+   * ```ts
+   * await client.jsonArrlen('user:1', '$.tags');
+   * ```
+   */
   jsonArrlen(key: Key, path?: string): R<number | null> {
     return path === undefined ? this._1(null, C.JSON_ARRLEN, key) : this._2(null, C.JSON_ARRLEN, key, path);
   }
+  /**
+   * Member names of an object, in document order (`JSON.OBJKEYS`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Optional path; defaults to `$`.
+   * @returns The names, or `null` when the key or path is absent.
+   * @throws {@link RuvioError} `WRONGTYPE` when the value is not an object.
+   *
+   * @example
+   * ```ts
+   * await client.jsonObjkeys('user:1');
+   * ```
+   */
   jsonObjkeys(key: Key, path?: string): R<string[] | null> {
     return path === undefined ? this._1(null, C.JSON_OBJKEYS, key) : this._2(null, C.JSON_OBJKEYS, key, path);
   }
+  /**
+   * Number of members of an object (`JSON.OBJLEN`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Optional path; defaults to `$`.
+   * @returns The count, or `null` when the key or path is absent.
+   *
+   * @example
+   * ```ts
+   * await client.jsonObjlen('user:1');
+   * ```
+   */
   jsonObjlen(key: Key, path?: string): R<number | null> {
     return path === undefined ? this._1(null, C.JSON_OBJLEN, key) : this._2(null, C.JSON_OBJLEN, key, path);
   }
+  /**
+   * Adds a number to a numeric value (`JSON.NUMINCRBY`). Integer arithmetic when both are integers that do not overflow, otherwise a finite double.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Path of the number (required).
+   * @param delta Number to add.
+   * @returns The new value, or `null` when the key or path is absent.
+   * @throws {@link RuvioError} `WRONGTYPE` when the value is not a number.
+   *
+   * @example
+   * ```ts
+   * await client.jsonNumincrby('user:1', '$.age', 1);
+   * ```
+   */
   jsonNumincrby(key: Key, path: string, delta: number): R<number | null> {
     return this._3(T.jsonNum, C.JSON_NUMINCRBY, key, path, delta);
   }
+  /**
+   * Multiplies a numeric value (`JSON.NUMMULTBY`). Integers stay integers unless the product overflows; a non-finite result is refused.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Path of the number (required).
+   * @param factor Multiplier.
+   * @returns The new value, or `null` when the key or path is absent.
+   * @throws {@link RuvioError} `WRONGTYPE` when the value is not a number; `ERR` for a non-finite result.
+   *
+   * @example
+   * ```ts
+   * await client.jsonNummultby('item:1', '$.price', 1.1);
+   * ```
+   */
   jsonNummultby(key: Key, path: string, factor: number): R<number | null> {
     return this._3(T.jsonNum, C.JSON_NUMMULTBY, key, path, factor);
   }
+  /**
+   * Flips a boolean value (`JSON.TOGGLE`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Path of the boolean (required).
+   * @returns The new value, or `null` when the key or path is absent.
+   * @throws {@link RuvioError} `WRONGTYPE` when the value is not a boolean.
+   *
+   * @example
+   * ```ts
+   * await client.jsonToggle('user:1', '$.active');
+   * ```
+   */
   jsonToggle(key: Key, path: string): R<boolean | null> {
     return this._2(T.jsonBool, C.JSON_TOGGLE, key, path);
   }
-  /** `JSON.ARRAPPEND key path json...` (each value is JSON text). */
+  /**
+   * Appends values to an array (`JSON.ARRAPPEND`). Cost grows with the array length; for append-heavy data use a list.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Path of the array (required).
+   * @param json Values to append, each as JSON text.
+   * @returns The new array length, or `null` when the key or path is absent.
+   * @throws {@link RuvioError} `WRONGTYPE` when the value is not an array.
+   *
+   * @example
+   * ```ts
+   * await client.jsonArrappend('user:1', '$.tags', '"b"', '"c"');
+   * ```
+   */
   jsonArrappend(key: Key, path: string, ...json: Value[]): R<number | null> {
     return this._v(null, C.JSON_ARRAPPEND, pushAll([key, path], json));
   }
+  /**
+   * Inserts values into an array at an index (`JSON.ARRINSERT`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Path of the array (required).
+   * @param index Insert position; negative counts from the end. An index outside `0..length` is an error.
+   * @param json Values to insert, each as JSON text.
+   * @returns The new array length, or `null` when the key or path is absent.
+   * @throws {@link RuvioError} `ERR` for an index out of range; `WRONGTYPE`.
+   *
+   * @example
+   * ```ts
+   * await client.jsonArrinsert('user:1', '$.tags', 0, '"first"');
+   * ```
+   */
   jsonArrinsert(key: Key, path: string, index: number, ...json: Value[]): R<number | null> {
     return this._v(null, C.JSON_ARRINSERT, pushAll([key, path, index], json));
   }
+  /**
+   * Removes and returns an array element (`JSON.ARRPOP`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Optional path; defaults to `$`.
+   * @param index Position to pop; default `-1` (the last). An index outside the array is clamped.
+   * @returns The popped element as JSON text, or `null` for an empty array or absent key/path.
+   * @throws {@link RuvioError} `WRONGTYPE` when the value is not an array.
+   *
+   * @example
+   * ```ts
+   * await client.jsonArrpop('user:1', '$.tags');
+   * ```
+   */
   jsonArrpop(key: Key, path?: string, index?: number): R<string | null> {
     if (path === undefined) return this._1(null, C.JSON_ARRPOP, key);
     return index === undefined ? this._2(null, C.JSON_ARRPOP, key, path) : this._3(null, C.JSON_ARRPOP, key, path, index);
   }
+  /**
+   * Keeps only a range of an array (`JSON.ARRTRIM`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Path of the array (required).
+   * @param start First index to keep (inclusive); negative counts from the end.
+   * @param stop Last index to keep (inclusive). A reversed or past-the-end range empties the array.
+   * @returns The new length, or `null` when the key or path is absent.
+   * @throws {@link RuvioError} `WRONGTYPE` when the value is not an array.
+   *
+   * @example
+   * ```ts
+   * await client.jsonArrtrim('user:1', '$.tags', 0, 9);
+   * ```
+   */
   jsonArrtrim(key: Key, path: string, start: number, stop: number): R<number | null> {
     return this._4(null, C.JSON_ARRTRIM, key, path, start, stop);
   }
-  /** `JSON.ARRINDEX key path scalarJson [start [stop]]`; -1 when absent. */
+  /**
+   * Finds the first position of a scalar in an array (`JSON.ARRINDEX`). Scalars only; `1` and `1.0` are different values.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Path of the array (required).
+   * @param scalarJson The scalar as JSON text, e.g. `'"b"'` or `'3'`.
+   * @param start Optional first index to search.
+   * @param stop Optional last index; `0` means the end.
+   * @returns The index, `-1` when absent from the array, or `null` when the key or path is absent.
+   *
+   * @example
+   * ```ts
+   * await client.jsonArrindex('user:1', '$.tags', '"b"'); // 1
+   * ```
+   */
   jsonArrindex(key: Key, path: string, scalarJson: Value, start?: number, stop?: number): R<number | null> {
     const a: Arg[] = [key, path, scalarJson];
     if (start !== undefined) {
@@ -4448,26 +4772,100 @@ export abstract class Commands {
     }
     return this._v(null, C.JSON_ARRINDEX, a);
   }
+  /**
+   * Empties an array or object and sets a number to 0 (`JSON.CLEAR`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Optional path; defaults to `$`.
+   * @returns The number of values changed (`0` when already empty or not clearable).
+   *
+   * @example
+   * ```ts
+   * await client.jsonClear('user:1', '$.tags');
+   * ```
+   */
   jsonClear(key: Key, path?: string): R<number> {
     return path === undefined ? this._1(null, C.JSON_CLEAR, key) : this._2(null, C.JSON_CLEAR, key, path);
   }
-  /** `JSON.STRAPPEND key path jsonString` (the value is JSON text, e.g. `'"abc"'`). */
+  /**
+   * Appends to a string value (`JSON.STRAPPEND`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param path Path of the string (required).
+   * @param jsonString The text to append as a JSON string, e.g. `'"abc"'` (with the quotes).
+   * @returns The new string length in bytes, or `null` when the key or path is absent.
+   * @throws {@link RuvioError} `WRONGTYPE` when the value is not a string.
+   *
+   * @example
+   * ```ts
+   * await client.jsonStrappend('user:1', '$.name', '" Lovelace"');
+   * ```
+   */
   jsonStrappend(key: Key, path: string, jsonString: Value): R<number | null> {
     return this._3(null, C.JSON_STRAPPEND, key, path, jsonString);
   }
-  /** `JSON.INDEX CREATE name PREFIX prefix PATH path [TYPE string|number|bool]` (database 0 only). */
+  /**
+   * Creates an exact-match index over one JSON field (`JSON.INDEX CREATE name PREFIX prefix PATH path [TYPE ...]`, Ruvio extension). Database 0 only.
+   * Equality on one scalar field only. The index is built in the background (`ERR index is building` until done), follows every write, delete, expiry and rename, and keeps its postings in memory (rebuilt at startup). Its definition is stored as a reserved key, visible to `KEYS`/`DBSIZE`, and dropped by `FLUSHDB`/`FLUSHALL` on database 0.
+   *
+   * @param name Index name.
+   * @param prefix Only keys starting with this prefix are indexed.
+   * @param path Path of the field to index, e.g. `$.email`.
+   * @param type Value type: `'string'`, `'number'` or `'bool'`.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `ERR` when the name exists or the selected database is not 0.
+   *
+   * @example
+   * ```ts
+   * await client.jsonIndexCreate('by_email', 'user:', '$.email', 'string');
+   * ```
+   */
   jsonIndexCreate(name: string, prefix: string, path: string, type?: 'string' | 'number' | 'bool'): R<'OK'> {
     const a: Arg[] = [name, W.PREFIX, prefix, W.PATH, path];
     if (type !== undefined) a.push(W.TYPE, type);
     return this._v(null, C.JSON_INDEX_CREATE, a);
   }
+  /**
+   * Removes an index (`JSON.INDEX DROP`).
+   *
+   * @param name Index name.
+   * @returns `true` when dropped; `false` when it did not exist.
+   *
+   * @example
+   * ```ts
+   * await client.jsonIndexDrop('by_email');
+   * ```
+   */
   jsonIndexDrop(name: string): R<boolean> {
     return this._1(T.bool, C.JSON_INDEX_DROP, name);
   }
+  /**
+   * Lists indexes (`JSON.INDEX LIST`). Prints one entry per shard.
+   *
+   * @returns Index descriptions.
+   *
+   * @example
+   * ```ts
+   * await client.jsonIndexList();
+   * ```
+   */
   jsonIndexList(): R<string[]> {
     return this._0(null, C.JSON_INDEX_LIST);
   }
-  /** `JSON.FIND name VALUE v [COUNT n] [AFTER key]`: matching keys, ascending. */
+  /**
+   * Finds keys whose indexed field equals a value (`JSON.FIND name VALUE v [COUNT n] [AFTER key]`, Ruvio extension). Runs on every shard and merges.
+   *
+   * @param name Index name from {@link jsonIndexCreate}.
+   * @param value Value to match exactly.
+   * @param opts `count` page size (at most 1000); `after` the last key of the previous page, to continue.
+   * @returns Matching keys in ascending order.
+   * @throws {@link RuvioError} `ERR index is building` until the first build finishes; `ERR` for an unknown index.
+   *
+   * @example
+   * ```ts
+   * const keys = await client.jsonFind('by_email', 'ada@example.com', { count: 10 });
+   * ```
+   */
   jsonFind(name: string, value: Value, opts?: { count?: number; after?: Key }): R<string[]> {
     const a: Arg[] = [name, W.VALUE, value];
     if (opts?.count !== undefined) a.push(W.COUNT, opts.count);
@@ -4477,7 +4875,22 @@ export abstract class Commands {
 
   // ---- streams ---------------------------------------------------------------------------
 
-  /** `XADD key [NOMKSTREAM] [MAXLEN|MINID [~] n] [DELAY ms] id field value ...`; `null` with NOMKSTREAM on a missing key. */
+  /**
+   * Appends an entry to a stream (`XADD key [NOMKSTREAM] [MAXLEN|MINID [~] n] [DELAY ms] id field value ...`).
+   * `maxLen` and `minId` both trim exactly (also with `approximate`) and cannot be combined. An id that is not above the top id is rejected.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param id `'*'` for an automatic id, `'ms-*'` for an automatic sequence, or an explicit `'ms-seq'`.
+   * @param fields Object `{ field: value }` or a flat array `[field, value, ...]`.
+   * @param opts {@link XAddOptions}: `noMkStream`, `maxLen`, `minId`, `approximate`, and Ruvio's `delayMs` which hides the entry from {@link xreadgroup} for that long.
+   * @returns The entry id, or `null` when `noMkStream` is set and the key does not exist.
+   * @throws {@link RuvioError} `ERR` for an id not above the top id or a bad trim option; `WRONGTYPE`.
+   *
+   * @example
+   * ```ts
+   * const id = await client.xadd('events', '*', { type: 'signup', user: 7 }, { maxLen: 10_000 });
+   * ```
+   */
   xadd(key: Key, id: string, fields: Record<string, Value> | Value[], opts?: XAddOptions): R<string | null> {
     const a: Arg[] = [key];
     if (opts !== undefined) {
@@ -4488,20 +4901,76 @@ export abstract class Commands {
     a.push(id);
     return this._v(null, C.XADD, pushFields(a, fields));
   }
+  /**
+   * Number of entries (`XLEN`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The count; `0` when the key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.xlen('events');
+   * ```
+   */
   xlen(key: Key): R<number> {
     return this._1(null, C.XLEN, key);
   }
+  /**
+   * Reads entries between two ids, oldest first (`XRANGE`). No exclusive bounds.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param start Lowest id (`'-'` for the beginning, default).
+   * @param end Highest id (`'+'` for the end, default).
+   * @param count Optional maximum number of entries.
+   * @returns {@link StreamEntry} objects; empty when none.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const entries = await client.xrange('events', '-', '+', 100);
+   * ```
+   */
   xrange(key: Key, start = '-', end = '+', count?: number): R<StreamEntry[]> {
     return count === undefined
       ? this._3(T.stream, C.XRANGE, key, start, end)
       : this._v(T.stream, C.XRANGE, [key, start, end, W.COUNT, count]);
   }
+  /**
+   * Reads entries between two ids, newest first (`XREVRANGE`). Note the argument order: end first, then start. `count` keeps the newest matches.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param end Highest id (`'+'` default).
+   * @param start Lowest id (`'-'` default).
+   * @param count Optional maximum number of entries.
+   * @returns {@link StreamEntry} objects, newest first.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const latest = await client.xrevrange('events', '+', '-', 10);
+   * ```
+   */
   xrevrange(key: Key, end = '+', start = '-', count?: number): R<StreamEntry[]> {
     return count === undefined
       ? this._3(T.stream, C.XREVRANGE, key, end, start)
       : this._v(T.stream, C.XREVRANGE, [key, end, start, W.COUNT, count]);
   }
-  /** `XREAD [COUNT n] [BLOCK ms] STREAMS key... id...`. `block` parks the connection: use `duplicate()`. */
+  /**
+   * Reads new entries from one or more streams (`XREAD [COUNT n] [BLOCK ms] STREAMS key... id...`).
+   * The id is exclusive: `'0'` means from the start and `'$'` means only entries added after the call. `block` parks the whole connection, so use a dedicated client (`duplicate()`). This does not read a consumer group; see {@link xreadgroup}.
+   *
+   * @param streams Object `{ key: lastId }` or an array of `[key, lastId]` pairs.
+   * @param opts {@link XReadOptions}: `count` and `block` (milliseconds; `0` waits until an entry or shutdown).
+   * @returns One {@link StreamReadResult} per stream that has entries, or `null` when there are none (or the block timed out).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const worker = client.duplicate();
+   * const res = await worker.xread({ events: '$' }, { block: 5000, count: 10 });
+   * ```
+   */
   xread(streams: Record<string, string> | ReadonlyArray<readonly [Key, string]>, opts?: XReadOptions): R<StreamReadResult[] | null> {
     const a: Arg[] = [];
     if (opts?.count !== undefined) a.push(W.COUNT, opts.count);
@@ -4512,35 +4981,158 @@ export abstract class Commands {
     for (const p of pairs) a.push(p[1]);
     return this._v(T.xread, C.XREAD, a);
   }
+  /**
+   * Deletes entries by id (`XDEL`). The stream key and its last id remain even when it becomes empty.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param ids Stream entry ids (`ms-seq`).
+   * @returns The number of entries deleted (a repeated id counts once).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.xdel('events', '1700000000000-0');
+   * ```
+   */
   xdel(key: Key, ...ids: string[]): R<number> {
     return this._kv(null, C.XDEL, key, ids);
   }
+  /**
+   * Sets the stream's last generated id without adding an entry (`XSETID`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param id Must be greater than or equal to the current top id.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `ERR` when the key is missing or `id` is lower than the top id.
+   *
+   * @example
+   * ```ts
+   * await client.xsetid('events', '1800000000000-0');
+   * ```
+   */
   xsetid(key: Key, id: string): R<'OK'> {
     return this._2(null, C.XSETID, key, id);
   }
+  /**
+   * Trims a stream (`XTRIM`). Trimming is always exact; the `~` option is accepted. `LIMIT` is not supported.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param opts {@link XTrimOptions}: `maxLen` keeps at most that many entries; `minId` drops entries below the id and keeps that id. Not both.
+   * @returns The number of entries removed.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.xtrim('events', { maxLen: 1000 });
+   * ```
+   */
   xtrim(key: Key, opts: XTrimOptions): R<number> {
     const a: Arg[] = [key];
     pushStreamId(a, opts);
     return this._v(null, C.XTRIM, a);
   }
+  /**
+   * Creates a consumer group (`XGROUP CREATE`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param group Consumer group name.
+   * @param id Where the group starts: `'$'` (only new entries), `'0'` (everything), or an explicit id.
+   * @param opts `mkStream: true` creates an empty stream when the key is missing.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `BUSYGROUP` when the group exists; `ERR` when the key is missing and `mkStream` is not set.
+   *
+   * @example
+   * ```ts
+   * await client.xgroupCreate('events', 'workers', '$', { mkStream: true });
+   * ```
+   */
   xgroupCreate(key: Key, group: string, id: string, opts?: { mkStream?: boolean }): R<'OK'> {
     return opts?.mkStream
       ? this._4(null, C.XGROUP_CREATE, key, group, id, W.MKSTREAM)
       : this._3(null, C.XGROUP_CREATE, key, group, id);
   }
+  /**
+   * Registers a consumer before it has pending entries (`XGROUP CREATECONSUMER`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param group Consumer group name.
+   * @param consumer Consumer name.
+   * @returns `true` when the name is new; `false` when the group already had it.
+   * @throws {@link RuvioError} `NOGROUP` when the group does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.xgroupCreateconsumer('events', 'workers', 'w1');
+   * ```
+   */
   xgroupCreateconsumer(key: Key, group: string, consumer: string): R<boolean> {
     return this._3(T.bool, C.XGROUP_CREATECONSUMER, key, group, consumer);
   }
+  /**
+   * Deletes a consumer group (`XGROUP DESTROY`). A blocked {@link xreadgroup} on it receives `NOGROUP`.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param group Consumer group name.
+   * @returns `true` when removed; `false` when it was already gone.
+   *
+   * @example
+   * ```ts
+   * await client.xgroupDestroy('events', 'workers');
+   * ```
+   */
   xgroupDestroy(key: Key, group: string): R<boolean> {
     return this._2(T.bool, C.XGROUP_DESTROY, key, group);
   }
+  /**
+   * Moves a group's last-delivered id (`XGROUP SETID`). Pending entries stay as they are.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param group Consumer group name.
+   * @param id `'$'`, `'0'` or an explicit id.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `NOGROUP` when the group does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.xgroupSetid('events', 'workers', '0');
+   * ```
+   */
   xgroupSetid(key: Key, group: string, id: string): R<'OK'> {
     return this._3(null, C.XGROUP_SETID, key, group, id);
   }
+  /**
+   * Removes a consumer from a group (`XGROUP DELCONSUMER`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param group Consumer group name.
+   * @param consumer Consumer name.
+   * @returns How many pending entries that consumer held (`0` for an unknown consumer).
+   * @throws {@link RuvioError} `NOGROUP` when the group does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.xgroupDelconsumer('events', 'workers', 'w1');
+   * ```
+   */
   xgroupDelconsumer(key: Key, group: string, consumer: string): R<number> {
     return this._3(null, C.XGROUP_DELCONSUMER, key, group, consumer);
   }
-  /** `XREADGROUP GROUP g c [COUNT n] [BLOCK ms] [NOACK] STREAMS key >` (Ruvio: one stream, `>` only). */
+  /**
+   * Reads new entries for a consumer of a group (`XREADGROUP GROUP g c [COUNT n] [BLOCK ms] [NOACK] STREAMS key >`).
+   * Ruvio reads one stream and only the `>` id (never-delivered entries). With `block`, the call waits on this shard for a later `XADD` and hands the id to the oldest waiting consumer of the group; it parks the connection, so use a dedicated client. Delivered entries stay pending until {@link xack}.
+   *
+   * @param group Consumer group name.
+   * @param consumer Consumer name.
+   * @param key Stream to read.
+   * @param opts {@link XReadGroupOptions}: `count`, `block` (ms, `0` waits until an entry or shutdown), `noAck` (advance the group but do not add a pending entry).
+   * @returns One {@link StreamReadResult}, or `null` when there is nothing new (or the block timed out).
+   * @throws {@link RuvioError} `NOGROUP` when the group does not exist.
+   *
+   * @example
+   * ```ts
+   * const res = await worker.xreadgroup('workers', 'w1', 'events', { count: 10, block: 5000 });
+   * ```
+   */
   xreadgroup(group: string, consumer: string, key: Key, opts?: XReadGroupOptions): R<StreamReadResult[] | null> {
     const a: Arg[] = [W.GROUP, group, consumer];
     if (opts?.count !== undefined) a.push(W.COUNT, opts.count);
@@ -4549,14 +5141,55 @@ export abstract class Commands {
     a.push(W.STREAMS, key, W.GTID);
     return this._v(T.xread, C.XREADGROUP, a);
   }
+  /**
+   * Acknowledges entries so they leave the group's pending list (`XACK`). The stream entry stays stored.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param group Consumer group name.
+   * @param ids Entry ids (a repeated id counts once).
+   * @returns The number of entries acknowledged.
+   *
+   * @example
+   * ```ts
+   * await client.xack('events', 'workers', id);
+   * ```
+   */
   xack(key: Key, group: string, ...ids: string[]): R<number> {
     return this._v(null, C.XACK, pushAll([key, group], ids));
   }
-  /** `XPENDING key group` summary. */
+  /**
+   * Summary of a group's pending entries (`XPENDING key group`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param group Consumer group name.
+   * @returns A {@link PendingSummary}: `count`, `smallest`/`greatest` id (`null` when empty) and pending counts per consumer, sorted by name.
+   * @throws {@link RuvioError} `NOGROUP` when the group does not exist.
+   *
+   * @example
+   * ```ts
+   * const s = await client.xpending('events', 'workers');
+   * ```
+   */
   xpending(key: Key, group: string): R<PendingSummary> {
     return this._2(T.pendingSummary, C.XPENDING, key, group);
   }
-  /** `XPENDING key group [IDLE ms] start end count [consumer]`. */
+  /**
+   * Lists pending entries (`XPENDING key group [IDLE ms] start end count [consumer]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param group Consumer group name.
+   * @param start Lowest id, inclusive (`'-'` for the beginning).
+   * @param end Highest id, inclusive (`'+'` for the end).
+   * @param count Maximum rows.
+   * @param opts `idle` only rows idle at least this many milliseconds; `consumer` only that consumer's rows.
+   * @returns {@link PendingRow} objects `{ id, consumer, idleMs, deliveries }`.
+   * @throws {@link RuvioError} `NOGROUP` when the group does not exist.
+   *
+   * @example
+   * ```ts
+   * const rows = await client.xpendingRange('events', 'workers', '-', '+', 100, { idle: 60_000 });
+   * ```
+   */
   xpendingRange(key: Key, group: string, start: string, end: string, count: number, opts?: { idle?: number; consumer?: string }): R<PendingRow[]> {
     const a: Arg[] = [key, group];
     if (opts?.idle !== undefined) a.push(W.IDLE, opts.idle);
@@ -4564,13 +5197,47 @@ export abstract class Commands {
     if (opts?.consumer !== undefined) a.push(opts.consumer);
     return this._v(T.pendingRows, C.XPENDING, a);
   }
+  /**
+   * Takes over pending entries that have been idle too long (`XAUTOCLAIM`).
+   * Scans pending ids after `start`, claims those idle for at least `minIdleMs`, up to `count` (default: the rest of the list).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param group Consumer group name.
+   * @param consumer Consumer that takes ownership.
+   * @param minIdleMs Minimum idle time in milliseconds.
+   * @param start Id to start scanning from (`'0-0'` for the beginning).
+   * @param opts `count` maximum entries; `justId` return ids instead of entries.
+   * @returns An {@link AutoClaimResult}: `next` start id for the following call (`0-0` when the scan finished), the claimed `entries` (or ids), and `deleted` ids that no longer exist in the stream.
+   * @throws {@link RuvioError} `NOGROUP` when the group does not exist.
+   *
+   * @example
+   * ```ts
+   * const r = await client.xautoclaim('events', 'workers', 'w2', 60_000, '0-0', { count: 50 });
+   * ```
+   */
   xautoclaim(key: Key, group: string, consumer: string, minIdleMs: number, start: string, opts?: { count?: number; justId?: boolean }): R<AutoClaimResult> {
     const a: Arg[] = [key, group, consumer, minIdleMs, start];
     if (opts?.count !== undefined) a.push(W.COUNT, opts.count);
     if (opts?.justId) a.push(W.JUSTID);
     return this._v(T.autoclaim, C.XAUTOCLAIM, a);
   }
-  /** `XCLAIM`; entries, or ids with `justId`. */
+  /**
+   * Takes over specific pending entries (`XCLAIM`). Entries deleted from the stream are dropped from the pending list and not returned.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param group Consumer group name.
+   * @param consumer Consumer that takes ownership.
+   * @param minIdleMs Only claim entries idle at least this long (ms).
+   * @param ids Entry ids to claim (a repeated id is claimed once).
+   * @param opts {@link XClaimOptions}: `idle` or `time` (not both) set the idle clock, `retryCount`, `force` (claim an id that is in the stream but not pending), `justId`, `lastId`.
+   * @returns The claimed {@link StreamEntry} objects, or ids with `justId`.
+   * @throws {@link RuvioError} `NOGROUP`; `ERR` when `idle` and `time` are combined.
+   *
+   * @example
+   * ```ts
+   * await client.xclaim('events', 'workers', 'w2', 60_000, [id]);
+   * ```
+   */
   xclaim(key: Key, group: string, consumer: string, minIdleMs: number, ids: string[], opts?: XClaimOptions): R<StreamEntry[] | string[]> {
     const a: Arg[] = [key, group, consumer, minIdleMs];
     pushAll(a, ids);
@@ -4584,32 +5251,120 @@ export abstract class Commands {
     }
     return this._v(T.streamOrIds, C.XCLAIM, a);
   }
+  /**
+   * Describes a stream (`XINFO STREAM`): length, last-generated-id, groups, first and last entry. No radix-tree or entries-added fields.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns A map of the fields.
+   * @throws {@link RuvioError} `ERR` when the key does not exist.
+   *
+   * @example
+   * ```ts
+   * const info = await client.xinfoStream('events');
+   * ```
+   */
   xinfoStream(key: Key): R<Record<string, unknown>> {
     return this._1(T.map, C.XINFO_STREAM, key);
   }
+  /**
+   * Lists a stream's groups (`XINFO GROUPS`): name, consumers, pending, last-delivered-id, lag. Consumers are the distinct names on the pending list.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns One map per group.
+   *
+   * @example
+   * ```ts
+   * await client.xinfoGroups('events');
+   * ```
+   */
   xinfoGroups(key: Key): R<Record<string, unknown>[]> {
     return this._1(T.mapArr, C.XINFO_GROUPS, key);
   }
+  /**
+   * Lists a group's consumers (`XINFO CONSUMERS`) with pending count and idle time since the latest delivery. A consumer with an empty pending list is not stored.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param group Consumer group name.
+   * @returns One map per consumer.
+   * @throws {@link RuvioError} `NOGROUP` when the group does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.xinfoConsumers('events', 'workers');
+   * ```
+   */
   xinfoConsumers(key: Key, group: string): R<Record<string, unknown>[]> {
     return this._2(T.mapArr, C.XINFO_CONSUMERS, key, group);
   }
 
   // ---- server / introspection ------------------------------------------------------------
 
+  /**
+   * Server information (`INFO [section]`).
+   *
+   * @param section Optional section name, e.g. `'memory'`, `'latencystats'`; `'prometheus'` returns Prometheus text.
+   * @returns The text report.
+   *
+   * @example
+   * ```ts
+   * const text = await client.info('memory');
+   * ```
+   */
   info(section?: string): R<string> {
     return section === undefined ? this._0(T.lines, C.INFO) : this._1(T.lines, C.INFO, section);
   }
-  /** `CONFIG GET pattern` as an object (requirepass is redacted). */
+  /**
+   * Reads server settings (`CONFIG GET pattern`). `requirepass` is redacted; `CONFIG SET` is not supported.
+   *
+   * @param pattern Glob over setting names, e.g. `'max*'`.
+   * @returns An object of setting name to value.
+   *
+   * @example
+   * ```ts
+   * await client.configGet('port_mode');
+   * ```
+   */
   configGet(pattern: string): R<Record<string, string>> {
     return this._1(T.map, C.CONFIG_GET, pattern);
   }
+  /**
+   * Writes a checkpoint now (`SAVE`). In-process.
+   *
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.save();
+   * ```
+   */
   save(): R<'OK'> {
     return this._0(null, C.SAVE);
   }
+  /**
+   * Writes a checkpoint (`BGSAVE`). Runs in-process, not in a forked child.
+   *
+   * @returns A status message.
+   *
+   * @example
+   * ```ts
+   * await client.bgsave();
+   * ```
+   */
   bgsave(): R<string> {
     return this._0(null, C.BGSAVE);
   }
-  /** `WAIT numReplicas timeoutMs`. Blocks the connection while it waits. */
+  /**
+   * Waits for replicas (`WAIT numReplicas timeoutMs`). Blocks only the calling connection until that many replicas have synced this shard's WAL to disk, or the timeout. A missing replica never rolls the write back. Not allowed inside MULTI or scripts. With `port_mode = "per-shard"` it also covers the shards this connection's writes were forwarded to.
+   *
+   * @param numReplicas Replicas to wait for.
+   * @param timeoutMs Milliseconds to wait; `0` waits until shutdown.
+   * @returns How many replicas reached the sequence (`0` on a server that is off or a replica).
+   *
+   * @example
+   * ```ts
+   * const acked = await worker.wait(1, 2000);
+   * ```
+   */
   wait(numReplicas: number, timeoutMs: number): R<number> {
     return this._2(null, C.WAIT, numReplicas, timeoutMs);
   }
@@ -4617,98 +5372,411 @@ export abstract class Commands {
   // ---- transactions (raw; prefer client.multi() and client.isolated()) -------------------
 
   /**
-   * `WATCH key...`. Only meaningful on a connection you own: use
-   * `client.isolated(c => ...)` or a `duplicate()`d client, not the shared one.
+   * Marks keys for optimistic locking (`WATCH`). A later write by any connection (including this one) makes the next `EXEC` fail. At most 128 watched keys.
+   * Only meaningful on a connection you own: use `client.isolated(c => ...)` or a `duplicate()`d client, not the shared one.
+   *
+   * @param keys Keys to operate on.
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.isolated(async (c) => {
+   *   await c.watch('balance');
+   *   const bal = Number(await c.get('balance'));
+   *   const res = await c.multi().set('balance', bal - 1).exec(); // null if balance changed
+   * });
+   * ```
    */
   watch(...keys: Key[]): R<'OK'> {
     return this._v(null, C.WATCH, keys);
   }
+  /**
+   * Forgets all watched keys (`UNWATCH`).
+   *
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await c.unwatch();
+   * ```
+   */
   unwatch(): R<'OK'> {
     return this._0(null, C.UNWATCH);
   }
 
   // ---- scripts ---------------------------------------------------------------------------
 
+  /**
+   * Runs a Lua script (`EVAL`). Lua 5.1 sandbox; writes are one WAL batch.
+   * Declared keys must share a slot; a script with no keys runs on the connection's shard. Scripts cannot call `SELECT`, `FLUSHDB`, `FLUSHALL`, `SWAPDB` or `MOVE`.
+   *
+   * @param script Lua source.
+   * @param keys Keys, available to the script as `KEYS[1..]`.
+   * @param args Other arguments, available as `ARGV[1..]`.
+   * @returns The script's result, converted to a reply (raw: strings, numbers, arrays, `null`).
+   * @throws {@link RuvioError} on a script error; `CROSSSLOT` when the keys are in different slots.
+   *
+   * @example
+   * ```ts
+   * const n = await client.eval('return redis.call("INCRBY", KEYS[1], ARGV[1])', ['hits'], [5]);
+   * ```
+   */
   eval(script: string, keys: Key[] = [], args: Value[] = []): R<unknown> {
     return this._v(null, C.EVAL, pushAll(pushAll([script, keys.length], keys), args));
   }
+  /**
+   * Runs a cached script by its SHA-1 (`EVALSHA`). The cache is per shard and memory-only, so after a restart the script is gone.
+   *
+   * @param sha1 Hash returned by {@link scriptLoad}.
+   * @param keys Keys (`KEYS`).
+   * @param args Other arguments (`ARGV`).
+   * @returns The script's result.
+   * @throws {@link RuvioError} `NOSCRIPT` when the script is not cached (load it again).
+   *
+   * @example
+   * ```ts
+   * const sha = await client.scriptLoad('return 1');
+   * await client.evalsha(sha);
+   * ```
+   */
   evalsha(sha1: string, keys: Key[] = [], args: Value[] = []): R<unknown> {
     return this._v(null, C.EVALSHA, pushAll(pushAll([sha1, keys.length], keys), args));
   }
+  /**
+   * Caches a script without running it (`SCRIPT LOAD`). The cache is not durable.
+   *
+   * @param script Lua source.
+   * @returns The SHA-1 hex digest.
+   *
+   * @example
+   * ```ts
+   * const sha = await client.scriptLoad('return ARGV[1]');
+   * ```
+   */
   scriptLoad(script: string): R<string> {
     return this._1(null, C.SCRIPT_LOAD, script);
   }
+  /**
+   * Tests whether scripts are cached (`SCRIPT EXISTS`).
+   *
+   * @param sha1s Digests to check.
+   * @returns One boolean per digest.
+   *
+   * @example
+   * ```ts
+   * await client.scriptExists(sha); // [true]
+   * ```
+   */
   scriptExists(...sha1s: string[]): R<boolean[]> {
     return this._v(T.boolArr, C.SCRIPT_EXISTS, sha1s);
   }
+  /**
+   * Empties the script cache (`SCRIPT FLUSH`).
+   *
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.scriptFlush();
+   * ```
+   */
   scriptFlush(): R<'OK'> {
     return this._0(null, C.SCRIPT_FLUSH);
   }
+  /**
+   * Stops the running script (`SCRIPT KILL`).
+   *
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `NOTBUSY` when no script is running.
+   *
+   * @example
+   * ```ts
+   * await client.scriptKill();
+   * ```
+   */
   scriptKill(): R<'OK'> {
     return this._0(null, C.SCRIPT_KILL);
   }
+  /**
+   * Calls a function stored with {@link functionLoad} (`FCALL`). Same key rules as {@link eval}. Lua is not replayed.
+   *
+   * @param name Function name.
+   * @param keys Keys (`KEYS`).
+   * @param args Other arguments (`ARGV`).
+   * @returns The function's result.
+   * @throws {@link RuvioError} when no function has that name.
+   *
+   * @example
+   * ```ts
+   * await client.fcall('bump', ['hits'], [1]);
+   * ```
+   */
   fcall(name: string, keys: Key[] = [], args: Value[] = []): R<unknown> {
     return this._v(null, C.FCALL, pushAll(pushAll([name, keys.length], keys), args));
   }
-  /** `FUNCTION LOAD name body` (Ruvio form: one named Lua body, memory only). */
+  /**
+   * Stores a named Lua function body (`FUNCTION LOAD name body`, Ruvio form: one named body, not a Redis library shebang). Kept in memory on the shard and lost on restart.
+   *
+   * @param name Function name.
+   * @param body Lua source.
+   * @returns The server reply.
+   *
+   * @example
+   * ```ts
+   * await client.functionLoad('bump', 'return redis.call("INCR", KEYS[1])');
+   * ```
+   */
   functionLoad(name: string, body: string): R<unknown> {
     return this._2(null, C.FUNCTION_LOAD, name, body);
   }
+  /**
+   * Lists loaded functions (`FUNCTION LIST`) in byte order of their names.
+   *
+   * @returns The function names.
+   *
+   * @example
+   * ```ts
+   * await client.functionList();
+   * ```
+   */
   functionList(): R<unknown[]> {
     return this._0(null, C.FUNCTION_LIST);
   }
+  /**
+   * Removes a function (`FUNCTION DELETE`).
+   *
+   * @param name Function name.
+   * @returns `true` when removed; `false` when it did not exist.
+   *
+   * @example
+   * ```ts
+   * await client.functionDelete('bump');
+   * ```
+   */
   functionDelete(name: string): R<boolean> {
     return this._1(T.bool, C.FUNCTION_DELETE, name);
   }
 
   // ---- cluster ---------------------------------------------------------------------------
 
+  /**
+   * Slot ownership (`CLUSTER SLOTS`). Static topology of the shards in one process; hosts and ports come from `advertised_host` and `advertised_port`. {@link ClusterClient} reads this itself.
+   *
+   * @returns Raw slot ranges with master host, port and id.
+   * @throws {@link RuvioError} `ERR` ("cluster mode is disabled") on a server running a single shard.
+   *
+   * @example
+   * ```ts
+   * const slots = await client.clusterSlots();
+   * ```
+   */
   clusterSlots(): R<unknown[]> {
     return this._0(null, C.CLUSTER_SLOTS);
   }
+  /**
+   * Node list (`CLUSTER NODES`). Static topology; every shard is a primary.
+   *
+   * @returns Text, one line per node.
+   * @throws {@link RuvioError} `ERR` when cluster mode is disabled.
+   *
+   * @example
+   * ```ts
+   * await client.clusterNodes();
+   * ```
+   */
   clusterNodes(): R<string> {
     return this._0(T.lines, C.CLUSTER_NODES);
   }
+  /**
+   * Shard list (`CLUSTER SHARDS`). Every shard is a primary.
+   *
+   * @returns Raw shard descriptions.
+   * @throws {@link RuvioError} `ERR` when cluster mode is disabled.
+   *
+   * @example
+   * ```ts
+   * await client.clusterShards();
+   * ```
+   */
   clusterShards(): R<unknown[]> {
     return this._0(null, C.CLUSTER_SHARDS);
   }
+  /**
+   * Cluster state (`CLUSTER INFO`): `cluster_state` is always `ok` and every slot is assigned.
+   *
+   * @returns Text of `field:value` lines.
+   * @throws {@link RuvioError} `ERR` when cluster mode is disabled.
+   *
+   * @example
+   * ```ts
+   * await client.clusterInfo();
+   * ```
+   */
   clusterInfo(): R<string> {
     return this._0(T.lines, C.CLUSTER_INFO);
   }
+  /**
+   * Id of the shard that received the command (`CLUSTER MYID`).
+   *
+   * @returns The node id.
+   * @throws {@link RuvioError} `ERR` when cluster mode is disabled.
+   *
+   * @example
+   * ```ts
+   * await client.clusterMyid();
+   * ```
+   */
   clusterMyid(): R<string> {
     return this._0(null, C.CLUSTER_MYID);
   }
+  /**
+   * Hash slot of a key (`CLUSTER KEYSLOT`), 0 to 16383. Also works with one shard. Locally: {@link hashSlot}.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The slot number.
+   *
+   * @example
+   * ```ts
+   * await client.clusterKeyslot('user:{42}'); // same slot as 'cart:{42}'
+   * ```
+   */
   clusterKeyslot(key: Key): R<number> {
     return this._1(null, C.CLUSTER_KEYSLOT, key);
   }
+  /**
+   * Allows reads from replicas on this connection (`READONLY`). Returns OK in cluster mode; there are no replicas to read from.
+   *
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `ERR` when cluster mode is disabled.
+   *
+   * @example
+   * ```ts
+   * await client.readonly();
+   * ```
+   */
   readonly(): R<'OK'> {
     return this._0(null, C.READONLY);
   }
+  /**
+   * Undoes {@link readonly} (`READWRITE`).
+   *
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `ERR` when cluster mode is disabled.
+   *
+   * @example
+   * ```ts
+   * await client.readwrite();
+   * ```
+   */
   readwrite(): R<'OK'> {
     return this._0(null, C.READWRITE);
   }
 
   // ---- pub/sub (publishing; subscribing lives on Subscriber) ----------------------------
 
+  /**
+   * Sends a message to a channel (`PUBLISH`). Delivered to exact `SUBSCRIBE` clients and matching `PSUBSCRIBE` patterns on every shard, in both port modes. Not stored, not durable. A full subscriber queue disconnects that subscriber. Receive with {@link Subscriber}.
+   *
+   * @param channel Channel name.
+   * @param message Message text.
+   * @returns The number of subscribers that received it (summed over shards).
+   *
+   * @example
+   * ```ts
+   * await client.publish('news', 'hello');
+   * ```
+   */
   publish(channel: Key, message: Value): R<number> {
     return this._2(null, C.PUBLISH, channel, message);
   }
+  /**
+   * Sends a message to a sharded channel (`SPUBLISH`). Delivered only to `SSUBSCRIBE` subscribers of that channel on the shard that owns the channel's slot. Not stored. {@link ClusterClient} routes it by channel.
+   *
+   * @param channel Channel name.
+   * @param message Message text.
+   * @returns The number of subscribers that received it.
+   *
+   * @example
+   * ```ts
+   * await client.spublish('orders:eu', 'created');
+   * ```
+   */
   spublish(channel: Key, message: Value): R<number> {
     return this._2(null, C.SPUBLISH, channel, message);
   }
 
   // ---- bitmaps ---------------------------------------------------------------------------
 
+  /**
+   * Sets or clears one bit (`SETBIT`), creating and zero-padding the string as needed. The TTL is kept.
+   * The bitmap is limited to 16 MiB (offset below 134,217,728) and each call rewrites the whole value.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param offset Bit position, 0 to 134,217,727.
+   * @param bit `0` or `1`.
+   * @returns The previous value of the bit.
+   * @throws {@link RuvioError} `ERR` for an offset out of range; `WRONGTYPE`.
+   *
+   * @example
+   * ```ts
+   * await client.setbit('online', 1234, 1);
+   * ```
+   */
   setbit(key: Key, offset: number, bit: 0 | 1): R<number> {
     return this._3(null, C.SETBIT, key, offset, bit);
   }
+  /**
+   * Reads one bit (`GETBIT`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param offset Bit position, up to 2^32-1.
+   * @returns `0` or `1`; `0` when the key is missing or the offset is past the end.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.getbit('online', 1234);
+   * ```
+   */
   getbit(key: Key, offset: number): R<number> {
     return this._2(null, C.GETBIT, key, offset);
   }
+  /**
+   * Counts set bits (`BITCOUNT [start end [BYTE|BIT]]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param start First byte (or bit) of the range; negative counts from the end. Only used together with `end`.
+   * @param end Last byte (or bit), inclusive.
+   * @param unit `'BYTE'` (default) or `'BIT'`.
+   * @returns The number of bits set; `0` for a missing key.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.bitcount('online');
+   * await client.bitcount('online', 0, 7, 'BYTE');
+   * ```
+   */
   bitcount(key: Key, start?: number, end?: number, unit?: BitUnit): R<number> {
     if (start === undefined || end === undefined) return this._1(null, C.BITCOUNT, key);
     return unit === undefined ? this._3(null, C.BITCOUNT, key, start, end) : this._4(null, C.BITCOUNT, key, start, end, unit);
   }
+  /**
+   * Finds the first bit with a given value (`BITPOS`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param bit `0` or `1`.
+   * @param start Optional first byte (or bit) to search.
+   * @param end Optional last byte (or bit), inclusive; needs `start`.
+   * @param unit `'BYTE'` (default) or `'BIT'`; needs `end`.
+   * @returns The bit position, or `-1` when not found.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.bitpos('online', 1);
+   * ```
+   */
   bitpos(key: Key, bit: 0 | 1, start?: number, end?: number, unit?: BitUnit): R<number> {
     const a: Arg[] = [key, bit];
     if (start !== undefined) {
@@ -4720,17 +5788,53 @@ export abstract class Commands {
     }
     return this._v(null, C.BITPOS, a);
   }
+  /**
+   * Bitwise operation across strings, stored in `destination` (`BITOP`). Result limited to 16 MiB. Keys must share a slot.
+   *
+   * @param op `'AND'`, `'OR'`, `'XOR'` or `'NOT'` (`NOT` takes exactly one source).
+   * @param destination Key that receives the result (any existing value is replaced).
+   * @param keys Source keys.
+   * @returns The length in bytes of the stored result.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.bitop('AND', '{d}both', '{d}a', '{d}b');
+   * ```
+   */
   bitop(op: 'AND' | 'OR' | 'XOR' | 'NOT', destination: Key, ...keys: Key[]): R<number> {
     return this._v(null, C.BITOP, pushAll([op, destination], keys));
   }
   /**
-   * `BITFIELD key op...` with raw operation words, e.g.
-   * `bitfield(k, 'SET', 'u8', 0, 200, 'GET', 'u8', 0, 'OVERFLOW', 'SAT', 'INCRBY', 'u8', 0, 100)`.
+   * Reads and writes integer fields inside a string (`BITFIELD key op...`) using raw operation words.
+   * Operations: `GET type offset`, `SET type offset value`, `INCRBY type offset delta` and `OVERFLOW WRAP|SAT|FAIL`. Types are `i1`..`i64` (signed) and `u1`..`u63` (unsigned). An offset is a bit number, or `#n` for the nth field of that width. The field must end below 134,217,728 bits. A write rewrites the whole value.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param ops Operation words in order.
+   * @returns One result per GET/SET/INCRBY: the number, or `null` when `OVERFLOW FAIL` refused it.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.bitfield('k', 'SET', 'u8', 0, 200, 'GET', 'u8', 0, 'OVERFLOW', 'SAT', 'INCRBY', 'u8', 0, 100);
+   * ```
    */
   bitfield(key: Key, ...ops: Value[]): R<(number | null)[]> {
     return this._kv(null, C.BITFIELD, key, ops);
   }
-  /** `BITFIELD_RO key GET type offset ...`. */
+  /**
+   * Read-only fields (`BITFIELD_RO key GET type offset ...`). Same types and limits as {@link bitfield}.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param gets One `[type, offset]` pair per field to read, e.g. `['u8', 0]`.
+   * @returns The field values, in order.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.bitfieldRo('k', ['u8', 0], ['i16', '#1']);
+   * ```
+   */
   bitfieldRo(key: Key, ...gets: [type: string, offset: number | string][]): R<number[]> {
     const a: Arg[] = [key];
     for (const g of gets) a.push(W.GET, g[0], g[1]);
@@ -4739,12 +5843,50 @@ export abstract class Commands {
 
   // ---- hyperloglog -----------------------------------------------------------------------
 
+  /**
+   * Adds elements to a HyperLogLog (`PFADD`). The dense 12,304-byte encoding is always used and every call rewrites the value.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param elements Elements.
+   * @returns `true` when the estimate changed; `false` otherwise.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.pfadd('visitors', 'u1', 'u2');
+   * ```
+   */
   pfadd(key: Key, ...elements: Value[]): R<boolean> {
     return this._kv(T.bool, C.PFADD, key, elements);
   }
+  /**
+   * Estimated number of distinct elements (`PFCOUNT`). Several keys give the union estimate without storing it. Estimates match Redis 7.
+   *
+   * @param keys Keys to operate on.
+   * @returns The estimate; `0` for missing keys.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.pfcount('visitors');
+   * ```
+   */
   pfcount(...keys: Key[]): R<number> {
     return this._v(null, C.PFCOUNT, keys);
   }
+  /**
+   * Merges HyperLogLogs into `destination` (`PFMERGE`). The destination takes part in the union.
+   *
+   * @param destination Key that receives the result (any existing value is replaced).
+   * @param sources Source keys.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.pfmerge('visitors:all', 'visitors:mon', 'visitors:tue');
+   * ```
+   */
   pfmerge(destination: Key, ...sources: Key[]): R<'OK'> {
     return this._kv(null, C.PFMERGE, destination, sources);
   }
