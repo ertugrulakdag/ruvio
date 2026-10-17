@@ -200,7 +200,7 @@ cd ruvio-$v-linux-x64
       <section class="step panel prose" id="ui" aria-labelledby="ui-h">
         <h2 id="ui-h">Operator UI</h2>
         <p>
-          A browser view of one running server: data, command forms, Pub/Sub and ACL users. The container serves the
+          A browser view of one running server: data, command forms, a command console, Pub/Sub and ACL users. The container serves the
           browser and connects to the Ruvio server named by <code>RUVIO_UI_TARGET_HOST</code> and{" "}
           <code>RUVIO_UI_TARGET_PORT</code>. Sign-in is the server ACL user.
         </p>
@@ -210,6 +210,42 @@ docker run --rm -p 8080:8080 \\
   -e RUVIO_UI_TARGET_PORT=6379 \\
   salihcantekin/ruvio-ui:linux`} />
         <p>Then open <code>http://127.0.0.1:8080</code>. Port 8080 is only the UI.</p>
+        <figure class="shot">
+          <img src="/images/ui-overview.png" alt="Operator UI overview: shard health, keys, memory and command counters" width="1440" height="1000" loading="lazy" />
+        </figure>
+        <h3 id="ui-console">Console</h3>
+        <p>
+          The Console tab, at the bottom of the menu, runs server commands from the browser. It opens only when you
+          press <strong>Connect console</strong>, and commands run with the permissions of the user you signed in as.
+          Replies are formatted: JSON is pretty-printed, multi-line text such as <code>INFO</code> shows as plain
+          lines, and large results are cut on screen with <strong>Show more</strong>, <strong>Copy all</strong> and{" "}
+          <strong>Download</strong> for the full text. Errors keep the server's message and add a short hint, and
+          destructive commands such as <code>FLUSHALL</code> ask before they run. Subscriptions and blocking commands
+          are refused; Pub/Sub has its own screen.
+        </p>
+        <div class="shots">
+          <figure class="shot"><img src="/images/ui-console.png" alt="Console running commands and showing a formatted JSON reply" width="1440" height="1100" loading="lazy" /></figure>
+          <figure class="shot"><img src="/images/ui-data.png" alt="Data screen showing a JSON document as a tree" width="1440" height="1000" loading="lazy" /></figure>
+        </div>
+        <h3 id="ui-docker">UI in Docker, Ruvio on the same machine</h3>
+        <p>
+          Inside the container, <code>localhost</code> is the container itself. Give the UI the name of the machine that
+          runs Docker, <code>host.docker.internal</code>, and start the Ruvio binary on an address the container can
+          reach, with a password:
+        </p>
+        <CodeBlock lang="shell" code={`ruvio --address 0.0.0.0:6379 --requirepass change-me
+
+docker run --rm -p 8080:8080 \\
+  -e RUVIO_UI_TARGET_HOST=host.docker.internal \\
+  -e RUVIO_UI_TARGET_PORT=6379 \\
+  -e RUVIO_UI_TARGET_PASSWORD=change-me \\
+  salihcantekin/ruvio-ui:linux`} />
+        <p>
+          With more than one shard, sign in to any one shard port; the UI finds the others from the server and needs every
+          shard port reachable. Set <code>RUVIO_ADVERTISE_HOST</code> on the server to a name the UI can reach. The
+          Windows firewall rule, Linux notes and a list of connection errors are in{" "}
+          <a href="/docs/ui-connections/">Connecting the Operator UI</a>; the same file ships in every server download.
+        </p>
       </section>
 
       <section class="step panel prose" id="next" aria-labelledby="next-h">
@@ -232,6 +268,10 @@ docker run --rm -p 8080:8080 \\
 <style>
   .step { scroll-margin-top: 88px; display: grid; gap: 16px; }
   .step + .step { margin-top: 20px; }
+  .shot { margin: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--code-bg); }
+  .shot img { display: block; width: 100%; height: auto; }
+  .shots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  @media (max-width: 760px) { .shots { grid-template-columns: 1fr; } }
   .step > * + * { margin-top: 0; }
   .step h2 { display: flex; align-items: center; gap: 14px; margin: 0 0 4px; font-size: 24px; line-height: 1.25; color: var(--ink); }
   .step-no {

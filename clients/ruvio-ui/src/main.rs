@@ -854,7 +854,10 @@ fn shards(stream: &mut TcpStream, session_id: &str) -> std::io::Result<()> {
 
     let (listed, warning) = match execute_read_retry(&mut session.client, &["CLUSTER", "SLOTS"]) {
         Ok(value) => match slots_json(&value).filter(|items| !items.is_empty()) {
-            Some(nodes) => (Some(nodes), None),
+            Some(mut nodes) => {
+                let note = reroute_loopback(&mut nodes, &session.host);
+                (Some(nodes), note)
+            }
             None => (
                 None,
                 Some("No shard topology reported. Showing the entry node only.".to_owned()),
@@ -873,6 +876,35 @@ fn shards(stream: &mut TcpStream, session_id: &str) -> std::io::Result<()> {
         200,
         json!({"ok": true, "shards": listed.unwrap_or(vec![fallback[0].clone()]), "warning": warning}),
     )
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim_matches(['[', ']']);
+    host.eq_ignore_ascii_case("localhost") || host == "::1" || host.starts_with("127.")
+}
+
+/// A server that does not set `advertised_host` names its shards `127.0.0.1`, which points back
+/// at this process when the server is elsewhere (another machine, a host the UI container
+/// reaches by name). Such shards are reached through the address the user signed in with.
+fn reroute_loopback(nodes: &mut [Value], entry_host: &str) -> Option<String> {
+    if is_loopback_host(entry_host) {
+        return None;
+    }
+
+    let mut changed = false;
+
+    for node in nodes.iter_mut() {
+        if node["host"].as_str().is_some_and(is_loopback_host) {
+            node["host"] = json!(entry_host);
+            changed = true;
+        }
+    }
+
+    changed.then(|| {
+        format!(
+            "The server names its shards 127.0.0.1, so they are reached through {entry_host}. Set RUVIO_ADVERTISE_HOST on the server to a name clients can reach to make this permanent."
+        )
+    })
 }
 
 fn slots_json(value: &RespValue) -> Option<Vec<Value>> {
@@ -1091,7 +1123,8 @@ fn write_json(stream: &mut TcpStream, status: u16, body: Value) -> std::io::Resu
 
 #[cfg(test)]
 mod tests {
-    use super::{execute_read_retry, read_request, request_session_id, retryable_read};
+    use super::{execute_read_retry, read_request, request_session_id, reroute_loopback, retryable_read};
+    use serde_json::json;
     use ruvio_client::{Client, ClientOptions, RespValue};
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -1120,6 +1153,25 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn loopback_shards_are_reached_through_the_entry_host() {
+        let mut nodes = vec![
+            json!({"id": 0, "host": "127.0.0.1", "port": 6379}),
+            json!({"id": 1, "host": "localhost", "port": 6380}),
+            json!({"id": 2, "host": "10.0.0.9", "port": 6381}),
+        ];
+        let note = reroute_loopback(&mut nodes, "ruvio");
+        assert!(note.is_some_and(|text| text.contains("through ruvio")));
+        assert_eq!(nodes[0]["host"], "ruvio");
+        assert_eq!(nodes[1]["host"], "ruvio");
+        assert_eq!(nodes[2]["host"], "10.0.0.9");
+
+        let mut local = vec![json!({"id": 0, "host": "127.0.0.1", "port": 6379})];
+        assert!(reroute_loopback(&mut local, "127.0.0.1").is_none());
+        assert!(reroute_loopback(&mut local, "localhost").is_none());
+        assert_eq!(local[0]["host"], "127.0.0.1");
     }
 
     #[test]

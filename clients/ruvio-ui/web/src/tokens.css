@@ -1,0 +1,70 @@
+/*
+ * Ruvio operator theme ("Dusk Rust"), the same palette as the project site.
+ * Every color and font in the UI comes from here; to change the look, edit this file only.
+ */
+:root {
+  /* Surfaces */
+  --bg: #0a0c14;
+  --panel: rgba(16, 20, 33, 0.78);
+  --panel-solid: #10131f;
+  --soft: #151a2a;
+  --soft-hover: #1c2237;
+  --inset: rgba(8, 10, 18, 0.55);
+  --line: #242b3e;
+  --hover-wash: rgba(160, 175, 215, 0.07);
+  --shadow: rgba(2, 3, 8, 0.6);
+
+  /* Text */
+  --ink: #e9ecf3;
+  --muted: #959db0;
+  --faint: #808a9e;
+
+  /* Brand rust: --accent fills buttons, --accent-text is the lighter tone for links and marks on dark ground */
+  --accent: #b4512a;
+  --accent-hover: #c25c33;
+  --accent-ink: #ffffff;
+  --accent-text: #e0875f;
+  --accent-dim: rgba(180, 81, 42, 0.09);
+  --accent-line: rgba(224, 135, 95, 0.45);
+
+  /* Page ground: night with a cool glow up left, a dusk glow down right and a faint dot grid.
+     --sky-* is the header band, night to dusk; --dusk is the horizon glow as an RGB triple. */
+  --dusk: 176, 76, 36;
+  --ground-glow-a: rgba(141, 162, 192, 0.09);
+  --ground-glow-b: rgba(var(--dusk), 0.09);
+  --ground-dot: rgba(160, 175, 215, 0.075);
+  --ground:
+    radial-gradient(70vw 60vh at 8% -8%, var(--ground-glow-a), transparent 70%),
+    radial-gradient(60vw 55vh at 100% 105%, var(--ground-glow-b), transparent 70%),
+    radial-gradient(circle, var(--ground-dot) 1px, transparent 1.4px) 0 0 / 24px 24px,
+    var(--bg);
+  --sky-0: #0a0c14;
+  --sky-1: #11162e;
+  --sky-2: #20152a;
+  --sky:
+    radial-gradient(60% 120% at 30% 160%, rgba(var(--dusk), 0.28), rgba(var(--dusk), 0) 70%),
+    linear-gradient(180deg, var(--sky-0) 0%, var(--sky-1) 70%, var(--sky-2) 100%);
+  --sky-edge: linear-gradient(90deg, transparent, rgba(var(--dusk), 0.6), transparent);
+
+  /* Type scale */
+  --fs-base: 15.5px;
+
+  /* Status */
+  --danger: #ff9d9d;
+  --danger-line: rgba(255, 157, 157, 0.35);
+  --danger-wash: rgba(255, 157, 157, 0.05);
+  --warn: #f0b45a;
+
+  /* JSON viewer */
+  --syn-key: #8da2c0;
+  --syn-string: #9fe3a0;
+  --syn-number: #f0b45a;
+  --syn-boolean: #d79bff;
+  --placeholder: #6f7a93;
+
+  /* Type */
+  --f-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  color-scheme: dark;
+}

@@ -70,8 +70,17 @@ are not replayed; permission, wrong-type, and persistent failures remain visible
 
 ## Operator screens
 
-The panel uses the public site's navy background and mint accent, with
-responsive layouts and keyboard-accessible controls.
+The panel uses the public site's Dusk Rust theme, with responsive layouts and
+keyboard-accessible controls. Every color and font lives in
+`web/src/tokens.css`; change the look there.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/docs/images/ui-overview.png" width="90%" alt="Overview: shard health, keys, memory and command counters">
+</p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/docs/images/ui-data.png" width="45%" alt="Data: a JSON document as a tree">
+  <img src="https://raw.githubusercontent.com/salihcantekin/ruvio/main/docs/images/ui-console.png" width="45%" alt="Console: commands and a formatted JSON reply">
+</p>
 
 - **Overview** is the first screen after sign-in. It refreshes shard health,
   key counts, charged store memory, persistence state, and available command
@@ -110,6 +119,18 @@ responsive layouts and keyboard-accessible controls.
 - **Pub/Sub** manages channel and pattern subscriptions and publishing, with a
   bounded message feed. Changing shard scope stops subscriptions and clears the
   old feed. In All shards, Pub/Sub uses the entry node; it does not fan out.
+- **Console** (bottom of the menu) runs server commands. It stays closed until
+  you press **Connect console**, and commands run with the permissions of the
+  signed-in user. Replies print redis-cli style; a single string reply shows as
+  plain lines, and JSON is pretty-printed (switch between Auto, Text, JSON and
+  Quoted, and Trim whitespace). Only the first 200 lines and 1,000 characters
+  per value are drawn, with **Show more**; **Copy all** and **Download** give
+  the full result. Errors keep the server's text and add a short hint.
+  `FLUSHALL`, `FLUSHDB`, `SHUTDOWN`, `DEBUG`, `KEYS`, `CONFIG SET` and
+  `ACL SETUSER`/`DELUSER` ask first; subscriptions, `MONITOR`, blocking
+  commands and `MULTI`/`EXEC` are refused (Pub/Sub has its own screen). Up and
+  Down browse history, Esc clears the line, Ctrl+L clears the screen, and the
+  console can go full screen.
 - **ACL** loads the live user directory and lets you inspect or update a user.
   The persistence boundary is shown beside the form: surviving restart still
   means configuring `ruvio.toml`, not saving from this panel.

@@ -5,8 +5,8 @@
 #   deploy/local.sh status   show containers and run PING, SET, GET on Ruvio and Redis
 #   deploy/local.sh down     stop and remove the containers (keeps the Ruvio volume)
 #
-# Ruvio: 127.0.0.1:6379, no username or password (localhost only).
-# Redis: 127.0.0.1:6380, no password (localhost only).
+# Ruvio: 127.0.0.1:6379 (shard 0) and 6380 (shard 1), no username or password (localhost only).
+# Redis: 127.0.0.1:6390, no password (localhost only).
 # UI:    http://127.0.0.1:8080
 set -eu
 
@@ -80,7 +80,7 @@ case "${1:-status}" in
   status)
     if [ -f "$settings_file" ]; then . "$settings_file"; export LOCAL_ARCH; fi
     compose ps
-    check 6380 redis
+    check 6390 redis
     check 6379 ruvio
     ;;
   down)

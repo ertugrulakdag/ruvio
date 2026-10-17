@@ -253,7 +253,7 @@
   async function changeExpiry(event) {
     event.preventDefault();
     await action(async () => {
-      await run(["EXPIRE", selected, expiry]);
+      await run(["EXPIRE", selected, String(expiry)]);
       ttl = scalar(await run(["TTL", selected]));
     });
   }

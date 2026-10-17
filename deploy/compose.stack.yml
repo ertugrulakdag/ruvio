@@ -9,7 +9,7 @@ services:
     container_name: redis-local
     restart: unless-stopped
     ports:
-      - "127.0.0.1:6380:6379"
+      - "127.0.0.1:6390:6379"
     command: ["redis-server", "--save", "", "--appendonly", "no", "--protected-mode", "no", "--bind", "0.0.0.0"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -22,11 +22,15 @@ services:
     container_name: ruvio-local
     restart: unless-stopped
     ports:
-      - "127.0.0.1:6379:6379"
+      # Two shards: shard 0 on 6379, shard 1 on 6380.
+      - "127.0.0.1:6379-6380:6379-6380"
     environment:
-      # No password: the port is published on 127.0.0.1 only.
+      # No password: the ports are published on 127.0.0.1 only.
       RUVIO_ALLOW_UNAUTHENTICATED: "true"
       RUVIO_DURABILITY: memory
+      RUVIO_SHARDS: "2"
+      # The name the UI container uses to reach each shard (cluster replies name this host).
+      RUVIO_ADVERTISE_HOST: ruvio
     volumes:
       - ruvio-data:/data
   ruvio-ui:

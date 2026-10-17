@@ -212,8 +212,15 @@ docker run --rm -p 8080:8080 \
 Open http://127.0.0.1:8080. Sign-in is the server ACL user. An empty user and password connect as `default`. If the server was started with `RUVIO_REQUIREPASS`, type that password on the sign-in screen, or set `RUVIO_UI_TARGET_PASSWORD` so the field is filled in. Tags `linux` and `latest` are the same image.
 
 <p align="center">
-  <img src="docs/images/ui-overview.png" width="90%" alt="Operator UI overview of a two-shard server">
+  <img src="docs/images/ui-overview.png" width="90%" alt="Operator UI overview: shard health, keys, memory and command counters">
 </p>
+
+<p align="center">
+  <img src="docs/images/ui-data.png" width="45%" alt="Operator UI Data screen showing a JSON document as a tree">
+  <img src="docs/images/ui-console.png" width="45%" alt="Operator UI Console running commands and showing a formatted JSON reply">
+</p>
+
+The Console tab runs commands directly, with formatted and size-capped replies, copy and download of the full result, and a confirmation before destructive commands.
 
 All shards lists every key. One shard pins Data, the command screens, and Pub/Sub to that node. Users are `ACL` identities: `default` always exists, extra users that survive a restart live in `ruvio.toml`, and `ACL SETUSER` lasts until the next start. Install notes: [Operator UI](https://ruviodb.com/get-started/#ui).
 
