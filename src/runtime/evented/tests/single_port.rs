@@ -1,10 +1,10 @@
 use super::*;
 
+/// The single-port server binds its address itself: the reserved block moves into the
+/// server's thread, so no other test takes the port before the server has stopped.
 fn serve_single_port(shards: usize) -> (SocketAddr, ShutdownToken, thread::JoinHandle<()>) {
-    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = probe.local_addr().unwrap();
-
-    drop(probe);
+    let ports = crate::test_ports::reserve();
+    let address = ports.address_at(0);
     let mut config = AppConfig {
         address: address.to_string(),
         shards,
@@ -16,17 +16,14 @@ fn serve_single_port(shards: usize) -> (SocketAddr, ShutdownToken, thread::JoinH
     config.persistence.profile = crate::DurabilityProfile::Memory;
     let shutdown = ShutdownToken::default();
     let stop = shutdown.clone();
-    let server = thread::spawn(move || run(&config, shutdown).unwrap());
+    let server = thread::spawn(move || {
+        let _ports = ports;
 
-    for _ in 0..200 {
-        if StdTcpStream::connect(address).is_ok() {
-            return (address, stop, server);
-        }
+        run(&config, shutdown).unwrap()
+    });
 
-        thread::sleep(Duration::from_millis(2));
-    }
-
-    panic!("single-port server did not start");
+    wait_until_listening(address, &server);
+    (address, stop, server)
 }
 
 fn serve_single_port_always(
@@ -42,10 +39,8 @@ fn serve_single_port_durable(
     profile: crate::DurabilityProfile,
     configure: impl FnOnce(&mut AppConfig),
 ) -> (SocketAddr, ShutdownToken, thread::JoinHandle<()>) {
-    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = probe.local_addr().unwrap();
-
-    drop(probe);
+    let ports = crate::test_ports::reserve();
+    let address = ports.address_at(0);
     let mut config = AppConfig {
         address: address.to_string(),
         shards,
@@ -60,19 +55,13 @@ fn serve_single_port_durable(
     let shutdown = ShutdownToken::default();
     let stop = shutdown.clone();
     let server = thread::spawn(move || {
+        let _ports = ports;
         // The shard whose log failed ends with an error.
         let _ = run(&config, shutdown);
     });
 
-    for _ in 0..500 {
-        if StdTcpStream::connect(address).is_ok() {
-            return (address, stop, server);
-        }
-
-        thread::sleep(Duration::from_millis(2));
-    }
-
-    panic!("single-port server did not start");
+    wait_until_listening(address, &server);
+    (address, stop, server)
 }
 
 fn read_exactly(client: &mut StdTcpStream, expected: &[u8]) {
@@ -94,11 +83,30 @@ fn pings(address: SocketAddr) -> bool {
     };
     let mut reply = [0u8; 7];
 
-    let _ = client.set_read_timeout(Some(Duration::from_secs(1)));
+    let _ = client.set_read_timeout(Some(PATIENCE));
 
     client.write_all(&resp(&[&[b"PING"]])).is_ok()
         && client.read_exact(&mut reply).is_ok()
         && &reply == b"+PONG\r\n"
+}
+
+/// Connects to a replication listener of the server running on `server`, which may come up
+/// a moment after its RESP port.
+#[track_caller]
+fn connect_replication<T>(port: u16, server: &thread::JoinHandle<T>) -> StdTcpStream {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let mut replica = None;
+
+    wait_until(&format!("the replication listener on {address}"), || {
+        assert!(!server.is_finished(), "the server ended early");
+        replica = StdTcpStream::connect(address).ok();
+        replica.is_some()
+    });
+    let replica = replica.unwrap();
+
+    replica.set_read_timeout(Some(PATIENCE)).unwrap();
+    replica.set_write_timeout(Some(PATIENCE)).unwrap();
+    replica
 }
 
 fn next_port(address: SocketAddr) -> SocketAddr {
@@ -108,9 +116,7 @@ fn next_port(address: SocketAddr) -> SocketAddr {
 fn connect(address: SocketAddr) -> StdTcpStream {
     let client = StdTcpStream::connect(address).unwrap();
 
-    client
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+    client.set_read_timeout(Some(PATIENCE)).unwrap();
     client
 }
 
@@ -176,7 +182,7 @@ fn pipelined_commands_reach_every_shard_and_replies_keep_order() {
     read_exactly(&mut single, b"+OK\r\n+PONG\r\n$1\r\n1\r\n");
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -203,7 +209,7 @@ fn keys_on_different_shards_are_rejected_until_cross_shard_support_lands() {
     assert!(reply.starts_with(b"-CROSSSLOT"), "{reply:?}");
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -258,7 +264,7 @@ fn keyspace_commands_cover_all_shards_and_publish_reaches_subscribers() {
     read_exactly(&mut client, b":0\r\n");
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 fn two_shard_keys(label: &str) -> [String; 2] {
@@ -281,7 +287,7 @@ fn blocking_pop_waits_on_the_owning_shard_from_any_home_shard() {
             blocked
                 .write_all(&resp(&[&[b"BLPOP", key.as_bytes(), b"5"]]))
                 .unwrap();
-            thread::sleep(Duration::from_millis(100));
+            wait_for_parked(address, 1);
 
             let mut pusher = connect(address);
 
@@ -333,7 +339,7 @@ fn blocking_pop_waits_on_the_owning_shard_from_any_home_shard() {
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -398,7 +404,7 @@ fn multi_exec_and_watch_run_on_the_owning_shard() {
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -438,7 +444,7 @@ fn client_tracking_invalidations_reach_the_home_shard() {
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -446,12 +452,6 @@ fn an_expired_key_is_invalidated_for_a_tracking_client() {
     let (address, stop, server) = serve_single_port(1);
     let mut tracker = connect(address);
     let mut writer = connect(address);
-
-    // Long enough that a slow machine still reads it before it expires.
-    writer
-        .write_all(&resp(&[&[b"SET", b"short", b"v", b"PX", b"1000"]]))
-        .unwrap();
-    read_exactly(&mut writer, b"+OK\r\n");
 
     tracker.write_all(&resp(&[&[b"HELLO", b"3"]])).unwrap();
     let mut hello = [0u8; 1];
@@ -463,13 +463,16 @@ fn an_expired_key_is_invalidated_for_a_tracking_client() {
     let _ = tracker.read(&mut drain);
     let _ = tracker.set_read_timeout(Some(Duration::from_secs(5)));
 
+    // One batch reads the clock once, so the GET sees the key however slow the machine is.
+    // The key is not tracked yet when this client writes it: no invalidation for the SET.
     tracker
         .write_all(&resp(&[
             &[b"CLIENT", b"TRACKING", b"on"],
+            &[b"SET", b"short", b"v", b"PX", b"1000"],
             &[b"GET", b"short"],
         ]))
         .unwrap();
-    read_exactly(&mut tracker, b"+OK\r\n$1\r\nv\r\n");
+    read_exactly(&mut tracker, b"+OK\r\n+OK\r\n$1\r\nv\r\n");
 
     // The writer's read finds the key past its deadline and removes it.
     thread::sleep(Duration::from_millis(1100));
@@ -482,7 +485,7 @@ fn an_expired_key_is_invalidated_for_a_tracking_client() {
     );
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -523,7 +526,7 @@ fn a_command_sent_to_another_shard_is_counted() {
     assert!(text.contains("other_commands:2\r\n"), "{text}");
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 fn read_line(client: &mut StdTcpStream) -> String {
@@ -586,15 +589,13 @@ fn scan_walks_every_shard_exactly_once() {
     assert_eq!(seen.len(), 60);
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
 fn restricted_user_is_refused_on_every_shard_before_forwarding() {
-    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = probe.local_addr().unwrap();
-
-    drop(probe);
+    let ports = crate::test_ports::reserve();
+    let address = ports.address_at(0);
     let mut config = AppConfig {
         address: address.to_string(),
         shards: 4,
@@ -613,14 +614,7 @@ fn restricted_user_is_refused_on_every_shard_before_forwarding() {
     let stop = shutdown.clone();
     let server = thread::spawn(move || run(&config, shutdown).unwrap());
 
-    for _ in 0..200 {
-        if StdTcpStream::connect(address).is_ok() {
-            break;
-        }
-
-        thread::sleep(Duration::from_millis(2));
-    }
-
+    wait_until_listening(address, &server);
     let mut payload = b"*3\r\n$4\r\nAUTH\r\n$3\r\nbob\r\n$2\r\npw\r\n".to_vec();
     let keys = 32;
 
@@ -658,7 +652,7 @@ fn restricted_user_is_refused_on_every_shard_before_forwarding() {
         "no forbidden write succeeded: {text}"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 fn serve_secured(
@@ -666,10 +660,8 @@ fn serve_secured(
     users: &[(&str, &str)],
     max_commands_per_second: u64,
 ) -> (SocketAddr, ShutdownToken, thread::JoinHandle<()>) {
-    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = probe.local_addr().unwrap();
-
-    drop(probe);
+    let ports = crate::test_ports::reserve();
+    let address = ports.address_at(0);
     let mut config = AppConfig {
         address: address.to_string(),
         shards,
@@ -687,17 +679,14 @@ fn serve_secured(
     config.connections.max_commands_per_second = max_commands_per_second;
     let shutdown = ShutdownToken::default();
     let stop = shutdown.clone();
-    let server = thread::spawn(move || run(&config, shutdown).unwrap());
+    let server = thread::spawn(move || {
+        let _ports = ports;
 
-    for _ in 0..200 {
-        if StdTcpStream::connect(address).is_ok() {
-            return (address, stop, server);
-        }
+        run(&config, shutdown).unwrap()
+    });
 
-        thread::sleep(Duration::from_millis(2));
-    }
-
-    panic!("single-port server did not start");
+    wait_until_listening(address, &server);
+    (address, stop, server)
 }
 
 /// Reads until `count` complete top-level replies of the simple kinds the tests use arrived.
@@ -754,7 +743,7 @@ fn unauthenticated_scan_is_refused_for_every_shard_cursor() {
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -779,7 +768,7 @@ fn scan_obeys_the_command_acl_on_every_shard() {
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -811,7 +800,7 @@ fn forwarded_commands_count_against_the_rate_limit() {
     assert_eq!(replies[1..3], [":0", ":0"], "{replies:?}");
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -865,7 +854,7 @@ fn scripts_forwarded_to_another_shard_obey_the_callers_acl() {
     read_exactly(&mut admin, b":1\r\n:1\r\n");
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -893,7 +882,7 @@ fn exec_forwarded_to_another_shard_works_for_a_restricted_user() {
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -926,7 +915,7 @@ fn aborted_transaction_is_not_executed_on_the_owning_shard() {
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -958,7 +947,7 @@ fn transaction_aborts_after_a_key_refused_on_either_shard() {
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -1005,20 +994,16 @@ fn swapdb_and_queued_fan_commands_are_refused_with_several_shards() {
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
 fn wait_counts_replicas_that_reached_every_shard() {
     let directory = tempfile::tempdir().unwrap();
-    // Each shard's replication listener takes `replication_port + shard`: hold both of them
-    // while the data port is picked, or the OS may hand out one of them again.
-    let (first, second, replication_port) = bind_consecutive_pair();
-    let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = probe.local_addr().unwrap();
-
-    drop(probe);
-    drop((first, second));
+    // The data port, then one replication port per shard (`replication_port + shard`).
+    let ports = crate::test_ports::reserve();
+    let address = ports.address_at(0);
+    let replication_port = ports.port_at(2);
     let mut config = AppConfig {
         address: address.to_string(),
         shards: 2,
@@ -1039,28 +1024,10 @@ fn wait_counts_replicas_that_reached_every_shard() {
     let stop = shutdown.clone();
     let server = thread::spawn(move || run(&config, shutdown).unwrap());
 
-    for _ in 0..200 {
-        if StdTcpStream::connect(address).is_ok() {
-            break;
-        }
-
-        thread::sleep(Duration::from_millis(5));
-    }
-
+    wait_until_listening(address, &server);
     // A replica of shard 0 only, which acknowledges everything that shard will ever write.
     // The replication listener may come up a moment after the RESP port.
-    let mut replica = None;
-
-    for _ in 0..200 {
-        if let Ok(stream) = StdTcpStream::connect(("127.0.0.1", replication_port)) {
-            replica = Some(stream);
-            break;
-        }
-
-        thread::sleep(Duration::from_millis(5));
-    }
-
-    let mut replica = replica.expect("replication listener");
+    let mut replica = connect_replication(replication_port, &server);
     let handshake = crate::replication::encode_handshake(&crate::replication::Handshake {
         version: crate::replication::VERSION_RESUME,
         shard_id: 0,
@@ -1095,7 +1062,7 @@ fn wait_counts_replicas_that_reached_every_shard() {
 
     drop(replica);
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// A blocking pop forwarded to the shard that owns its key does not hold back the replies
@@ -1110,9 +1077,6 @@ fn replies_ahead_of_a_forwarded_blocking_pop_are_sent_before_it_waits() {
         let mut client = connect(address);
 
         client
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        client
             .write_all(&resp(&[
                 &[b"SET", b"ahead", b"1"],
                 &[b"BLPOP", key.as_bytes(), b"0"],
@@ -1122,7 +1086,7 @@ fn replies_ahead_of_a_forwarded_blocking_pop_are_sent_before_it_waits() {
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// `FILLGET ... WAIT` forwarded to the shard that owns its key does not hold back the
@@ -1143,9 +1107,6 @@ fn replies_ahead_of_a_forwarded_fillget_wait_are_sent_before_it_waits() {
         let mut client = connect(address);
 
         client
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        client
             .write_all(&resp(&[
                 &[b"SET", b"ahead", b"1"],
                 &[b"FILLGET", key.as_bytes(), b"5000", b"WAIT", b"4000"],
@@ -1155,7 +1116,7 @@ fn replies_ahead_of_a_forwarded_fillget_wait_are_sent_before_it_waits() {
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// A blocking pop parked on a shard whose WAL sync then fails, woken by a push that hands it
@@ -1181,7 +1142,7 @@ fn a_pop_woken_after_a_wal_sync_failure_gets_its_element() {
         })
         .collect();
 
-    thread::sleep(Duration::from_millis(200));
+    wait_for_parked(address, 2);
     crate::persistence::FAILING_SYNC_SHARDS
         .lock()
         .unwrap()
@@ -1221,7 +1182,7 @@ fn a_pop_woken_after_a_wal_sync_failure_gets_its_element() {
     }
 
     stop.request();
-    let _ = server.join();
+    let _ = join_within(server, PATIENCE);
 }
 
 /// A blocking pop served by a push whose own WAL sync then fails: the element came with that
@@ -1249,11 +1210,13 @@ fn a_pop_served_by_a_push_whose_sync_fails_is_refused() {
             })
             .collect();
 
-        thread::sleep(Duration::from_millis(200));
+        wait_for_parked(address, 2);
         // Only the push's own sync fails; the log then refuses every later batch. The pop
         // resumes after it, so its own commit finds the log already failed.
         super::super::connection::DELAY_SERVED_POPS
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+            .lock()
+            .unwrap()
+            .push(directory.path().to_path_buf());
         crate::persistence::FAILING_NEXT_SYNC_SHARDS
             .lock()
             .unwrap()
@@ -1272,7 +1235,9 @@ fn a_pop_served_by_a_push_whose_sync_fails_is_refused() {
         let popped_length = blocked[served].read(&mut popped).unwrap_or(0);
 
         super::super::connection::DELAY_SERVED_POPS
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+            .lock()
+            .unwrap()
+            .retain(|dir| dir != directory.path());
         crate::persistence::FAILING_NEXT_SYNC_SHARDS
             .lock()
             .unwrap()
@@ -1289,7 +1254,7 @@ fn a_pop_served_by_a_push_whose_sync_fails_is_refused() {
             String::from_utf8_lossy(&popped[..popped_length])
         );
         stop.request();
-        let _ = server.join();
+        let _ = join_within(server, PATIENCE);
     }
 }
 
@@ -1348,7 +1313,7 @@ fn a_forwarded_transaction_whose_multi_commit_failed_runs_nothing() {
         .unwrap();
     assert_eq!(read_line(&mut client), ":0");
     stop.request();
-    let _ = server.join();
+    let _ = join_within(server, PATIENCE);
 }
 
 /// A forwarded push that only hands its element to a parked client logs nothing; another
@@ -1376,7 +1341,7 @@ fn a_forwarded_push_that_only_served_a_pop_keeps_its_reply_when_the_batch_sync_f
         popper
             .write_all(&resp(&[&[b"BLPOP", key.as_bytes(), b"5"]]))
             .unwrap();
-        thread::sleep(Duration::from_millis(200));
+        wait_for_parked(address, 1);
         crate::persistence::FAILING_SYNC_SHARDS
             .lock()
             .unwrap()
@@ -1408,7 +1373,7 @@ fn a_forwarded_push_that_only_served_a_pop_keeps_its_reply_when_the_batch_sync_f
             .unwrap()
             .retain(|(dir, _)| dir != directory.path());
         stop.request();
-        let _ = server.join();
+        let _ = join_within(server, PATIENCE);
 
         // On the owning shard the pusher's connection is closed instead; nothing to check.
         if replies.is_empty() {
@@ -1453,8 +1418,9 @@ fn a_pop_that_waited_through_another_delivery_is_refused_with_its_failed_push() 
         let (address, stop, server) = serve_single_port_always(2, directory.path());
         let key = key_on_shard(shard, "queue");
         // Consecutive connections land on different shards: one pop is local, one forwarded.
+        // Each pop is parked before the next is sent: the first in line is known.
         let mut pops: Vec<StdTcpStream> = (0..2)
-            .map(|_| {
+            .map(|index| {
                 let mut client = connect(address);
 
                 client
@@ -1463,7 +1429,7 @@ fn a_pop_that_waited_through_another_delivery_is_refused_with_its_failed_push() 
                 client
                     .write_all(&resp(&[&[b"BLPOP", key.as_bytes(), b"5"]]))
                     .unwrap();
-                thread::sleep(Duration::from_millis(100));
+                wait_for_parked(address, index + 1);
                 client
             })
             .collect();
@@ -1503,7 +1469,7 @@ fn a_pop_that_waited_through_another_delivery_is_refused_with_its_failed_push() 
             .unwrap()
             .retain(|(dir, _)| dir != directory.path());
         stop.request();
-        let _ = server.join();
+        let _ = join_within(server, PATIENCE);
 
         assert!(
             pushed_length == 0 || pushed[0] == b'-',
@@ -1571,7 +1537,7 @@ fn an_everysec_write_reaches_the_log_before_its_reply_while_a_batch_waits_on_ano
 
         read_exactly(&mut holder, b"+OK\r\n:1\r\n");
         stop.request();
-        let _ = server.join();
+        let _ = join_within(server, PATIENCE);
         assert!(
             logged,
             "an acknowledged write of shard {home} was not in its WAL file"
@@ -1624,7 +1590,7 @@ fn an_everysec_write_reaches_the_log_before_its_reply_while_a_stalled_client_hol
 
     drop(holder);
     stop.request();
-    let _ = server.join();
+    let _ = join_within(server, PATIENCE);
     assert!(logged, "an acknowledged write was not in its WAL file");
 }
 
@@ -1642,15 +1608,12 @@ fn a_client_that_hangs_up_during_a_forwarded_blocking_pop_gives_up_its_waiter() 
         blocked
             .write_all(&resp(&[&[b"BLPOP", key.as_bytes(), b"0"]]))
             .unwrap();
-        thread::sleep(Duration::from_millis(150));
+        wait_for_parked(address, 1);
         drop(blocked);
-        thread::sleep(Duration::from_millis(300));
+        wait_for_parked(address, 0);
 
         let mut client = connect(address);
 
-        client
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
         client
             .write_all(&resp(&[
                 &[b"RPUSH", key.as_bytes(), b"x"],
@@ -1662,7 +1625,7 @@ fn a_client_that_hangs_up_during_a_forwarded_blocking_pop_gives_up_its_waiter() 
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -1692,7 +1655,7 @@ fn evented_hot_keys_serve_database_zero_only() {
         b"+OK\r\n+OK\r\n$-1\r\n:1\r\n+OK\r\n$4\r\nzero\r\n+OK\r\n$-1\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// Per-shard mode: a client that is not cluster-aware writes a key of shard 1 through shard 0's
@@ -1700,80 +1663,37 @@ fn evented_hot_keys_serve_database_zero_only() {
 #[test]
 fn per_shard_wait_counts_the_shards_a_connection_forwarded_to() {
     let directory = tempfile::tempdir().unwrap();
-    // Two consecutive data ports low enough for their cluster bus ports (data + 10000), and a
-    // replication port after them. A start that fails is retried on other ports.
-    let mut started = None;
+    // Two consecutive data ports, then a replication port per shard. The reserved range sits
+    // low enough for the cluster bus ports (data + 10000), which are only advertised.
+    let ports = crate::test_ports::reserve();
+    let address = ports.address_at(0);
+    let replication_port = ports.port_at(2);
+    let mut config = AppConfig {
+        address: address.to_string(),
+        shards: 2,
+        port_mode: crate::config::PortMode::PerShard,
+        shutdown_grace: Duration::from_secs(1),
+        ..AppConfig::default()
+    };
 
-    for attempt in 0..20u16 {
-        // Below every OS's ephemeral range (Linux from 32768), so no other test's sockets sit
-        // there, with room for the bus ports. The replication port is fixed too: one taken from
-        // the ephemeral range can be grabbed by a parallel test before the server binds it,
-        // after the data ports already answer.
-        let base = 10_000 + (std::process::id() as u16 % 600) * 17 + attempt * 37;
-        let replication_port = base + 2;
-        let address: std::net::SocketAddr = format!("127.0.0.1:{base}").parse().unwrap();
-        let mut config = AppConfig {
-            address: address.to_string(),
-            shards: 2,
-            port_mode: crate::config::PortMode::PerShard,
-            shutdown_grace: Duration::from_secs(1),
-            ..AppConfig::default()
-        };
+    config.persistence = PersistenceConfig {
+        profile: crate::DurabilityProfile::Everysec,
+        data_dir: directory.path().to_path_buf(),
+        sync_interval: Duration::from_millis(1),
+        ..PersistenceConfig::default()
+    };
+    config.replication.role = crate::config::ReplicationRole::Primary;
+    config.replication.listen = Some(format!("127.0.0.1:{replication_port}").parse().unwrap());
+    let shutdown = ShutdownToken::default();
+    let stop = shutdown.clone();
+    let server = thread::spawn(move || run(&config, shutdown));
 
-        config.persistence = PersistenceConfig {
-            profile: crate::DurabilityProfile::Everysec,
-            data_dir: directory.path().join(attempt.to_string()),
-            sync_interval: Duration::from_millis(1),
-            ..PersistenceConfig::default()
-        };
-        config.replication.role = crate::config::ReplicationRole::Primary;
-        config.replication.listen = Some(format!("127.0.0.1:{replication_port}").parse().unwrap());
-        let shutdown = ShutdownToken::default();
-        let stop = shutdown.clone();
-        let server = thread::spawn(move || run(&config, shutdown));
-
-        // Ready once both data ports answer PING and the replication listener accepts. A
-        // connect can reach another process on a port while this server's bind fails: give the
-        // failure time to show before trusting the ports.
-        for _ in 0..400 {
-            if server.is_finished()
-                || (pings(address)
-                    && pings(next_port(address))
-                    && StdTcpStream::connect(("127.0.0.1", replication_port)).is_ok())
-            {
-                break;
-            }
-
-            thread::sleep(Duration::from_millis(5));
-        }
-
-        thread::sleep(Duration::from_millis(100));
-
-        if server.is_finished() {
-            // Bind failed (AddrInUse): try other ports.
-            let _ = server.join();
-            continue;
-        }
-
-        started = Some((address, replication_port, stop, server));
-        break;
-    }
-
-    let (address, replication_port, stop, server) = started.expect("free ports");
-
+    wait_until("both data ports to answer PING", || {
+        assert!(!server.is_finished(), "the per-shard server ended early");
+        pings(address) && pings(next_port(address))
+    });
     // A replica of shard 0 only, which acknowledges everything that shard will ever write.
-    let mut replica = None;
-
-    for _ in 0..200 {
-        if let Ok(stream) = StdTcpStream::connect(("127.0.0.1", replication_port)) {
-            replica = Some(stream);
-            break;
-        }
-
-        thread::sleep(Duration::from_millis(5));
-    }
-
-    let mut replica = replica.expect("replication listener");
+    let mut replica = connect_replication(replication_port, &server);
     let handshake = crate::replication::encode_handshake(&crate::replication::Handshake {
         version: crate::replication::VERSION_RESUME,
         shard_id: 0,
@@ -1833,5 +1753,5 @@ fn per_shard_wait_counts_the_shards_a_connection_forwarded_to() {
 
     drop(replica);
     stop.request();
-    server.join().unwrap().unwrap();
+    join_within(server, PATIENCE).unwrap().unwrap();
 }

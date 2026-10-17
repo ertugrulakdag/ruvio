@@ -1,10 +1,10 @@
 use super::*;
 
-/// A client served while parked resumes only after the serving write's commit (a test can
-/// then fail that write's sync before the served client commits).
+/// Data directories whose clients served while parked resume only after the serving write's
+/// commit (a test can then fail that write's sync before the served client commits).
 #[cfg(test)]
-pub(super) static DELAY_SERVED_POPS: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+pub(super) static DELAY_SERVED_POPS: std::sync::Mutex<Vec<std::path::PathBuf>> =
+    std::sync::Mutex::new(Vec::new());
 
 /// Input an unauthenticated client may have buffered.
 const UNAUTHENTICATED_BUFFER_BYTES: usize = 16 * 1024;
@@ -2226,7 +2226,11 @@ async fn dispatch_inner<'s>(
                 .ok_or_else(closed_while_blocked)?;
 
                 #[cfg(test)]
-                if DELAY_SERVED_POPS.load(std::sync::atomic::Ordering::Relaxed) {
+                if DELAY_SERVED_POPS
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .contains(&state.published_config.persistence.data_dir)
+                {
                     // Let the serving write's commit (its yield, then its sync) run first.
                     for _ in 0..8 {
                         tokio::task::yield_now().await;

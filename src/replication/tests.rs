@@ -903,25 +903,26 @@ fn gap_handshake_leaves_the_live_generation() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
 
-    drop(listener);
-
-    let primary = spawn_primary(Shipment {
-        listen: address,
-        shard_id: 0,
-        published,
-        data_dir: directory.path().to_path_buf(),
-        requirepass: Vec::new(),
-        limits,
-        max_replicas: MAX_REPLICAS,
-        backlog_floor: Arc::new(AtomicU64::new(u64::MAX)),
-        replica_count: Arc::new(AtomicU64::new(0)),
-        acks: Arc::new(DurableAcks::new()),
-        fanout: Arc::new(PublishFanout::new()),
-        snapshot_max_bytes: 1024 * 1024 * 1024,
-        shard_count: 1,
-        history: [0; HISTORY_LEN],
-        snapshot_requests: Arc::new(AtomicU64::new(0)),
-    })
+    let primary = spawn_primary_on(
+        listener,
+        Shipment {
+            listen: address,
+            shard_id: 0,
+            published,
+            data_dir: directory.path().to_path_buf(),
+            requirepass: Vec::new(),
+            limits,
+            max_replicas: MAX_REPLICAS,
+            backlog_floor: Arc::new(AtomicU64::new(u64::MAX)),
+            replica_count: Arc::new(AtomicU64::new(0)),
+            acks: Arc::new(DurableAcks::new()),
+            fanout: Arc::new(PublishFanout::new()),
+            snapshot_max_bytes: 1024 * 1024 * 1024,
+            shard_count: 1,
+            history: [0; HISTORY_LEN],
+            snapshot_requests: Arc::new(AtomicU64::new(0)),
+        },
+    )
     .unwrap();
 
     let mut live = connect_replication(address);
@@ -975,7 +976,7 @@ fn gap_handshake_leaves_the_live_generation() {
         ),
         "gap handshake closed the live replica stream: {still_live:?}"
     );
-    drop(primary);
+    stop_primary(primary);
 }
 
 #[test]
@@ -1001,24 +1002,26 @@ fn two_replicas_receive_the_same_appended_frame() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
 
-    drop(listener);
-    let primary = spawn_primary(Shipment {
-        listen: address,
-        shard_id: 0,
-        published,
-        data_dir: directory.path().to_path_buf(),
-        requirepass: Vec::new(),
-        limits,
-        max_replicas: MAX_REPLICAS,
-        backlog_floor: Arc::new(AtomicU64::new(u64::MAX)),
-        replica_count: Arc::new(AtomicU64::new(0)),
-        acks: Arc::new(DurableAcks::new()),
-        fanout: Arc::new(PublishFanout::new()),
-        snapshot_max_bytes: 1024 * 1024 * 1024,
-        shard_count: 1,
-        history: [0; HISTORY_LEN],
-        snapshot_requests: Arc::new(AtomicU64::new(0)),
-    })
+    let primary = spawn_primary_on(
+        listener,
+        Shipment {
+            listen: address,
+            shard_id: 0,
+            published,
+            data_dir: directory.path().to_path_buf(),
+            requirepass: Vec::new(),
+            limits,
+            max_replicas: MAX_REPLICAS,
+            backlog_floor: Arc::new(AtomicU64::new(u64::MAX)),
+            replica_count: Arc::new(AtomicU64::new(0)),
+            acks: Arc::new(DurableAcks::new()),
+            fanout: Arc::new(PublishFanout::new()),
+            snapshot_max_bytes: 1024 * 1024 * 1024,
+            shard_count: 1,
+            history: [0; HISTORY_LEN],
+            snapshot_requests: Arc::new(AtomicU64::new(0)),
+        },
+    )
     .unwrap();
     let mut first = open_ok_replica(address, 0);
     let mut second = open_ok_replica(address, 0);
@@ -1033,7 +1036,7 @@ fn two_replicas_receive_the_same_appended_frame() {
     let second_frame = read_replication_frame(&mut second);
 
     assert_eq!(first_frame, second_frame);
-    drop(primary);
+    stop_primary(primary);
 }
 
 #[test]
@@ -1059,24 +1062,26 @@ fn closing_one_replica_leaves_the_other_streaming() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
 
-    drop(listener);
-    let primary = spawn_primary(Shipment {
-        listen: address,
-        shard_id: 0,
-        published,
-        data_dir: directory.path().to_path_buf(),
-        requirepass: Vec::new(),
-        limits,
-        max_replicas: MAX_REPLICAS,
-        backlog_floor: Arc::new(AtomicU64::new(u64::MAX)),
-        replica_count: Arc::new(AtomicU64::new(0)),
-        acks: Arc::new(DurableAcks::new()),
-        fanout: Arc::new(PublishFanout::new()),
-        snapshot_max_bytes: 1024 * 1024 * 1024,
-        shard_count: 1,
-        history: [0; HISTORY_LEN],
-        snapshot_requests: Arc::new(AtomicU64::new(0)),
-    })
+    let primary = spawn_primary_on(
+        listener,
+        Shipment {
+            listen: address,
+            shard_id: 0,
+            published,
+            data_dir: directory.path().to_path_buf(),
+            requirepass: Vec::new(),
+            limits,
+            max_replicas: MAX_REPLICAS,
+            backlog_floor: Arc::new(AtomicU64::new(u64::MAX)),
+            replica_count: Arc::new(AtomicU64::new(0)),
+            acks: Arc::new(DurableAcks::new()),
+            fanout: Arc::new(PublishFanout::new()),
+            snapshot_max_bytes: 1024 * 1024 * 1024,
+            shard_count: 1,
+            history: [0; HISTORY_LEN],
+            snapshot_requests: Arc::new(AtomicU64::new(0)),
+        },
+    )
     .unwrap();
     let gone = open_ok_replica(address, 0);
     let mut staying = open_ok_replica(address, 0);
@@ -1091,7 +1096,7 @@ fn closing_one_replica_leaves_the_other_streaming() {
     let frame = read_replication_frame(&mut staying);
 
     assert!(frame.len() > 4);
-    drop(primary);
+    stop_primary(primary);
 }
 
 #[test]
@@ -1115,24 +1120,26 @@ fn replica_limit_closes_the_extra_connection() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
 
-    drop(listener);
-    let primary = spawn_primary(Shipment {
-        listen: address,
-        shard_id: 0,
-        published: sink.published(),
-        data_dir: directory.path().to_path_buf(),
-        requirepass: Vec::new(),
-        limits,
-        max_replicas: 1,
-        backlog_floor: Arc::new(AtomicU64::new(u64::MAX)),
-        replica_count: Arc::new(AtomicU64::new(0)),
-        acks: Arc::new(DurableAcks::new()),
-        fanout: Arc::new(PublishFanout::new()),
-        snapshot_max_bytes: 1024 * 1024 * 1024,
-        shard_count: 1,
-        history: [0; HISTORY_LEN],
-        snapshot_requests: Arc::new(AtomicU64::new(0)),
-    })
+    let primary = spawn_primary_on(
+        listener,
+        Shipment {
+            listen: address,
+            shard_id: 0,
+            published: sink.published(),
+            data_dir: directory.path().to_path_buf(),
+            requirepass: Vec::new(),
+            limits,
+            max_replicas: 1,
+            backlog_floor: Arc::new(AtomicU64::new(u64::MAX)),
+            replica_count: Arc::new(AtomicU64::new(0)),
+            acks: Arc::new(DurableAcks::new()),
+            fanout: Arc::new(PublishFanout::new()),
+            snapshot_max_bytes: 1024 * 1024 * 1024,
+            shard_count: 1,
+            history: [0; HISTORY_LEN],
+            snapshot_requests: Arc::new(AtomicU64::new(0)),
+        },
+    )
     .unwrap();
     let _live = open_ok_replica(address, 0);
     let mut extra = connect_replication(address);
@@ -1157,7 +1164,7 @@ fn replica_limit_closes_the_extra_connection() {
         );
     }
 
-    drop(primary);
+    stop_primary(primary);
 }
 
 /// A replica that hangs up gives its slot back even while the primary has nothing to ship:
@@ -1182,24 +1189,26 @@ fn a_replica_that_hangs_up_on_an_idle_primary_frees_its_slot() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
 
-    drop(listener);
-    let primary = spawn_primary(Shipment {
-        listen: address,
-        shard_id: 0,
-        published: sink.published(),
-        data_dir: directory.path().to_path_buf(),
-        requirepass: Vec::new(),
-        limits,
-        max_replicas: 1,
-        backlog_floor: Arc::new(AtomicU64::new(u64::MAX)),
-        replica_count: Arc::new(AtomicU64::new(0)),
-        acks: Arc::new(DurableAcks::new()),
-        fanout: Arc::new(PublishFanout::new()),
-        snapshot_max_bytes: 1024 * 1024 * 1024,
-        shard_count: 1,
-        history: [0; HISTORY_LEN],
-        snapshot_requests: Arc::new(AtomicU64::new(0)),
-    })
+    let primary = spawn_primary_on(
+        listener,
+        Shipment {
+            listen: address,
+            shard_id: 0,
+            published: sink.published(),
+            data_dir: directory.path().to_path_buf(),
+            requirepass: Vec::new(),
+            limits,
+            max_replicas: 1,
+            backlog_floor: Arc::new(AtomicU64::new(u64::MAX)),
+            replica_count: Arc::new(AtomicU64::new(0)),
+            acks: Arc::new(DurableAcks::new()),
+            fanout: Arc::new(PublishFanout::new()),
+            snapshot_max_bytes: 1024 * 1024 * 1024,
+            shard_count: 1,
+            history: [0; HISTORY_LEN],
+            snapshot_requests: Arc::new(AtomicU64::new(0)),
+        },
+    )
     .unwrap();
     let handshake = encode_handshake(&Handshake {
         version: VERSION_RESUME,
@@ -1214,7 +1223,7 @@ fn a_replica_that_hangs_up_on_an_idle_primary_frees_its_slot() {
     // Each replica is served, then hangs up; the next one waits at most for that
     // connection to notice.
     for _ in 0..4 {
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let deadline = std::time::Instant::now() + PATIENCE;
         let served = loop {
             let mut stream = connect_replication(address);
             let mut reply = [0u8; REPLY_LEN];
@@ -1234,7 +1243,7 @@ fn a_replica_that_hangs_up_on_an_idle_primary_frees_its_slot() {
         assert_eq!(served, Some(HandshakeStatus::Ok));
     }
 
-    drop(primary);
+    stop_primary(primary);
 }
 
 #[test]
@@ -1257,24 +1266,26 @@ fn primary_refuses_a_replica_from_another_history_or_shard_layout() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
 
-    drop(listener);
-    let primary = spawn_primary(Shipment {
-        listen: address,
-        shard_id: 0,
-        published: sink.published(),
-        data_dir: directory.path().to_path_buf(),
-        requirepass: Vec::new(),
-        limits,
-        max_replicas: 4,
-        backlog_floor: Arc::new(AtomicU64::new(u64::MAX)),
-        replica_count: Arc::new(AtomicU64::new(0)),
-        acks: Arc::new(DurableAcks::new()),
-        fanout: Arc::new(PublishFanout::new()),
-        snapshot_max_bytes: 1024 * 1024 * 1024,
-        shard_count: 2,
-        history: [7; HISTORY_LEN],
-        snapshot_requests: Arc::new(AtomicU64::new(0)),
-    })
+    let primary = spawn_primary_on(
+        listener,
+        Shipment {
+            listen: address,
+            shard_id: 0,
+            published: sink.published(),
+            data_dir: directory.path().to_path_buf(),
+            requirepass: Vec::new(),
+            limits,
+            max_replicas: 4,
+            backlog_floor: Arc::new(AtomicU64::new(u64::MAX)),
+            replica_count: Arc::new(AtomicU64::new(0)),
+            acks: Arc::new(DurableAcks::new()),
+            fanout: Arc::new(PublishFanout::new()),
+            snapshot_max_bytes: 1024 * 1024 * 1024,
+            shard_count: 2,
+            history: [7; HISTORY_LEN],
+            snapshot_requests: Arc::new(AtomicU64::new(0)),
+        },
+    )
     .unwrap();
     let ask = |version: u16, after_sequence: u64, history: [u8; HISTORY_LEN], shard_count: u32| {
         let mut stream = connect_replication(address);
@@ -1314,7 +1325,7 @@ fn primary_refuses_a_replica_from_another_history_or_shard_layout() {
         HandshakeStatus::Shard
     );
 
-    drop(primary);
+    stop_primary(primary);
 }
 
 fn open_ok_replica(address: SocketAddr, after_sequence: u64) -> TcpStream {
@@ -1336,18 +1347,41 @@ fn open_ok_replica(address: SocketAddr, after_sequence: u64) -> TcpStream {
     stream
 }
 
+/// How long a test waits for what a passing run sees within milliseconds: a bug fails the
+/// test instead of hanging the run.
+const PATIENCE: Duration = Duration::from_secs(30);
+
+/// Joins `handle`, failing the test when the thread has not ended within [`PATIENCE`].
+#[track_caller]
+fn join_within<T>(handle: JoinHandle<T>) -> thread::Result<T> {
+    let deadline = std::time::Instant::now() + PATIENCE;
+
+    while !handle.is_finished() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a thread did not end within {PATIENCE:?}"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    handle.join()
+}
+
+/// Stops a primary started with `spawn_primary_on`, failing the test when its threads have
+/// not ended within [`PATIENCE`] (dropping it joins them).
+#[track_caller]
+fn stop_primary(primary: ReplicationThread) {
+    join_within(thread::spawn(move || drop(primary))).unwrap();
+}
+
 fn connect_replication(address: SocketAddr) -> TcpStream {
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let deadline = std::time::Instant::now() + PATIENCE;
 
     loop {
         if let Ok(stream) = TcpStream::connect(address) {
             stream.set_nodelay(true).unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            stream
-                .set_write_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
+            stream.set_read_timeout(Some(PATIENCE)).unwrap();
+            stream.set_write_timeout(Some(PATIENCE)).unwrap();
 
             return stream;
         }
@@ -1537,7 +1571,7 @@ fn snapshot_reply_leaves_the_upstream_record_until_the_snapshot_is_installed() {
     );
 
     assert!(retry);
-    assert_eq!(server.join().unwrap().version, VERSION_RESUME);
+    assert_eq!(join_within(server).unwrap().version, VERSION_RESUME);
     assert_eq!(upstream_history(directory.path(), 0), [1; HISTORY_LEN]);
 
     // A resume the primary accepts continues its history and is recorded at once.
@@ -1556,7 +1590,7 @@ fn snapshot_reply_leaves_the_upstream_record_until_the_snapshot_is_installed() {
         &mut VecDeque::new(),
         &AtomicBool::new(false),
     );
-    server.join().unwrap();
+    join_within(server).unwrap();
     assert_eq!(upstream_history(directory.path(), 0), [9; HISTORY_LEN]);
 }
 
@@ -1588,8 +1622,9 @@ fn primary_refuses_older_and_newer_handshake_versions_at_once() {
         stream.write_all(&bytes).unwrap();
         let reply = read_socket(&mut stream, LEGACY_REPLY_LEN);
 
+        // The primary's handshake read gives up after 5 s.
         assert!(
-            started.elapsed() < Duration::from_secs(1),
+            started.elapsed() < Duration::from_millis(2500),
             "refusal waited for a timeout"
         );
         assert_eq!(&reply[..8], HANDSHAKE_MAGIC);
@@ -1621,7 +1656,7 @@ fn primary_refuses_older_and_newer_handshake_versions_at_once() {
     );
 
     stop.store(true, Ordering::Release);
-    primary.join().unwrap();
+    join_within(primary).unwrap();
 }
 
 #[test]
@@ -1677,7 +1712,7 @@ fn replica_accept_loop_survives_accept_errors() {
 
     stop.store(true, Ordering::Release);
     drop(stream);
-    primary.join().unwrap();
+    join_within(primary).unwrap();
 }
 
 #[test]

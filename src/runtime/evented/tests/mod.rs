@@ -56,12 +56,15 @@ fn accept_bounded(listener: &std::net::TcpListener) -> StdTcpStream {
     }
 }
 
+/// How long a test waits for what a passing run sees within milliseconds: long enough for a
+/// loaded CI runner (a `SAVE` that fsyncs on two shards can take seconds), short enough that
+/// a bug fails the test instead of hanging the run.
+const PATIENCE: Duration = Duration::from_secs(30);
+
 fn request(address: SocketAddr, payload: &[u8]) -> Vec<u8> {
     let mut client = StdTcpStream::connect(address).unwrap();
 
-    client
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    client.set_read_timeout(Some(PATIENCE)).unwrap();
     client.write_all(payload).unwrap();
     client.shutdown(Shutdown::Write).unwrap();
     let mut response = Vec::new();
@@ -75,9 +78,7 @@ fn request(address: SocketAddr, payload: &[u8]) -> Vec<u8> {
 fn request_connected(address: SocketAddr, payload: &[u8]) -> Vec<u8> {
     let mut client = StdTcpStream::connect(address).unwrap();
 
-    client
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    client.set_read_timeout(Some(PATIENCE)).unwrap();
     client.write_all(payload).unwrap();
     let mut response = Vec::new();
     let mut byte = [0u8; 1];
@@ -296,16 +297,6 @@ fn serve_two_shards_with(
         .unwrap()
     });
 
-    for address in [left, right] {
-        for _ in 0..50 {
-            if StdTcpStream::connect(address).is_ok() {
-                break;
-            }
-
-            thread::sleep(Duration::from_millis(2));
-        }
-    }
-
     (left, right, shutdown, t0, t1)
 }
 
@@ -335,8 +326,8 @@ fn rustls_client(
     let connection = rustls::ClientConnection::new(Arc::new(config), name).unwrap();
     let tcp = StdTcpStream::connect(address).unwrap();
 
-    tcp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-    tcp.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+    tcp.set_read_timeout(Some(PATIENCE)).unwrap();
+    tcp.set_write_timeout(Some(PATIENCE)).unwrap();
     rustls::StreamOwned::new(connection, tcp)
 }
 
@@ -368,6 +359,88 @@ fn wait_for(limit: Duration, mut done: impl FnMut() -> bool) -> bool {
         thread::sleep(Duration::from_millis(20));
     }
     false
+}
+
+/// Polls `done` until it holds; fails the test, naming `what`, after [`PATIENCE`].
+#[track_caller]
+fn wait_until(what: &str, done: impl FnMut() -> bool) {
+    assert!(
+        wait_for(PATIENCE, done),
+        "gave up after {PATIENCE:?} waiting for {what}"
+    );
+}
+
+/// Polls `INFO` until `accept` takes the value of `field`, and returns that value.
+#[track_caller]
+fn wait_for_info(address: SocketAddr, field: &str, accept: impl Fn(u64) -> bool) -> u64 {
+    let mut seen = None;
+
+    wait_until(&format!("INFO {field} to reach the expected value"), || {
+        seen = info_field(address, field);
+        seen.is_some_and(&accept)
+    });
+    seen.unwrap()
+}
+
+/// Waits until exactly `count` blocking commands are parked on the server configured with
+/// `address`. Only counts the shards took after each look are trusted (they count on every
+/// maintenance tick), never one from before the caller's last request.
+#[track_caller]
+fn wait_for_parked(address: SocketAddr, count: usize) {
+    let mut seen = None;
+    let mut look = None;
+    let address = address.to_string();
+
+    assert!(
+        wait_for(PATIENCE, || {
+            let since = *look.get_or_insert_with(Instant::now);
+
+            match parked_waiters(&address, since) {
+                None => false,
+                Some(parked) => {
+                    seen = Some(parked);
+                    look = None;
+                    parked == count
+                }
+            }
+        }),
+        "gave up after {PATIENCE:?} waiting for {count} parked commands on {address}: {seen:?}"
+    );
+}
+
+/// Waits until the server running on `server` accepts connections on `address`; fails at
+/// once if the server ends first.
+#[track_caller]
+fn wait_until_listening<T>(address: SocketAddr, server: &thread::JoinHandle<T>) {
+    wait_until(&format!("a server on {address}"), || {
+        assert!(
+            !server.is_finished(),
+            "the server for {address} ended before it accepted connections"
+        );
+        StdTcpStream::connect(address).is_ok()
+    });
+}
+
+/// Joins `handle`, failing the test when the thread has not ended within `limit`: a server
+/// whose shutdown does not finish fails its test instead of hanging the whole run.
+#[track_caller]
+fn join_within<T>(handle: thread::JoinHandle<T>, limit: Duration) -> thread::Result<T> {
+    let name = handle.thread().name().unwrap_or("unnamed").to_owned();
+
+    assert!(
+        wait_for(limit, || handle.is_finished()),
+        "thread {name} did not end within {limit:?} (a shutdown that never finishes?)"
+    );
+    handle.join()
+}
+
+/// A shutdown token already requested, for a start that is expected to fail: should it
+/// start after all, it returns at once instead of serving forever.
+fn stopped() -> ShutdownToken {
+    let token = ShutdownToken::default();
+
+    token.request();
+    token
 }
 
 fn resp(commands: &[&[&[u8]]]) -> Vec<u8> {

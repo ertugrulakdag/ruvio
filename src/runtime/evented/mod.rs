@@ -628,6 +628,47 @@ fn run_cluster(config: &AppConfig, shutdown: ShutdownToken, force: bool) -> io::
     first_error.map_or(Ok(()), Err)
 }
 
+/// Blocking commands parked on each shard of the servers tests run (list waiters and retried
+/// commands such as `BLMOVE`), by configured address and shard id, with when the shard last
+/// counted them (every maintenance tick): a test polls it to know that a command has parked,
+/// or that a client which hung up has given up its waiter, instead of sleeping.
+#[cfg(test)]
+static PARKED_WAITERS: Mutex<Vec<(String, usize, usize, Instant)>> = Mutex::new(Vec::new());
+
+/// Records `parked` for this shard, or forgets the shard (`None`) as it stops.
+#[cfg(test)]
+fn note_parked_waiters(state: &ShardState, parked: Option<usize>) {
+    let address = &state.published_config.address;
+    let shard = state.route.as_ref().map_or(0, |route| route.shard_id);
+    let mut all = PARKED_WAITERS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
+    all.retain(|(other, id, _, _)| other != address || *id != shard);
+    if let Some(parked) = parked {
+        all.push((address.clone(), shard, parked, Instant::now()));
+    }
+}
+
+/// Blocking commands parked on every shard of the running test server configured with
+/// `address`, once every shard has counted them after `since`; `None` until then.
+#[cfg(test)]
+fn parked_waiters(address: &str, since: Instant) -> Option<usize> {
+    let all = PARKED_WAITERS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let shards: Vec<_> = all
+        .iter()
+        .filter(|(other, _, _, _)| other == address)
+        .collect();
+
+    if shards.is_empty() || shards.iter().any(|(_, _, _, counted)| *counted <= since) {
+        return None;
+    }
+
+    Some(shards.iter().map(|(_, _, parked, _)| parked).sum())
+}
+
 /// Requests shutdown for every shard when its owning thread ends for any reason.
 struct ShutdownOnExit(ShutdownToken);
 
@@ -1154,6 +1195,11 @@ async fn serve_async(
                 drop(store);
                 flush_key_notices(&state);
                 expire_waiters(&state);
+                #[cfg(test)]
+                note_parked_waiters(
+                    &state,
+                    Some(state.waiters.borrow().len() + state.retry_blockers.get()),
+                );
 
                 {
                     let mut wal = state
@@ -1185,6 +1231,8 @@ async fn serve_async(
         }
     }
 
+    #[cfg(test)]
+    note_parked_waiters(&state, None);
     let deadline = Instant::now() + shutdown_grace;
 
     while state.active_connections.get() != 0 && Instant::now() < deadline {

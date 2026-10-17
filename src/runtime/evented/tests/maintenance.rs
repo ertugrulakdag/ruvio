@@ -104,7 +104,7 @@ fn background_checkpoint_publishes_while_writes_continue_and_recovers() {
 
     write_all("b");
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     let (address, stop, server) = serve_with(|config| config.persistence = persistence.clone());
 
@@ -119,7 +119,7 @@ fn background_checkpoint_publishes_while_writes_continue_and_recovers() {
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// Without a WAL the checkpoint is the only copy: `SAVE` while a background checkpoint is
@@ -156,7 +156,7 @@ fn save_during_a_background_checkpoint_keeps_writes_made_after_it_began() {
 
     copy_dir(directory.path(), saved.path());
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     let (address, stop, server) = serve_with(|config| {
         config.persistence = PersistenceConfig {
@@ -170,7 +170,7 @@ fn save_during_a_background_checkpoint_keeps_writes_made_after_it_began() {
         b"$3\r\nnew\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// Under `always` a write whose sync fails is refused, yet stays applied in memory. No
@@ -215,7 +215,7 @@ fn a_write_refused_by_a_failed_always_sync_never_reaches_a_checkpoint() {
     stop.request();
     // Nothing acknowledged is lost, but the shard ends with an error: its WAL failed.
     assert!(
-        server.join().is_err(),
+        join_within(server, PATIENCE).is_err(),
         "a shard whose WAL failed exited cleanly"
     );
 
@@ -234,7 +234,7 @@ fn a_write_refused_by_a_failed_always_sync_never_reaches_a_checkpoint() {
             data_dir.display()
         );
         stop.request();
-        server.join().unwrap();
+        join_within(server, PATIENCE).unwrap();
     }
 }
 
@@ -281,7 +281,7 @@ fn save_with_a_failing_wal_sync_writes_a_new_checkpoint() {
     copy_dir(directory.path(), saved.path());
     std::fs::remove_dir_all(saved.path().join("wal")).unwrap();
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     let (address, stop, server) = serve_with(|config| {
         config.persistence = PersistenceConfig {
@@ -295,7 +295,7 @@ fn save_with_a_failing_wal_sync_writes_a_new_checkpoint() {
         b"$3\r\nnew\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// Without a WAL a failed shutdown checkpoint loses the writes since the last one: the
@@ -329,7 +329,7 @@ fn a_failed_final_checkpoint_without_a_wal_ends_the_server_with_an_error() {
     );
     stop.request();
 
-    let ended = server.join().unwrap();
+    let ended = join_within(server, PATIENCE).unwrap();
 
     assert!(
         ended
@@ -424,7 +424,7 @@ fn back_to_back_large_writes_are_admitted_and_maintenance_brings_memory_back() {
     );
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]

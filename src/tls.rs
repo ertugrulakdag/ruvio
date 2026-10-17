@@ -246,8 +246,7 @@ mod tests {
         let (cert, key) = write_self_signed_pair(dir.path(), "one");
         let acceptor = TlsAcceptor::load(&cert, &key).unwrap();
         let first = acceptor.current_config().unwrap();
-
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        let loaded_at = mtime(&cert).unwrap();
         let (cert2, key2) = write_self_signed_pair(dir.path(), "two");
 
         fs::copy(&cert2, &cert).unwrap();
@@ -255,6 +254,11 @@ mod tests {
         let mut touch = fs::OpenOptions::new().append(true).open(&cert).unwrap();
 
         writeln!(touch, "# reloaded").unwrap();
+        // Writes within one tick of a file system's clock can keep the old modification
+        // time: give the file one that differs whatever the clock's granularity.
+        touch
+            .set_modified(loaded_at + std::time::Duration::from_secs(60))
+            .unwrap();
         drop(touch);
         let second = acceptor.current_config().unwrap();
 

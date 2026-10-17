@@ -1108,8 +1108,14 @@ impl Drop for ReplicationThread {
 }
 
 pub fn spawn_primary(shipment: Shipment) -> io::Result<ReplicationThread> {
-    let listener = TcpListener::bind(shipment.listen)?;
+    spawn_primary_on(TcpListener::bind(shipment.listen)?, shipment)
+}
 
+/// [`spawn_primary`] on a listener already bound (to `shipment.listen` or any address).
+pub fn spawn_primary_on(
+    listener: TcpListener,
+    shipment: Shipment,
+) -> io::Result<ReplicationThread> {
     listener.set_nonblocking(true)?;
     let stop = Arc::new(AtomicBool::new(false));
     let shipment = Arc::new(shipment);

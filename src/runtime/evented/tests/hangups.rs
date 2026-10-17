@@ -10,14 +10,14 @@ fn park_over_tls_and_leave(address: SocketAddr, cert: &std::path::Path, clean_cl
 
     client.write_all(&resp(&[&[b"BLPOP", b"q", b"0"]])).unwrap();
     client.flush().unwrap();
-    thread::sleep(Duration::from_millis(150));
+    wait_for_parked(address, 1);
 
     if clean_close {
         client.conn.send_close_notify();
         let _ = client.conn.complete_io(&mut client.sock);
         let _ = client.sock.shutdown(std::net::Shutdown::Write);
         // Leave the socket half open: only the close record and the FIN say it is gone.
-        thread::sleep(Duration::from_millis(900));
+        wait_for_parked(address, 0);
         drop(client);
     } else {
         drop(client);
@@ -41,7 +41,7 @@ fn a_tls_client_that_hangs_up_while_blocked_gives_up_its_waiter() {
 
     for clean_close in [true, false] {
         park_over_tls_and_leave(address, &cert_for_client, clean_close);
-        thread::sleep(Duration::from_millis(300));
+        wait_for_parked(address, 0);
 
         let mut client = rustls_client(address, &cert_for_client);
 
@@ -62,7 +62,7 @@ fn a_tls_client_that_hangs_up_while_blocked_gives_up_its_waiter() {
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// Redis sends the replies of a pipeline as they are produced; a command that parks must not
@@ -80,9 +80,7 @@ fn replies_ahead_of_a_blocking_command_in_one_pipeline_are_sent_before_it_parks(
     ] {
         let mut client = StdTcpStream::connect(address).unwrap();
 
-        client
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+        client.set_read_timeout(Some(PATIENCE)).unwrap();
         // A write and a read ahead of the parked command, in one segment.
         client
             .write_all(&resp(&[
@@ -104,7 +102,7 @@ fn replies_ahead_of_a_blocking_command_in_one_pipeline_are_sent_before_it_parks(
     }
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// A blocking command that finds its data does not wait, so it adds no flush and no WAL
@@ -151,7 +149,7 @@ fn a_blocking_pop_that_does_not_wait_shares_the_pipeline_sync() {
 
     assert_eq!(deltas[1], deltas[0], "syncs for LPOP vs BLPOP: {deltas:?}");
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// Pipelines three large GETs and a `BLPOP q 0` behind them from a client that does not
@@ -189,14 +187,15 @@ fn a_blocking_pop_behind_an_unflushable_pipeline_takes_nothing_when_the_client_i
     });
     let stalled = pipeline_big_replies_then_blpop(address, 8 << 20);
 
-    thread::sleep(Duration::from_millis(1500));
+    // Dropped at its write timeout: only the INFO request's own connection is left.
+    wait_for_info(address, "connected_clients", |clients| clients == 1);
     assert_eq!(
         request(address, &resp(&[&[b"RPUSH", b"q", b"x"], &[b"LLEN", b"q"]])),
         b":1\r\n:1\r\n"
     );
     drop(stalled);
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// A push that lands while the replies ahead of a `BLPOP` are still being flushed is not
@@ -221,7 +220,7 @@ fn a_push_during_the_flush_ahead_of_a_blocking_pop_is_delivered_to_it() {
     assert_eq!(&replies[3 * bulk..], pop);
     assert_eq!(request(address, &resp(&[&[b"LLEN", b"q"]])), b":0\r\n");
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// `XREAD BLOCK ... $` behind replies still being flushed reads from the end it saw when it
@@ -266,5 +265,5 @@ fn an_entry_added_during_the_flush_ahead_of_xread_dollar_is_delivered() {
         String::from_utf8_lossy(read)
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }

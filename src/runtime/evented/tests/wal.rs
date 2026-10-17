@@ -198,7 +198,7 @@ fn scripts_and_transactions_share_sync_before_reply(worker: bool) {
         sequence("wal_durable_sequence:")
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     let (address, stop, server) = serve_with(|config| config.persistence = persistence);
     let check = resp(&[
@@ -210,7 +210,7 @@ fn scripts_and_transactions_share_sync_before_reply(worker: bool) {
         b"*5\r\n$1\r\n1\r\n$1\r\np\r\n$1\r\n2\r\n$1\r\n3\r\n$1\r\n1\r\n*1\r\n$1\r\nx\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// Under `always` a script or transaction in the group whose sync fails is refused like a
@@ -279,7 +279,7 @@ fn grouped_script_or_transaction_whose_sync_fails_is_refused_and_cut(worker: boo
         );
         stop.request();
         assert!(
-            server.join().is_err(),
+            join_within(server, PATIENCE).is_err(),
             "a shard whose WAL failed exited cleanly"
         );
 
@@ -300,7 +300,7 @@ fn grouped_script_or_transaction_whose_sync_fails_is_refused_and_cut(worker: boo
             assert_eq!(restarted, b"*3\r\n$3\r\nold\r\n$3\r\nold\r\n$-1\r\n");
         }
         stop.request();
-        server.join().unwrap();
+        join_within(server, PATIENCE).unwrap();
     }
 }
 
@@ -324,8 +324,11 @@ fn a_pop_served_by_a_grouped_script_whose_sync_fails_is_refused() {
     blocked
         .write_all(&resp(&[&[b"BLPOP", b"served", b"5"]]))
         .unwrap();
-    thread::sleep(Duration::from_millis(200));
-    super::super::connection::DELAY_SERVED_POPS.store(true, std::sync::atomic::Ordering::Relaxed);
+    wait_for_parked(address, 1);
+    super::super::connection::DELAY_SERVED_POPS
+        .lock()
+        .unwrap()
+        .push(directory.path().to_path_buf());
     crate::persistence::FAILING_NEXT_SYNC_SHARDS
         .lock()
         .unwrap()
@@ -347,7 +350,10 @@ fn a_pop_served_by_a_grouped_script_whose_sync_fails_is_refused() {
         .read(&mut popped)
         .map(|length| popped[..length].to_vec());
 
-    super::super::connection::DELAY_SERVED_POPS.store(false, std::sync::atomic::Ordering::Relaxed);
+    super::super::connection::DELAY_SERVED_POPS
+        .lock()
+        .unwrap()
+        .retain(|dir| dir != directory.path());
     crate::persistence::FAILING_NEXT_SYNC_SHARDS
         .lock()
         .unwrap()
@@ -373,7 +379,7 @@ fn a_pop_served_by_a_grouped_script_whose_sync_fails_is_refused() {
         b"$1\r\nv\r\n*1\r\n$1\r\nb\r\n"
     );
     stop.request();
-    let _ = server.join();
+    let _ = join_within(server, PATIENCE);
 }
 
 /// A WAL write (not sync) failure meets a script or `EXEC` inside a group: its record is
@@ -440,7 +446,7 @@ fn a_grouped_script_or_transaction_whose_write_fails_rolls_back() {
             b"+OK\r\n"
         );
         stop.request();
-        server.join().unwrap();
+        join_within(server, PATIENCE).unwrap();
 
         let (address, stop, server) = serve_with(|config| config.persistence = persistence);
         assert_eq!(
@@ -448,7 +454,7 @@ fn a_grouped_script_or_transaction_whose_write_fails_rolls_back() {
             b"*3\r\n$3\r\nold\r\n$-1\r\n$1\r\nv\r\n"
         );
         stop.request();
-        server.join().unwrap();
+        join_within(server, PATIENCE).unwrap();
     }
 }
 
@@ -512,7 +518,7 @@ fn a_grouped_exec_aborted_by_watch_answers_nil_and_logs_nothing() {
     assert_eq!(info_field(address, "wal_last_sequence"), Some(sequence));
     drop(client);
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     let (address, stop, server) = serve_with(|config| config.persistence = persistence);
     assert_eq!(
@@ -520,7 +526,7 @@ fn a_grouped_exec_aborted_by_watch_answers_nil_and_logs_nothing() {
         b"*2\r\n$6\r\ntheirs\r\n$-1\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// A transaction that flushes stays a group boundary: the writes before it are synced on
@@ -566,7 +572,7 @@ fn a_transaction_that_flushes_stays_a_wal_group_boundary() {
         // its own, and the write after it starts a new group.
         assert_eq!(wal_syncs(address) - before, syncs, "flush: {flush}");
         stop.request();
-        server.join().unwrap();
+        join_within(server, PATIENCE).unwrap();
 
         let (address, stop, server) = serve_with(|config| config.persistence = persistence);
         assert_eq!(
@@ -574,7 +580,7 @@ fn a_transaction_that_flushes_stays_a_wal_group_boundary() {
             b"*3\r\n$-1\r\n$1\r\n2\r\n$1\r\n3\r\n"
         );
         stop.request();
-        server.join().unwrap();
+        join_within(server, PATIENCE).unwrap();
     }
 }
 
@@ -628,7 +634,7 @@ fn native_pipeline_shares_sync_before_reply(worker: bool) {
         sequence("wal_durable_sequence:")
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
     let (address, stop, server) = serve_with(|config| {
         config.persistence = persistence;
     });
@@ -640,7 +646,7 @@ fn native_pipeline_shares_sync_before_reply(worker: bool) {
         b"*2\r\n$9\r\ncompleted\r\n$1\r\nr\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -659,7 +665,7 @@ fn evented_worker_rejects_unsupported_config_through_library_entry_point() {
     // One shard drops hot_keys, so the clash needs two.
     config.shards = 2;
     config.hot_keys.push("cache:*".into());
-    let error = serve(listener, config, ShutdownToken::default()).unwrap_err();
+    let error = serve(listener, config, stopped()).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     assert!(error.to_string().contains("hot_keys"));
 }
@@ -688,7 +694,7 @@ fn evented_worker_hot_reads_and_fallback_transaction_are_durable() {
         b"+OK\r\n$1\r\nv\r\n+OK\r\n+QUEUED\r\n*1\r\n:1\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
     let (address, stop, server) = serve_with(|config| config.persistence = persistence);
     assert_eq!(
         request(
@@ -698,7 +704,7 @@ fn evented_worker_hot_reads_and_fallback_transaction_are_durable() {
         b"$1\r\nv\r\n$1\r\n1\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -724,7 +730,7 @@ fn evented_save_publishes_a_durable_checkpoint() {
         b"+OK\r\n+OK\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
     assert!(directory.path().join("CURRENT").exists());
     assert!(directory.path().join("CLOCK").exists());
 
@@ -737,7 +743,7 @@ fn evented_save_publishes_a_durable_checkpoint() {
         b"$5\r\nvalue\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -773,9 +779,7 @@ fn shutdown_with_pending_clients(worker: bool) {
     );
 
     let mut subscriber = StdTcpStream::connect(address).unwrap();
-    subscriber
-        .set_read_timeout(Some(Duration::from_secs(3)))
-        .unwrap();
+    subscriber.set_read_timeout(Some(PATIENCE)).unwrap();
     subscriber
         .write_all(&resp(&[&[b"SUBSCRIBE", b"news"]]))
         .unwrap();
@@ -795,35 +799,38 @@ fn shutdown_with_pending_clients(worker: bool) {
         waiter.read(&mut byte).unwrap_err().kind(),
         io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
     ));
-    waiter
-        .set_read_timeout(Some(Duration::from_secs(3)))
-        .unwrap();
+    waiter.set_read_timeout(Some(PATIENCE)).unwrap();
 
     let mut partial = StdTcpStream::connect(address).unwrap();
-    partial
-        .set_read_timeout(Some(Duration::from_secs(3)))
-        .unwrap();
+    partial.set_read_timeout(Some(PATIENCE)).unwrap();
     partial
         .write_all(b"*3\r\n$3\r\nSET\r\n$7\r\npartial\r\n$5\r\nin")
         .unwrap();
 
     let mut pending = StdTcpStream::connect(address).unwrap();
-    pending
-        .set_read_timeout(Some(Duration::from_secs(3)))
-        .unwrap();
+    pending.set_read_timeout(Some(PATIENCE)).unwrap();
     pending
         .write_all(&resp(&[&[b"SET", b"pending", b"value"]]))
         .unwrap();
-    let ready_by = Instant::now() + Duration::from_secs(2);
+    // The earlier requests' connections may not be reaped yet, and under `always` the sync
+    // worker may still be syncing the pending SET while this INFO is rendered: wait for
+    // the five clients and for it to be durable.
+    let ready_by = Instant::now() + PATIENCE;
     let info = loop {
         let info = String::from_utf8(request(address, &resp(&[&[b"INFO"]]))).unwrap();
-        let sequence = info
-            .lines()
-            .find_map(|line| line.strip_prefix("wal_last_sequence:"))
-            .unwrap()
-            .parse::<u64>()
-            .unwrap();
-        if sequence >= 2 && info.contains("connected_clients:5\r\n") {
+        let field = |name: &str| {
+            info.lines()
+                .find_map(|line| line.strip_prefix(name))
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+        };
+        let last = field("wal_last_sequence:");
+
+        if last >= 2
+            && info.contains("connected_clients:5\r\n")
+            && (!worker || field("wal_durable_sequence:") == last)
+        {
             break info;
         }
         assert!(
@@ -832,24 +839,16 @@ fn shutdown_with_pending_clients(worker: bool) {
         );
         thread::sleep(Duration::from_millis(5));
     };
-    if worker {
-        let field = |name: &str| {
-            info.lines()
-                .find_map(|line| line.strip_prefix(name))
-                .unwrap()
-                .parse::<u64>()
-                .unwrap()
-        };
-        assert_eq!(field("wal_last_sequence:"), field("wal_durable_sequence:"));
-    } else {
+    if !worker {
         assert!(!info.contains("wal_unsynced_bytes:0\r\n"), "{info}");
     }
 
     let began = Instant::now();
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
+    // The grace is 300 ms; a shutdown that waits for its clients instead never ends.
     assert!(
-        began.elapsed() < Duration::from_secs(2),
+        began.elapsed() < Duration::from_secs(10),
         "shutdown exceeded drain deadline"
     );
     let mut blocked = Vec::new();
@@ -878,7 +877,7 @@ fn shutdown_with_pending_clients(worker: bool) {
         b"$-1\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -898,7 +897,7 @@ fn evented_worker_keeps_answering_reads_after_a_wal_append_failure() {
         b"+OK\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -944,7 +943,7 @@ fn evented_worker_keeps_answering_reads_after_a_wal_append_failure() {
         b"+OK\r\n"
     );
     stop.request();
-    let _ = server.join().unwrap();
+    let _ = join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -963,7 +962,7 @@ fn evented_shutdown_after_wal_append_failure_keeps_memory_and_log_consistent() {
         b"+OK\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -1001,7 +1000,7 @@ fn evented_shutdown_after_wal_append_failure_keeps_memory_and_log_consistent() {
     let in_memory = request(address, &resp(&[&[b"GET", b"failed"]]));
     stop.request();
     // The fault was transient: shutdown leaves the failed state and writes its checkpoint.
-    server.join().unwrap().unwrap();
+    join_within(server, PATIENCE).unwrap().unwrap();
 
     let (address, stop, server) = serve_with(|config| config.persistence = persistence);
     assert_eq!(
@@ -1010,7 +1009,7 @@ fn evented_shutdown_after_wal_append_failure_keeps_memory_and_log_consistent() {
     );
     assert_eq!(request(address, &resp(&[&[b"GET", b"failed"]])), in_memory);
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// Under `always` the refused record rolls the transaction back. Under `everysec` it is staged
@@ -1038,7 +1037,7 @@ fn transaction_refused_by_the_wal_leaves_memory_and_log_alike(profile: crate::Du
     setup.extend(resp(&[&[b"RPUSH", b"{t}list", b"x", b"y"]]));
     assert_eq!(request(address, &setup), b"+OK\r\n:2\r\n");
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -1102,13 +1101,13 @@ fn transaction_refused_by_the_wal_leaves_memory_and_log_alike(profile: crate::Du
         String::from_utf8_lossy(expected)
     );
     stop.request();
-    server.join().unwrap().unwrap();
+    join_within(server, PATIENCE).unwrap().unwrap();
 
     let (address, stop, server) = serve_with(|config| config.persistence = persistence);
 
     assert_eq!(request(address, &check), expected);
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -1190,14 +1189,14 @@ fn evented_wal_backlog_checkpoint_and_memory_recovery() {
         assert_eq!(request(address, b"*1\r\n$4\r\nSAVE\r\n"), b"+OK\r\n");
         assert_eq!(request(address, b"*1\r\n$4\r\nPING\r\n"), b"+PONG\r\n");
     }
-    writer.join().unwrap();
+    join_within(writer, PATIENCE).unwrap();
     let mut recovered = b"*3\r\n$3\r\nSET\r\n$9\r\nrecovered\r\n$4096\r\n".to_vec();
     recovered.extend_from_slice(&value);
     recovered.extend_from_slice(b"\r\n");
     assert_eq!(request(address, &recovered), b"+OK\r\n");
     assert_eq!(request(address, b"*1\r\n$4\r\nSAVE\r\n"), b"+OK\r\n");
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     let (address, stop, server) = serve_with(|config| {
         config.persistence = persistence;
@@ -1217,7 +1216,7 @@ fn evented_wal_backlog_checkpoint_and_memory_recovery() {
         b"$-1\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -1275,9 +1274,9 @@ fn evented_bgsave_aborted_by_the_journal_bound_still_completes() {
     let aborts = info_field(address, "snapshot_aborts_total");
 
     writing.store(false, std::sync::atomic::Ordering::Relaxed);
-    writer.join().unwrap();
+    join_within(writer, PATIENCE).unwrap();
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
     assert!(aborts.is_some_and(|aborts| aborts > 0), "{aborts:?}");
     assert!(completed, "BGSAVE never completed after {aborts:?} aborts");
 }
@@ -1335,7 +1334,7 @@ fn evented_write_larger_than_a_wal_segment_gets_a_clear_error_and_no_misconf() {
         "{text}"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// Under `everysec` a pipeline of plain writes, scripts and transactions is one WAL write,
@@ -1392,7 +1391,7 @@ fn an_everysec_pipeline_of_scripts_and_transactions_is_one_wal_write() {
 
     copy_dir(directory.path(), killed.path());
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     let (address, stop, server) = serve_with(|config| {
         config.persistence = PersistenceConfig {
@@ -1409,7 +1408,7 @@ fn an_everysec_pipeline_of_scripts_and_transactions_is_one_wal_write() {
         "*5\r\n$1\r\np\r\n$1\r\n1\r\n$1\r\n2\r\n$1\r\n3\r\n$1\r\n1\r\n*1\r\n$1\r\nx\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// Under `everysec` single-command clients served in one scheduler turn share one WAL
@@ -1439,9 +1438,7 @@ fn everysec_clients_served_in_one_turn_share_a_wal_write() {
             .map(|_| {
                 let client = StdTcpStream::connect(address).unwrap();
 
-                client
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
+                client.set_read_timeout(Some(PATIENCE)).unwrap();
                 client
             })
             .collect();
@@ -1477,7 +1474,7 @@ fn everysec_clients_served_in_one_turn_share_a_wal_write() {
 
     copy_dir(directory.path(), killed.path());
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     let (address, stop, server) = serve_with(|config| {
         config.persistence = PersistenceConfig {
@@ -1494,7 +1491,7 @@ fn everysec_clients_served_in_one_turn_share_a_wal_write() {
 
     assert_eq!(size, acknowledged);
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 fn written(directory: &std::path::Path) -> u64 {
@@ -1572,7 +1569,7 @@ fn an_everysec_grouped_script_or_transaction_whose_write_fails_acts_like_a_plain
 
         copy_dir(directory.path(), killed.path());
         stop.request();
-        server.join().unwrap();
+        join_within(server, PATIENCE).unwrap();
 
         let (address, stop, server) = serve_with(|config| {
             config.persistence = PersistenceConfig {
@@ -1585,7 +1582,7 @@ fn an_everysec_grouped_script_or_transaction_whose_write_fails_acts_like_a_plain
             b"*3\r\n$3\r\nnew\r\n$3\r\nnew\r\n$1\r\nv\r\n"
         );
         stop.request();
-        server.join().unwrap();
+        join_within(server, PATIENCE).unwrap();
     }
 }
 
@@ -1615,7 +1612,7 @@ fn one_shard_with_hot_keys_restarts_with_its_keys() {
         b"+OK\r\n+OK\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     let (address, stop, server) = start(persistence);
 
@@ -1624,5 +1621,5 @@ fn one_shard_with_hot_keys_restarts_with_its_keys() {
         b"$1\r\nv\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }

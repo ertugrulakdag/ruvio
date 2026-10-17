@@ -33,7 +33,7 @@ fn evented_select_isolates_databases_and_survives_restart() {
             b"+OK\r\n+OK\r\n+OK\r\n$3\r\none\r\n:1\r\n:2\r\n+OK\r\n$4\r\nzero\r\n$-1\r\n:1\r\n-ERR DB index is out of range\r\n"
         );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     let (address, stop, server) = serve_with(|config| {
         config.persistence = persistence.clone();
@@ -51,7 +51,7 @@ fn evented_select_isolates_databases_and_survives_restart() {
     assert!(info.contains("db0:keys=1,expires=0"), "{info}");
     assert!(info.contains("db1:keys=2,expires=0"), "{info}");
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn evented_database_commands_work_over_the_wire() {
             b"+OK\r\n+OK\r\n+OK\r\n+OK\r\n+QUEUED\r\n+QUEUED\r\n*2\r\n$1\r\n5\r\n+OK\r\n$-1\r\n+OK\r\n+OK\r\n:0\r\n"
         );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -118,8 +118,8 @@ fn evented_cluster_mode_keeps_database_zero_only() {
             b"+OK\r\n-ERR SELECT is not allowed in cluster mode\r\n-ERR SWAPDB is not supported with more than one shard\r\n"
         );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 /// `CONFIG GET` answers the running settings inside `MULTI` too, not the defaults.
@@ -139,7 +139,7 @@ fn config_get_in_a_transaction_answers_the_running_settings() {
         b"+OK\r\n+QUEUED\r\n*1\r\n*2\r\n$15\r\nslowlog-max-len\r\n$1\r\n7\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// `INFO` queued in `MULTI` answers with the server's report, as it does outside one.
@@ -155,7 +155,7 @@ fn info_in_a_transaction_reports_the_server() {
     );
     assert!(!text.contains("ruvio_backend:portable"), "{text}");
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 /// Every field `INFO` writes has a row in the field table of `docs/OBSERVABILITY.md`, and
@@ -169,7 +169,7 @@ fn info_fields_and_the_observability_table_agree() {
     let keyspace = String::from_utf8(request(address, &resp(&[&[b"INFO", b"KeySpace"]]))).unwrap();
     let unknown = request(address, &resp(&[&[b"INFO", b"nosuchsection"]]));
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     assert!(keyspace.contains("# Keyspace\r\n") && keyspace.contains("db0:keys=1"));
     assert!(!keyspace.contains("# Server"), "{keyspace}");

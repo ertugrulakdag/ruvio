@@ -6,7 +6,7 @@ fn evented_serves_ping_on_the_owning_thread() {
 
     assert_eq!(request(address, b"*1\r\n$4\r\nPING\r\n"), b"+PONG\r\n");
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn evented_exec_aborts_after_a_command_refused_while_queueing() {
           $-1\r\n+OK\r\n+QUEUED\r\n*1\r\n+OK\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn evented_exec_aborts_after_a_command_refused_by_acl_or_arity_while_queueing() 
         );
     }
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -112,7 +112,7 @@ fn evented_exec_runs_the_others_when_a_queued_command_has_invalid_arguments() {
          +OK\r\n+QUEUED\r\n*1\r\n-ERR source and destination objects are the same\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn evented_exec_crossslot_empty_and_reused_multi() {
         b"$9\r\ndiscarded\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -190,13 +190,13 @@ fn evented_memory_pressure_pipeline_and_slow_reader_recover() {
     assert_eq!(success + rejected, 32);
 
     let mut slow = StdTcpStream::connect(address).unwrap();
-    slow.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    slow.set_read_timeout(Some(PATIENCE)).unwrap();
     let get = b"*2\r\n$3\r\nGET\r\n$10\r\npressure:0\r\n";
     slow.write_all(&get.repeat(3)).unwrap();
     slow.shutdown(Shutdown::Write).unwrap();
 
     assert_eq!(
-        request_within(address, b"*1\r\n$4\r\nPING\r\n", Duration::from_secs(2)),
+        request_within(address, b"*1\r\n$4\r\nPING\r\n", PATIENCE),
         b"+PONG\r\n"
     );
     assert_eq!(
@@ -235,7 +235,7 @@ fn evented_memory_pressure_pipeline_and_slow_reader_recover() {
         [format!("${}\r\n", value.len()).as_bytes(), &value, b"\r\n"].concat()
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -252,7 +252,7 @@ fn evented_standalone_deletes_keys_in_different_hash_slots() {
         b"+OK\r\n+OK\r\n:2\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -267,7 +267,7 @@ fn evented_multi_accepts_keys_in_different_hash_slots_on_one_shard() {
         b"+OK\r\n+QUEUED\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -295,7 +295,7 @@ fn evented_pipeline_set_get_and_info_on_the_owning_thread() {
         assert!(text.contains(field), "Missing {field}: {text}");
     }
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -306,9 +306,7 @@ fn evented_auth_rejects_commands_until_the_password_matches() {
 
     let mut client = StdTcpStream::connect(address).unwrap();
 
-    client
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    client.set_read_timeout(Some(PATIENCE)).unwrap();
     client
         .write_all(b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n")
         .unwrap();
@@ -327,7 +325,7 @@ fn evented_auth_rejects_commands_until_the_password_matches() {
     client.read_to_end(&mut response).unwrap();
     assert_eq!(response, b"+OK\r\n+OK\r\n");
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -358,7 +356,7 @@ fn evented_acl_named_user_limits_commands_and_keys() {
     assert!(text.contains("NOPERM this user has no permissions to access one or more keys"));
     assert!(text.contains("NOPERM this user has no permissions to run the 'config' command"));
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -375,7 +373,7 @@ fn evented_rate_limits_commands_on_one_connection() {
         b"+PONG\r\n+PONG\r\n-ERR max commands per second exceeded\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -392,9 +390,7 @@ fn evented_caps_authenticated_connections_per_acl_user() {
 
     let mut first = StdTcpStream::connect(address).unwrap();
 
-    first
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    first.set_read_timeout(Some(PATIENCE)).unwrap();
     first
         .write_all(b"*2\r\n$4\r\nAUTH\r\n$6\r\nsecret\r\n")
         .unwrap();
@@ -408,7 +404,7 @@ fn evented_caps_authenticated_connections_per_acl_user() {
     );
     drop(first);
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -425,7 +421,7 @@ fn evented_applies_configured_protocol_limits() {
         b"-ERR key is too large\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -440,9 +436,7 @@ fn evented_rejects_connections_over_the_per_ip_limit() {
 
     let mut first = StdTcpStream::connect(address).unwrap();
 
-    first
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    first.set_read_timeout(Some(PATIENCE)).unwrap();
     first.write_all(b"*1\r\n$4\r\nPING\r\n").unwrap();
     let mut pong = [0; 7];
 
@@ -450,16 +444,14 @@ fn evented_rejects_connections_over_the_per_ip_limit() {
     assert_eq!(&pong, b"+PONG\r\n");
     let mut second = StdTcpStream::connect(address).unwrap();
 
-    second
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    second.set_read_timeout(Some(PATIENCE)).unwrap();
     let mut response = Vec::new();
 
     second.read_to_end(&mut response).unwrap();
     assert_eq!(response, b"-ERR max number of clients reached\r\n");
     drop(first);
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -474,15 +466,13 @@ fn evented_closes_idle_connections_after_the_configured_timeout() {
 
     let mut client = StdTcpStream::connect(address).unwrap();
 
-    client
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    client.set_read_timeout(Some(PATIENCE)).unwrap();
     let mut response = Vec::new();
 
     client.read_to_end(&mut response).unwrap();
     assert!(response.is_empty());
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -497,16 +487,14 @@ fn evented_limits_inactive_partial_frame_reads() {
 
     let mut client = StdTcpStream::connect(address).unwrap();
 
-    client
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    client.set_read_timeout(Some(PATIENCE)).unwrap();
     client.write_all(b"*2\r\n").unwrap();
     let mut response = Vec::new();
 
     client.read_to_end(&mut response).unwrap();
     assert_eq!(response, b"-ERR protocol error\r\n");
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -565,7 +553,7 @@ fn evented_oversized_and_truncated_frames_do_not_poison_reconnects() {
     }
     assert_eq!(request(address, b"*1\r\n$4\r\nPING\r\n"), b"+PONG\r\n");
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -577,7 +565,7 @@ fn evented_unknown_command_replies_and_keeps_the_connection() {
         b"-ERR unknown command\r\n+PONG\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -600,7 +588,7 @@ fn evented_rejected_admin_verbs_reply_and_keep_the_connection() {
               +PONG\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -621,16 +609,17 @@ fn evented_tls_serves_ping_and_rejects_plaintext() {
 
     let mut plain = StdTcpStream::connect(address).unwrap();
 
-    plain
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    plain.set_read_timeout(Some(PATIENCE)).unwrap();
     let _ = plain.write_all(b"*1\r\n$4\r\nPING\r\n");
     let mut response = Vec::new();
     let _ = plain.read_to_end(&mut response);
 
     assert_ne!(response, b"+PONG\r\n");
 
-    thread::sleep(Duration::from_millis(20));
+    let loaded_at = std::fs::metadata(&cert_for_client)
+        .unwrap()
+        .modified()
+        .unwrap();
     let (cert2, key2) = crate::tls::write_self_signed_pair(directory.path(), "two");
 
     std::fs::copy(&cert2, &cert_for_client).unwrap();
@@ -641,11 +630,16 @@ fn evented_tls_serves_ping_and_rejects_plaintext() {
         .unwrap();
 
     writeln!(touch, "# reloaded").unwrap();
+    // Writes within one tick of a file system's clock can keep the old modification time:
+    // give the file one the server tells apart whatever the clock's granularity.
+    touch
+        .set_modified(loaded_at + Duration::from_secs(60))
+        .unwrap();
     drop(touch);
     ping_over_tls(address, &cert2);
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -656,7 +650,7 @@ fn evented_replica_refuses_hot_path_writes_but_serves_reads() {
         config.persistence.profile = crate::DurabilityProfile::Always;
         config.persistence.data_dir = data_dir;
         config.replication.role = crate::config::ReplicationRole::Replica;
-        config.replication.primary = Some("127.0.0.1:9".parse().unwrap());
+        config.replication.primary = Some("127.0.0.1:1".parse().unwrap());
     });
     let reply = String::from_utf8(request(
         address,
@@ -667,7 +661,7 @@ fn evented_replica_refuses_hot_path_writes_but_serves_reads() {
     assert_eq!(reply.matches("-READONLY").count(), 3, "{reply}");
     assert!(reply.ends_with("$-1\r\n"), "{reply}");
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 const OVERSIZED_REPLY: &[u8] =
@@ -692,7 +686,7 @@ fn evented_frame_with_too_many_arguments_is_refused_and_the_connection_kept() {
         .concat()
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -742,7 +736,7 @@ fn evented_oversized_argument_is_refused_and_the_connection_kept() {
     client.read_to_end(&mut rest).unwrap();
     assert_eq!(rest, b"-ERR protocol error\r\n");
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -774,8 +768,9 @@ fn evented_large_pipeline_replies_stream_under_a_small_output_limit() {
     let mut response = vec![0; reply.len() * 600];
 
     client.read_exact(&mut response).unwrap();
-    writer.join().unwrap();
+    join_within(writer, PATIENCE).unwrap();
     assert!(response.chunks(reply.len()).all(|chunk| chunk == reply));
+    drop(client);
 
     // A client that takes nothing for the write timeout while half the limit is unsent
     // is cut; what it was sent is bounded by the limit plus the socket buffers.
@@ -785,7 +780,8 @@ fn evented_large_pipeline_replies_stream_under_a_small_output_limit() {
         .unwrap();
     idle.write_all(&resp(&[&[b"GET", b"big"]]).repeat(2_000))
         .unwrap();
-    thread::sleep(Duration::from_millis(1_500));
+    // Cut: only the INFO request's own connection is left.
+    wait_for_info(address, "connected_clients", |clients| clients == 1);
     let mut received = Vec::new();
     let mut chunk = vec![0; 1 << 20];
 
@@ -804,7 +800,7 @@ fn evented_large_pipeline_replies_stream_under_a_small_output_limit() {
         "the shard kept serving"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -834,9 +830,10 @@ fn evented_shutdown_closes_idle_and_subscribed_clients_at_once() {
     let started = Instant::now();
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
+    // A shutdown that waits for them takes the whole 10 s grace.
     assert!(
-        started.elapsed() < Duration::from_secs(1),
+        started.elapsed() < Duration::from_secs(5),
         "shutdown waited {:?} for idle clients",
         started.elapsed()
     );
@@ -897,9 +894,9 @@ fn evented_blocked_client_that_hangs_up_gives_up_its_waiter() {
         let mut gone = connect_bounded(address);
 
         gone.write_all(&resp(&[command])).unwrap();
-        thread::sleep(Duration::from_millis(100));
+        wait_for_parked(address, 1);
         drop(gone);
-        thread::sleep(Duration::from_millis(100));
+        wait_for_parked(address, 0);
 
         assert_eq!(
             request(address, &resp(&[&[b"RPUSH", b"q", b"x"], &[b"LLEN", b"q"]])),
@@ -921,14 +918,14 @@ fn evented_blocked_client_that_hangs_up_gives_up_its_waiter() {
         ping.read_exact(&mut pong).unwrap();
         drop(gone);
     }
-    thread::sleep(Duration::from_millis(200));
+    wait_for_parked(address, 0);
     assert_eq!(
         exchange(address, &resp(&[&[b"BLPOP", b"zz", b"0.1"]]), 5),
         b"*-1\r\n"
     );
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 // A hang-up behind unread bytes is seen only where the OS reports the FIN (Linux, macOS).
@@ -941,11 +938,11 @@ fn evented_blocked_client_that_hangs_up_with_unread_input_gives_up_its_waiter() 
     let mut gone = StdTcpStream::connect(address).unwrap();
 
     gone.write_all(&resp(&[&[b"BLPOP", b"q", b"0"]])).unwrap();
-    thread::sleep(Duration::from_millis(100));
+    wait_for_parked(address, 1);
     gone.write_all(b"*1\r\n$4\r\nPING\r\n").unwrap();
     thread::sleep(Duration::from_millis(50));
     gone.shutdown(std::net::Shutdown::Write).unwrap();
-    thread::sleep(Duration::from_millis(700));
+    wait_for_parked(address, 0);
 
     assert_eq!(
         request(address, &resp(&[&[b"RPUSH", b"q", b"x"], &[b"LLEN", b"q"]])),
@@ -954,7 +951,7 @@ fn evented_blocked_client_that_hangs_up_with_unread_input_gives_up_its_waiter() 
     );
     drop(gone);
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -981,7 +978,7 @@ fn evented_parked_clients_wake_on_data_timeout_and_shutdown() {
     moved
         .write_all(&resp(&[&[b"BLMOVE", b"b", b"d", b"LEFT", b"LEFT", b"5"]]))
         .unwrap();
-    thread::sleep(Duration::from_millis(100));
+    wait_for_parked(address, 2);
     assert_eq!(
         request(
             address,
@@ -1008,14 +1005,15 @@ fn evented_parked_clients_wake_on_data_timeout_and_shutdown() {
             b"BLMOVE", b"never", b"d", b"LEFT", b"LEFT", b"0",
         ]]))
         .unwrap();
-    thread::sleep(Duration::from_millis(100));
+    wait_for_parked(address, 2);
 
     let stopping = Instant::now();
 
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
+    // A shutdown that waits for them takes the whole 10 s grace.
     assert!(
-        stopping.elapsed() < Duration::from_secs(1),
+        stopping.elapsed() < Duration::from_secs(5),
         "shutdown waited {:?} for blocked clients",
         stopping.elapsed()
     );
@@ -1043,9 +1041,7 @@ fn admission_counters_reach_the_prometheus_reply() {
     let connect = || {
         let stream = StdTcpStream::connect(address).unwrap();
 
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+        stream.set_read_timeout(Some(PATIENCE)).unwrap();
         stream
     };
     let mut first = connect();
@@ -1103,5 +1099,5 @@ fn admission_counters_reach_the_prometheus_reply() {
         assert!(value.is_some_and(|value| value > 0), "{name}: {metrics}");
     }
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }

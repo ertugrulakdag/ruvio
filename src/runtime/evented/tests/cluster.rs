@@ -66,8 +66,8 @@ fn evented_two_shards_forward_and_reject_cross_slot_keys() {
     assert!(cross.starts_with("-CROSSSLOT"), "{cross}");
 
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -121,8 +121,8 @@ fn evented_cluster_discovery_reports_shards_and_the_advertised_port() {
         "{server}"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -161,8 +161,8 @@ fn evented_two_shards_save_recovers_both_owners() {
     assert_eq!(request(right_addr, b"*1\r\n$4\r\nSAVE\r\n"), b"+OK\r\n");
     assert!(directory.path().join("CLOCK").exists());
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 
     let (left_addr, right_addr, stop, left_server, right_server) =
         serve_two_shards_with(|config| {
@@ -178,8 +178,8 @@ fn evented_two_shards_save_recovers_both_owners() {
         b"$4\r\neast\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -209,13 +209,13 @@ fn evented_rejects_wal_only_shard_count_changes_before_serving() {
         address: "127.0.0.1:0".into(),
         ..AppConfig::default()
     };
-    let error = run(&config, ShutdownToken::default()).unwrap_err();
+    let error = run(&config, stopped()).unwrap_err();
     assert!(error.to_string().contains("WAL shard layout"), "{error}");
     assert!(!directory.path().join("SHARD_LAYOUT").exists());
 
     validate_shard_layout(&config.persistence, 2, 2, config.protocol).unwrap();
     config.shards = 3;
-    let error = run(&config, ShutdownToken::default()).unwrap_err();
+    let error = run(&config, stopped()).unwrap_err();
     assert!(error.to_string().contains("shard layout"), "{error}");
 }
 
@@ -241,8 +241,8 @@ fn evented_rejects_legacy_checkpoint_only_shard_count_change() {
     assert_eq!(request(left, &resp(&[&[b"SAVE"]])), b"+OK\r\n");
     assert_eq!(request(right, &resp(&[&[b"SAVE"]])), b"+OK\r\n");
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
     assert!(directory.path().join("CURRENT").exists());
     assert!(!directory.path().join("SHARD_LAYOUT").exists());
     let config = AppConfig {
@@ -250,7 +250,7 @@ fn evented_rejects_legacy_checkpoint_only_shard_count_change() {
         address: "127.0.0.1:0".into(),
         ..AppConfig::default()
     };
-    let error = run(&config, ShutdownToken::default()).unwrap_err();
+    let error = run(&config, stopped()).unwrap_err();
     assert!(
         error.to_string().contains("checkpoint shard count"),
         "{error}"
@@ -284,7 +284,7 @@ fn evented_rejects_empty_durable_layout_change_and_legacy_single_shard_wal() {
         b"+OK\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
     assert!(validate_shard_layout(&persistence, 2, 2, config.protocol).is_err());
 }
 
@@ -326,8 +326,8 @@ fn evented_hot_keys_are_visible_on_both_shards_without_moved() {
         b"$-1\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -351,7 +351,10 @@ fn evented_hot_keys_set_nx_has_one_winner_across_shards() {
         )
     });
 
-    let replies = [left.join().unwrap(), right.join().unwrap()];
+    let replies = [
+        join_within(left, PATIENCE).unwrap(),
+        join_within(right, PATIENCE).unwrap(),
+    ];
     let wins = replies
         .iter()
         .filter(|reply| reply.as_slice() == b"+OK\r\n")
@@ -364,8 +367,8 @@ fn evented_hot_keys_set_nx_has_one_winner_across_shards() {
     assert_eq!(wins, 1, "{replies:?}");
     assert_eq!(misses, 1, "{replies:?}");
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -386,8 +389,8 @@ fn evented_hot_keys_reject_unsupported_and_leave_shard_untouched() {
         b"$-1\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -430,8 +433,8 @@ fn a_hot_key_inside_multi_is_refused_and_aborts_exec() {
         b"$3\r\nold\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -463,8 +466,8 @@ fn evented_hot_keys_save_publishes_after_hot_partition() {
     assert!(directory.path().join("CURRENT").exists());
     assert_eq!(request(right_addr, b"*1\r\n$4\r\nSAVE\r\n"), b"+OK\r\n");
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 
     let (left_addr, right_addr, stop, left_server, right_server) =
         serve_two_shards_with(|config| {
@@ -481,8 +484,8 @@ fn evented_hot_keys_save_publishes_after_hot_partition() {
         b"$4\r\nheld\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -508,8 +511,8 @@ fn evented_hot_keys_off_still_shards_prefixed_keys() {
         b"$4\r\nheld\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -526,11 +529,11 @@ fn evented_shards_stay_responsive_while_a_peer_blocks() {
     waiting
         .set_read_timeout(Some(Duration::from_millis(100)))
         .unwrap();
+    waiting.set_write_timeout(Some(PATIENCE)).unwrap();
     waiting
-        .set_write_timeout(Some(Duration::from_secs(1)))
-        .unwrap();
-    waiting
-        .write_all(&resp(&[&[b"BLPOP", blocked_key.as_bytes(), b"5"]]))
+        // Without a timeout: a shard blocked by it would not answer the requests below
+        // before their deadline.
+        .write_all(&resp(&[&[b"BLPOP", blocked_key.as_bytes(), b"0"]]))
         .unwrap();
     let mut probe = [0u8; 1];
     let still_blocked = waiting.read(&mut probe).unwrap_err();
@@ -555,20 +558,18 @@ fn evented_shards_stay_responsive_while_a_peer_blocks() {
     ]);
 
     assert_eq!(
-        request_within(right, &peer, Duration::from_secs(1)),
+        request_within(right, &peer, PATIENCE),
         b"+OK\r\n$1\r\nv\r\n:1\r\n"
     );
     assert_eq!(
-        request_within(left, &local, Duration::from_secs(1)),
+        request_within(left, &local, PATIENCE),
         b"+OK\r\n$1\r\nv\r\n+PONG\r\n"
     );
     assert_eq!(
         request(left, &resp(&[&[b"LPUSH", blocked_key.as_bytes(), b"x"]])),
         b":1\r\n"
     );
-    waiting
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .unwrap();
+    waiting.set_read_timeout(Some(PATIENCE)).unwrap();
     let expected = format!(
         "*2\r\n${}\r\n{}\r\n$1\r\nx\r\n",
         blocked_key.len(),
@@ -579,8 +580,8 @@ fn evented_shards_stay_responsive_while_a_peer_blocks() {
     waiting.read_exact(&mut woke).unwrap();
     assert_eq!(woke, expected.as_bytes());
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -589,22 +590,22 @@ fn evented_script_quota_keeps_both_shards_responsive() {
         config.scripts.max_instructions = 100_000;
     });
     let script = resp(&[&[b"EVAL", b"while true do end", b"0"]]);
-    let left_request = thread::spawn(move || request_within(left, &script, Duration::from_secs(2)));
+    let left_request = thread::spawn(move || request_within(left, &script, PATIENCE));
     assert_eq!(
-        request_within(right, &resp(&[&[b"PING"]]), Duration::from_secs(2)),
+        request_within(right, &resp(&[&[b"PING"]]), PATIENCE),
         b"+PONG\r\n"
     );
     assert_eq!(
-        left_request.join().unwrap(),
+        join_within(left_request, PATIENCE).unwrap(),
         b"-ERR Lua instruction quota exceeded\r\n"
     );
     assert_eq!(
-        request_within(left, &resp(&[&[b"PING"]]), Duration::from_secs(2)),
+        request_within(left, &resp(&[&[b"PING"]]), PATIENCE),
         b"+PONG\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -686,9 +687,7 @@ fn evented_shards_keep_keys_scripts_and_subscribers_local() {
 
     let mut subscriber = StdTcpStream::connect(right).unwrap();
 
-    subscriber
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .unwrap();
+    subscriber.set_read_timeout(Some(PATIENCE)).unwrap();
     subscriber
         .write_all(&resp(&[&[b"SUBSCRIBE", b"news"]]))
         .unwrap();
@@ -723,8 +722,8 @@ fn evented_shards_keep_keys_scripts_and_subscribers_local() {
         .unwrap();
     assert!(queued_peak >= expected.len(), "{info}");
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -735,9 +734,7 @@ fn a_publish_the_gate_refuses_reaches_no_other_shard() {
         serve_two_shards_with(|config| config.security.requirepass = "secret".into());
     let mut subscriber = StdTcpStream::connect(right).unwrap();
 
-    subscriber
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .unwrap();
+    subscriber.set_read_timeout(Some(PATIENCE)).unwrap();
     subscriber
         .write_all(&resp(&[&[b"AUTH", b"secret"], &[b"SUBSCRIBE", b"news"]]))
         .unwrap();
@@ -794,17 +791,15 @@ fn a_publish_the_gate_refuses_reaches_no_other_shard() {
         ),
         b"+OK\r\n:0\r\n"
     );
-    subscriber
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .unwrap();
+    subscriber.set_read_timeout(Some(PATIENCE)).unwrap();
     let expected = crate::pubsub::encode_message(b"news", b"hello");
     let mut message = vec![0u8; expected.len()];
 
     subscriber.read_exact(&mut message).unwrap();
     assert_eq!(message, expected);
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -888,8 +883,8 @@ fn evented_shards_flush_locally_and_share_one_acl_directory() {
         b"$-1\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -1032,9 +1027,7 @@ fn evented_shards_run_same_slot_work_and_route_sharded_channels() {
     );
     let mut watcher = StdTcpStream::connect(left).unwrap();
 
-    watcher
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    watcher.set_read_timeout(Some(PATIENCE)).unwrap();
     watcher
         .write_all(&resp(&[&[b"WATCH", watched.as_bytes()]]))
         .unwrap();
@@ -1065,7 +1058,7 @@ fn evented_shards_run_same_slot_work_and_route_sharded_channels() {
     );
     let mut peer = StdTcpStream::connect(right).unwrap();
 
-    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    peer.set_read_timeout(Some(PATIENCE)).unwrap();
     peer.write_all(&resp(&[&[b"WATCH", stable.as_bytes()]]))
         .unwrap();
     peer.read_exact(&mut watched_ok).unwrap();
@@ -1089,9 +1082,7 @@ fn evented_shards_run_same_slot_work_and_route_sharded_channels() {
     assert!(request(left, &resp(&[&[b"SSUBSCRIBE", channel.as_bytes()]])).starts_with(b"-MOVED"));
     let mut subscriber = StdTcpStream::connect(right).unwrap();
 
-    subscriber
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    subscriber.set_read_timeout(Some(PATIENCE)).unwrap();
     subscriber
         .write_all(&resp(&[&[b"SSUBSCRIBE", channel.as_bytes()]]))
         .unwrap();
@@ -1121,17 +1112,15 @@ fn evented_shards_run_same_slot_work_and_route_sharded_channels() {
         ),
         b":1\r\n"
     );
-    subscriber
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    subscriber.set_read_timeout(Some(PATIENCE)).unwrap();
     let expected = crate::pubsub::encode_smessage(channel.as_bytes(), b"hello");
     let mut message = vec![0u8; expected.len()];
 
     subscriber.read_exact(&mut message).unwrap();
     assert_eq!(message, expected);
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -1166,8 +1155,8 @@ fn evented_bgsave_on_one_shard_publishes_a_round_for_every_shard() {
             && info_field(right_addr, "rdb_bgsave_in_progress") == Some(0)
     }));
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 
     let (_, right_addr, stop, left_server, right_server) = serve_two_shards_with(|config| {
         config.persistence = persistence;
@@ -1178,8 +1167,8 @@ fn evented_bgsave_on_one_shard_publishes_a_round_for_every_shard() {
         b"$4\r\neast\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 /// `SAVE` on one shard while another shard's background checkpoint, begun before that
@@ -1219,8 +1208,8 @@ fn evented_save_on_one_shard_keeps_a_write_another_shard_made_during_its_checkpo
 
     copy_dir(directory.path(), saved.path());
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 
     let (_, right_addr, stop, left_server, right_server) = serve_two_shards_with(|config| {
         config.persistence = PersistenceConfig {
@@ -1234,8 +1223,8 @@ fn evented_save_on_one_shard_keeps_a_write_another_shard_made_during_its_checkpo
         b"$3\r\nnew\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -1322,11 +1311,11 @@ fn evented_save_returns_while_save_and_bgsave_requests_keep_arriving() {
     copy_dir(directory.path(), saved.path());
     spamming.store(false, Ordering::Release);
     for spammer in spammers {
-        spammer.join().unwrap();
+        join_within(spammer, PATIENCE).unwrap();
     }
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 
     let (_, right_addr, stop, left_server, right_server) = serve_two_shards_with(|config| {
         config.persistence = PersistenceConfig {
@@ -1340,8 +1329,8 @@ fn evented_save_returns_while_save_and_bgsave_requests_keep_arriving() {
         b"$1\r\n3\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -1385,8 +1374,8 @@ fn evented_hot_partition_covers_a_shard_file_that_replaced_its_earlier_one() {
         Some(crate::store::SnapshotValue::Bytes(b"after".to_vec()))
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -1424,8 +1413,8 @@ fn evented_save_on_one_shard_publishes_the_round_while_the_others_are_idle() {
     );
     assert_eq!(info_field(left_addr, "rdb_bgsave_in_progress"), Some(0));
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -1461,8 +1450,8 @@ fn evented_idle_shard_joins_a_round_a_busy_shard_opened() {
             && info_field(idle, "rdb_bgsave_in_progress") == Some(0)
     });
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
     assert!(published, "the periodic round never published");
 }
 
@@ -1500,7 +1489,8 @@ fn evented_two_shards_save_fails_at_once_when_a_checkpoint_cannot_be_written() {
         request(left_addr, &resp(&[&[b"SAVE"]])),
         b"-MISCONF persistence error\r\n"
     );
-    assert!(started.elapsed() < Duration::from_secs(2));
+    // The round's own timeout is two minutes.
+    assert!(started.elapsed() < Duration::from_secs(20));
     // A later SAVE fails the same way: its own request is attempted again.
     assert_eq!(
         request(right_addr, &resp(&[&[b"SAVE"]])),
@@ -1517,8 +1507,8 @@ fn evented_two_shards_save_fails_at_once_when_a_checkpoint_cannot_be_written() {
         );
     }
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -1538,10 +1528,13 @@ fn evented_two_shards_back_to_back_saves_do_not_wait_out_the_retry_throttle() {
 
     assert_eq!(request(left_addr, &resp(&[&[b"SAVE"]])), b"+OK\r\n");
     // Each SAVE is a new request: the other shard starts its file at once instead of after
-    // the one-second throttle that spaces out retries of a failed one.
+    // the one-second throttle that spaces out retries of a failed one. Six SAVEs that each
+    // waited it out take six seconds; an average far below that tells them apart from a
+    // slow disk.
+    let saves = 6;
     let started = Instant::now();
 
-    for _ in 0..2 {
+    for _ in 0..saves {
         assert_eq!(
             request_connected(left_addr, &resp(&[&[b"SAVE"]])),
             b"+OK\r\n"
@@ -1550,11 +1543,11 @@ fn evented_two_shards_back_to_back_saves_do_not_wait_out_the_retry_throttle() {
     let elapsed = started.elapsed();
 
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
     assert!(
-        elapsed < Duration::from_millis(1500),
-        "two idle SAVEs took {elapsed:?}"
+        elapsed < Duration::from_millis(500) * saves,
+        "{saves} idle SAVEs took {elapsed:?}"
     );
 }
 
@@ -1588,8 +1581,8 @@ fn evented_exec_fails_when_queued_keys_span_shards() {
         "{text}"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -1609,12 +1602,15 @@ fn evented_two_shards_save_during_an_open_round_does_not_wait_out_the_throttle()
 
     // Warm up: the first round of an idle pair publishes.
     assert_eq!(request(left_addr, &resp(&[&[b"SAVE"]])), b"+OK\r\n");
-    let mut slowest = Duration::ZERO;
+    let mut waited = Duration::ZERO;
+    // A SAVE that waited out the one-second throttle each time would take six seconds in
+    // all; an average far below that tells it apart from a slow disk.
+    let saves = 6;
 
     // Each SAVE arrives while the round its BGSAVE opened is still waiting for the other
     // shard. This shard's file is in that round, so it holds back the SAVE's checkpoint;
     // once the round publishes, that checkpoint starts at once.
-    for _ in 0..3 {
+    for _ in 0..saves {
         let replies = request(left_addr, &resp(&[&[b"BGSAVE"]]));
 
         assert!(replies.starts_with(b"+"), "{replies:?}");
@@ -1624,15 +1620,15 @@ fn evented_two_shards_save_during_an_open_round_does_not_wait_out_the_throttle()
             request_connected(left_addr, &resp(&[&[b"SAVE"]])),
             b"+OK\r\n"
         );
-        slowest = slowest.max(started.elapsed());
+        waited += started.elapsed();
     }
 
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
     assert!(
-        slowest < Duration::from_millis(900),
-        "a SAVE after a BGSAVE took {slowest:?}"
+        waited < Duration::from_millis(500) * saves,
+        "{saves} SAVEs after a BGSAVE took {waited:?}"
     );
 }
 
@@ -1681,7 +1677,7 @@ fn rounds_still_publish_after_one_shard_wal_sync_failed() {
     assert!(!refused.starts_with(b"+"), "{refused:?}");
 
     let failed_at = generation();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + PATIENCE;
     let mut last = String::new();
 
     for n in 0.. {
@@ -1700,9 +1696,9 @@ fn rounds_still_publish_after_one_shard_wal_sync_failed() {
 
     copy_dir(directory.path(), killed.path());
     stop.request();
-    left_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
     // The failed shard ends with an error: its log failed.
-    let _ = right_server.join();
+    let _ = join_within(right_server, PATIENCE);
     assert_no_orphan_round(&persistence);
 
     let (left_addr, right_addr, stop, left_server, right_server) =
@@ -1722,8 +1718,8 @@ fn rounds_still_publish_after_one_shard_wal_sync_failed() {
         b"$3\r\nold\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 /// Fails every WAL sync of `shard` in `directory` while `run` runs.
@@ -1800,7 +1796,7 @@ fn a_shard_whose_log_failed_keeps_answering_while_its_file_is_copied() {
     crate::persistence::CARRY_DELAYS
         .lock()
         .unwrap()
-        .push((directory.path().to_path_buf(), Duration::from_secs(3)));
+        .push((directory.path().to_path_buf(), Duration::from_secs(5)));
     let refused = with_failing_shard(directory.path(), 1, || {
         request(right_addr, &resp(&[&[b"SET", right.as_bytes(), b"new"]]))
     });
@@ -1827,11 +1823,12 @@ fn a_shard_whose_log_failed_keeps_answering_while_its_file_is_copied() {
         .unwrap()
         .retain(|(dir, _)| dir != directory.path());
     stop.request();
-    left_server.join().unwrap();
-    let _ = right_server.join();
+    join_within(left_server, PATIENCE).unwrap();
+    let _ = join_within(right_server, PATIENCE);
 
+    // A shard that waited for the copy stalls for most of its 5 s.
     assert!(
-        slowest < Duration::from_secs(1),
+        slowest < Duration::from_millis(2500),
         "the shard stalled {slowest:?} while its file was copied"
     );
 }
@@ -1873,8 +1870,8 @@ fn a_hot_key_write_refused_by_a_failed_log_is_not_published() {
 
     copy_dir(directory.path(), killed.path());
     stop.request();
-    let _ = left_server.join();
-    let _ = right_server.join();
+    let _ = join_within(left_server, PATIENCE);
+    let _ = join_within(right_server, PATIENCE);
 
     let (left_addr, _right_addr, stop, left_server, right_server) =
         serve_two_shards_with(|config| {
@@ -1887,8 +1884,8 @@ fn a_hot_key_write_refused_by_a_failed_log_is_not_published() {
         b"$3\r\nold\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 /// With no round ever published, a shard whose log failed still lets rounds publish: its
@@ -1920,7 +1917,7 @@ fn rounds_publish_after_a_shard_log_failed_before_any_round() {
     assert!(!refused.starts_with(b"+"), "{refused:?}");
     assert_eq!(published_generation(&persistence), 0);
 
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + PATIENCE;
 
     while published_generation(&persistence) == 0 && Instant::now() < deadline {
         request(left_addr, &resp(&[&[b"SET", left.as_bytes(), b"b"]]));
@@ -1935,8 +1932,8 @@ fn rounds_publish_after_a_shard_log_failed_before_any_round() {
 
     copy_dir(directory.path(), killed.path());
     stop.request();
-    left_server.join().unwrap();
-    let _ = right_server.join();
+    join_within(left_server, PATIENCE).unwrap();
+    let _ = join_within(right_server, PATIENCE);
     assert_no_orphan_round(&persistence);
 
     let (left_addr, right_addr, stop, left_server, right_server) =
@@ -1956,8 +1953,8 @@ fn rounds_publish_after_a_shard_log_failed_before_any_round() {
         b"$4\r\nkept\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 /// Fails the next `count` WAL writes of `shard` in `directory`; the log resumes by itself
@@ -1983,7 +1980,7 @@ fn wait_for_round_after(
     address: SocketAddr,
     key: &str,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + PATIENCE;
 
     while published_generation(persistence) <= generation && Instant::now() < deadline {
         request(address, &resp(&[&[b"SET", key.as_bytes(), b"poke"]]));
@@ -2035,7 +2032,7 @@ fn a_bgsave_during_a_slow_carry_does_not_lose_writes_made_after_the_log_resumed(
     assert!(!carrying.starts_with(b"+"), "{carrying:?}");
 
     // The log resumes and takes a write past the copied file's snapshot point.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     let mut accepted = false;
 
     while !accepted && Instant::now() < deadline {
@@ -2059,8 +2056,8 @@ fn a_bgsave_during_a_slow_carry_does_not_lose_writes_made_after_the_log_resumed(
         .retain(|(dir, _)| dir != directory.path());
     stop_failing_writes(directory.path());
     stop.request();
-    left_server.join().unwrap();
-    let _ = right_server.join();
+    join_within(left_server, PATIENCE).unwrap();
+    let _ = join_within(right_server, PATIENCE);
 
     let (_left_addr, right_addr, stop, left_server, right_server) =
         serve_two_shards_with(|config| {
@@ -2075,8 +2072,8 @@ fn a_bgsave_during_a_slow_carry_does_not_lose_writes_made_after_the_log_resumed(
         b"$3\r\nnew\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 /// A hot-key write on a shard whose log is failed is refused before it reaches the shared
@@ -2117,7 +2114,7 @@ fn a_hot_key_write_on_a_failed_log_is_refused_before_it_is_applied() {
     );
 
     // The log resumes (recovery is tried at most twice a second) and rounds publish.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     let mut accepted = false;
 
     while !accepted && Instant::now() < deadline {
@@ -2128,8 +2125,8 @@ fn a_hot_key_write_on_a_failed_log_is_refused_before_it_is_applied() {
     wait_for_round_after(&persistence, saved, left_addr, &left);
     stop_failing_writes(directory.path());
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 /// A shard whose log sync failed for writes that were not hot-key writes does not keep the
@@ -2178,8 +2175,8 @@ fn rounds_with_a_hot_partition_publish_after_a_sync_failure_of_plain_writes() {
 
     copy_dir(directory.path(), killed.path());
     stop.request();
-    left_server.join().unwrap();
-    let _ = right_server.join();
+    join_within(left_server, PATIENCE).unwrap();
+    let _ = join_within(right_server, PATIENCE);
 
     let (left_addr, right_addr, stop, left_server, right_server) =
         serve_two_shards_with(|config| {
@@ -2196,13 +2193,13 @@ fn rounds_with_a_hot_partition_publish_after_a_sync_failure_of_plain_writes() {
         b"$3\r\nold\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 /// Waits until no shard is writing or owes a checkpoint.
 fn wait_for_idle_checkpoints(addresses: &[SocketAddr]) {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + PATIENCE;
     let idle = b"rdb_bgsave_in_progress:0";
 
     for &address in addresses {
@@ -2222,7 +2219,7 @@ fn wait_for_idle_checkpoints(addresses: &[SocketAddr]) {
 /// Starts a BGSAVE, retrying while an earlier one or a carried copy is still running (a
 /// loaded test machine can still be finishing the previous round).
 fn start_bgsave(address: SocketAddr) {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + PATIENCE;
 
     loop {
         let reply = request(address, &resp(&[&[b"BGSAVE"]]));
@@ -2238,7 +2235,28 @@ fn start_bgsave(address: SocketAddr) {
     }
 }
 
-fn fail_next_commit(directory: &std::path::Path, start: impl FnOnce()) {
+/// Round commits in a data directory keep failing while this lives (see [`fail_commits`]).
+struct FailingCommits(std::path::PathBuf);
+
+impl Drop for FailingCommits {
+    fn drop(&mut self) {
+        crate::persistence::FAILING_COMMITS
+            .lock()
+            .unwrap()
+            .retain(|(dir, _)| *dir != self.0);
+        crate::persistence::SHARD_FILE_DELAYS
+            .lock()
+            .unwrap()
+            .retain(|(dir, _, _)| *dir != self.0);
+    }
+}
+
+/// Fails every round commit from `start` on, and returns once one was tried. The commits
+/// keep failing until the guard drops: a round retried after the failed one cannot publish
+/// while the test still checks that nothing did.
+fn fail_commits(directory: &std::path::Path, start: impl FnOnce()) -> FailingCommits {
+    let guard = FailingCommits(directory.to_path_buf());
+
     crate::persistence::SHARD_FILE_DELAYS.lock().unwrap().push((
         directory.to_path_buf(),
         0,
@@ -2247,27 +2265,16 @@ fn fail_next_commit(directory: &std::path::Path, start: impl FnOnce()) {
     crate::persistence::FAILING_COMMITS
         .lock()
         .unwrap()
-        .push((directory.to_path_buf(), 1));
+        .push((directory.to_path_buf(), u32::MAX));
     start();
-    let deadline = Instant::now() + Duration::from_secs(15);
-
-    while crate::persistence::FAILING_COMMITS
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|(dir, left)| dir == directory && *left > 0)
-    {
-        assert!(Instant::now() < deadline, "no round commit was tried");
-        thread::sleep(Duration::from_millis(20));
-    }
-    crate::persistence::FAILING_COMMITS
-        .lock()
-        .unwrap()
-        .retain(|(dir, _)| dir != directory);
-    crate::persistence::SHARD_FILE_DELAYS
-        .lock()
-        .unwrap()
-        .retain(|(dir, _, _)| dir != directory);
+    wait_until("a round commit to be tried", || {
+        crate::persistence::FAILING_COMMITS
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(dir, left)| dir == directory && *left < u32::MAX)
+    });
+    guard
 }
 
 /// A round whose commit failed never publishes, but the shard's file submitted to it was
@@ -2313,10 +2320,11 @@ fn checkpoint_failed_round_commit_does_not_compact_the_log_past_a_later_carried_
             b"+OK\r\n"
         );
     }
-    fail_next_commit(directory.path(), || {
+    let failing = fail_commits(directory.path(), || {
         start_bgsave(right_addr);
     });
     assert_eq!(published_generation(&persistence), saved);
+    drop(failing);
 
     // The right shard's log fails, and stays failed until a round publishes: it carries
     // the file published before the failed round.
@@ -2331,7 +2339,7 @@ fn checkpoint_failed_round_commit_does_not_compact_the_log_past_a_later_carried_
 
     stop_failing_writes(directory.path());
     // The log resumes; the right shard's next file goes into a round that fails again.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     let mut accepted = false;
 
     while !accepted && Instant::now() < deadline {
@@ -2339,7 +2347,7 @@ fn checkpoint_failed_round_commit_does_not_compact_the_log_past_a_later_carried_
         thread::sleep(Duration::from_millis(50));
     }
     assert!(accepted, "the right shard's log did not resume");
-    fail_next_commit(directory.path(), || {
+    let failing = fail_commits(directory.path(), || {
         start_bgsave(right_addr);
     });
     assert_eq!(published_generation(&persistence), published);
@@ -2347,10 +2355,11 @@ fn checkpoint_failed_round_commit_does_not_compact_the_log_past_a_later_carried_
     let killed = tempfile::tempdir().unwrap();
 
     copy_dir(directory.path(), killed.path());
+    drop(failing);
     stop_failing_writes(directory.path());
     stop.request();
-    left_server.join().unwrap();
-    let _ = right_server.join();
+    join_within(left_server, PATIENCE).unwrap();
+    let _ = join_within(right_server, PATIENCE);
 
     let (_left_addr, right_addr, stop, left_server, right_server) =
         serve_two_shards_with(|config| {
@@ -2369,8 +2378,8 @@ fn checkpoint_failed_round_commit_does_not_compact_the_log_past_a_later_carried_
         b"$1\r\ny\r\n"
     );
     stop.request();
-    left_server.join().unwrap();
-    right_server.join().unwrap();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
 }
 
 /// A hot-key SET keeps the deadline of every expiry form through the log: EXAT and PXAT
@@ -2421,8 +2430,8 @@ fn hot_key_set_keeps_absolute_and_kept_deadlines_through_the_log() {
         b"+OK\r\n+OK\r\n+OK\r\n+OK\r\n$1\r\nw\r\n$-1\r\n"
     );
     stop.request();
-    left.join().unwrap();
-    right.join().unwrap();
+    join_within(left, PATIENCE).unwrap();
+    join_within(right, PATIENCE).unwrap();
     thread::sleep(Duration::from_millis(500));
 
     let (address, _, stop, left, right) = start(persistence);
@@ -2431,6 +2440,6 @@ fn hot_key_set_keeps_absolute_and_kept_deadlines_through_the_log() {
     reads.extend(frame(&[b"GET", b"lock:kept"]));
     assert_eq!(request(address, &reads), b"$-1\r\n$-1\r\n");
     stop.request();
-    left.join().unwrap();
-    right.join().unwrap();
+    join_within(left, PATIENCE).unwrap();
+    join_within(right, PATIENCE).unwrap();
 }

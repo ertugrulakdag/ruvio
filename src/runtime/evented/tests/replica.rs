@@ -5,9 +5,9 @@ use crate::persistence::ShardCheckpoint;
 fn evented_skewed_replica_promotion_keeps_expired_deadlines_expired() {
     let primary_dir = tempfile::tempdir().unwrap();
     let replica_dir = tempfile::tempdir().unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let replication = listener.local_addr().unwrap();
-    drop(listener);
+    // Held until the promoted replica has stopped: it listens on the same address.
+    let ports = crate::test_ports::reserve();
+    let replication = ports.address_at(0);
     let floor = 4_000_000_000_000;
     let persistence = |directory: &std::path::Path| PersistenceConfig {
         profile: crate::DurabilityProfile::Everysec,
@@ -43,44 +43,30 @@ fn evented_skewed_replica_promotion_keeps_expired_deadlines_expired() {
             primary_name: None,
         };
     });
+    // One batch reads the clock once: the GET sees the value however slow the runner is,
+    // where a later request could come after the 250 ms.
     assert_eq!(
         request(
             primary_address,
-            &resp(&[&[b"SET", b"near", b"value", b"PX", b"250"]])
+            &resp(&[
+                &[b"SET", b"near", b"value", b"PX", b"250"],
+                &[b"GET", b"near"]
+            ])
         ),
-        b"+OK\r\n"
+        b"+OK\r\n$5\r\nvalue\r\n"
     );
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        let info = String::from_utf8(request(replica_address, &resp(&[&[b"INFO"]]))).unwrap();
-        let sequence = info
-            .lines()
-            .find_map(|line| line.strip_prefix("wal_last_sequence:"))
-            .unwrap()
-            .parse::<u64>()
-            .unwrap();
-        // The value and its deadline travel as one record.
-        if sequence >= 1 {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "replica did not receive the value and deadline: {info}"
-        );
-        thread::sleep(Duration::from_millis(2));
-    }
-    assert_eq!(
-        request(primary_address, &resp(&[&[b"GET", b"near"]])),
-        b"$5\r\nvalue\r\n"
-    );
+    // The value and its deadline travel as one record.
+    wait_for_info(replica_address, "wal_last_sequence", |sequence| {
+        sequence >= 1
+    });
     assert_eq!(
         request(replica_address, &resp(&[&[b"GET", b"near"]])),
         b"$-1\r\n"
     );
     primary_stop.request();
     replica_stop.request();
-    primary.join().unwrap();
-    replica.join().unwrap();
+    join_within(primary, PATIENCE).unwrap();
+    join_within(replica, PATIENCE).unwrap();
 
     replica_clock.persist_clock(UnixMillis::new(floor)).unwrap();
     assert_eq!(
@@ -101,18 +87,15 @@ fn evented_skewed_replica_promotion_keeps_expired_deadlines_expired() {
         b"$-1\r\n"
     );
     promoted_stop.request();
-    promoted.join().unwrap();
+    join_within(promoted, PATIENCE).unwrap();
 }
 
 #[test]
 fn evented_replica_installs_a_compacted_checkpoint() {
     let primary_dir = tempfile::tempdir().unwrap();
     let replica_dir = tempfile::tempdir().unwrap();
-    let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let replication = reserved.local_addr().unwrap();
-
-    drop(reserved);
-
+    let ports = crate::test_ports::reserve();
+    let replication = ports.address_at(0);
     let primary_persistence = PersistenceConfig {
         profile: crate::DurabilityProfile::Everysec,
         data_dir: primary_dir.path().to_path_buf(),
@@ -179,26 +162,15 @@ fn evented_replica_installs_a_compacted_checkpoint() {
         };
     });
 
-    let deadline = Instant::now() + Duration::from_secs(2);
+    wait_until(
+        "the replica to install the checkpoint and the following SET",
+        || {
+            let key = request(replica_address, b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n");
+            let other = request(replica_address, b"*2\r\n$3\r\nGET\r\n$5\r\nother\r\n");
 
-    loop {
-        let key = request(replica_address, b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n");
-        let other = request(replica_address, b"*2\r\n$3\r\nGET\r\n$5\r\nother\r\n");
-
-        if other == b"$4\r\nsnap\r\n" && key == b"$4\r\nnext\r\n" {
-            break;
-        }
-
-        if Instant::now() >= deadline {
-            primary_stop.request();
-            replica_stop.request();
-            primary.join().unwrap();
-            replica.join().unwrap();
-            panic!("evented replica did not install the checkpoint and the following SET");
-        }
-
-        thread::sleep(Duration::from_millis(5));
-    }
+            other == b"$4\r\nsnap\r\n" && key == b"$4\r\nnext\r\n"
+        },
+    );
 
     assert_eq!(
         crate::replication::upstream_history(replica_dir.path(), 0),
@@ -207,17 +179,16 @@ fn evented_replica_installs_a_compacted_checkpoint() {
 
     primary_stop.request();
     replica_stop.request();
-    primary.join().unwrap();
-    replica.join().unwrap();
+    join_within(primary, PATIENCE).unwrap();
+    join_within(replica, PATIENCE).unwrap();
 }
 
 #[test]
 fn replica_replays_json_root_then_path_and_ttl_in_one_transaction() {
     let primary_dir = tempfile::tempdir().unwrap();
     let replica_dir = tempfile::tempdir().unwrap();
-    let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let replication = reserved.local_addr().unwrap();
-    drop(reserved);
+    let ports = crate::test_ports::reserve();
+    let replication = ports.address_at(0);
     let persistence = |path: &std::path::Path| PersistenceConfig {
         profile: crate::DurabilityProfile::Everysec,
         data_dir: path.to_path_buf(),
@@ -266,18 +237,12 @@ fn replica_replays_json_root_then_path_and_ttl_in_one_transaction() {
         ),
         b"+OK\r\n+QUEUED\r\n+QUEUED\r\n+QUEUED\r\n+QUEUED\r\n*4\r\n+OK\r\n+OK\r\n:1\r\n:1\r\n"
     );
-    let deadline = Instant::now() + Duration::from_secs(8);
-    loop {
-        let value = request(
+    wait_until("the replica to apply the transaction", || {
+        request(
             replica_address,
             &resp(&[&[b"JSON.GET", b"{doc}", b"$.field"]]),
-        );
-        if value == b"$1\r\n1\r\n" {
-            break;
-        }
-        assert!(Instant::now() < deadline, "transaction stalled: {value:?}");
-        thread::sleep(Duration::from_millis(5));
-    }
+        ) == b"$1\r\n1\r\n"
+    });
     assert!(
         CheckpointManager::new(persistence(replica_dir.path()), Default::default())
             .load()
@@ -287,13 +252,15 @@ fn replica_replays_json_root_then_path_and_ttl_in_one_transaction() {
     );
     primary_stop.request();
     replica_stop.request();
-    primary.join().unwrap();
-    replica.join().unwrap();
+    join_within(primary, PATIENCE).unwrap();
+    join_within(replica, PATIENCE).unwrap();
 }
 
 #[test]
 fn incomplete_replica_blocks_reads_and_requires_force_on_every_writer_restart() {
     let directory = tempfile::tempdir().unwrap();
+    // The writer restarts take ports of their own: the replica's freed one may be reused.
+    let ports = crate::test_ports::reserve();
     let mut config = AppConfig::default();
     config.persistence.profile = crate::DurabilityProfile::Everysec;
     config.persistence.data_dir = directory.path().to_path_buf();
@@ -305,60 +272,39 @@ fn incomplete_replica_blocks_reads_and_requires_force_on_every_writer_restart() 
         replica.replication.role = crate::config::ReplicationRole::Replica;
         replica.replication.primary = Some("127.0.0.1:1".parse().unwrap());
     });
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let reply = loop {
-        if let Ok(mut client) = StdTcpStream::connect(address) {
-            client
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            client.write_all(&resp(&[&[b"GET", b"key"]])).unwrap();
-            let mut reply = [0; 64];
-            let n = client.read(&mut reply).unwrap();
-            break reply[..n].to_vec();
-        }
-        assert!(Instant::now() < deadline);
-        thread::sleep(Duration::from_millis(2));
-    };
-    assert_eq!(reply, b"-LOADING replica catching up\r\n");
+    assert_eq!(
+        request(address, &resp(&[&[b"GET", b"key"]])),
+        b"-LOADING replica catching up\r\n"
+    );
     stop.request();
-    server.join().unwrap();
-    config.address = address.to_string();
+    join_within(server, PATIENCE).unwrap();
+    config.address = ports.address_at(0).to_string();
+    let address = ports.address_at(0);
 
-    let error = run_with_force(&config, ShutdownToken::default(), false).unwrap_err();
+    let error = run_with_force(&config, stopped(), false).unwrap_err();
     assert!(error.to_string().contains("--force-promote-incomplete"));
     let stop = ShutdownToken::default();
     let server_stop = stop.clone();
     let writer = config.clone();
     let thread = thread::spawn(move || run_with_force(&writer, server_stop, true).unwrap());
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        if let Ok(mut client) = StdTcpStream::connect(address) {
-            client
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            client.write_all(&resp(&[&[b"GET", b"key"]])).unwrap();
-            let mut reply = [0; 64];
-            assert!(client.read(&mut reply).unwrap() > 0);
-            break;
-        }
-        assert!(Instant::now() < deadline);
-        thread::sleep(Duration::from_millis(2));
-    }
+    wait_until_listening(address, &thread);
+    assert!(!request(address, &resp(&[&[b"GET", b"key"]])).is_empty());
     stop.request();
-    thread.join().unwrap();
+    join_within(thread, PATIENCE).unwrap();
     assert_eq!(
         replica_guard::read(directory.path(), 0).unwrap(),
         Some(CatchupMarker::Preparing)
     );
-    assert!(run_with_force(&config, ShutdownToken::default(), false).is_err());
+    assert!(run_with_force(&config, stopped(), false).is_err());
 
     let multi = tempfile::tempdir().unwrap();
     config.persistence.data_dir = multi.path().to_path_buf();
-    config.address = "127.0.0.1:6379".into();
+    // Refused before it binds; the ports are reserved should it bind after all.
+    config.address = ports.address_at(2).to_string();
     config.shards = 2;
     replica_guard::write(multi.path(), 1, CatchupMarker::Preparing).unwrap();
     assert!(
-        run_with_force(&config, ShutdownToken::default(), false)
+        run_with_force(&config, stopped(), false)
             .unwrap_err()
             .to_string()
             .contains("--force-promote-incomplete")
@@ -404,7 +350,7 @@ fn restart_only_clears_installed_marker_when_checkpoint_and_wal_prove_catchup() 
         Some(marker)
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     let complete = CatchupMarker::Installed {
         generation: 1,
@@ -416,7 +362,7 @@ fn restart_only_clears_installed_marker_when_checkpoint_and_wal_prove_catchup() 
     assert_eq!(request(address, &resp(&[&[b"GET", b"key"]])), b"$-1\r\n");
     assert_eq!(replica_guard::read(directory.path(), 0).unwrap(), None);
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -458,7 +404,7 @@ fn failed_wal_replay_keeps_installed_catchup_marker() {
     config.address = "127.0.0.1:0".into();
     config.replication.role = crate::config::ReplicationRole::Replica;
     config.replication.primary = Some("127.0.0.1:1".parse().unwrap());
-    let error = run_with_force(&config, ShutdownToken::default(), false).unwrap_err();
+    let error = run_with_force(&config, stopped(), false).unwrap_err();
     assert!(error.to_string().contains("JSON path set replay failed"));
     assert_eq!(
         replica_guard::read(directory.path(), 0).unwrap(),
@@ -470,9 +416,8 @@ fn failed_wal_replay_keeps_installed_catchup_marker() {
 fn preparing_marker_recovers_from_equal_sequence_snapshot_without_new_writes() {
     let primary_dir = tempfile::tempdir().unwrap();
     let replica_dir = tempfile::tempdir().unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let replication_address = listener.local_addr().unwrap();
-    drop(listener);
+    let ports = crate::test_ports::reserve();
+    let replication_address = ports.address_at(0);
     let persistence = |path: &std::path::Path| PersistenceConfig {
         profile: crate::DurabilityProfile::Everysec,
         data_dir: path.to_path_buf(),
@@ -506,30 +451,23 @@ fn preparing_marker_recovers_from_equal_sequence_snapshot_without_new_writes() {
         config.replication.role = crate::config::ReplicationRole::Replica;
         config.replication.primary = Some(replication_address);
     });
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let result = request(address, &resp(&[&[b"GET", b"key"]]));
-        if result == b"$5\r\nvalue\r\n" {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "replica did not recover: {result:?}"
-        );
-        thread::sleep(Duration::from_millis(5));
-    }
+    wait_until("the replica to recover", || {
+        request(address, &resp(&[&[b"GET", b"key"]])) == b"$5\r\nvalue\r\n"
+    });
     assert_eq!(replica_guard::read(replica_dir.path(), 0).unwrap(), None);
     stop.request();
     primary_stop.request();
-    replica.join().unwrap();
-    primary.join().unwrap();
+    join_within(replica, PATIENCE).unwrap();
+    join_within(primary, PATIENCE).unwrap();
 }
 
 #[test]
 fn two_shard_catchup_publishes_complete_checkpoint_before_unblocking() {
     let primary_dir = tempfile::tempdir().unwrap();
     let replica_dir = tempfile::tempdir().unwrap();
-    let mut replication_address = None;
+    // Each shard's replication listener takes `replication_address + shard`.
+    let ports = crate::test_ports::reserve();
+    let replication_address = ports.address_at(0);
     let persistence = |path: &std::path::Path| PersistenceConfig {
         profile: crate::DurabilityProfile::Everysec,
         data_dir: path.to_path_buf(),
@@ -538,16 +476,10 @@ fn two_shard_catchup_publishes_complete_checkpoint_before_unblocking() {
     };
     let (primary_left, primary_right, primary_stop, primary0, primary1) =
         serve_two_shards_with(|config| {
-            let (first, second, port) = bind_consecutive_pair();
-            drop(first);
-            drop(second);
-            let address = format!("127.0.0.1:{port}").parse().unwrap();
-            replication_address = Some(address);
             config.persistence = persistence(primary_dir.path());
             config.replication.role = crate::config::ReplicationRole::Primary;
-            config.replication.listen = Some(address);
+            config.replication.listen = Some(replication_address);
         });
-    let replication_address = replication_address.unwrap();
     let key0 = key_on_shard(0, "replica-a");
     let key1 = key_on_shard(1, "replica-b");
     assert_eq!(
@@ -569,19 +501,10 @@ fn two_shard_catchup_publishes_complete_checkpoint_before_unblocking() {
             config.replication.role = crate::config::ReplicationRole::Replica;
             config.replication.primary = Some(replication_address);
         });
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let left = request(replica_left, &resp(&[&[b"GET", key0.as_bytes()]]));
-        let right = request(replica_right, &resp(&[&[b"GET", key1.as_bytes()]]));
-        if left == b"$1\r\na\r\n" && right == b"$1\r\nb\r\n" {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "shards stalled: {left:?}, {right:?}"
-        );
-        thread::sleep(Duration::from_millis(5));
-    }
+    wait_until("both replica shards to catch up", || {
+        request(replica_left, &resp(&[&[b"GET", key0.as_bytes()]])) == b"$1\r\na\r\n"
+            && request(replica_right, &resp(&[&[b"GET", key1.as_bytes()]])) == b"$1\r\nb\r\n"
+    });
     assert_eq!(replica_guard::read(replica_dir.path(), 0).unwrap(), None);
     assert_eq!(replica_guard::read(replica_dir.path(), 1).unwrap(), None);
     // Each shard recorded the primary's history once its own snapshot was installed.
@@ -604,7 +527,7 @@ fn two_shard_catchup_publishes_complete_checkpoint_before_unblocking() {
     replica_stop.request();
     primary_stop.request();
     for join in [replica0, replica1, primary0, primary1] {
-        join.join().unwrap();
+        join_within(join, PATIENCE).unwrap();
     }
 }
 
@@ -626,10 +549,8 @@ fn replica_catches_up_from_older_snapshot_while_primary_keeps_writing() {
 fn resync_expired_json(compacted: bool, busy: bool) {
     let primary_dir = tempfile::tempdir().unwrap();
     let replica_dir = tempfile::tempdir().unwrap();
-    let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let replication = reserved.local_addr().unwrap();
-    drop(reserved);
-
+    let ports = crate::test_ports::reserve();
+    let replication = ports.address_at(0);
     let persistence = |path: &std::path::Path| PersistenceConfig {
         profile: crate::DurabilityProfile::Everysec,
         data_dir: path.to_path_buf(),
@@ -756,11 +677,9 @@ fn resync_expired_json(compacted: bool, busy: bool) {
         })
     });
     if busy {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while writes.load(Ordering::Acquire) < 20 {
-            assert!(Instant::now() < deadline, "primary writer did not start");
-            thread::sleep(Duration::from_millis(1));
-        }
+        wait_until("the primary's writer to start", || {
+            writes.load(Ordering::Acquire) >= 20
+        });
     }
     let (replica_address, replica_stop, replica) = serve_with(|config| {
         config.persistence = replica_config.clone();
@@ -771,22 +690,13 @@ fn resync_expired_json(compacted: bool, busy: bool) {
             primary_name: None,
         };
     });
-    let deadline = Instant::now() + Duration::from_secs(8);
-    loop {
-        let count = request(
+    wait_until("the snapshot resync", || {
+        request(
             replica_address,
             &resp(&[&[b"JSON.GET", b"{doc}", b"$.count"]]),
-        );
-        let other = request(replica_address, &resp(&[&[b"GET", b"{doc}other"]]));
-        if count == b"$1\r\n2\r\n" && other == b"$7\r\nwritten\r\n" {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "snapshot resync stalled: {count:?}, {other:?}"
-        );
-        thread::sleep(Duration::from_millis(5));
-    }
+        ) == b"$1\r\n2\r\n"
+            && request(replica_address, &resp(&[&[b"GET", b"{doc}other"]])) == b"$7\r\nwritten\r\n"
+    });
     // Past its deadline by the replica's clock, the document is still held for the
     // primary's deltas and PERSIST; only a replica without it needs a newer snapshot.
     if compacted {
@@ -797,23 +707,15 @@ fn resync_expired_json(compacted: bool, busy: bool) {
         );
     }
     if let Some(writer) = writer {
-        writer.join().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(8);
-        loop {
-            if request(replica_address, &resp(&[&[b"GET", b"noise"]])) == b"$3\r\n500\r\n" {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "replica did not catch up with ongoing writes"
-            );
-            thread::sleep(Duration::from_millis(2));
-        }
+        join_within(writer, PATIENCE).unwrap();
+        wait_until("the replica to catch up with the ongoing writes", || {
+            request(replica_address, &resp(&[&[b"GET", b"noise"]])) == b"$3\r\n500\r\n"
+        });
     }
     primary_stop.request();
     replica_stop.request();
-    primary.join().unwrap();
-    replica.join().unwrap();
+    join_within(primary, PATIENCE).unwrap();
+    join_within(replica, PATIENCE).unwrap();
 
     let (restarted_address, restarted_stop, restarted) = serve_with(|config| {
         config.persistence = replica_config;
@@ -830,16 +732,15 @@ fn resync_expired_json(compacted: bool, busy: bool) {
         b"$7\r\nwritten\r\n"
     );
     restarted_stop.request();
-    restarted.join().unwrap();
+    join_within(restarted, PATIENCE).unwrap();
 }
 
 #[test]
 fn an_idle_replica_applies_a_burst_without_waiting_for_its_timers() {
     let primary_dir = tempfile::tempdir().unwrap();
     let replica_dir = tempfile::tempdir().unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let replication = listener.local_addr().unwrap();
-    drop(listener);
+    let ports = crate::test_ports::reserve();
+    let replication = ports.address_at(0);
     let persistence = |directory: &std::path::Path| PersistenceConfig {
         profile: crate::DurabilityProfile::Everysec,
         data_dir: directory.to_path_buf(),
@@ -877,16 +778,13 @@ fn an_idle_replica_applies_a_burst_without_waiting_for_its_timers() {
     // command to the replica drains its queue on the way.
     let limits = ProtocolLimits::default();
     let started = Instant::now();
-    let applied = wait_for(Duration::from_secs(3), || {
+
+    wait_until("the idle replica to apply the burst", || {
         matches!(
             crate::persistence::read_frames(replica_dir.path(), 0, records - 1, records, limits),
             Ok(crate::persistence::FrameRead::Frames(frames)) if frames.len() == 1
         )
     });
-    assert!(
-        applied,
-        "an idle replica took longer than 3 s to apply {records} records"
-    );
     eprintln!(
         "idle replica applied {records} records in {:?}",
         started.elapsed()
@@ -894,8 +792,8 @@ fn an_idle_replica_applies_a_burst_without_waiting_for_its_timers() {
 
     primary_stop.request();
     replica_stop.request();
-    primary.join().unwrap();
-    replica.join().unwrap();
+    join_within(primary, PATIENCE).unwrap();
+    join_within(replica, PATIENCE).unwrap();
 }
 
 #[test]
@@ -930,7 +828,7 @@ fn replica_with_a_pending_full_resync_starts_over_a_log_that_does_not_replay() {
     };
 
     // Without a pending resync the log is genuinely unusable.
-    assert!(run_with_force(&config, ShutdownToken::default(), false).is_err());
+    assert!(run_with_force(&config, stopped(), false).is_err());
 
     replica_guard::write(directory.path(), 0, CatchupMarker::Preparing).unwrap();
     let (address, stop, server) = serve_with(|replica| {
@@ -938,40 +836,30 @@ fn replica_with_a_pending_full_resync_starts_over_a_log_that_does_not_replay() {
         replica.replication.role = crate::config::ReplicationRole::Replica;
         replica.replication.primary = Some("127.0.0.1:1".parse().unwrap());
     });
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let reply = loop {
-        if let Ok(mut client) = StdTcpStream::connect(address) {
-            client
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            client.write_all(&resp(&[&[b"GET", b"key"]])).unwrap();
-            let mut reply = [0; 64];
-            let n = client.read(&mut reply).unwrap();
-            break reply[..n].to_vec();
-        }
-        assert!(!server.is_finished(), "replica did not start");
-        assert!(Instant::now() < deadline);
-        thread::sleep(Duration::from_millis(2));
-    };
-    assert_eq!(reply, b"-LOADING replica catching up\r\n");
+    assert_eq!(
+        request(address, &resp(&[&[b"GET", b"key"]])),
+        b"-LOADING replica catching up\r\n"
+    );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
     assert_eq!(
         replica_guard::read(directory.path(), 0).unwrap(),
         Some(CatchupMarker::Preparing)
     );
-    // Promoting it anyway still refuses the log it cannot replay.
-    config.address = address.to_string();
-    assert!(run_with_force(&config, ShutdownToken::default(), true).is_err());
+    // Promoting it anyway still refuses the log it cannot replay. On a port of its own:
+    // the replica's freed one may be taken by now.
+    let ports = crate::test_ports::reserve();
+
+    config.address = ports.address_at(0).to_string();
+    assert!(run_with_force(&config, stopped(), true).is_err());
 }
 
 #[test]
 fn replica_whose_log_sync_failed_reports_the_link_down() {
     let primary_dir = tempfile::tempdir().unwrap();
     let replica_dir = tempfile::tempdir().unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let replication = listener.local_addr().unwrap();
-    drop(listener);
+    let ports = crate::test_ports::reserve();
+    let replication = ports.address_at(0);
     let persistence = |directory: &std::path::Path, profile| PersistenceConfig {
         profile,
         data_dir: directory.to_path_buf(),
@@ -1003,14 +891,9 @@ fn replica_whose_log_sync_failed_reports_the_link_down() {
     };
 
     request(primary_address, &resp(&[&[b"SET", b"first", b"1"]]));
-    assert!(
-        wait_for(Duration::from_secs(5), || info_field(
-            replica_address,
-            "wal_last_sequence"
-        )
-        .is_some_and(|sequence| sequence >= 1)),
-        "replica did not follow"
-    );
+    wait_for_info(replica_address, "wal_last_sequence", |sequence| {
+        sequence >= 1
+    });
     assert_eq!(status(replica_address).as_deref(), Some("up"));
 
     // From now on the replica's log syncs fail: it refuses every later frame.
@@ -1019,7 +902,7 @@ fn replica_whose_log_sync_failed_reports_the_link_down() {
         .unwrap()
         .push(replica_dir.path().to_path_buf());
     request(primary_address, &resp(&[&[b"SET", b"second", b"2"]]));
-    let reported = wait_for(Duration::from_secs(5), || {
+    let reported = wait_for(PATIENCE, || {
         status(replica_address).as_deref() == Some("down")
     });
     crate::persistence::FAILING_SYNC_DIRS
@@ -1028,8 +911,8 @@ fn replica_whose_log_sync_failed_reports_the_link_down() {
         .retain(|dir| dir != replica_dir.path());
     primary_stop.request();
     replica_stop.request();
-    primary.join().unwrap();
-    replica.join().unwrap();
+    join_within(primary, PATIENCE).unwrap();
+    join_within(replica, PATIENCE).unwrap();
     assert!(
         reported,
         "a replica that cannot log frames must not report its link up"
@@ -1100,7 +983,7 @@ fn replica_follows_a_new_link_that_resends_queued_frames_and_resyncs_on_a_gap() 
     for frame in &frames[..5] {
         first.write_all(frame).unwrap();
     }
-    assert!(wait_for(Duration::from_secs(5), || applied() >= 5));
+    wait_until("the replica to apply frames 1..=5", || applied() >= 5);
     drop(first);
 
     // The restarted primary resends from 1, as a new link does for frames the shard had not
@@ -1112,14 +995,14 @@ fn replica_follows_a_new_link_that_resends_queued_frames_and_resyncs_on_a_gap() 
     for frame in &frames[..10] {
         second.write_all(frame).unwrap();
     }
-    let followed = wait_for(Duration::from_secs(5), || applied() >= 10);
+    let followed = wait_for(PATIENCE, || applied() >= 10);
     let value = request(replica_address, &resp(&[&[b"GET", b"k9"]]));
 
     // Frame 12 without 11: the replica cannot continue this stream and asks for a snapshot
     // that covers 11 on a new link.
     second.write_all(&frames[11]).unwrap();
     listener.set_nonblocking(true).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     let resync = loop {
         match listener.accept() {
             Ok((mut third, _)) => {
@@ -1137,7 +1020,7 @@ fn replica_follows_a_new_link_that_resends_queued_frames_and_resyncs_on_a_gap() 
     let reached = applied();
     replica_stop.request();
     drop(second);
-    replica.join().unwrap();
+    join_within(replica, PATIENCE).unwrap();
 
     assert!(followed, "replica stopped at sequence {reached}");
     assert_eq!(value, b"$1\r\nv\r\n");

@@ -23,52 +23,59 @@ fn expiration_progresses_during_continuous_connection_accepts() {
         }
     });
 
-    thread::sleep(Duration::from_millis(350));
-    let info = String::from_utf8(request(address, &resp(&[&[b"INFO"]]))).unwrap();
-    running.store(false, Ordering::Relaxed);
-    flood.join().unwrap();
-    stop.request();
-    server.join().unwrap();
+    // The maintenance tick reaps the key while the flood keeps the shard accepting.
+    let before = accepted.load(Ordering::Relaxed);
+    let mut info = String::new();
 
-    assert!(
-        accepted.load(Ordering::Relaxed) >= 20,
-        "connection flood was too slow"
-    );
-    assert!(info.contains("keys:0\r\nexpired_keys:1"), "{info}");
+    wait_until("the due key to be reaped", || {
+        info = String::from_utf8(request(address, &resp(&[&[b"INFO"]]))).unwrap();
+        info.contains("keys:0\r\nexpired_keys:1")
+    });
+    let during = accepted.load(Ordering::Relaxed) - before;
+
+    running.store(false, Ordering::Relaxed);
+    join_within(flood, PATIENCE).unwrap();
+    stop.request();
+    join_within(server, PATIENCE).unwrap();
+
+    assert!(during > 0, "the connection flood stopped: {info}");
 }
 
 #[test]
 fn expiration_progresses_with_a_long_lived_pipelined_client() {
     let (address, stop, server) = serve_on_ephemeral();
     let mut client = StdTcpStream::connect(address).unwrap();
-    client
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    client.set_read_timeout(Some(PATIENCE)).unwrap();
     assert_eq!(
         request(address, &resp(&[&[b"SET", b"due", b"v", b"PX", b"50"]])),
         b"+OK\r\n"
     );
 
+    // The maintenance tick reaps the key while the pipelined client keeps the shard busy.
     let ping: &[&[u8]] = &[b"PING"];
     let ping_batch = resp(&[ping; 8]);
     let mut replies = [0u8; 8 * 7];
     let started = Instant::now();
-    let mut batches = 0;
-    while started.elapsed() < Duration::from_millis(350) {
+    let reaped = loop {
         client.write_all(&ping_batch).unwrap();
         client.read_exact(&mut replies).unwrap();
         assert_eq!(replies.as_slice(), b"+PONG\r\n".repeat(8));
-        batches += 1;
         thread::sleep(Duration::from_millis(2));
-    }
 
-    let info = String::from_utf8(request(address, &resp(&[&[b"INFO"]]))).unwrap();
-    assert!(batches >= 5, "pipelined client was too slow");
-    assert!(info.contains("keys:0\r\nexpired_keys:1"), "{info}");
+        let info = String::from_utf8(request(address, &resp(&[&[b"INFO"]]))).unwrap();
+
+        if info.contains("keys:0\r\nexpired_keys:1") {
+            break true;
+        }
+        if started.elapsed() > PATIENCE {
+            break false;
+        }
+    };
+    assert!(reaped, "the due key was not reaped within {PATIENCE:?}");
     assert_eq!(request(address, &resp(&[&[b"GET", b"due"]])), b"$-1\r\n");
     drop(client);
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -78,9 +85,7 @@ fn active_expiry_publishes_one_database_scoped_notice_and_counter() {
     });
     let channel = b"__keyevent@1__:expired";
     let mut subscriber = StdTcpStream::connect(address).unwrap();
-    subscriber
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    subscriber.set_read_timeout(Some(PATIENCE)).unwrap();
     subscriber
         .write_all(&resp(&[&[b"SSUBSCRIBE", channel]]))
         .unwrap();
@@ -110,7 +115,7 @@ fn active_expiry_publishes_one_database_scoped_notice_and_counter() {
         "{metrics}"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
 
 #[test]
@@ -123,9 +128,11 @@ fn equal_deadline_storm_drains_without_blocking_unrelated_requests() {
         let key = format!("storm-{index}");
         payload.extend(resp(&[&[b"SET", key.as_bytes(), b"v", b"PX", b"500"]]));
     }
+    // In the same batch, which reads the clock once: the TTL is left however slow the runner.
+    payload.extend(resp(&[&[b"PTTL", b"storm-127"]]));
     let replies = request(address, &payload);
-    assert_eq!(replies, b"+OK\r\n".repeat(128));
-    let remaining = request(address, &resp(&[&[b"PTTL", b"storm-127"]]));
+    let (sets, remaining) = replies.split_at(128 * b"+OK\r\n".len());
+    assert_eq!(sets, b"+OK\r\n".repeat(128));
     let remaining: u64 = std::str::from_utf8(&remaining[1..remaining.len() - 2])
         .unwrap()
         .parse()
@@ -142,11 +149,11 @@ fn equal_deadline_storm_drains_without_blocking_unrelated_requests() {
         if info.contains("keys:0\r\nexpired_keys:128") {
             break start.elapsed();
         }
-        assert!(start.elapsed() < Duration::from_secs(3), "{info}");
+        assert!(start.elapsed() < PATIENCE, "{info}");
         thread::sleep(Duration::from_millis(10));
     };
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
     ping_latencies.sort_unstable();
     let p95 = ping_latencies[ping_latencies.len() * 95 / 100];
@@ -198,22 +205,22 @@ fn mixed_expiration_load_drains_while_ping_latency_is_measured() {
         thread::sleep(Duration::from_millis(10));
     }
     running.store(false, Ordering::Relaxed);
-    let mut latencies = pinger.join().unwrap();
+    let mut latencies = join_within(pinger, PATIENCE).unwrap();
     let drain_started = Instant::now();
     loop {
         let info = String::from_utf8(request(address, &resp(&[&[b"INFO"]]))).unwrap();
         if info.contains(&format!("keys:0\r\nexpired_keys:{}", rounds * 2)) {
             break;
         }
-        assert!(drain_started.elapsed() < Duration::from_secs(3), "{info}");
+        assert!(drain_started.elapsed() < PATIENCE, "{info}");
         thread::sleep(Duration::from_millis(10));
     }
     let drain_lag = drain_started.elapsed();
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 
-    assert!(rounds >= 20, "mixed workload was too slow: {rounds}");
-    assert!(latencies.len() >= 20, "PING sample was too small");
+    assert!(rounds > 0, "the mixed workload made no round");
+    assert!(!latencies.is_empty(), "no PING was answered");
     latencies.sort_unstable();
     eprintln!(
         "2s mixed TTL load: rounds={rounds}, expired={}, drain after writes={drain_lag:?}, PING p99={:?}, max={:?}",
@@ -247,7 +254,7 @@ fn expired_deadlines_remain_expired_after_durable_restart() {
         b"+OK\r\n+OK\r\n+OK\r\n:1\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
     thread::sleep(Duration::from_millis(200));
 
     let (address, stop, server) = serve_with(|config| {
@@ -269,5 +276,5 @@ fn expired_deadlines_remain_expired_after_durable_restart() {
         b"+OK\r\n$-1\r\n:-2\r\n$1\r\nv\r\n:-1\r\n+OK\r\n$3\r\nnew\r\n"
     );
     stop.request();
-    server.join().unwrap();
+    join_within(server, PATIENCE).unwrap();
 }
