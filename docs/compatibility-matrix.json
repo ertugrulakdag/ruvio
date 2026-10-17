@@ -3039,7 +3039,7 @@
       "language": "C#",
       "library": "Ruvio.Client",
       "package": "Ruvio.Client",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "protocol": "RESP2",
       "suite": "clients/csharp/Ruvio.Client/Commands/Commands.cs"
     }
