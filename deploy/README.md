@@ -22,8 +22,8 @@ deploy/local.sh status  # containers, plus PING, SET, GET on Ruvio and Redis
 deploy/local.sh down    # stop and remove the containers; the Ruvio data volume is kept
 ```
 
-- Ruvio listens on `127.0.0.1:6379`. It has no username or password, and it is reachable from this machine only.
-- Redis listens on `127.0.0.1:6380`, also without a password and localhost only.
+- Ruvio runs two shards: shard 0 on `127.0.0.1:6379` and shard 1 on `127.0.0.1:6380`. Any one port serves every key; a cluster-aware client can use both. It has no username or password, and it is reachable from this machine only. The UI finds both shards through `CLUSTER SLOTS`, which names the host `ruvio` (`RUVIO_ADVERTISE_HOST`) so the UI container can reach them.
+- Redis listens on `127.0.0.1:6390`, also without a password and localhost only.
 - The UI is at `http://127.0.0.1:8080`.
 - The answers are saved in `deploy/.local.env` (git-ignored). Delete that file to be asked again. To skip the questions, set `LOCAL_OS=mac|windows` and `LOCAL_ARCH=arm64|amd64` before `up`.
 - Ruvio runs in memory durability mode, so its data is lost when the container is removed.

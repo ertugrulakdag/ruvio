@@ -13,10 +13,21 @@ public final class TxPool implements AutoCloseable {
     private final ArrayDeque<Connection> idle = new ArrayDeque<>();
     private boolean closed;
 
+    /**
+     * Creates a pool.
+     *
+     * @param link the link used to open extra connections
+     */
     public TxPool(Link link) {
         this.link = link;
     }
 
+    /**
+     * Takes an idle connection or opens a new one.
+     *
+     * @return a connection that the caller owns until {@link #giveBack}
+     * @throws RuvioConnectionException when the client is closed
+     */
     public Connection borrow() {
         synchronized (this) {
             if (closed) {
@@ -32,6 +43,12 @@ public final class TxPool implements AutoCloseable {
         return link.openExtra("tx");
     }
 
+    /**
+     * Returns a connection; it is kept for reuse only when healthy, idle and the pool has room, otherwise closed.
+     *
+     * @param c the connection
+     * @param healthy whether it is in a clean state
+     */
     public void giveBack(Connection c, boolean healthy) {
         if (healthy && c.isOpen() && c.inFlight() == 0) {
             synchronized (this) {
@@ -44,6 +61,7 @@ public final class TxPool implements AutoCloseable {
         c.close();
     }
 
+    /** Closes every idle connection and refuses further borrows. */
     @Override
     public void close() {
         synchronized (this) {

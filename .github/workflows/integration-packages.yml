@@ -39,9 +39,21 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
-      - uses: dtolnay/rust-toolchain@1.97.0
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --bin ruvio --locked
+      # The tests run against the published server image, so the job needs no Rust build.
+      # A dev run uses the `preview` image when one exists, else the last release.
+      - name: Start Ruvio
+        env:
+          PREVIEW: ${{ github.ref_name == 'dev' }}
+        run: |
+          set -euo pipefail
+          image=salihcantekin/ruvio:latest
+          if [ "$PREVIEW" = "true" ] && docker pull --quiet salihcantekin/ruvio:preview; then
+            image=salihcantekin/ruvio:preview
+          fi
+          docker run --detach --name ruvio-integrations \
+            -e RUVIO_ALLOW_UNAUTHENTICATED=true -e RUVIO_DURABILITY=memory -e RUVIO_SHARDS=1 \
+            --publish 127.0.0.1:16382:6379 "$image"
+          docker exec ruvio-integrations ruvio --version
       - name: Stamp preview versions
         if: github.ref_name == 'dev'
         env:
@@ -85,28 +97,8 @@ jobs:
           PACKAGE: ${{ inputs.package }}
         run: |
           set -euo pipefail
-          data_dir="$RUNNER_TEMP/ruvio-integrations"
-          mkdir -p "$data_dir"
-          cat > "$RUNNER_TEMP/ruvio-integrations.toml" << EOF
-          address = "127.0.0.1:16382"
-          shards = 1
-
-          [persistence]
-          profile = "memory"
-          data_dir = "$data_dir"
-
-          [security]
-          protected_mode = true
-          allow_unauthenticated_public = false
-          EOF
           export RUVIO_ADDR=127.0.0.1:16382
           export RUVIO_TEST_ADDR="$RUVIO_ADDR"
-          export RUVIO_DATA_DIR="$data_dir"
-          export RUVIO_DURABILITY=memory
-          export RUVIO_SHARDS=1
-          ./target/debug/ruvio --config "$RUNNER_TEMP/ruvio-integrations.toml" > "$RUNNER_TEMP/ruvio-integrations.log" 2>&1 &
-          server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           python3 -c "import socket,time
           for _ in range(100):
               try:
@@ -132,6 +124,9 @@ jobs:
             dotnet test "integrations/dotnet/$name.Tests/$name.Tests.csproj" -c Release
             dotnet pack "integrations/dotnet/$name/$name.csproj" -c Release -o dist -p:ContinuousIntegrationBuild=true
           done
+      - name: Ruvio log
+        if: failure()
+        run: docker logs ruvio-integrations || true
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ inputs.package }}

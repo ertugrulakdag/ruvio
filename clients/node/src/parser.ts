@@ -6,7 +6,7 @@ import { RuvioError } from './errors.js';
 /** Returned by {@link Parser.next} when the buffered bytes hold no complete reply. */
 export const NEED_MORE: unique symbol = Symbol('ruvio.needMore');
 
-/** A RESP3 push frame (`>`), delivered out of band. */
+/** A RESP3 push frame (`>`), delivered out of band (the client emits it as the `push` event, e.g. for client-side-cache invalidation). `data` is the frame's elements. */
 export class PushMessage {
   constructor(readonly data: unknown[]) {}
 }
@@ -33,6 +33,8 @@ interface Frame {
 }
 
 /**
+ * Incremental RESP2/RESP3 reply parser used by the clients. Low-level: most code never needs it.
+ *
  * Parses replies out of the bytes fed to it. The parser works in place on the caller's
  * buffer (which may be a reused read buffer); only an unfinished reply tail is copied into
  * an owned accumulator. Nested replies resume at the element where data ran out, so a large

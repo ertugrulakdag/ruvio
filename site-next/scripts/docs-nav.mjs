@@ -69,6 +69,7 @@ export const GROUPS = [
     label: "Start",
     items: [
       { src: "docs/SETUP.md", label: "Setup" },
+      { src: "docs/UI_CONNECTIONS.md", label: "Connecting the Operator UI" },
       { src: "docs/CONFIGURATION.md", label: "Configuration" },
       { src: "docs/PORTABILITY.md", label: "Portability" },
       { src: "docs/SUPPORT_MATRIX.md", label: "Support matrix" },

@@ -7,18 +7,44 @@ import (
 	"sync"
 )
 
-// Message is a Pub/Sub delivery. Kind is "message", "pmessage" or "smessage";
-// Pattern is set for pmessage.
+// Message is one Pub/Sub delivery, received from PubSub.Channel.
+//
+// Kind is "message" for a SUBSCRIBE channel, "pmessage" for a pattern subscription and
+// "smessage" for a sharded channel (SSUBSCRIBE). Channel is the channel the message was
+// published to. Pattern is the matching pattern and is set only for "pmessage". Payload
+// is the message body.
 type Message struct {
-	Kind    string
+	// Kind is "message", "pmessage" or "smessage".
+	Kind string
+	// Channel is the channel the message was published to.
 	Channel string
+	// Pattern is the matching pattern; set only for "pmessage".
 	Pattern string
+	// Payload is the message body.
 	Payload string
 }
 
-// PubSub is a subscription on its own dedicated connection. Messages arrive on
-// Channel(); it is closed when the connection closes. Methods are safe for
-// concurrent use.
+// PubSub is a subscription session on its own dedicated connection. Create one with
+// Client.PubSub, add channels with Subscribe, PSubscribe or SSubscribe, and read
+// deliveries from Channel.
+//
+// You must keep reading Channel: when its buffer is full the connection reader blocks,
+// so a slow reader delays only this subscription but also delays subscribe
+// confirmations. Channel is closed when the connection closes (Close, a network error or
+// a server shutdown). There is no automatic resubscribe; open a new PubSub and subscribe
+// again if that happens.
+//
+// All methods are safe for concurrent use. In cluster mode, shard channels are
+// subscribed on the node that owns their slot (one connection per node); classic
+// channels and patterns use the seed node, and a classic PUBLISH reaches every shard.
+//
+//	ps, err := c.PubSub(ctx, 0)
+//	if err != nil { return err }
+//	defer ps.Close()
+//	_ = ps.Subscribe(ctx, "news")
+//	for m := range ps.Channel() {
+//	    fmt.Println(m.Channel, m.Payload)
+//	}
 type PubSub struct {
 	cl      *cluster // cluster mode: shard channels live on the node owning their slot
 	cn      *conn    // the seed node (SUBSCRIBE, PSUBSCRIBE, and every channel in standalone mode)
@@ -35,8 +61,12 @@ type PubSub struct {
 	err     error
 }
 
-// PubSub opens a dedicated subscription connection. buffer sizes the message
-// channel (0 = 1024); a slow reader applies backpressure to this connection only.
+// PubSub opens a dedicated subscription connection (it does not use the shared
+// connection).
+//
+// buffer is the capacity of the message channel; 0 or a negative value means 1024.
+// Returns an error if the connection cannot be opened or the handshake (HELLO, AUTH,
+// SELECT) fails. No channels are subscribed yet.
 func (c *Client) PubSub(ctx context.Context, buffer int) (*PubSub, error) {
 	if buffer <= 0 {
 		buffer = 1024
@@ -60,7 +90,9 @@ func (c *Client) PubSub(ctx context.Context, buffer int) (*PubSub, error) {
 	return ps, nil
 }
 
-// Channel returns the message stream.
+// Channel returns the stream of incoming messages. It is closed when the subscription
+// connection closes, so ranging over it ends cleanly. The same channel is returned on
+// every call.
 func (ps *PubSub) Channel() <-chan Message { return ps.msgs }
 
 func (ps *PubSub) onValue(v Value) {
@@ -105,7 +137,8 @@ func (ps *PubSub) onFail(err error) {
 	})
 }
 
-// Close closes the subscription connection and the message channel.
+// Close closes the subscription connection(s) and, through that, the Channel. It always
+// returns nil and is safe to call more than once.
 func (ps *PubSub) Close() error {
 	ps.cn.close()
 	ps.xmu.Lock()
@@ -161,29 +194,39 @@ func (ps *PubSub) roundTripOn(ctx context.Context, cn *conn, name []byte, args [
 	return nil
 }
 
-// Subscribe subscribes to exact channels and waits for the confirmations.
+// Subscribe sends SUBSCRIBE and waits for the server to confirm every channel. Channels
+// are exact names. Messages published afterwards arrive on Channel with Kind "message".
+// Subscribing to a channel twice is harmless. Returns the server error, a connection
+// error or the context error.
 func (ps *PubSub) Subscribe(ctx context.Context, channels ...string) error {
 	return ps.roundTrip(ctx, cSUBSCRIBE, channels, len(channels), ps.chans, true)
 }
 
-// Unsubscribe drops channels (none = all exact channels).
+// Unsubscribe sends UNSUBSCRIBE for the given channels. With no arguments it leaves
+// every classic channel this PubSub has subscribed to. It waits for the confirmations.
 func (ps *PubSub) Unsubscribe(ctx context.Context, channels ...string) error {
 	return ps.roundTrip(ctx, cUNSUBSCRIBE, channels, len(channels), ps.chans, false)
 }
 
-// PSubscribe subscribes to glob patterns (* and ?).
+// PSubscribe sends PSUBSCRIBE and waits for the confirmations. Patterns use glob style:
+// * matches any run of characters and ? matches one character. Matching deliveries
+// arrive with Kind "pmessage" and Pattern set.
+//
+//	_ = ps.PSubscribe(ctx, "user:*", "log.?")
 func (ps *PubSub) PSubscribe(ctx context.Context, patterns ...string) error {
 	return ps.roundTrip(ctx, cPSUBSCRIBE, patterns, len(patterns), ps.pats, true)
 }
 
-// PUnsubscribe drops patterns (none = all).
+// PUnsubscribe sends PUNSUBSCRIBE for the given patterns. With no arguments it leaves
+// every pattern this PubSub has subscribed to.
 func (ps *PubSub) PUnsubscribe(ctx context.Context, patterns ...string) error {
 	return ps.roundTrip(ctx, cPUNSUBSCRIBE, patterns, len(patterns), ps.pats, false)
 }
 
-// SSubscribe subscribes to shard channels. In cluster mode each channel is subscribed
-// on the node owning its slot (one extra connection per node, opened on demand); a lost
-// node connection closes the whole subscription.
+// SSubscribe sends SSUBSCRIBE (sharded Pub/Sub). Messages published with SPUBLISH arrive
+// with Kind "smessage". In cluster mode each channel is subscribed on the node that owns
+// its slot. Keyspace and keyevent notifications are delivered this way too, on channels
+// named like __keyspace@<db>__:<key> and __keyevent@<db>__:<event>.
 func (ps *PubSub) SSubscribe(ctx context.Context, channels ...string) error {
 	if ps.cl == nil {
 		return ps.roundTrip(ctx, cSSUBSCRIBE, channels, len(channels), ps.shards, true)
@@ -191,7 +234,8 @@ func (ps *PubSub) SSubscribe(ctx context.Context, channels ...string) error {
 	return ps.shardOp(ctx, cSSUBSCRIBE, channels, true)
 }
 
-// SUnsubscribe drops shard channels (none = all).
+// SUnsubscribe sends SUNSUBSCRIBE for the given shard channels. With no arguments it
+// leaves every shard channel this PubSub has subscribed to.
 func (ps *PubSub) SUnsubscribe(ctx context.Context, channels ...string) error {
 	if ps.cl == nil {
 		return ps.roundTrip(ctx, cSUNSUBSCRIBE, channels, len(channels), ps.shards, false)
@@ -263,7 +307,9 @@ func (ps *PubSub) connFor(ctx context.Context, node *Client) (*conn, error) {
 	return cn, nil
 }
 
-// Ping checks the subscription connection.
+// Ping sends PING on the subscription connection and waits for the reply. It is a cheap
+// way to check that the connection is alive. Returns an error if the connection is
+// closed or ctx ends first.
 func (ps *PubSub) Ping(ctx context.Context) error {
 	return ps.roundTrip(ctx, cPING, nil, 1, nil, false)
 }

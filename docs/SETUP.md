@@ -216,6 +216,11 @@ docker run --rm -p 8080:8080 \
   salihcantekin/ruvio-ui:linux
 ```
 
+The UI connects to Ruvio from inside the container, so `127.0.0.1` there is the
+container itself. For a Ruvio binary on the same machine, for a multi-shard
+server, and for the firewall and password settings, see
+[UI_CONNECTIONS](UI_CONNECTIONS.md).
+
 From a checkout, the compose file builds that same image next to a server:
 
 ```bash

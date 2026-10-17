@@ -10,45 +10,90 @@ use crate::cluster::{ClusterRouter, Connection, Discovery, throw_error};
 use crate::error::Error;
 use crate::value::RespValue;
 
-/// How `SET` treats a key that already exists or is missing.
+/// Condition for [`Client::set_with`] and the other `SET` variants.
+///
+/// Maps to the `NX` / `XX` flags of `SET`. When the condition is not met the server writes
+/// nothing and replies with a null bulk; the client reports that as `false` (or, for
+/// [`Client::set_and_get`], still returns the previous value).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SetMode {
-    /// Write the key either way.
+    /// Write the key whether or not it exists (no flag sent). This is the default.
     #[default]
     Always,
-    /// Write only when the key is absent (`NX`).
+    /// Write only when the key does not exist (`NX`). Use it to create a value once.
     IfNotExists,
-    /// Write only when the key exists (`XX`).
+    /// Write only when the key already exists (`XX`). Use it to overwrite without creating.
     IfExists,
 }
 
-/// Where to connect, and an optional password sent as `AUTH`.
+/// Everything [`Client::connect_with`] needs to open a connection.
+///
+/// Start from [`ClientOptions::default`] (loopback, port 6379, no password, database 0) and
+/// override what you need with struct-update syntax.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use ruvio_client::*;
+/// # use std::time::Duration;
+/// # fn run(client: &mut Client) -> Result<(), Error> {
+/// let options = ClientOptions {
+///     host: "cache.internal".to_owned(),
+///     port: 6379,
+///     password: Some("secret".to_owned()),
+///     connect_timeout: Duration::from_secs(2),
+///     ..ClientOptions::default()
+/// };
+/// let mut client = Client::connect_with(options)?;
+/// client.ping()?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
-    /// Server host. Defaults to loopback.
+    /// Server host name or IP address. Must not be empty. Defaults to `127.0.0.1`.
     pub host: String,
-    /// RESP port. Defaults to 6379.
+    /// Server RESP port. Defaults to 6379. On a sharded server with `port_mode = "per-shard"`
+    /// this is the seed port (any shard); the other shards are found with `CLUSTER SLOTS`.
     pub port: u16,
-    /// ACL user. When set together with [`Self::password`], the client sends `AUTH user password`.
+    /// ACL user name. When set together with [`Self::password`] the client sends
+    /// `AUTH user password`; with only a password it sends the one-argument `AUTH password`.
+    /// Defaults to `None`.
     pub username: Option<String>,
-    /// When set, the client sends `AUTH` before [`Client::connect_with`] returns.
+    /// Password sent as `AUTH` right after connecting, before `SELECT` and cluster discovery.
+    /// Also used again on every automatic reconnect. A wrong password makes
+    /// [`Client::connect_with`] fail with [`Error::Server`]. Defaults to `None` (no `AUTH`).
     pub password: Option<String>,
-    /// Logical database. When not 0, the client sends `SELECT` after `AUTH`.
+    /// Logical database number, `0` up to the server's `databases` setting minus one (16
+    /// databases by default). When not 0 the client sends `SELECT` after `AUTH`, and again after
+    /// every reconnect. Only valid against a single-shard server: with a routed (multi-shard)
+    /// connection a non-zero value makes [`Client::connect_with`] fail with [`Error::Protocol`].
+    /// Defaults to 0.
     pub database: u32,
-    /// How long TCP connect may take.
+    /// Upper bound for each TCP connect attempt (not for reads). Defaults to 5 seconds. A
+    /// timeout surfaces as [`Error::Io`].
     pub connect_timeout: Duration,
-    /// When true (the default), connect sends `CLUSTER SLOTS`. A slot map turns
-    /// the client into a router; a disabled-cluster error keeps one socket.
+    /// When true (the default) connecting sends `CLUSTER SLOTS`. If the server returns a slot
+    /// map with more than one node the client becomes a router that sends each key to its
+    /// owning shard; a server that has cluster support off (or a single shard) keeps one plain
+    /// socket. Set it to false to talk to exactly the host and port given, for example to
+    /// inspect one shard on purpose; then `dbsize`, `scan`, `keys` and `flushdb` act on that
+    /// shard only.
     pub discover_cluster: bool,
-    /// When true (the default), a broken socket is opened again before the next command.
-    /// The command that discovers the drop still fails. Set this to false and call
-    /// [`Client::reconnect`] on your own schedule.
+    /// When true (the default) a socket that is found broken is opened again before the next
+    /// command, restoring `AUTH`, `SELECT` and active subscriptions. The command that
+    /// discovered the drop still fails with [`Error::Io`] and is not re-sent, because it may
+    /// already have been applied. Set it to false to handle drops yourself with
+    /// [`Client::reconnect`].
     pub reconnect: bool,
-    /// How many connect attempts a reconnect makes before giving up. One is a single try.
+    /// How many connect attempts one automatic reconnect makes before giving up with the last
+    /// error. 1 means a single try. Defaults to 8. Ignored when [`Client::set_reconnect_delay`]
+    /// is used.
     pub max_reconnect_attempts: u32,
-    /// First automatic wait after a failed reconnect attempt.
+    /// Wait after the first failed reconnect attempt; it doubles with each further failure up
+    /// to [`Self::reconnect_max_delay`]. Defaults to 100 ms.
     pub reconnect_base_delay: Duration,
-    /// Ceiling for the automatic exponential wait.
+    /// Ceiling for the doubling reconnect wait. Defaults to 2 seconds.
     pub reconnect_max_delay: Duration,
 }
 
@@ -73,23 +118,45 @@ impl Default for ClientOptions {
 /// The shared slot for an `on_connection_lost` / `on_connection_restored` callback.
 pub(crate) type NoticeHook = Arc<Mutex<Option<Arc<dyn Fn(ConnectionNotice) + Send + Sync>>>>;
 
-/// A command or subscriber socket dropped, or came back.
+/// Describes a socket that dropped or came back; passed to the callbacks registered with
+/// [`Client::on_connection_lost`] and [`Client::on_connection_restored`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionNotice {
+    /// Host the socket was connected to.
     pub host: String,
+    /// Port the socket was connected to.
     pub port: u16,
-    /// True when the socket is the dedicated Pub/Sub connection.
+    /// True when the socket is the dedicated Pub/Sub connection, false for a command socket.
     pub subscriber: bool,
 }
 
-/// A Ruvio client. Against a single server it is one TCP connection. Against a
-/// sharded server it opens one connection per shard and sends each command to
-/// the shard that owns its key.
+/// A blocking Ruvio client. Create one with [`Client::connect`] or [`Client::connect_with`].
 ///
-/// Subscribe commands open a second TCP socket, the same way `Ruvio.Client`
-/// does. `GET`, `SET`, `PING`, and `PUBLISH` stay on the command sockets.
+/// Against a single server it is one TCP connection. Against a sharded server it opens one
+/// connection per shard (lazily) and sends each command to the shard that owns its key; see
+/// the crate-level docs for the cluster rules. All command methods are in this one type and
+/// take `&mut self`, so share a client between threads behind a `Mutex`, or give each thread
+/// its own client. A command waits for its reply: there is no read timeout unless you set
+/// one with [`Client::set_read_timeout`].
+///
+/// Subscribe commands open a second TCP socket automatically, so `GET`, `SET`, `PING` and
+/// `PUBLISH` stay on the command socket while messages arrive on the other one.
 ///
 /// The client speaks RESP2 and does not send `CLIENT SETINFO` or `HELLO`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use ruvio_client::*;
+/// # use std::time::Duration;
+/// # fn run(client: &mut Client) -> Result<(), Error> {
+/// let mut client = Client::connect("127.0.0.1", 6379)?;
+/// client.set("user:1:name", "Ada")?;
+/// let name = client.get_string("user:1:name")?;
+/// assert_eq!(name.as_deref(), Some("Ada"));
+/// # Ok(())
+/// # }
+/// ```
 pub struct Client {
     transport: Transport,
     database: u32,
@@ -109,14 +176,61 @@ enum Transport {
 }
 
 impl Client {
-    /// Opens a connection. Sends `CLUSTER SLOTS` so a sharded server is routed automatically.
+    /// Opens a connection to `host:port` on database 0 with default options.
+    ///
+    /// Sends `CLUSTER SLOTS` so a sharded server is routed automatically.
+    ///
+    /// # Arguments
+    /// * `host` - host name or IP address.
+    /// * `port` - RESP port, 6379 by default on the server.
+    ///
+    /// # Returns
+    /// A connected [`Client`].
+    ///
+    /// # Errors
+    /// [`Error::Io`] when the connection cannot be opened within 5 seconds; [`Error::Protocol`]
+    /// when `host` is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let mut client = Client::connect("127.0.0.1", 6379)?;
+    /// assert_eq!(client.ping()?, "PONG");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn connect(host: impl Into<String>, port: u16) -> Result<Self, Error> {
         Self::connect_database(host, port, 0)
     }
 
-    /// Opens a connection bound to one logical database. Sends `SELECT` when `database` is not 0.
+    /// Opens a connection bound to one logical database.
     ///
-    /// The returned client is the database handle: every command on it runs in `database`.
+    /// Sends `SELECT` when `database` is not 0. The returned client is the database handle:
+    /// every command on it runs in `database`, and the choice is restored after a reconnect.
+    ///
+    /// # Arguments
+    /// * `host`, `port` - as for [`Client::connect`].
+    /// * `database` - index from 0 to the server's `databases` setting minus one (16 databases
+    ///   by default). Only a single-shard server has more than database 0.
+    ///
+    /// # Errors
+    /// [`Error::Server`] when the index is out of range (`ERR DB index is out of range`);
+    /// [`Error::Protocol`] against a sharded server when `database` is not 0; [`Error::Io`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let mut sessions = Client::connect_database("127.0.0.1", 6379, 2)?;
+    /// sessions.set("token", "abc")?; // lives in database 2 only
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn connect_database(
         host: impl Into<String>,
         port: u16,
@@ -130,19 +244,75 @@ impl Client {
         })
     }
 
-    /// Opens a connection to an IP address and port. Sends `SELECT` when `database` is not 0.
+    /// Like [`Client::connect_database`] but takes an [`IpAddr`](std::net::IpAddr), so no name
+    /// lookup happens.
+    ///
+    /// # Arguments
+    /// * `ip` - server address.
+    /// * `port` - RESP port.
+    /// * `database` - logical database, 0 for the default.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let ip = "127.0.0.1".parse().unwrap();
+    /// let mut client = Client::connect_ip(ip, 6379, 0)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn connect_ip(ip: IpAddr, port: u16, database: u32) -> Result<Self, Error> {
         Self::connect_addr(SocketAddr::new(ip, port), database)
     }
 
-    /// Opens a connection to a socket address. Sends `SELECT` when `database` is not 0.
+    /// Like [`Client::connect_database`] but takes a ready [`SocketAddr`](std::net::SocketAddr).
+    ///
+    /// # Arguments
+    /// * `address` - server IP and port.
+    /// * `database` - logical database, 0 for the default.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let address = "127.0.0.1:6379".parse().unwrap();
+    /// let mut client = Client::connect_addr(address, 0)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn connect_addr(address: SocketAddr, database: u32) -> Result<Self, Error> {
         Self::connect_database(address.ip().to_string(), address.port(), database)
     }
 
-    /// Opens a connection. When [`ClientOptions::password`] is set, sends `AUTH`.
-    /// When [`ClientOptions::discover_cluster`] is on, sends `CLUSTER SLOTS`.
-    /// When [`ClientOptions::database`] is not 0, a standalone server then gets `SELECT`.
+    /// Opens a connection with full control over [`ClientOptions`].
+    ///
+    /// The steps are: TCP connect (bounded by `connect_timeout`), `AUTH` when a password is set,
+    /// `CLUSTER SLOTS` when `discover_cluster` is on, and `SELECT` when `database` is not 0.
+    ///
+    /// # Errors
+    /// * [`Error::Protocol`] - empty host, or a non-zero `database` against a sharded server.
+    /// * [`Error::Server`] - `AUTH` or `SELECT` refused (wrong password, database out of range).
+    /// * [`Error::Io`] - connect failed or timed out.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let mut client = Client::connect_with(ClientOptions {
+    ///     host: "127.0.0.1".to_owned(),
+    ///     password: Some("secret".to_owned()),
+    ///     database: 1,
+    ///     ..ClientOptions::default()
+    /// })?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn connect_with(options: ClientOptions) -> Result<Self, Error> {
         if options.host.is_empty() {
             return Err(Error::Protocol("host is required".to_owned()));
@@ -182,12 +352,14 @@ impl Client {
         }
     }
 
-    /// True when the server reported a slot map and commands are routed by slot.
+    /// True when the server reported a multi-shard slot map and commands are routed by hash
+    /// slot. False for a standalone server or when `discover_cluster` is off.
     pub fn is_cluster(&self) -> bool {
         matches!(self.transport, Transport::Cluster(_))
     }
 
-    /// How many shards the client routes to. 1 for a single server.
+    /// How many shards the client routes to: the number of nodes in the slot map, or 1 for a
+    /// single server. Does not send anything.
     pub fn shard_count(&self) -> usize {
         match &self.transport {
             Transport::Single(_) => 1,
@@ -195,35 +367,126 @@ impl Client {
         }
     }
 
-    /// Sends `PING` and returns the simple-string reply.
+    /// Sends `PING` and returns the reply, normally `"PONG"`. Use it as a health check.
+    ///
+    /// # Errors
+    /// [`Error::Io`] when the server is unreachable, [`Error::Server`] when it refuses the
+    /// command (for example `NOAUTH`).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// assert_eq!(client.ping()?, "PONG");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn ping(&mut self) -> Result<String, Error> {
         read_ping(self.run(["PING"])?)
     }
 
-    /// Sends `PING message` and returns the echoed message.
+    /// Sends `PING message` and returns the message back (a bulk echo). Handy to check that
+    /// replies are matched to the right requests.
+    ///
+    /// # Arguments
+    /// * `message` - any text.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// assert_eq!(client.ping_message("hi")?, "hi");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn ping_message(&mut self, message: &str) -> Result<String, Error> {
         read_ping(self.run(["PING", message])?)
     }
 
-    /// The logical database this connection last selected.
+    /// The logical database this client last selected (0 unless set by `connect_database`,
+    /// [`ClientOptions::database`], [`Client::select`] or [`Client::into_database`]). Does not
+    /// contact the server.
     pub fn database(&self) -> u32 {
         self.database
     }
 
-    /// Opens a second socket for Pub/Sub. `subscribe` on this client already
-    /// does that automatically; use this when you want the socket in hand.
+    /// Opens a second socket dedicated to Pub/Sub and returns it as a new [`Client`].
+    ///
+    /// You rarely need this: `subscribe`, `psubscribe` and `ssubscribe` on a normal client open
+    /// that socket on their own. Use it when you want the subscriber in its own variable, for
+    /// example to read messages on another thread. On a sharded server the new socket connects
+    /// to the seed node only; classic `PUBLISH` reaches subscribers on every shard.
+    ///
+    /// # Errors
+    /// [`Error::Io`] when the connection cannot be opened; [`Error::Server`] when `AUTH`
+    /// fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let mut subscriber = client.subscriber()?;
+    /// subscriber.subscribe(&["news"])?;
+    /// let message = subscriber.read_message()?; // blocks until a push arrives
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn subscriber(&self) -> Result<Self, Error> {
         self.open_pubsub(&["SUBSCRIBE"])
     }
 
-    /// A separate Pub/Sub socket for sharded channels: on a cluster it connects to the shard that
-    /// owns `channel`'s slot, so `ssubscribe` of channels in that slot (one hash tag) works there.
-    /// A [`Self::subscriber`] socket reaches one shard only.
+    /// Opens a Pub/Sub socket for sharded channels (`SSUBSCRIBE`).
+    ///
+    /// On a sharded server the socket connects to the shard that owns `channel`'s hash slot, so
+    /// `ssubscribe` of channels in that slot (use one hash tag, e.g. `{room1}:a`, `{room1}:b`)
+    /// works there. A plain [`Client::subscriber`] reaches one shard only, and `SSUBSCRIBE` on
+    /// the wrong shard is redirected by the server, not forwarded.
+    ///
+    /// # Arguments
+    /// * `channel` - any channel name whose slot you want to listen on.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let mut subscriber = client.sharded_subscriber("{room1}:events")?;
+    /// subscriber.ssubscribe(&["{room1}:events"])?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn sharded_subscriber(&self, channel: &str) -> Result<Self, Error> {
         self.open_pubsub(&["SSUBSCRIBE", channel])
     }
 
-    /// Sends `SELECT`. Indexes run from 0 to the server's `databases` setting minus one (16 by default).
+    /// Sends `SELECT` to switch this connection to another logical database.
+    ///
+    /// # Arguments
+    /// * `database` - index from 0 to the server's `databases` setting minus one (16 by
+    ///   default). Remembered for reconnects. Only a single-shard server has more than one
+    ///   database; a sharded server only has database 0.
+    ///
+    /// # Errors
+    /// [`Error::Server`] if the index is out of range or the server runs several shards.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.select(3)?;
+    /// assert_eq!(client.database(), 3);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn select(&mut self, database: u32) -> Result<(), Error> {
         let index = Num::uint(u64::from(database));
 
@@ -233,19 +496,52 @@ impl Client {
         Ok(())
     }
 
-    /// Sends `SELECT` and returns the same connection.
+    /// Sends `SELECT` and returns the same connection, so it can be chained after `connect`.
     ///
-    /// This is not a second TCP socket: every later command on the client uses the new database.
+    /// This is not a second TCP socket: every later command on the client uses the new
+    /// database.
+    ///
+    /// # Errors
+    /// As for [`Client::select`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let mut client = Client::connect("127.0.0.1", 6379)?.into_database(2)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn into_database(mut self, database: u32) -> Result<Self, Error> {
         self.select(database)?;
 
         Ok(self)
     }
 
-    /// Sets how long a read may block. `None` waits forever.
+    /// Sets how long a reply read may block, on every socket of this client (including the
+    /// Pub/Sub socket). `None` waits forever, which is the default.
     ///
-    /// A timed-out read returns [`Error::Io`], and the reply may still arrive later,
-    /// so drop the client unless it was only waiting in [`Self::read_message`].
+    /// A timeout while nothing has arrived yet is harmless: [`Error::Io`] with kind
+    /// `WouldBlock`/`TimedOut`, and the connection stays usable (this is how you poll
+    /// [`Client::read_message`]). A timeout in the middle of a command reply leaves the reply
+    /// unread, so drop the client in that case. Blocking commands such as `blpop` need a read
+    /// timeout longer than their own timeout.
+    ///
+    /// # Arguments
+    /// * `timeout` - `Some(duration)` (must be non-zero) or `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.set_read_timeout(Some(Duration::from_secs(3)))?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
         self.read_timeout = Some(timeout);
 
@@ -261,7 +557,31 @@ impl Client {
         Ok(())
     }
 
-    /// Sends `GET` and returns the raw bulk, or `None` when the key is missing.
+    /// Sends `GET` and returns the raw bytes of a string value.
+    ///
+    /// # Arguments
+    /// * `key` - the key to read.
+    ///
+    /// # Returns
+    /// `Some(bytes)` with the stored bytes (possibly empty), or `None` when the key is missing
+    /// or expired. Use [`Client::get_string`] for text.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` when the key holds a list, hash, set or other non-string
+    /// type; [`Error::Io`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.set("k", "v")?;
+    /// assert_eq!(client.get("k")?, Some(b"v".to_vec()));
+    /// assert_eq!(client.get("missing")?, None);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn get(&mut self, key: &str) -> Result<Option<Vec<u8>>, Error> {
         match self.execute(&["GET", key])? {
             RespValue::Null => Ok(None),
@@ -270,7 +590,26 @@ impl Client {
         }
     }
 
-    /// Sends `GET` and decodes the bulk as UTF-8. `None` when the key is missing.
+    /// Sends `GET` and decodes the value as UTF-8 text.
+    ///
+    /// # Returns
+    /// `Some(text)` or `None` when the key is missing.
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] when the value is not valid UTF-8 (use [`Client::get`] for binary
+    /// data); [`Error::Server`] `WRONGTYPE` for a non-string key.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.set("greeting", "hello")?;
+    /// assert_eq!(client.get_string("greeting")?.as_deref(), Some("hello"));
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn get_string(&mut self, key: &str) -> Result<Option<String>, Error> {
         match self.get(key)? {
             None => Ok(None),
@@ -278,12 +617,52 @@ impl Client {
         }
     }
 
-    /// Sends `SET`. Returns false when `NX` or `XX` skips the write.
+    /// Sends `SET key value` with no expiry and no condition. Replaces any existing value of
+    /// any type, and clears any TTL.
+    ///
+    /// # Returns
+    /// `true` when written. (Always true here; the `bool` is shared with the conditional
+    /// variants such as [`Client::set_with`].) Use [`Client::set_bytes`] for non-UTF-8 values.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.set("name", "Ada")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn set(&mut self, key: &str, value: &str) -> Result<bool, Error> {
         self.set_with(key, value, None, SetMode::Always)
     }
 
-    /// Sends `SET` with an optional millisecond expiry and `NX` or `XX`.
+    /// Sends `SET` with an optional expiry and an optional `NX`/`XX` condition.
+    ///
+    /// # Arguments
+    /// * `key`, `value` - key and string value.
+    /// * `expiry` - `Some(ttl)` sends `PX` with the TTL in whole milliseconds (sub-millisecond
+    ///   parts are dropped); `None` stores without expiry and removes any previous TTL.
+    /// * `mode` - see [`SetMode`].
+    ///
+    /// # Returns
+    /// `true` when the value was written; `false` when `NX`/`XX` skipped it.
+    ///
+    /// # Errors
+    /// [`Error::Server`] if the TTL is zero or too large for the server.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// // Create the key once, expiring in 30 seconds.
+    /// let created = client.set_with("lock", "me", Some(Duration::from_secs(30)), SetMode::IfNotExists)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn set_with(
         &mut self,
         key: &str,
@@ -304,7 +683,31 @@ impl Client {
         }
     }
 
-    /// Sends `SET ... PXAT`: the key expires at `expires_at`.
+    /// Sends `SET ... PXAT`: the key expires at an absolute time.
+    ///
+    /// # Arguments
+    /// * `key`, `value`, `mode` - as for [`Client::set_with`].
+    /// * `expires_at` - absolute [`SystemTime`](std::time::SystemTime); sent as Unix
+    ///   milliseconds. A time in the past makes the key expire immediately.
+    ///
+    /// # Returns
+    /// `true` when written, `false` when `mode` skipped the write.
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] when `expires_at` is before the Unix epoch.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// use std::time::SystemTime;
+    /// let deadline = SystemTime::now() + Duration::from_secs(3600);
+    /// client.set_expires_at("promo", "on", deadline, SetMode::Always)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn set_expires_at(
         &mut self,
         key: &str,
@@ -322,7 +725,24 @@ impl Client {
         )
     }
 
-    /// Sends `SET ... KEEPTTL`: the key keeps its current expiry.
+    /// Sends `SET ... KEEPTTL`: overwrites the value but keeps the key's current expiry.
+    ///
+    /// # Arguments
+    /// * `mode` - [`SetMode`] condition.
+    ///
+    /// # Returns
+    /// `true` when written, `false` when `mode` skipped the write.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.set_keep_ttl("session", "new-data", SetMode::IfExists)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn set_keep_ttl(&mut self, key: &str, value: &str, mode: SetMode) -> Result<bool, Error> {
         self.set_fixed(key, value, Some(("KEEPTTL", "")), mode)
     }
@@ -367,8 +787,29 @@ impl Client {
         ))
     }
 
-    /// Sends `SET ... GET` and returns the previous string, or `None` when the key was missing.
-    /// With `NX` or `XX` the previous value is returned even when the write is skipped.
+    /// Sends `SET ... GET`: writes a value and returns the previous one in one step.
+    ///
+    /// # Arguments
+    /// * `key`, `value`, `expiry`, `mode` - as for [`Client::set_with`].
+    ///
+    /// # Returns
+    /// The previous string, or `None` when the key did not exist. With `NX`/`XX` the previous
+    /// value is returned even if the write was skipped, so you cannot tell from the result alone
+    /// whether the write happened.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` when the existing value is not a string.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let old = client.set_and_get("config", "v2", None, SetMode::Always)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn set_and_get(
         &mut self,
         key: &str,
@@ -395,9 +836,32 @@ impl Client {
         self.bulk_or_null(&arguments[..=count])
     }
 
-    /// Sends `SET key value IFEQ expected [PX ms]` (Ruvio extension): writes only when the
-    /// current string equals `expected`. False when it did not match or the key is missing.
-    /// `None` for `ttl` clears any TTL, as a plain `SET` does.
+    /// Sends `SET key value IFEQ expected [PX ms]`, a Ruvio compare-and-set: write only when
+    /// the current string equals `expected`. Redis has no equivalent.
+    ///
+    /// # Arguments
+    /// * `key`, `value` - key and the new value.
+    /// * `expected` - the value the key must hold now (exact byte comparison).
+    /// * `ttl` - `Some(ttl)` sets a new expiry in milliseconds; `None` clears any TTL (as a
+    ///   plain `SET` does). See [`Client::set_if_eq_keep_ttl`] to keep it.
+    ///
+    /// # Returns
+    /// `true` when swapped; `false` when the key is missing or holds a different value.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` for a non-string key.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// // Release a lock only if we still own it.
+    /// let swapped = client.set_if_eq("owner", "node-2", "node-1", None)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn set_if_eq(
         &mut self,
         key: &str,
@@ -417,7 +881,8 @@ impl Client {
         Ok(!reply.is_null())
     }
 
-    /// Sends `SET key value IFEQ expected KEEPTTL`: compare-and-set that keeps the key's TTL.
+    /// Sends `SET key value IFEQ expected KEEPTTL`: compare-and-set that leaves the key's TTL
+    /// untouched. Arguments and results are as for [`Client::set_if_eq`].
     pub fn set_if_eq_keep_ttl(
         &mut self,
         key: &str,
@@ -430,13 +895,51 @@ impl Client {
     }
 
     /// Sends `SET key value EX seconds`.
+    ///
+    /// # Arguments
+    /// * `seconds` - lifetime in whole seconds; must be greater than 0.
+    ///
+    /// # Returns
+    /// `true` when written.
+    ///
+    /// # Errors
+    /// [`Error::Server`] if `seconds` is 0 or overflows. See also [`Client::setex`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.set_ex("otp", "493021", 60)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn set_ex(&mut self, key: &str, value: &str, seconds: u64) -> Result<bool, Error> {
         let seconds = Num::uint(seconds);
 
         self.set_fixed(key, value, Some(("EX", seconds.as_str())), SetMode::Always)
     }
 
-    /// Sends `SET key value EXAT unix_seconds`.
+    /// Sends `SET key value EXAT unix_seconds`: expire at an absolute time.
+    ///
+    /// # Arguments
+    /// * `unix_seconds` - Unix timestamp in seconds. A past time deletes the key at once.
+    /// * `mode` - [`SetMode`] condition.
+    ///
+    /// # Returns
+    /// `true` when written, `false` when `mode` skipped the write.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.set_exat("report", "ready", 1_900_000_000, SetMode::Always)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn set_exat(
         &mut self,
         key: &str,
@@ -449,7 +952,25 @@ impl Client {
         self.set_fixed(key, value, Some(("EXAT", seconds.as_str())), mode)
     }
 
-    /// Binary-safe `SET key value [PX ms]`. Use [`Self::get`] to read the bytes back.
+    /// Binary-safe `SET key value [PX ms]` for values that are not valid UTF-8 (images,
+    /// encrypted blobs, serialized structures). Read back with [`Client::get`].
+    ///
+    /// # Arguments
+    /// * `value` - raw bytes.
+    /// * `ttl` - `Some` sets the expiry in milliseconds; `None` stores without expiry and clears
+    ///   any TTL.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.set_bytes("blob", &[0, 159, 146, 150], None)?;
+    /// assert_eq!(client.get("blob")?, Some(vec![0, 159, 146, 150]));
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn set_bytes(
         &mut self,
         key: &str,
@@ -472,12 +993,51 @@ impl Client {
         Ok(())
     }
 
-    /// Sends `INCR`.
+    /// Sends `INCR`: adds 1 to the integer stored at `key` and returns the new value. A missing
+    /// key counts as 0, so the first call returns 1.
+    ///
+    /// # Errors
+    /// [`Error::Server`] when the value is not an integer (`ERR value is not an integer or out
+    /// of range`), would overflow `i64`, or the key holds another type (`WRONGTYPE`). A value
+    /// written with `SETV` is also refused.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// assert_eq!(client.incr("visits")?, 1);
+    /// assert_eq!(client.incr("visits")?, 2);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn incr(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["INCR", key])
     }
 
-    /// Sends `EXPIRE`, or `PEXPIRE` when `ttl` is not whole seconds. False when the key does not exist.
+    /// Sets a time to live on an existing key.
+    ///
+    /// Sends `EXPIRE` when `ttl` is a whole number of seconds, otherwise `PEXPIRE` with
+    /// milliseconds.
+    ///
+    /// # Arguments
+    /// * `ttl` - time to live from now. Zero makes the key expire right away.
+    ///
+    /// # Returns
+    /// `true` when the TTL was set; `false` when the key does not exist.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.set("cache:1", "data")?;
+    /// assert!(client.expire("cache:1", Duration::from_secs(60))?);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn expire(&mut self, key: &str, ttl: Duration) -> Result<bool, Error> {
         if ttl.subsec_nanos() == 0 {
             let seconds = Num::uint(duration_secs(ttl));
@@ -490,12 +1050,42 @@ impl Client {
         self.flag(["PEXPIRE", key, millis.as_str()])
     }
 
-    /// Sends `DEL` for one key.
+    /// Sends `DEL` for one key. Returns 1 if the key existed and was removed, 0 otherwise. Any
+    /// type of value is deleted.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.set("tmp", "x")?;
+    /// assert_eq!(client.del_key("tmp")?, 1);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn del_key(&mut self, key: &str) -> Result<i64, Error> {
         self.del(&[key])
     }
 
-    /// Sends `DEL` and returns how many keys were removed.
+    /// Sends `DEL` for several keys and returns how many existed and were removed.
+    ///
+    /// On a sharded server keys in different slots are deleted per shard and the counts summed;
+    /// this is **not atomic**.
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] when `keys` is empty (nothing is sent).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let removed = client.del(&["a", "b", "c"])?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn del(&mut self, keys: &[&str]) -> Result<i64, Error> {
         if keys.is_empty() {
             return Err(Error::Protocol("DEL needs at least one key".to_owned()));
@@ -504,8 +1094,31 @@ impl Client {
         self.integer(join("DEL", keys))
     }
 
-    /// Reads the next reply without sending a command. Use this after a subscribe
-    /// for `message`, `pmessage`, and `smessage` pushes.
+    /// Reads the next reply without sending a command. Use it after a subscribe to receive
+    /// Pub/Sub pushes.
+    ///
+    /// # Returns
+    /// A [`RespValue::Array`]. For `SUBSCRIBE`: `["message", channel, payload]`; for
+    /// `PSUBSCRIBE`: `["pmessage", pattern, channel, payload]`; for `SSUBSCRIBE`:
+    /// `["smessage", channel, payload]`. Subscribe confirmations arrive as `["subscribe",
+    /// channel, count]`. Prefer [`Client::next_message`], which skips confirmations and returns a
+    /// [`PubSubMessage`](crate::PubSubMessage).
+    ///
+    /// Blocks until a message arrives unless [`Client::set_read_timeout`] is set; a timeout
+    /// returns [`Error::Io`] and the client stays usable.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let mut subscriber = client.subscriber()?;
+    /// subscriber.subscribe(&["news"])?;
+    /// let push = subscriber.read_message()?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn read_message(&mut self) -> Result<RespValue, Error> {
         if let Some(pubsub) = &mut self.pubsub {
             return pubsub.read_message();
@@ -521,7 +1134,22 @@ impl Client {
         throw_error(reply)
     }
 
-    /// Called when a command or subscriber socket drops.
+    /// Registers a callback called when a command or Pub/Sub socket drops. Replaces any earlier
+    /// one. The callback runs on the thread that noticed the drop, so keep it short and do not
+    /// call the client from inside it.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.on_connection_lost(|notice| {
+    ///     eprintln!("lost {}:{} (subscriber: {})", notice.host, notice.port, notice.subscriber);
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn on_connection_lost<F>(&mut self, hook: F)
     where
         F: Fn(ConnectionNotice) + Send + Sync + 'static,
@@ -529,7 +1157,8 @@ impl Client {
         *self.on_lost.lock().expect("connection hook") = Some(Arc::new(hook));
     }
 
-    /// Called after a dropped socket is open again.
+    /// Registers a callback called after a dropped socket has been opened again (including
+    /// `AUTH`, `SELECT` and re-subscribing). Same rules as [`Client::on_connection_lost`].
     pub fn on_connection_restored<F>(&mut self, hook: F)
     where
         F: Fn(ConnectionNotice) + Send + Sync + 'static,
@@ -537,8 +1166,26 @@ impl Client {
         *self.on_restored.lock().expect("connection hook") = Some(Arc::new(hook));
     }
 
-    /// Replaces the built-in exponential wait. The attempt starts at 1 after the first failure.
-    /// Return `None` to stop. When set, `max_reconnect_attempts` is not applied.
+    /// Replaces the built-in exponential wait between reconnect attempts.
+    ///
+    /// # Arguments
+    /// * `delay` - called with the attempt number (1 after the first failure). Return
+    ///   `Some(wait)` to sleep and try again, or `None` to give up and return the connect
+    ///   error. When set, [`ClientOptions::max_reconnect_attempts`] is not applied.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// // Retry up to 5 times, waiting 200 ms * attempt.
+    /// client.set_reconnect_delay(|attempt| {
+    ///     (attempt <= 5).then(|| Duration::from_millis(200 * u64::from(attempt)))
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn set_reconnect_delay<F>(&mut self, delay: F)
     where
         F: Fn(u32) -> Option<Duration> + Send + Sync + 'static,
@@ -550,8 +1197,14 @@ impl Client {
         }
     }
 
-    /// Opens a dropped command socket again. With [`ClientOptions::reconnect`] on, the next
-    /// command does this itself.
+    /// Opens a dropped command socket again now. Does nothing when the connection is healthy.
+    ///
+    /// With [`ClientOptions::reconnect`] on (the default) the next command does this by itself;
+    /// call it directly when you turned automatic reconnect off. `AUTH`, `SELECT` and active
+    /// subscriptions are restored.
+    ///
+    /// # Errors
+    /// [`Error::Io`] when the server still cannot be reached after the configured attempts.
     pub fn reconnect(&mut self) -> Result<(), Error> {
         if let Transport::Cluster(router) = &mut self.transport {
             return router.reconnect_broken();
@@ -564,7 +1217,28 @@ impl Client {
         self.reopen()
     }
 
-    /// Sends one command. A RESP error becomes [`Error::Server`] and the connection stays open.
+    /// Sends one raw command and returns the reply, for commands that have no typed method.
+    ///
+    /// # Arguments
+    /// * `arguments` - the command name followed by its arguments, e.g. `&["OBJECT",
+    ///   "ENCODING", "k"]`. On a sharded server the key is found by the command's key rules and
+    ///   routed; multi-key commands over several slots are split (`MGET`, `MSET`, `DEL`,
+    ///   `EXISTS`, `UNLINK`, `TOUCH`) or rejected with `CROSSSLOT`.
+    ///
+    /// # Returns
+    /// The [`RespValue`] reply. An error reply never comes back here; it becomes
+    /// [`Error::Server`] and the connection stays open.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let reply = client.execute(&["OBJECT", "ENCODING", "mykey"])?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn execute(&mut self, arguments: &[&str]) -> Result<RespValue, Error> {
         self.ensure_open()?;
 
@@ -584,9 +1258,22 @@ impl Client {
         Ok(reply)
     }
 
-    /// Binary-safe [`Self::execute`]: every argument is raw bytes, so values need not be UTF-8
-    /// (`RESTORE` payloads, images, encrypted blobs). On a cluster it routes by the second
-    /// argument; multi-key commands are not split on this path.
+    /// Binary-safe [`Client::execute`]: every argument is raw bytes, so values need not be
+    /// UTF-8 (`RESTORE` payloads, images, encrypted blobs).
+    ///
+    /// On a sharded server the command is routed by its second argument; multi-key commands are
+    /// not split on this path.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let reply = client.execute_binary(&[b"SET", b"k", &[0xff, 0x00, 0xfe]])?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn execute_binary(&mut self, arguments: &[&[u8]]) -> Result<RespValue, Error> {
         self.ensure_open()?;
 
@@ -598,8 +1285,32 @@ impl Client {
         throw_error(reply)
     }
 
-    /// Writes every command, then reads one reply each. Error replies stay as [`RespValue::Error`].
-    /// On a cluster the commands are grouped by shard; replies keep command order.
+    /// Pipelines commands: writes all of them, then reads one reply each, in one round trip.
+    ///
+    /// # Arguments
+    /// * `commands` - each item is one command (name plus arguments). Must not be empty.
+    ///
+    /// # Returns
+    /// One [`RespValue`] per command, in order. A failing command shows up as
+    /// [`RespValue::Error`] at its index instead of failing the call, so check each reply. On a
+    /// sharded server commands are grouped per shard and the replies still come back in the
+    /// original order. A non-split multi-key command over several slots yields a `CROSSSLOT`
+    /// error at its index and the rest still run.
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] for an empty list; [`Error::Io`] if the socket fails midway.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let replies = client.execute_many(&[&["SET", "a", "1"], &["INCR", "a"], &["GET", "a"]])?;
+    /// assert_eq!(replies.len(), 3);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn execute_many(&mut self, commands: &[&[&str]]) -> Result<Vec<RespValue>, Error> {
         if commands.is_empty() {
             return Err(Error::Protocol(

@@ -127,6 +127,12 @@ test("HTTP, transport and RESP errors remain failures; a next request still work
   assert.deepEqual(await execute(["GET", "k"]), bulk("ok"));
 });
 
+test("command arguments are always sent as text, even when a number input produced a number", async (t) => {
+  const mock = t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ ok: true, value: bulk("ok") })));
+  await execute(["EXPIRE", "k", 3600]);
+  assert.deepEqual(JSON.parse(mock.mock.calls[0].arguments[1].body).args, ["EXPIRE", "k", "3600"]);
+});
+
 test("read-only HTTP failures retry but writes are never replayed", async (t) => {
   const mock = t.mock.method(globalThis, "fetch");
   let attempts = 0;

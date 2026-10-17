@@ -1,10 +1,16 @@
 # MIT License - Copyright (c) 2026 Salih Cantekin. See LICENSE.
-"""Synchronous cluster client: ``Ruvio(host, port, cluster=True)``.
+"""Synchronous cluster client: ``Ruvio(host, port, cluster=True)`` or :class:`ClusterRuvio`.
 
 On the first command (or ``connect()``) the seed is asked for ``CLUSTER SLOTS``. A server that
 answers ``-ERR cluster mode is disabled`` (or reports a single node) is used as a plain standalone
-server from then on. Otherwise a 16384-entry slot -> node table is built and every command is sent
+server from then on. Otherwise a 16384-entry slot-to-node table is built and every command is sent
 to the node that owns its key, over one lazily opened socket per node.
+
+Ruvio shards are slot owners inside one process (``shards = N``; with ``port_mode = "per-shard"``,
+the default, shard ``i`` listens on the base port plus ``i``). A server forwards a command for a key it
+does not own, so a plain client works against any one port, with an extra hop; the cluster client
+avoids the hop and also fans out the keyless commands (``DBSIZE``, ``KEYS``, ``FLUSHDB`` ...) that a
+single port answers for its own shard only.
 
 Only this class pays for routing: ``Ruvio(...)`` without ``cluster=True`` is untouched.
 """
@@ -61,21 +67,54 @@ def _fail(conn: _Conn, exc: BaseException) -> BaseException:
 
 
 class ClusterRuvio(Ruvio):
-    """Cluster-aware synchronous client (see the module docstring and README "Cluster").
+    """Cluster-aware synchronous client. Same methods as :class:`ruvio.Ruvio`; routing is automatic.
 
-    * single-key commands go to the owner of the key's slot; keyless ones to the seed;
-    * MGET/MSET/DEL/UNLINK/EXISTS/TOUCH over several nodes are split per node, sent to all nodes
-      before any reply is read, and re-assembled in the caller's order;
-    * any other command whose keys span slots raises :class:`CrossSlotError` before sending;
-    * ``-MOVED`` patches/refreshes the slot table and is followed up to 3 times per command;
-    * a failed node socket is closed and reopened by the next command for that node; a command
-      that hit a transport failure is never replayed;
-    * ``scan()`` walks the nodes one after the other (cursor = server_cursor * nodes + node).
+    Create it with ``ClusterRuvio(host, port)`` or ``Ruvio(host, port, cluster=True)``; the arguments are
+    those of :class:`ruvio.Ruvio` (a Unix socket is not allowed). ``host``/``port`` is any one shard (the
+    seed). Like the plain client it is not thread-safe.
+
+    Routing rules:
+
+    * Single-key commands go to the owner of the key's slot (CRC16 of the key, or of its ``{hash tag}``,
+      modulo 16384; see :func:`ruvio.key_slot`). Keyless commands go to the seed node.
+    * ``mget``/``mset``/``delete``/``unlink``/``exists``/``touch`` over several slots are split per node, sent
+      to all nodes before any reply is read, and put back in your order. This is **not atomic** across
+      shards.
+    * Any other command whose keys span slots raises :class:`ruvio.CrossSlotError` before anything is
+      sent (``rename``, ``copy``, ``lmove``, ``sinterstore``, ``bitop``, ``eval`` ...). Put the keys in
+      one slot with a hash tag such as ``{user:1}:profile`` and ``{user:1}:cart``.
+    * ``dbsize`` adds up all shards; ``keys`` joins them; ``flushdb``/``flushall`` run on every shard;
+      ``auth``, ``select`` and ``client_setname`` are applied to every node; ``scan`` walks the shards one
+      after the other (the cursor encodes the shard, treat it as opaque).
+    * A pipeline is grouped per node and the replies come back in your order. A pipeline holding a
+      command with keys in several slots is refused before sending. A transaction
+      (``pipeline(transaction=True)``) must use one slot; ``watch`` pins the node.
+    * ``MOVED`` replies are followed up to 3 times per command (a Ruvio server forwards instead of
+      sending ``MOVED`` for keys, so this matters for other topologies); ``ASK`` is not followed.
+    * A node socket that fails is closed and reopened by the next command for that node. A command that
+      hit a transport failure is never sent again.
+    * With more than one shard only database 0 exists.
+
+    A standalone or single-shard server is detected on the first command and then used as a plain client.
+
+    Example:
+        from ruvio import ClusterRuvio
+
+        client = ClusterRuvio("127.0.0.1", 7000)
+        client.set("user:1", "Ada")
+        client.mget("user:1", "user:2")      # split over shards if needed
+        client.dbsize()                      # sum over all shards
     """
 
     __slots__ = ("_cl",)
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Creates the client. Arguments are those of :class:`ruvio.Ruvio` (``cluster`` is implied).
+
+        Raises:
+            ValueError: ``unix_socket_path`` was given; cluster mode needs ``host``/``port``.
+            ConnectionError: ``lazy=False`` and the seed cannot be reached.
+        """
         super().__init__(*args, **kwargs)
         o = self._conn.opts
         if o.unix_socket_path:
@@ -198,7 +237,11 @@ class ClusterRuvio(Ruvio):
         return False
 
     def refresh_slots(self) -> None:
-        """Re-reads ``CLUSTER SLOTS`` and rebuilds the slot table."""
+        """Re-reads ``CLUSTER SLOTS`` and rebuilds the slot table.
+
+        Normally not needed: ``MOVED`` replies patch or reload the table. Call it after you changed the
+        topology. Does nothing on a standalone server.
+        """
         if self._cl.mode == 0:
             self._discover()
         elif self._cl.mode == 1:
@@ -206,14 +249,22 @@ class ClusterRuvio(Ruvio):
 
     @property
     def is_cluster(self) -> bool:
-        """True when the seed answered ``CLUSTER SLOTS`` with a multi-node map."""
+        """True when the seed answered ``CLUSTER SLOTS`` with a multi-node map (discovers on first use).
+
+        Returns:
+            ``False`` for a standalone or single-shard server.
+        """
         if self._cl.mode == 0:
             self._discover()
         return self._cl.mode == 1
 
     @property
     def nodes(self) -> List[Tuple[str, int]]:
-        """``(host, port)`` of the known nodes in slot order (empty in standalone fallback)."""
+        """``(host, port)`` of the known nodes in slot order (discovers on first use).
+
+        Returns:
+            A list of tuples; empty on a standalone server.
+        """
         if self._cl.mode == 0:
             self._discover()
         return [(n.host, n.port) for n in self._cl.nodes]
@@ -466,22 +517,50 @@ class ClusterRuvio(Ruvio):
             no.password, no.username, no.db, no.client_name = o.password, o.username, o.db, o.client_name
 
     def select(self, db: int) -> Any:
+        """``SELECT db`` on every node; remembered for reconnects.
+
+        A multi-shard server only has database 0, so any other number raises.
+
+        Args:
+            db: Database number.
+
+        Returns:
+            ``True``.
+        """
         ok = super().select(db)
         self._share_opts()
         return ok
 
     def client_setname(self, name: str) -> Any:
+        """``CLIENT SETNAME name`` on every node; remembered for reconnects.
+
+        Args:
+            name: The name.
+
+        Returns:
+            ``True``.
+        """
         ok = super().client_setname(name)
         self._share_opts()
         return ok
 
     def auth(self, password: str, username: Optional[str] = None) -> Any:
+        """``AUTH [username] password`` on every node; remembered for reconnects.
+
+        Args:
+            password: The password.
+            username: ACL user; omit for the default user.
+
+        Returns:
+            ``True``.
+        """
         ok = super().auth(password, username)
         self._share_opts()
         return ok
 
     @property
     def raw(self) -> "ClusterRuvio":
+        """A view on the same nodes and slot table whose replies are ``bytes``."""
         view = ClusterRuvio.__new__(ClusterRuvio)
         view._conn = self._conn
         view._cl = self._cl
@@ -489,6 +568,14 @@ class ClusterRuvio(Ruvio):
         return view
 
     def connect(self) -> "ClusterRuvio":
+        """Opens the seed socket and discovers the slot table.
+
+        Returns:
+            The client itself.
+
+        Raises:
+            ConnectionError: The seed is unreachable.
+        """
         if self._conn.sock is None:
             self._conn.open()
         if self._cl.mode == 0:
@@ -496,26 +583,56 @@ class ClusterRuvio(Ruvio):
         return self
 
     def close(self) -> None:
+        """Closes every node socket. The client can be used again."""
         c = self._cl
         for n in {id(x): x for x in [c.seed, *c.nodes, *c.by_addr.values()]}.values():
             n.conn.close()
         c.watch = None
 
     def dedicated(self) -> "ClusterRuvio":
-        """A new cluster client (own sockets) with the same options, e.g. for WATCH or blocking commands."""
+        """A new cluster client (own sockets) with the same options, for ``WATCH`` or blocking commands.
+
+        Returns:
+            A new :class:`ClusterRuvio`; close it when done.
+        """
         opts = self._conn.opts.as_dict()
         return ClusterRuvio(decode_responses=self._decode, cluster=True, **opts)
 
     def pubsub(self, ignore_subscribe_messages: bool = False) -> "ClusterPubSub":
-        """Pub/Sub on one node. Classic channels and patterns meet on the owner of slot 0 (where
-        ``PUBLISH`` goes); ``ssubscribe`` connects to the owner of the channel's slot."""
+        """Pub/Sub session on one node.
+
+        Classic channels and patterns meet on the owner of slot 0 (where ``publish`` goes). The first
+        ``ssubscribe`` connects to the owner of the channel's slot; all sharded channels of a session must live on
+        that node.
+
+        Args:
+            ignore_subscribe_messages: Hide subscription confirmations.
+
+        Returns:
+            A :class:`ruvio.PubSub`.
+
+        Raises:
+            CrossSlotError: (from ``ssubscribe``) channels of one call are in different slots.
+            RuvioError: (from ``ssubscribe``) the channel lives on another node than this session; open a
+                second ``pubsub()``.
+        """
         if self._cl.mode == 0:
             self._discover()
         return ClusterPubSub(self, ignore_subscribe_messages)
 
 
 class ClusterPubSub(PubSub):
+    """Pub/Sub session of a cluster client.
+
+Classic subscriptions live on the owner of slot 0, sharded ones on the channel's owner.
+    """
     def __init__(self, client: ClusterRuvio, ignore_subscribe_messages: bool = False) -> None:
+        """Creates the session. Use :meth:`ClusterRuvio.pubsub` instead.
+
+        Args:
+            client: The cluster client.
+            ignore_subscribe_messages: Hide subscription confirmations.
+        """
         c = client._cl
         node = client._owner(0) if c.mode == 1 else c.seed
         opts = _Options(**client._conn.opts.as_dict())
@@ -524,6 +641,15 @@ class ClusterPubSub(PubSub):
         self._client = client
 
     def ssubscribe(self, *channels: Any) -> None:
+        """``SSUBSCRIBE`` on the node that owns the channels' slot.
+
+        Args:
+            *channels: Channel names; all must hash to the same slot.
+
+        Raises:
+            CrossSlotError: The channels are in different slots.
+            RuvioError: The session is already connected to another node.
+        """
         c = self._client._cl
         if c.mode == 1 and channels:
             slots = {cl.key_slot(ch) for ch in channels}

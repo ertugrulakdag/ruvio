@@ -4,24 +4,32 @@ using System.Text;
 
 namespace Ruvio.Client;
 
-/// <summary>One command argument: a string, or an integer written in decimal without a string.</summary>
+/// <summary>One command argument: a string, an integer written in decimal without a string, or a shared pre-encoded token.</summary>
 internal readonly struct RespArg
 {
     internal readonly string? Text;
     internal readonly long Number;
+    internal readonly byte[]? Encoded;
 
-    private RespArg(string? text, long number)
+    private RespArg(string? text, long number, byte[]? encoded = null)
     {
         Text = text;
         Number = number;
+        Encoded = encoded;
     }
 
     public static implicit operator RespArg(string text) => new(text ?? throw new ArgumentNullException(nameof(text)), 0);
 
     public static implicit operator RespArg(long number) => new(null, number);
 
+    /// <summary>An ASCII keyword whose UTF-8 bytes were encoded once; the writer copies them as they are.</summary>
+    internal static RespArg Token(byte[] encoded) => new(null, 0, encoded);
+
     public override string ToString() =>
-        Text ?? Number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        Text
+        ?? (Encoded is not null
+            ? Encoding.ASCII.GetString(Encoded)
+            : Number.ToString(System.Globalization.CultureInfo.InvariantCulture));
 }
 
 /// <summary>
@@ -177,7 +185,7 @@ internal readonly struct RespCommand
     };
 
     /// <summary>The text of one part, or null when it is a number.</summary>
-    internal string? TextAt(int index) => _list is not null ? _list[index] : Part(index).Text;
+    internal string? TextAt(int index) => _list is not null ? _list[index] : Part(index) is { Encoded: not null } token ? token.ToString() : Part(index).Text;
 
     /// <summary>The list form, for cluster routing, retries, and other rare paths.</summary>
     internal IReadOnlyList<string> AsList()
@@ -208,7 +216,9 @@ internal readonly struct RespCommand
         for (int index = firstPart; index < Count; index++)
         {
             RespArg part = Part(index);
-            int length = part.Text is null ? Digits(part.Number) : Utf8.GetByteCount(part.Text);
+            int length = part.Encoded is { } token
+                ? token.Length
+                : part.Text is null ? Digits(part.Number) : Utf8.GetByteCount(part.Text);
             lengths[index] = length;
             size += 1 + Digits(length) + 2 + length + 2;
         }
@@ -226,7 +236,12 @@ internal readonly struct RespCommand
                 RespArg part = Part(index);
                 cursor = WriteLine(destination, cursor, (byte)'$', lengths[index]);
 
-                if (part.Text is null)
+                if (part.Encoded is { } encoded)
+                {
+                    encoded.CopyTo(destination[cursor..]);
+                    cursor += encoded.Length;
+                }
+                else if (part.Text is null)
                 {
                     Utf8Formatter.TryFormat(part.Number, destination[cursor..], out int written);
                     cursor += written;

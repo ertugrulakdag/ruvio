@@ -90,5 +90,13 @@ export const C = {
   PFADD: cmd('PFADD'), PFCOUNT: cmd('PFCOUNT'), PFMERGE: cmd('PFMERGE'),
 } as const;
 
-/** Pre-encoded command names, exported for {@link Commands.call} style use and tests. */
+/**
+ * Pre-encoded command names, one per supported command (`Cmds.GET`, `Cmds.CLIENT_ID`, ...), for
+ * {@link Commands.callCmd}. Sub-commands use an underscore.
+ *
+ * @example
+ * ```ts
+ * await client.callCmd(Cmds.INCR, 'hits');
+ * ```
+ */
 export const Cmds = C;

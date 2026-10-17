@@ -17,19 +17,35 @@ type executor interface {
 // cmds holds the typed command methods shared by Client and Conn.
 type cmds struct{ ex executor }
 
-// NullString is a nullable bulk string element (MGET, HMGET, ...).
+// NullString is one element of a reply that may contain nulls, such as MGET or HMGET.
+// Valid is false when the server returned a null (missing key or field); Val is then
+// empty. Valid is true for an existing value, including an empty string.
 type NullString struct {
-	Val   string
+	// Val is the value; empty when Valid is false.
+	Val string
+	// Valid is false when the server returned null.
 	Valid bool
 }
 
-// NullFloat is a nullable score (ZMSCORE).
+// NullFloat is one nullable score, as returned by ZMSCORE. Valid is false when the
+// member does not exist; Val is then 0.
 type NullFloat struct {
-	Val   float64
+	// Val is the score; 0 when Valid is false.
+	Val float64
+	// Valid is false when the member does not exist.
 	Valid bool
 }
 
-// Do sends any command. Arguments may be string, []byte, ints, uints, floats or bool.
+// Do sends any command and returns the raw reply, for commands without a typed method.
+// The first argument is the command name. Arguments may be string, []byte, int, int32,
+// int64, uint, uint32, uint64, float32, float64, bool (sent as 1 or 0) or nil (sent as
+// an empty string); any other type returns an error before anything is sent.
+//
+// A server error reply (such as WRONGTYPE) is returned as *Error. In cluster mode the
+// command is routed by its first key, as for typed commands.
+//
+//	v, err := c.Do(ctx, "OBJECT", "ENCODING", "k")
+//	if err == nil { fmt.Println(v.Str()) }
 func (c *cmds) Do(ctx context.Context, args ...any) (Value, error) {
 	r := getReq()
 	var err error
@@ -40,7 +56,8 @@ func (c *cmds) Do(ctx context.Context, args ...any) (Value, error) {
 	return c.ex.exec(ctx, r)
 }
 
-// DoBytes is Do for raw binary arguments.
+// DoBytes is Do for arguments that are already byte slices, which suits binary data and
+// avoids conversions.
 func (c *cmds) DoBytes(ctx context.Context, args ...[]byte) (Value, error) {
 	r := getReq()
 	r.buf = appendArrayHeader(r.buf, len(args))
@@ -221,10 +238,13 @@ func toStrMap(v Value) (map[string]string, error) {
 	return m, nil
 }
 
-// Z is a sorted-set member with its score.
+// Z is a sorted-set member with its score, used by ZADD, ZRANGE WITHSCORES and similar
+// commands.
 type Z struct {
+	// Member is the member name.
 	Member string
-	Score  float64
+	// Score is the member score.
+	Score float64
 }
 
 func toZs(v Value) ([]Z, error) {

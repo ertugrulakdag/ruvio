@@ -4,6 +4,12 @@ Notable changes to `ruvio-ui`, the web console (Docker image and host binaries).
 
 ## Unreleased
 
+- New Dusk Rust theme, matching the project site. Every color and font is in `web/src/tokens.css`.
+- New **Console** screen: run server commands with formatted, size-capped replies, copy and download of the full result, confirmation before destructive commands, history, and full screen.
+- Command arguments are always sent as text. Setting an expiry no longer fails with "invalid type: integer".
+- Shard health is collapsible and starts collapsed; shard notices moved to a header button.
+- When the server names its shards `127.0.0.1` and you signed in with another host, shards are reached through that host. See `docs/UI_CONNECTIONS.md`.
+
 ## 0.1.8 - 2026-10-17
 
 No recorded changes.

@@ -18,6 +18,14 @@ public final class HashSlot {
     private HashSlot() {
     }
 
+    /**
+     * Computes the CRC16 (XMODEM) of a byte range.
+     *
+     * @param b the bytes
+     * @param from the first index
+     * @param to the end index, exclusive
+     * @return the checksum, 0 to 65535
+     */
     public static int crc16(byte[] b, int from, int to) {
         int crc = 0;
         for (int i = from; i < to; i++) {
@@ -26,11 +34,24 @@ public final class HashSlot {
         return crc;
     }
 
+    /**
+     * Computes the hash slot of a key.
+     *
+     * @param key the key bytes
+     * @return the slot, 0 to 16383
+     */
     public static int of(byte[] key) {
         return of(key, 0, key.length);
     }
 
-    /** Slot of {@code key[from, from + length)}, so a key inside an encoded frame needs no copy. */
+    /**
+     * Computes the slot of {@code key[from, from + length)}, so a key inside an encoded frame needs no copy.
+     *
+     * @param key the array holding the key
+     * @param from the first index of the key
+     * @param length the key length
+     * @return the slot, 0 to 16383
+     */
     public static int of(byte[] key, int from, int length) {
         int end = from + length;
         int open = -1;

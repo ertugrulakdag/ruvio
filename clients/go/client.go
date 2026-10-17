@@ -1,12 +1,5 @@
 // Copyright (c) 2026 Salih Cantekin. MIT License; see LICENSE.
 
-// Package ruvio is a fast, allocation-light client for the Ruvio server (RESP2, RESP3
-// via HELLO 3).
-//
-// One Client multiplexes every concurrent call over a single TCP connection: frames
-// queued while a write is in flight are coalesced into one write, and replies are
-// matched to callers in FIFO order. Blocking commands, transactions and Pub/Sub use
-// dedicated connections so they never stall the shared one.
 package ruvio
 
 import (
@@ -18,28 +11,42 @@ import (
 	"time"
 )
 
-// Options configures a Client.
+// Options configures a Client. The zero value connects to 127.0.0.1:6379 without
+// authentication, on database 0, speaking RESP2.
+//
+// The connection settings are applied, in this order, on every connection the client
+// opens (the shared one, dedicated ones and Pub/Sub ones, also after a reconnect):
+// HELLO 3 / AUTH, SELECT, then CLIENT SETNAME.
 type Options struct {
-	// Addr is host:port. Default 127.0.0.1:6379.
+	// Addr is host:port. Default 127.0.0.1:6379. With Cluster it is the seed: the
+	// address of any shard.
 	Addr string
 	// Username and Password send AUTH on every new connection when Password is set.
+	// An empty Username authenticates the default user.
 	Username string
+	// Password is the AUTH password; see Username.
 	Password string
-	// DB is the logical database selected on every new connection.
+	// DB is the logical database selected on every new connection (SELECT). The
+	// default is 0. A sharded server only has database 0.
 	DB int
 	// ClientName sends CLIENT SETNAME on every new connection.
 	ClientName string
 	// Protocol 3 sends HELLO 3 on connect; 0 or 2 stays on RESP2 (nothing is sent).
+	// RESP3 is needed for ClientTracking and OnPush.
 	Protocol int
-	// DialTimeout bounds connecting and the handshake when the context has no deadline.
+	// DialTimeout bounds connecting and the handshake when the context has no
+	// deadline. Default 5 seconds.
 	DialTimeout time.Duration
-	// Dial overrides the dialer (for TLS, unix sockets, tests).
+	// Dial overrides the dialer (for TLS, unix sockets, tests). The network argument
+	// is always "tcp" and addr is Options.Addr (or the node address in cluster
+	// mode). Return a *tls.Conn here when the server requires TLS.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 	// MaxIdleDedicated is how many dedicated connections (blocking commands,
 	// transactions) are kept for reuse. Default 4.
 	MaxIdleDedicated int
 	// OnPush receives RESP3 push frames (CLIENT TRACKING invalidations) on the
-	// shared connection. It runs on the reader goroutine and must not block.
+	// shared connection. It runs on the reader goroutine and must not block. Setting
+	// it makes the shared connection read continuously.
 	OnPush func(Value)
 	// Cluster turns on cluster routing. On first use the client asks the seed (Addr) for
 	// CLUSTER SLOTS, builds the slot table and keeps one multiplexed connection per node
@@ -48,7 +55,11 @@ type Options struct {
 	Cluster bool
 }
 
-// Client is safe for concurrent use. Its zero value is not usable; call NewClient.
+// Client is a connection to one Ruvio server (or, with Options.Cluster, to a whole
+// sharded server). It is safe for concurrent use by many goroutines and meant to be
+// created once and shared; do not create one per request. All typed command methods
+// (Get, Set, HSet ...) are available on it. Its zero value is not usable; call NewClient
+// or Connect.
 type Client struct {
 	cmds
 	opts Options
@@ -64,7 +75,11 @@ type Client struct {
 	cl *cluster // non-nil when Options.Cluster is set
 }
 
-// NewClient returns a client. It connects lazily; call Ping to connect eagerly.
+// NewClient returns a Client without connecting. The first command opens the connection,
+// and if the connection later drops, the next command opens a new one (there is no
+// reconnect option; the command that found the drop fails and is not retried). Defaults:
+// Addr "127.0.0.1:6379", DialTimeout 5s, MaxIdleDedicated 4. Use Connect to fail fast on
+// a wrong address or password.
 func NewClient(opts Options) *Client {
 	if opts.Addr == "" {
 		opts.Addr = "127.0.0.1:6379"
@@ -84,7 +99,12 @@ func NewClient(opts Options) *Client {
 	return c
 }
 
-// Connect is NewClient followed by PING.
+// Connect is NewClient followed by Ping. It returns the connect, authentication or
+// protocol error if the server cannot be reached or the options are rejected, and closes
+// the client in that case. ctx bounds the dial and handshake (otherwise
+// Options.DialTimeout does).
+//
+//	c, err := ruvio.Connect(ctx, ruvio.Options{Addr: "10.0.0.5:6379", Password: "secret"})
 func Connect(ctx context.Context, opts Options) (*Client, error) {
 	c := NewClient(opts)
 	if err := c.Ping(ctx); err != nil {
@@ -94,7 +114,11 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 	return c, nil
 }
 
-// Close closes the shared and idle dedicated connections. Pending calls fail.
+// Close closes the shared connection, the idle dedicated connections and, in cluster
+// mode, every node connection. Commands that are waiting fail with ErrClosed, as does
+// every later command. Pub/Sub, Conn and Tx values obtained earlier keep their own
+// connection until they are closed. Calling Close again is a no-op. It always returns
+// nil.
 func (c *Client) Close() error {
 	if c.closed.Swap(true) {
 		return nil
@@ -293,19 +317,33 @@ func (c *Client) release(cn *conn) {
 	}
 }
 
-// Do sends any command (the escape hatch) on the shared connection. Arguments may be
-// string, []byte, ints, uints, floats or bool. Server errors are returned as *Error.
+// Do sends any command and returns the raw reply, for commands that have no typed
+// method. Arguments may be string, []byte, int, int32, int64, uint, uint32, uint64,
+// float32, float64 or bool; nil is sent as an empty string. Bools are sent as "1" and
+// "0", floats in plain decimal ("+inf" and "-inf" for infinities). Any other type
+// returns an error before anything is sent. A server error is returned as *Error and the
+// Value then has Kind KindError.
+//
+//	v, err := c.Do(ctx, "OBJECT", "ENCODING", "mykey")
+//	s := v.Str()
 func (c *Client) Do(ctx context.Context, args ...any) (Value, error) {
 	return c.cmds.Do(ctx, args...)
 }
 
-// Stats reports transport counters of the shared connection (writes coalesce frames).
+// Stats are transport counters of the shared connection. Because frames that queue up
+// while a write is in flight leave in one write, Writes is usually smaller than the
+// number of commands sent. In cluster mode the counters add up over all node
+// connections.
 type Stats struct {
-	Writes       uint64
+	// Writes is the number of socket write calls made.
+	Writes uint64
+	// BytesWritten is the number of bytes written to the socket.
 	BytesWritten uint64
 }
 
-// Stats returns counters for the current shared connection.
+// Stats returns the transport counters of the current shared connection. They restart
+// from zero when the connection is replaced. It returns the zero value before the first
+// command.
 func (c *Client) Stats() Stats {
 	if c.cl != nil {
 		return c.cl.stats()
@@ -317,9 +355,15 @@ func (c *Client) Stats() Stats {
 	return Stats{Writes: cn.writes.Load(), BytesWritten: cn.bytesWritten.Load()}
 }
 
-// Conn is a dedicated connection taken from the client. Use it for commands that
-// change connection state (WATCH, CLIENT TRACKING, SELECT for one caller). Not safe
-// for concurrent use by design; call Close to return it to the client.
+// Conn is a dedicated connection taken from a Client with Client.Conn. Use it for
+// commands that change connection state or must run on one connection: SELECT for one
+// caller, WATCH, CLIENT TRACKING, or a series of commands that must not interleave with
+// other goroutines. All typed command methods and Pipeline are available. A Conn is not
+// safe for concurrent use; always Close it, which returns the connection to the client.
+//
+// In cluster mode a Conn is taken from the shard that owns the first key it uses and
+// every later key must hash to the same slot, otherwise the call fails with
+// ErrCrossSlot. Use Client.ConnFor to choose the shard up front.
 type Conn struct {
 	cmds
 	c     *Client
@@ -334,7 +378,16 @@ type Conn struct {
 	closed     bool
 }
 
-// Conn takes a dedicated connection.
+// Conn takes a dedicated connection (see the Conn type). It opens a new connection when
+// no idle one is available. In cluster mode the connection is taken lazily, from the
+// shard of the first key. Close the returned Conn when done.
+//
+//	d, err := c.Conn(ctx)
+//	if err != nil {
+//	    return err
+//	}
+//	defer d.Close()
+//	d.Select(ctx, 2)
 func (c *Client) Conn(ctx context.Context) (*Conn, error) {
 	if c.cl != nil {
 		t, err := c.cl.topo(ctx)
@@ -356,8 +409,10 @@ func (c *Client) Conn(ctx context.Context) (*Conn, error) {
 	return d, nil
 }
 
-// Close returns the connection to the client. A connection whose database or
-// protocol was changed is closed instead of being reused.
+// Close returns the connection to the client for reuse. If Select, Hello or another
+// command changed the database or protocol of the connection (it is marked dirty), the
+// connection is closed instead of being reused. Further use of the Conn returns
+// ErrClosed. It always returns nil.
 func (d *Conn) Close() error {
 	d.closed = true
 	if d.cn == nil {

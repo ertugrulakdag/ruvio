@@ -5,8 +5,11 @@ export function nodeId(node) {
   return node ? `${node.host}:${node.port}` : "all";
 }
 
+// The server takes every argument as text, while number inputs hand back numbers.
+export const textArgs = (args) => args.map((arg) => String(arg ?? ""));
+
 export async function execute(args, shard = null) {
-  const result = await api("/api/command", { args, shard });
+  const result = await api("/api/command", { args: textArgs(args), shard });
   if (result.value?.kind === "error") throw new Error(result.value.text);
   return result.value;
 }

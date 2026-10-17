@@ -1,6 +1,14 @@
 <script>
   import { onMount } from "svelte";
   import "./app.css";
+  import Icon from "./Icon.svelte";
+  let scopeMenu = $state();
+  // Close header dropdowns (shard picker, notices) on a click outside them or on Escape.
+  function closeScopeMenu(event) {
+    for (const menu of document.querySelectorAll("details.scope-dropdown[open]")) {
+      if (event.type === "keydown" ? event.key === "Escape" : !menu.contains(event.target)) menu.open = false;
+    }
+  }
   import { api } from "./api.js";
   import { execute, nodeId, scanOwners, scanSelected } from "./operator.js";
   import { preference, savePreference } from "./preferences.js";
@@ -10,14 +18,16 @@
   import Browser from "./Browser.svelte";
   import PubSub from "./PubSub.svelte";
   import Users from "./Users.svelte";
+  import Console from "./Console.svelte";
 
   const navigation = [
-    { id: "overview", label: "Overview", icon: "01" },
-    { id: "data", label: "Data", icon: "02" },
-    { id: "tasks", label: "Tasks", icon: "03" },
-    { id: "pubsub", label: "Pub/Sub", icon: "04" },
-    { id: "users", label: "ACL", icon: "05" },
+    { id: "overview", label: "Overview", icon: "overview" },
+    { id: "data", label: "Data", icon: "data" },
+    { id: "tasks", label: "Tasks", icon: "tasks" },
+    { id: "pubsub", label: "Pub/Sub", icon: "pubsub" },
+    { id: "users", label: "ACL", icon: "users" },
   ];
+  const dock = { id: "console", label: "Console", icon: "terminal" };
   const logLimit = 100;
   let host = $state("127.0.0.1");
   let port = $state(6379);
@@ -172,7 +182,7 @@
 
   function navigate(id) {
     section = id;
-    document.querySelector(".body")?.scrollTo({ top: 0, behavior: "instant" });
+    for (const el of document.querySelectorAll(".body, .workspace")) el.scrollTo({ top: 0, behavior: "instant" });
   }
 
   function openTask(id) {
@@ -180,6 +190,8 @@
     navigate("tasks");
   }
 </script>
+
+<svelte:window onclick={closeScopeMenu} onkeydown={closeScopeMenu} />
 
 {#if restoring}
   <main class="gate"><p role="status">Restoring session...</p></main>
@@ -212,7 +224,16 @@
     <header class="top">
       <div class="mark"><img class="logo" src="/mark.png" alt="" /> ruvio <span class="product-label">OPERATOR</span></div>
       <div class="who"><span class="status-dot"></span><span>{host}:{port}</span><span class="badge">{username || "default"}</span></div>
-      <details class="scope-dropdown">
+      {#if topologyError || topologyNotice}
+        <details class="scope-dropdown notice-dropdown" class:alert={topologyError}>
+          <summary><Icon name="info" /> {topologyError ? "Problem" : "Notice"}</summary>
+          <div class="scope-menu" role="status">
+            {#if topologyError}<p class="err">{topologyError}</p><button onclick={loadShards}>Retry discovery</button>{/if}
+            {#if topologyNotice}<p>{topologyNotice}</p>{/if}
+          </div>
+        </details>
+      {/if}
+      <details class="scope-dropdown" bind:this={scopeMenu}>
         <summary>{scopeLabel} <span class="count">{shards.length}</span></summary>
         <div class="scope-menu" role="group" aria-label="Shard scope">
           <button class:on={!selectedIds.length} disabled={scopeBusy} onclick={() => pickShards([])}>All shards</button>
@@ -226,22 +247,22 @@
     </header>
     <div class="body">
       <aside class="sidebar" class:collapsed={sidebarCollapsed}>
-        <button class="quiet sidebar-toggle" aria-label={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"} aria-expanded={!sidebarCollapsed} onclick={() => (sidebarCollapsed = !sidebarCollapsed)}>
-          <span aria-hidden="true">{sidebarCollapsed ? "\u2630" : "\u00ab"}</span><span class="sidebar-toggle-label">{sidebarCollapsed ? "Menu" : "Collapse"}</span>
+        <button class="quiet sidebar-toggle" title={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"} aria-label={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"} aria-expanded={!sidebarCollapsed} onclick={() => (sidebarCollapsed = !sidebarCollapsed)}>
+          <Icon name={sidebarCollapsed ? "chevronsRight" : "chevronsLeft"} /><span class="sidebar-toggle-label">{sidebarCollapsed ? "Menu" : "Collapse"}</span>
         </button>
         <p class="eyebrow nav-label">WORKSPACE</p>
+        {#snippet navButton(item)}
+          <button class:on={section === item.id} aria-current={section === item.id ? "page" : undefined} aria-label={item.label} title={sidebarCollapsed ? item.label : undefined} onclick={() => navigate(item.id)}>
+            <span class="nav-icon" aria-hidden="true"><Icon name={item.icon} /></span><span class="nav-text">{item.label}</span>
+          </button>
+        {/snippet}
         <nav aria-label="Main navigation">
-          {#each navigation as item}
-            <button class:on={section === item.id} aria-current={section === item.id ? "page" : undefined} aria-label={item.label} title={sidebarCollapsed ? item.label : undefined} onclick={() => navigate(item.id)}>
-              <span class="nav-icon" aria-hidden="true">{item.icon}</span><span class="nav-text">{item.label}</span>
-            </button>
-          {/each}
+          {#each navigation as item}{@render navButton(item)}{/each}
         </nav>
+        <nav class="nav-dock" aria-label="Tools">{@render navButton(dock)}</nav>
         <div class="sidebar-foot"><span class="status-dot"></span><span class="sidebar-foot-label"> HTTP to RESP</span><p>Connected as {username || "default"}</p></div>
       </aside>
       <main class="workspace">
-        {#if topologyError}<div class="error-box" role="alert">{topologyError} <button onclick={loadShards}>Retry discovery</button></div>{/if}
-        {#if topologyNotice}<div class="notice">{topologyNotice}</div>{/if}
         {#if sessionError}<div class="error-box" role="alert">{sessionError}</div>{/if}
         <div class="screen">
           {#if section === "overview"}
@@ -255,6 +276,10 @@
             <header class="page-head"><div><p class="eyebrow">ACCESS CONTROL</p><h1>ACL users</h1><p>Inspect access and update live server users.</p></div><span class="badge">Signed in as {username || "default"}</span></header>
             {#key scope}<Users {run} />{/key}
           {/if}
+          <div hidden={section !== "console"}>
+            <header class="page-head"><div><p class="eyebrow">RUN COMMANDS</p><h1>Console</h1><p>Type server commands and read the replies.</p></div></header>
+            <Console {run} {scopeLabel} endpoint={shard ? nodeId(shard) : `${host}:${port}`} />
+          </div>
           {#key scope}
             <div hidden={section !== "pubsub"}>
               <PubSub target={shard ? { host: shard.host, port: shard.port } : null} {note} endpoint={shard ? nodeId(shard) : `${host}:${port}`} bind:busy={pubBusy} bind:database={pubsubDatabase} />

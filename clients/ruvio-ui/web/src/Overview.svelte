@@ -1,10 +1,13 @@
 <script>
   import { execute, nodeId, parseInfo, metric, totalMetric, number, bytes } from "./operator.js";
   import { taskFamilies } from "./catalog.js";
+  import Icon from "./Icon.svelte";
   import { preference, savePreference } from "./preferences.js";
+  const taskIcons = { locking: "lock", conditional: "layers", limiting: "clock", idempotency: "key", inventory: "cart", sessions: "users", jobs: "tasks", changes: "list", json: "doc", strings: "doc", keys: "key", lists: "list" };
   let { shards, shard, openTask, onData, lines } = $props();
   let readings = $state([]);
   let refreshing = $state(false);
+  let shardsOpen = $state(preference("overview.shardsOpen", false) === true);
   let paused = $state(preference("overview.paused", false) === true);
   const savedInterval = Number(preference("overview.interval", 5));
   let interval = $state([2, 5, 10, 30, 60].includes(savedInterval) ? savedInterval : 5);
@@ -78,8 +81,16 @@
 <p class="metrics-caption">{shard ? `Metrics for ${nodeId(shard)}` : "Metrics summed across discovered shards"} &middot; {updated ? `Last checked ${updated}` : "First reading in progress"} &middot; Missing metrics are never counted as zero.</p>
 
 <section class="panel">
-  <div class="section-heading"><div><h2>Shard health</h2><p class="hint">Availability, storage, and persistence by owner</p></div><span class="badge">{shards.length} discovered</span></div>
-  <div class="shard-grid">
+  <div class="section-heading">
+    <div class="shard-head">
+      <h2><button class="shard-toggle" aria-expanded={shardsOpen} aria-controls="shard-grid" onclick={() => { shardsOpen = !shardsOpen; savePreference("overview.shardsOpen", shardsOpen); }}>
+        <Icon name={shardsOpen ? "chevronDown" : "chevronRight"} />Shard health
+      </button></h2>
+      <p class="hint">Availability, storage, and persistence by owner</p>
+    </div>
+    <span class="badge">{#if readings.length}{readings.filter((item) => item.reachable).length} of {readings.length} up{:else}{shards.length} discovered{/if}</span>
+  </div>
+  <div class="shard-grid" id="shard-grid" hidden={!shardsOpen}>
     {#each readings as reading}
       {@const info = reading.info}
       {@const unhealthy = info && (info.ruvio_persistence_state === "error" || (info.ruvio_readiness && info.ruvio_readiness !== "ready") || (info.ruvio_health && info.ruvio_health !== "ok"))}
@@ -111,7 +122,7 @@
   <div class="section-heading"><div><h2>What do you need to do?</h2><p class="hint">Purpose-built forms. Real server commands.</p></div><button class="text-button" onclick={() => openTask("strings")}>All tasks &rarr;</button></div>
   <div class="quick-grid">
     {#each taskFamilies.slice(0, 8) as item, index}
-      <button class="quick-card" onclick={() => openTask(item.id)}><span class="quick-number">0{index + 1}</span><strong>{item.label}</strong><span>{item.description}</span><code>{item.commands[0].name}{item.id === "locking" ? " / RELEASE" : ""}</code><span class="quick-arrow" aria-hidden="true">&nearr;</span></button>
+      <button class="quick-card" onclick={() => openTask(item.id)}><span class="quick-icon"><Icon name={taskIcons[item.id] ?? "bolt"} /></span><strong>{item.label}</strong><span>{item.description}</span><code>{item.commands[0].name}{item.id === "locking" ? " / RELEASE" : ""}</code><span class="quick-arrow" aria-hidden="true">&nearr;</span></button>
     {/each}
   </div>
 </section>

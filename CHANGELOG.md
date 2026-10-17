@@ -4,6 +4,8 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+- `XADD ... MAXLEN` accepts `=` as well as `~` before the count, like `XTRIM` and `XADD ... MINID` already did.
+
 ## 0.3.3 - 2026-10-17
 
 - **Behaviour change:** `port_mode = "per-shard"` is now the default. A multi-shard server also listens on port+1 .. port+N-1, one port per shard; `single` is deprecated. A key sent to the wrong shard's port is forwarded to its owner instead of answered with `MOVED` (`SSUBSCRIBE` and `SPUBLISH` still answer `MOVED`).

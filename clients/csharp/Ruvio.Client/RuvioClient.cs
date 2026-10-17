@@ -85,6 +85,14 @@ public sealed partial class RuvioClient : IRuvioClient
     }
 
     /// <summary>The cluster hash slot (0-16383) of <paramref name="key"/>, honoring <c>{hash tags}</c>.</summary>
+    /// <param name="key">The key. When it contains <c>{tag}</c> with at least one character inside, only the tag is hashed.</param>
+    /// <returns>The slot, from 0 to 16383 (CRC16 of the key or tag, modulo 16384).</returns>
+    /// <remarks>Use it to check whether two keys share a slot (and so can be used together in one multi-key command). No server call is made.</remarks>
+    /// <example>
+    /// <code>
+    /// bool same = RuvioClient.GetHashSlot("{user:1}:cart") == RuvioClient.GetHashSlot("{user:1}:wishlist");   // true
+    /// </code>
+    /// </example>
     public static int GetHashSlot(string key)
     {
         ArgumentNullException.ThrowIfNull(key);
@@ -188,14 +196,14 @@ public sealed partial class RuvioClient : IRuvioClient
         RuvioSocket.ThrowOnError(await connection.SendAsync(["SELECT", index], cancellationToken));
     }
 
-    /// <summary>Sends <c>PING</c> and returns the simple-string reply.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string> PingAsync(CancellationToken cancellationToken = default)
     {
         return ReadPing(await ExecuteCommandAsync(new RespCommand("PING"), cancellationToken));
     }
 
-    /// <summary>Sends <c>PING message</c> and returns the echoed message.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string> PingAsync(string message, CancellationToken cancellationToken = default)
     {
@@ -218,13 +226,13 @@ public sealed partial class RuvioClient : IRuvioClient
         return reply.AsString() ?? throw new RuvioException("PING returned a null reply");
     }
 
-    /// <summary>Sends <c>GET</c> and returns the raw bulk, or null when the key is missing.</summary>
+    /// <inheritdoc />
     public ValueTask<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default)
     {
         return GetBulkAsync(key, cancellationToken);
     }
 
-    /// <summary>Sends <c>GET</c> and decodes the bulk as UTF-8. Null when the key is missing.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string?> GetStringAsync(string key, CancellationToken cancellationToken = default)
     {
@@ -238,13 +246,7 @@ public sealed partial class RuvioClient : IRuvioClient
         return RespValue.Bulk(value).AsString();
     }
 
-    /// <summary>
-    /// Sends <c>GET</c> and converts the bulk.
-    /// Supported types: <see cref="string"/>, byte arrays, <see cref="int"/>, <see cref="long"/>,
-    /// and their nullable forms. A missing key is null for a class or <c>Nullable</c>.
-    /// <c>GetAsync&lt;long&gt;</c> on a missing key throws; use <see cref="GetInt64Async"/> or
-    /// <c>GetAsync&lt;long?&gt;</c> when the key may be absent.
-    /// </summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default)
     {
@@ -260,14 +262,14 @@ public sealed partial class RuvioClient : IRuvioClient
         return RespConvert.FromBulk<T>(bytes);
     }
 
-    /// <summary>Sends <c>GET</c> and parses a decimal integer. Null when the key is missing.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<int?> GetInt32Async(string key, CancellationToken cancellationToken = default)
     {
         return RespConvert.FromBulk<int?>(await GetBulkAsync(key, cancellationToken));
     }
 
-    /// <summary>Sends <c>GET</c> and parses a decimal integer. Null when the key is missing.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<long?> GetInt64Async(string key, CancellationToken cancellationToken = default)
     {
@@ -292,7 +294,7 @@ public sealed partial class RuvioClient : IRuvioClient
         return reply.Bytes;
     }
 
-    /// <summary>Sends <c>SET</c>. Returns false when <c>NX</c> or <c>XX</c> skips the write.</summary>
+    /// <inheritdoc />
     public ValueTask<bool> SetAsync(
         string key,
         string value,
@@ -301,7 +303,7 @@ public sealed partial class RuvioClient : IRuvioClient
         return SetAsync(key, value, expiry: null, mode: SetMode.Always, cancellationToken);
     }
 
-    /// <summary>Sends <c>SET</c> with an optional millisecond expiry and <c>NX</c> or <c>XX</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<bool> SetAsync(
         string key,
@@ -320,7 +322,7 @@ public sealed partial class RuvioClient : IRuvioClient
         return true;
     }
 
-    /// <summary>Sends <c>SET ... PXAT</c>: the key expires at <paramref name="expiresAt"/>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<bool> SetAsync(
         string key,
@@ -335,7 +337,7 @@ public sealed partial class RuvioClient : IRuvioClient
         return reply.Kind is not RespKind.Null;
     }
 
-    /// <summary>Sends <c>SET ... KEEPTTL</c>: the key keeps its current expiry.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<bool> SetKeepingTimeToLiveAsync(
         string key,
@@ -349,10 +351,7 @@ public sealed partial class RuvioClient : IRuvioClient
         return reply.Kind is not RespKind.Null;
     }
 
-    /// <summary>
-    /// Sends <c>SET ... GET</c> and returns the previous string, or null when the key was missing.
-    /// With <c>NX</c> or <c>XX</c> the previous value is returned even when the write is skipped.
-    /// </summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string?> SetAndGetAsync(
         string key,
@@ -397,7 +396,7 @@ public sealed partial class RuvioClient : IRuvioClient
         return get ? command.With("GET") : command;
     }
 
-    /// <summary>Sends <c>INCR</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<long> IncrementAsync(string key, CancellationToken cancellationToken = default)
     {
@@ -411,7 +410,7 @@ public sealed partial class RuvioClient : IRuvioClient
         return reply.Integer;
     }
 
-    /// <summary>Sends <c>EXPIRE</c>. Returns false when the key does not exist.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<bool> ExpireAsync(
         string key,
@@ -438,13 +437,13 @@ public sealed partial class RuvioClient : IRuvioClient
         return reply.Integer > 0;
     }
 
-    /// <summary>Sends <c>DEL</c> for one key.</summary>
+    /// <inheritdoc />
     public ValueTask<long> DeleteAsync(string key, CancellationToken cancellationToken = default)
     {
         return DeleteAsync([key], cancellationToken);
     }
 
-    /// <summary>Sends <c>DEL</c> and returns how many keys were removed.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<long> DeleteAsync(
         IReadOnlyList<string> keys,
@@ -474,17 +473,14 @@ public sealed partial class RuvioClient : IRuvioClient
         return reply.Integer;
     }
 
-    /// <summary>
-    /// Sends one command. A RESP error becomes <see cref="RuvioException"/> and
-    /// the connection stays open.
-    /// </summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> ExecuteAsync(
         params string[] arguments)
     {
         return ExecuteAsync(arguments, CancellationToken.None);
     }
 
-    /// <summary>Sends one command. Keep the argument list unchanged until completion.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> ExecuteAsync(
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken = default)
@@ -537,11 +533,7 @@ public sealed partial class RuvioClient : IRuvioClient
         return await ExecuteOnceAsync(command, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Sends raw RESP bulk arguments. Does not replay commands after transport failures.
-    /// Cluster mode supports single-key string/hash/expiry commands, EVAL/EVALSHA with keys in
-    /// one slot, and DEL/UNLINK/EXISTS (split per slot); unsupported commands fail explicitly. Do not modify argument memory until completion.
-    /// </summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<RespValue> ExecuteBinaryAsync(
         IReadOnlyList<ReadOnlyMemory<byte>> arguments,
@@ -644,12 +636,7 @@ public sealed partial class RuvioClient : IRuvioClient
         _cluster = cluster;
     }
 
-    /// <summary>
-    /// Writes every command, then reads one reply each. Error replies are
-    /// returned as <see cref="RespKind.Error"/> values and do not throw.
-    /// On a cluster the commands are grouped by shard; replies keep command order.
-    /// Keep command lists unchanged until completion.
-    /// </summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<RespValue>> ExecuteManyAsync(
         IReadOnlyList<IReadOnlyList<string>> commands,

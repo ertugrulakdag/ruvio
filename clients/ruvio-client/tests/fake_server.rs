@@ -13,10 +13,11 @@ mod common;
 
 use ruvio_client::__bench::parse;
 use ruvio_client::{
-    BitOperation, BloomInsertOptions, Client, ClientOptions, Error, FieldExpireCondition,
-    FillOutcome, GeoFrom, GeoSearch, IdemState, JsonIndexType, JsonSetCondition, RespValue,
+    BitFieldOffset, BitFieldOp, BitFieldOverflow, BitFieldType, BitOperation, BloomInsertOptions,
+    Client, ClientOptions, ClientType, Error, FieldExpireCondition, FillOutcome, GeoFrom, GeoOrder,
+    GeoSearch, GeoUnit, IdemState, InfoSection, JsonIndexType, JsonSetCondition, RespValue,
     RestoreOptions, SetMode, SortedSetAddOptions, StreamClaimOptions, StreamPendingFilter,
-    StreamReadOptions,
+    StreamReadOptions, StreamTrim, TrimMode,
 };
 
 type Requests = Arc<Mutex<Vec<Vec<String>>>>;
@@ -529,10 +530,10 @@ fn geo_add_and_search_build_every_option() {
         ])
     );
 
-    let mut search = GeoSearch::radius(GeoFrom::Member("a"), 10.0, "km");
+    let mut search = GeoSearch::radius(GeoFrom::Member("a"), 10.0, GeoUnit::Kilometers);
     search.count = Some(3);
     search.any = true;
-    search.descending = Some(true);
+    search.order = Some(GeoOrder::Desc);
     search.with_distance = true;
     search.with_hash = true;
     search.with_coordinates = true;
@@ -569,9 +570,9 @@ fn geo_add_and_search_build_every_option() {
     assert_eq!(matches[1].member, "b");
     assert_eq!(matches[1].distance, None);
 
-    let mut by_box = GeoSearch::radius(GeoFrom::LonLat(1.0, 2.0), 0.0, "m");
+    let mut by_box = GeoSearch::radius(GeoFrom::LonLat(1.0, 2.0), 0.0, GeoUnit::Meters);
     by_box.shape = ruvio_client::GeoShape::Box(3.0, 4.0);
-    by_box.descending = Some(false);
+    by_box.order = Some(GeoOrder::Asc);
     by_box.count = Some(1);
     let (_, request) = probe("*0\r\n", |c| c.geo_search_with("g", &by_box));
     assert_eq!(
@@ -591,7 +592,7 @@ fn geo_add_and_search_build_every_option() {
             "1"
         ])
     );
-    by_box.descending = None;
+    by_box.order = None;
     by_box.count = None;
     let (_, request) = probe("*0\r\n", |c| c.geo_search_with("g", &by_box));
     assert_eq!(request.len(), 9);
@@ -624,13 +625,60 @@ fn bit_commands() {
     }
 
     let (reply, request) = probe("*3\r\n:1\r\n$-1\r\n:3\r\n", |c| {
-        c.bitfield("k", &["GET", "u8", "0"])
+        c.bitfield(
+            "k",
+            &[BitFieldOp::Get {
+                ty: BitFieldType::unsigned(8).unwrap(),
+                offset: BitFieldOffset::Bit(0),
+            }],
+        )
     });
     assert_eq!(reply.unwrap(), vec![Some(1), None, Some(3)]);
     assert_eq!(request, words(&["BITFIELD", "k", "GET", "u8", "0"]));
-    let (reply, request) = probe("*1\r\n:1\r\n", |c| c.bitfield_ro("k", &["GET", "u8", "0"]));
+    let (reply, request) = probe("*1\r\n:1\r\n", |c| {
+        c.bitfield_ro(
+            "k",
+            &[BitFieldOp::Get {
+                ty: BitFieldType::unsigned(8).unwrap(),
+                offset: BitFieldOffset::Bit(0),
+            }],
+        )
+    });
     assert_eq!(reply.unwrap(), vec![Some(1)]);
     assert_eq!(request[0], "BITFIELD_RO");
+    let (reply, request) = probe("*4\r\n:1\r\n:2\r\n:3\r\n:4\r\n", |c| {
+        let i16_type = BitFieldType::signed(16).unwrap();
+        let u63_type = BitFieldType::unsigned(63).unwrap();
+
+        c.bitfield(
+            "k",
+            &[
+                BitFieldOp::Overflow(BitFieldOverflow::Sat),
+                BitFieldOp::Set {
+                    ty: i16_type,
+                    offset: BitFieldOffset::Field(2),
+                    value: -5,
+                },
+                BitFieldOp::IncrBy {
+                    ty: u63_type,
+                    offset: BitFieldOffset::Bit(100),
+                    delta: 7,
+                },
+                BitFieldOp::Get {
+                    ty: i16_type,
+                    offset: BitFieldOffset::Field(2),
+                },
+            ],
+        )
+    });
+    assert_eq!(reply.unwrap().len(), 4);
+    assert_eq!(
+        request,
+        words(&[
+            "BITFIELD", "k", "OVERFLOW", "SAT", "SET", "i16", "#2", "-5", "INCRBY", "u63", "100",
+            "7", "GET", "i16", "#2"
+        ])
+    );
     let (reply, _) = probe(":1\r\n", |c| c.bitfield("k", &[]));
     assert!(protocol(reply).starts_with("BITFIELD returned"));
     let (reply, _) = probe("*1\r\n$1\r\nx\r\n", |c| c.bitfield("k", &[]));
@@ -685,6 +733,37 @@ fn stream_adds_and_info() {
     let (reply, request) = probe(":2\r\n", |c| c.xtrim_minid("s", "5-0"));
     assert_eq!(reply.unwrap(), 2);
     assert_eq!(request, words(&["XTRIM", "s", "MINID", "5-0"]));
+    let (reply, request) = probe(":2\r\n", |c| c.xtrim("s", &StreamTrim::min_id("5-0")));
+    assert_eq!(reply.unwrap(), 2);
+    assert_eq!(request, words(&["XTRIM", "s", "MINID", "=", "5-0"]));
+    let trim = StreamTrim::max_len(7).mode(TrimMode::Approximate);
+    let (reply, request) = probe(":0\r\n", |c| c.xtrim("s", &trim));
+    assert_eq!(reply.unwrap(), 0);
+    assert_eq!(request, words(&["XTRIM", "s", "MAXLEN", "~", "7"]));
+    let (reply, request) = probe("$3\r\n1-1\r\n", |c| {
+        c.xadd_trim("s", &trim, "*", &[("f", "v")])
+    });
+    assert_eq!(reply.unwrap(), "1-1");
+    assert_eq!(
+        request,
+        words(&["XADD", "s", "MAXLEN", "~", "7", "*", "f", "v"])
+    );
+    let (reply, request) = probe("$3\r\n1-1\r\n", |c| {
+        c.xadd_trim("s", &StreamTrim::min_id("3-0"), "*", &[("f", "v")])
+    });
+    reply.unwrap();
+    assert_eq!(
+        request,
+        words(&["XADD", "s", "MINID", "=", "3-0", "*", "f", "v"])
+    );
+    let (reply, request) = probe("$0\r\n\r\n", |c| {
+        c.info_section(InfoSection::CommandCounters)
+    });
+    reply.unwrap();
+    assert_eq!(request, words(&["INFO", "commandcounters"]));
+    let (reply, request) = probe("$0\r\n\r\n", |c| c.client_list_type(ClientType::Replica));
+    reply.unwrap();
+    assert_eq!(request, words(&["CLIENT", "LIST", "TYPE", "replica"]));
     let (reply, request) = probe(":1\r\n", |c| c.xgroup_create_consumer("s", "g", "c"));
     assert_eq!(reply.unwrap(), 1);
     assert_eq!(request, words(&["XGROUP", "CREATECONSUMER", "s", "g", "c"]));
@@ -1389,11 +1468,13 @@ fn hash_set_and_sorted_set_scan_iterators() {
 
 #[test]
 fn scan_pages_reject_bad_cursors_and_shapes() {
-    let (reply, _) = probe("*2\r\n$1\r\nx\r\n*0\r\n", |c| c.scan(0, None, None));
+    let (reply, _) = probe("*2\r\n$1\r\nx\r\n*0\r\n", |c| c.scan(0, None, None, None));
     assert!(protocol(reply).contains("bad cursor"));
-    let (reply, _) = probe("*3\r\n$1\r\n0\r\n*0\r\n*0\r\n", |c| c.scan(0, None, None));
+    let (reply, _) = probe("*3\r\n$1\r\n0\r\n*0\r\n*0\r\n", |c| {
+        c.scan(0, None, None, None)
+    });
     assert!(protocol(reply).starts_with("SCAN returned"));
-    let (reply, _) = probe(":1\r\n", |c| c.scan(0, None, None));
+    let (reply, _) = probe(":1\r\n", |c| c.scan(0, None, None, None));
     assert!(reply.is_err());
     let (reply, _) = probe("*2\r\n$1\r\n0\r\n:1\r\n", |c| c.sscan("s", 0, None, None));
     assert!(reply.is_err());
@@ -1587,5 +1668,65 @@ fn lease_and_semaphore_guards() {
             .semaphore_permit("sem", 3, Duration::from_secs(2))
             .unwrap()
             .is_none()
+    );
+}
+
+#[test]
+fn typed_keywords_match_the_old_string_requests() {
+    use ruvio_client::{InsertPosition, KeyType, ListSide};
+
+    let (_, request) = probe(":1\r\n", |c| {
+        c.linsert("l", InsertPosition::After, "p", "v")
+    });
+    assert_eq!(request, words(&["LINSERT", "l", "AFTER", "p", "v"]));
+
+    let (_, request) = probe("$-1\r\n", |c| {
+        c.lmove("a", "b", ListSide::Right, ListSide::Left)
+    });
+    assert_eq!(request, words(&["LMOVE", "a", "b", "RIGHT", "LEFT"]));
+
+    let (_, request) = probe("$-1\r\n", |c| {
+        c.blmove(
+            "a",
+            "b",
+            ListSide::Left,
+            ListSide::Right,
+            std::time::Duration::from_secs(2),
+        )
+    });
+    assert_eq!(request, words(&["BLMOVE", "a", "b", "LEFT", "RIGHT", "2"]));
+
+    let (_, request) = probe("$-1\r\n", |c| {
+        c.geo_dist("g", "a", "b", Some(GeoUnit::Miles))
+    });
+    assert_eq!(request, words(&["GEODIST", "g", "a", "b", "mi"]));
+
+    let (_, request) = probe("$-1\r\n", |c| c.geo_dist("g", "a", "b", None));
+    assert_eq!(request, words(&["GEODIST", "g", "a", "b"]));
+
+    let (_, request) = probe("*0\r\n", |c| {
+        c.geo_search("g", 1.5, 2.0, 3.0, GeoUnit::Feet)
+    });
+    assert_eq!(
+        request,
+        words(&[
+            "GEOSEARCH",
+            "g",
+            "FROMLONLAT",
+            "1.5",
+            "2.0",
+            "BYRADIUS",
+            "3.0",
+            "ft",
+            "ASC"
+        ])
+    );
+
+    let (_, request) = probe("*2\r\n$1\r\n0\r\n*0\r\n", |c| {
+        c.scan(5, Some("a*"), Some(10), Some(KeyType::SortedSet))
+    });
+    assert_eq!(
+        request,
+        words(&["SCAN", "5", "MATCH", "a*", "COUNT", "10", "TYPE", "zset"])
     );
 }

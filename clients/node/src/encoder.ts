@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // RESP request encoder: writes frames straight into a reusable slab Buffer.
 
-/** A command argument: strings are sent as UTF-8, Buffers as raw bytes, numbers as ASCII. */
+/** A command argument for {@link Commands.call}: strings are sent as UTF-8, Buffers as raw bytes, numbers and bigints as ASCII digits. */
 export type Arg = string | Buffer | number | bigint;
 
-/** A pre-encoded command name (one or more words) plus how many words it holds. */
+/** A pre-encoded command name (one or more words) plus how many words it holds. Create with {@link cmd}. */
 export interface Cmd {
   /** `$3\r\nGET\r\n` (and further words for subcommands). */
   readonly frag: Buffer;
@@ -16,7 +16,19 @@ export interface Cmd {
   readonly pre: (Uint8Array | undefined)[];
 }
 
-/** Pre-encodes a command (or command + subcommand words) as RESP bulk strings. */
+/**
+ * Pre-encodes a command name (or command plus subcommand words) as RESP bulk strings, for use with
+ * {@link Commands.callCmd}. Do it once at start-up and reuse the result.
+ *
+ * @param words The command name, then any subcommand words: `cmd('GET')`, `cmd('CLIENT', 'ID')`.
+ * @returns The reusable {@link Cmd}.
+ *
+ * @example
+ * ```ts
+ * const GET = cmd('GET');
+ * const value = await client.callCmd(GET, 'user:1');
+ * ```
+ */
 export function cmd(...words: string[]): Cmd {
   let s = '';
   for (const w of words) s += '$' + Buffer.byteLength(w) + '\r\n' + w + '\r\n';
@@ -58,6 +70,8 @@ function digits(n: number): number {
 }
 
 /**
+ * Growable RESP request writer used by the clients. Low-level: most code never needs it.
+ *
  * Growable request writer. `frameStart..pos` is the frame being written; `start..frameStart`
  * holds complete frames not yet handed to the sink. With a sink, a full slab is flushed and a
  * fresh slab is taken (old regions are never overwritten, so `subarray` hand-off is zero copy).

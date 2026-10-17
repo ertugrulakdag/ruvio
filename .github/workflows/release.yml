@@ -633,6 +633,7 @@ jobs:
           done
           cp LICENSE README.md "dist/$name/"
           cp ruvio.example.toml "dist/$name/"
+          cp docs/UI_CONNECTIONS.md "dist/$name/"
           cd dist
           if [ "${{ matrix.ext }}" = zip ]; then
             7z a "$name.zip" "$name" >/dev/null
