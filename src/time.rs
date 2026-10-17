@@ -266,18 +266,39 @@ fn measure_ticks_per_micro() -> f64 {
     (frequency.max(1) as f64) / 1_000_000.0
 }
 
+/// The rate is two (wall clock, counter) pairs 5 ms apart. A preemption between the two reads
+/// of one pair would skew the rate by its length, so each pair is the tightest of a few reads:
+/// the wall time halfway between two `Instant`s around one counter read.
 #[cfg(target_arch = "x86_64")]
 fn measure_ticks_per_micro() -> f64 {
-    let wall = std::time::Instant::now();
-    let first = ticks();
+    fn pair() -> (std::time::Instant, u64) {
+        let mut best: Option<(std::time::Duration, std::time::Instant, u64)> = None;
 
-    while wall.elapsed() < std::time::Duration::from_millis(5) {
+        for _ in 0..16 {
+            let before = std::time::Instant::now();
+            let counter = ticks();
+            let width = before.elapsed();
+
+            if best.is_none_or(|(narrowest, _, _)| width < narrowest) {
+                best = Some((width, before + width / 2, counter));
+            }
+        }
+
+        let (_, wall, counter) = best.expect("sixteen reads");
+
+        (wall, counter)
+    }
+
+    let (first_wall, first) = pair();
+
+    while first_wall.elapsed() < std::time::Duration::from_millis(5) {
         std::hint::spin_loop();
     }
 
-    let elapsed = ticks().saturating_sub(first).max(1) as f64;
+    let (last_wall, last) = pair();
+    let micros = last_wall.duration_since(first_wall).as_nanos() as f64 / 1000.0;
 
-    elapsed / (wall.elapsed().as_nanos() as f64 / 1000.0)
+    last.saturating_sub(first).max(1) as f64 / micros
 }
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -291,19 +312,25 @@ mod stamp_tests {
 
     #[test]
     fn a_stamp_measures_a_sleep_within_a_few_percent() {
+        // Calibrated first: when this test is the first to stamp, measuring the rate inside
+        // `elapsed_micros` would add its 5 ms to the wall time only.
+        Stamp::calibrate();
         // Compared with the wall clock over the same interval: a loaded machine may oversleep
-        // a lot, but both clocks see the same oversleep.
-        let wall = std::time::Instant::now();
+        // a lot, but both clocks see the same oversleep. Wall readings on both sides of each
+        // stamp read bound the stamped interval, however long the thread waits between them.
+        let outer = std::time::Instant::now();
         let stamp = Stamp::now();
+        let inner = std::time::Instant::now();
 
         std::thread::sleep(std::time::Duration::from_millis(20));
+        let shortest = inner.elapsed().as_micros() as f64;
         let micros = stamp.elapsed_micros() as f64;
-        let expected = wall.elapsed().as_micros() as f64;
+        let longest = outer.elapsed().as_micros() as f64;
 
         assert!(micros >= 19_000.0, "{micros}");
         assert!(
-            (micros - expected).abs() <= expected * 0.1 + 500.0,
-            "stamp {micros} us, wall {expected} us"
+            micros >= shortest * 0.9 - 500.0 && micros <= longest * 1.1 + 500.0,
+            "stamp {micros} us, wall between {shortest} and {longest} us"
         );
     }
 }
