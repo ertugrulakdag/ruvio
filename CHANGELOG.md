@@ -4,6 +4,8 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+## 0.3.4 - 2026-10-17
+
 - `XADD ... MAXLEN` accepts `=` as well as `~` before the count, like `XTRIM` and `XADD ... MINID` already did.
 
 ## 0.3.3 - 2026-10-17
