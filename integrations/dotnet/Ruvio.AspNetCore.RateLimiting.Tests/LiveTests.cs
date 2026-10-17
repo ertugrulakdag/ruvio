@@ -37,7 +37,19 @@ public class LiveTests
             await Task.WhenAll(contexts.Select(middleware.InvokeAsync));
             Assert.Equal(3, contexts.Count(context => context.Response.StatusCode == 200));
             Assert.Equal(7, contexts.Count(context => context.Response.StatusCode == 429));
-            await Task.Delay(1200);
+
+            // The window lasts 30 s, so the ten requests above always share it. Expiring the key
+            // stands in for the window running out.
+            Assert.Equal(1, (await first.ExecuteAsync("PEXPIRE", key, "1")).Integer);
+
+            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+
+            while ((await first.ExecuteAsync("EXISTS", key)).Integer != 0)
+            {
+                Assert.True(DateTime.UtcNow < deadline, "The expired window key never went away.");
+                await Task.Delay(10);
+            }
+
             var afterExpiry = Context(firstServices);
 
             await middleware.InvokeAsync(afterExpiry);
@@ -69,7 +81,7 @@ public class LiveTests
         var context = new DefaultHttpContext { RequestServices = provider };
 
         context.SetEndpoint(new Endpoint(_ => Task.CompletedTask,
-            new EndpointMetadataCollection(new RuvioRateLimitAttribute("live", 3, 1)), "live"));
+            new EndpointMetadataCollection(new RuvioRateLimitAttribute("live", 3, 30)), "live"));
 
         return context;
     }

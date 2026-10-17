@@ -120,9 +120,9 @@ public class StoreTests
     public async Task Entry_and_tag_metadata_expire_and_shorter_entries_do_not_shorten_shared_tags()
     {
         await using var scope = await LiveScope.Open();
-        await scope.Store.SetAsync("long", [1], ["t"], TimeSpan.FromSeconds(3), default);
+        await scope.Store.SetAsync("long", [1], ["t"], TimeSpan.FromSeconds(30), default);
         await scope.Store.SetAsync("short", [2], ["t"], TimeSpan.FromMilliseconds(100), default);
-        Assert.InRange((await scope.Client.ExecuteAsync("PTTL", scope.Store.TagKey("t"))).Integer, 2000, 3000);
+        Assert.InRange((await scope.Client.ExecuteAsync("PTTL", scope.Store.TagKey("t"))).Integer, 20_000, 30_000);
         await Task.Delay(180);
         Assert.Null(await scope.Store.GetAsync("short", default));
         Assert.Equal(new byte[] { 1 }, await scope.Store.GetAsync("long", default));

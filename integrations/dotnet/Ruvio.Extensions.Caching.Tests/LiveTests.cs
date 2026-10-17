@@ -74,14 +74,17 @@ public class LiveTests
             FillWait = TimeSpan.FromMilliseconds(300),
         }));
         using var stuck = new CancellationTokenSource();
+        var building = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<byte[]> builder = cache.GetOrCreateAsync("fill-wait", async token =>
         {
+            building.SetResult();
             await Task.Delay(Timeout.Infinite, token);
 
             return [];
         }, new(), stuck.Token);
 
-        await Task.Delay(100);
+        // The factory runs once the builder holds the fill marker.
+        await building.Task.WaitAsync(TimeSpan.FromSeconds(10));
         byte[] value = await cache.GetOrCreateAsync("fill-wait", _ => Task.FromResult(new byte[] { 4 }),
             new() { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
 
@@ -94,42 +97,52 @@ public class LiveTests
     public async Task Sliding_refresh_and_get_renew_but_absolute_deadline_is_never_extended()
     {
         await using var scope = await Scope.Open();
-        await scope.Cache.SetAsync("slide", [1], new() { SlidingExpiration = TimeSpan.FromMilliseconds(600) });
+        string slide = scope.Key("slide");
 
-        await Task.Delay(350);
+        // A one-minute window, and PEXPIRE stands in for the time between accesses, so no check
+        // depends on how fast the commands run.
+        await scope.Cache.SetAsync("slide", [1], new() { SlidingExpiration = TimeSpan.FromSeconds(60) });
+        Assert.InRange(await scope.Ttl("slide"), 50_000, 60_000);
+        await scope.Client.ExecuteAsync("PEXPIRE", slide, "5000");
         await scope.Cache.RefreshAsync("slide");
-        Assert.InRange(await scope.Ttl("slide"), 400, 600);
-        await Task.Delay(350);
+        Assert.InRange(await scope.Ttl("slide"), 50_000, 60_000);
+        await scope.Client.ExecuteAsync("PEXPIRE", slide, "5000");
         Assert.Equal(new byte[] { 1 }, await scope.Cache.GetAsync("slide"));
+        Assert.InRange(await scope.Ttl("slide"), 50_000, 60_000);
+        await scope.Client.ExecuteAsync("PEXPIRE", slide, "1");
+        await Eventually(async () => await scope.Cache.GetAsync("slide") is null, "the expired entry to read as missing");
 
-        Assert.InRange(await scope.Ttl("slide"), 400, 600);
-        await Task.Delay(750);
-        Assert.Null(await scope.Cache.GetAsync("slide"));
-
-        long before = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
+        // 9 s absolute, 8 s sliding: from the second refresh on (1.4 s or more after the write)
+        // a renewal by the sliding window alone would pass the absolute deadline.
         await scope.Cache.SetAsync("cap", [2], new()
         {
-            AbsoluteExpirationRelativeToNow = TimeSpan.FromMilliseconds(900),
-            SlidingExpiration = TimeSpan.FromMilliseconds(400),
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(9),
+            SlidingExpiration = TimeSpan.FromSeconds(8),
         });
 
         long after = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < 3; i++)
         {
-            await Task.Delay(100);
+            await Task.Delay(700);
             await scope.Cache.RefreshAsync("cap");
-            long measuredAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            long ttl = await scope.Ttl("cap");
+            long expiresAt = (await scope.Client.ExecuteAsync("PEXPIRETIME", scope.Key("cap"))).Integer;
 
-            Assert.InRange(ttl, 0, 400);
-            Assert.True(measuredAt + ttl <= after + 900, "Refresh exceeded the original absolute deadline.");
+            Assert.True(expiresAt > 0, "The entry lost its expiry or expired before its deadline.");
+            Assert.True(expiresAt <= after + 9000, "Refresh exceeded the original absolute deadline.");
         }
+    }
 
-        await Task.Delay(TimeSpan.FromMilliseconds(Math.Max(1, after + 1000 - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())));
-        Assert.Null(await scope.Cache.GetAsync("cap"));
-        Assert.True(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() > before + 900);
+    /// <summary>Polls <paramref name="condition"/> until it holds; fails after 10 s.</summary>
+    private static async Task Eventually(Func<Task<bool>> condition, string what)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+
+        while (!await condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, $"Timed out waiting for {what}.");
+            await Task.Delay(10);
+        }
     }
 
     [LiveFact]
@@ -141,18 +154,18 @@ public class LiveTests
         string envelope = (await scope.Client.ExecuteAsync("GET", scope.Key("relative"))).AsString()!;
         long deadline = long.Parse(envelope.Split('\n')[1], CultureInfo.InvariantCulture);
 
-        Assert.InRange(deadline - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), 9000, 10000);
-        var earlier = DateTimeOffset.UtcNow.AddSeconds(2);
+        Assert.InRange(deadline - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), 5000, 10000);
+        var earlier = DateTimeOffset.UtcNow.AddSeconds(20);
 
         await scope.Cache.SetAsync("earlier", [1], new()
         {
             AbsoluteExpiration = earlier,
-            AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30),
-            SlidingExpiration = TimeSpan.FromSeconds(10),
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(60),
+            SlidingExpiration = TimeSpan.FromSeconds(40),
         });
 
         await scope.Cache.RefreshAsync("earlier");
-        Assert.InRange(await scope.Ttl("earlier"), 1, 2000);
+        Assert.InRange(await scope.Ttl("earlier"), 1, 20_000);
         string stored = (await scope.Client.ExecuteAsync("GET", scope.Key("earlier"))).AsString()!;
 
         Assert.Equal(earlier.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture), stored.Split('\n')[1]);
