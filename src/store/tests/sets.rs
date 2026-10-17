@@ -434,7 +434,9 @@ fn spilled_set_samples_and_keeps_scanning() {
 
     assert_eq!(cursor, 0);
     assert!(base.iter().all(|member| seen.contains(member)));
-    assert_spread(&single_draws(&shard, b"s", 450 * 40), 450, "spilled");
+    // With 40 draws per member, the chance that one of 450 members falls under a third of its
+    // share was about 3e-4 a run; with 100 it is below 1e-10.
+    assert_spread(&single_draws(&shard, b"s", 450 * 100), 450, "spilled");
 }
 
 /// Removing popped members with one lookup leaves the store as the general remove does:

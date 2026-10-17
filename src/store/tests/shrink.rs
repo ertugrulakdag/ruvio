@@ -196,14 +196,20 @@ fn deleting_a_large_collection_frees_it_off_the_shard_thread() {
     let charged = shard.memory_usage();
     assert!(charged.collection_bytes + charged.value_bytes >= crate::lazy_free::MIN_DEFERRED_BYTES);
 
+    let _ = crate::lazy_free::take_last_deferred();
     assert!(shard.delete(b"big"));
     assert_eq!(shard.set_card(b"big"), Ok(0));
     assert_eq!(shard.get(b"small"), Some(&b"v"[..]));
     assert!(shard.memory_usage().collection_bytes < charged.collection_bytes);
 
+    // This test's own value: the shared queue also holds what parallel tests delete and flush.
+    let freed = crate::lazy_free::take_last_deferred().expect("the set was handed over");
     let start = std::time::Instant::now();
-    while crate::lazy_free::pending_bytes() != 0 {
-        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    while !freed.load(std::sync::atomic::Ordering::Acquire) {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(30),
+            "the deleted set was not freed within 30 s"
+        );
         std::thread::yield_now();
     }
 }

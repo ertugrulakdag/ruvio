@@ -28,6 +28,22 @@ const MAX_PENDING_JOBS: usize = 16 * 1024;
 struct Job {
     value: Box<dyn Send>,
     bytes: usize,
+    /// Set once the value is dropped, for the test that handed it over.
+    #[cfg(test)]
+    freed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static LAST_DEFERRED: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The flag that turns true once the last value this thread handed to the drop thread is
+/// freed, so a test waits for its own value instead of for a queue every test shares.
+#[cfg(test)]
+pub(crate) fn take_last_deferred() -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+    LAST_DEFERRED.with(|last| last.borrow_mut().take())
 }
 
 static QUEUE: OnceLock<Option<Sender<Job>>> = OnceLock::new();
@@ -46,6 +62,8 @@ fn queue() -> Option<&'static Sender<Job>> {
                         drop(job.value);
                         PENDING_BYTES.fetch_sub(job.bytes, Ordering::Relaxed);
                         PENDING_JOBS.fetch_sub(1, Ordering::Relaxed);
+                        #[cfg(test)]
+                        job.freed.store(true, Ordering::Release);
                     }
                 })
                 .ok()
@@ -95,14 +113,22 @@ fn enqueue<T: Send + 'static>(value: T, bytes: usize) {
 
     PENDING_BYTES.fetch_add(bytes, Ordering::Relaxed);
     PENDING_JOBS.fetch_add(1, Ordering::Relaxed);
+    #[cfg(test)]
+    let freed = std::sync::Arc::<std::sync::atomic::AtomicBool>::default();
+    #[cfg(test)]
+    LAST_DEFERRED.with(|last| *last.borrow_mut() = Some(std::sync::Arc::clone(&freed)));
 
     if let Err(error) = queue.send(Job {
         value: Box::new(value),
         bytes,
+        #[cfg(test)]
+        freed,
     }) {
         PENDING_BYTES.fetch_sub(bytes, Ordering::Relaxed);
         PENDING_JOBS.fetch_sub(1, Ordering::Relaxed);
         drop(error.0.value);
+        #[cfg(test)]
+        error.0.freed.store(true, Ordering::Release);
     }
 }
 
