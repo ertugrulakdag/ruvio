@@ -1,24 +1,41 @@
-/// One RESP2 value.
+/// One RESP2 value, as returned by [`Client::execute`](crate::Client::execute) and the
+/// low-level methods such as `eval` and `command_info`. Most typed methods decode it for you.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RespValue {
-    /// A simple string, such as `OK`.
+    /// A simple string such as `OK` or `PONG`.
     Simple(String),
-    /// An error reply. [`crate::Client::execute`] returns this as [`crate::Error::Server`].
+    /// An error reply. `Client::execute` converts it to [`Error::Server`](crate::Error::Server);
+    /// it only appears as a value inside pipeline results and nested arrays.
     Error(String),
-    /// A signed integer.
+    /// A signed 64-bit integer.
     Integer(i64),
-    /// A bulk string, including the empty bulk.
+    /// A bulk string as raw bytes, including the empty bulk. Not necessarily UTF-8.
     Bulk(Vec<u8>),
-    /// An array of values.
+    /// An array of values (possibly nested).
     Array(Vec<RespValue>),
-    /// A null bulk or a null array.
+    /// A null bulk or null array: the key, field or result does not exist.
     Null,
 }
 
 impl RespValue {
-    /// UTF-8 text of a simple string, error, or bulk string. An integer is its
-    /// decimal form. `None` when the value is null or an array (including a
-    /// Pub/Sub push).
+    /// UTF-8 text of a simple string, error or bulk string; an integer becomes its decimal
+    /// text. `Ok(None)` for null or an array (including a Pub/Sub push). Copies the bytes; use
+    /// [`Self::into_string`] to avoid that.
+    ///
+    /// # Errors
+    /// [`Error::Protocol`](crate::Error::Protocol) when a bulk string is not valid UTF-8.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let text = RespValue::Bulk(b"hi".to_vec()).as_string()?;
+    /// assert_eq!(text.as_deref(), Some("hi"));
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn as_string(&self) -> Result<Option<String>, crate::Error> {
         match self {
             RespValue::Null | RespValue::Array(_) => Ok(None),
@@ -33,7 +50,8 @@ impl RespValue {
         }
     }
 
-    /// Like [`Self::as_string`], but moves a bulk's bytes into the `String` instead of copying.
+    /// Like [`Self::as_string`] but consumes the value and moves a bulk's bytes into the
+    /// `String` instead of copying them.
     pub fn into_string(self) -> Result<Option<String>, crate::Error> {
         match self {
             RespValue::Null | RespValue::Array(_) => Ok(None),
@@ -45,7 +63,8 @@ impl RespValue {
         }
     }
 
-    /// The bulk bytes, or `None` for any other kind. Does not copy.
+    /// The raw bytes of a bulk (or simple) string, or `None` for any other kind, including
+    /// null. Does not copy.
     pub fn into_bytes(self) -> Option<Vec<u8>> {
         match self {
             RespValue::Bulk(bytes) => Some(bytes),
@@ -54,7 +73,7 @@ impl RespValue {
         }
     }
 
-    /// The integer, or `None` for any other kind.
+    /// The integer, or `None` when the value is not an integer.
     pub fn as_integer(&self) -> Option<i64> {
         match self {
             RespValue::Integer(value) => Some(*value),
@@ -62,7 +81,7 @@ impl RespValue {
         }
     }
 
-    /// The array items, or `None` for any other kind.
+    /// The array items, or `None` when the value is not an array.
     pub fn as_array(&self) -> Option<&[RespValue]> {
         match self {
             RespValue::Array(items) => Some(items),
@@ -70,7 +89,7 @@ impl RespValue {
         }
     }
 
-    /// True for a null bulk or a null array.
+    /// True for a null bulk or null array.
     pub fn is_null(&self) -> bool {
         matches!(self, RespValue::Null)
     }
