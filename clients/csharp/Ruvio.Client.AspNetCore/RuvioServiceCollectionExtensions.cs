@@ -5,11 +5,29 @@ using Microsoft.Extensions.Options;
 namespace Ruvio.Client.AspNetCore;
 
 /// <summary>Registers an owning <see cref="RuvioConnection"/> and its shared database client.</summary>
+/// <remarks>
+/// Every overload registers the same singletons: <see cref="RuvioConnection"/>, <see cref="IRuvioConnection"/>,
+/// <see cref="IRuvioClient"/> for <see cref="RuvioClientOptions.Database"/>, and <see cref="RuvioClient"/>.
+/// The connection opens on first use of any of them, blocking that first resolve, and the container disposes it at shutdown.
+/// </remarks>
 public static class RuvioServiceCollectionExtensions
 {
     /// <summary>
     /// Registers one owning connection and its configured database-scoped client.
     /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configure">Sets the connection options: host, port, credentials, database, timeouts and reconnect policy.</param>
+    /// <returns>The same collection, for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="services"/> or <paramref name="configure"/> is null.</exception>
+    /// <example>
+    /// <code>
+    /// builder.Services.AddRuvioClient(o =>
+    /// {
+    ///     o.Host = "ruvio.internal";
+    ///     o.Password = builder.Configuration["Ruvio:Password"];
+    /// });
+    /// </code>
+    /// </example>
     public static IServiceCollection AddRuvioClient(
         this IServiceCollection services,
         Action<RuvioClientOptions> configure)
@@ -27,6 +45,18 @@ public static class RuvioServiceCollectionExtensions
     /// after it opens. Use it for connection lifecycle events. Reconnect timing stays on
     /// <see cref="RuvioClientOptions"/>.
     /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configure">Sets the connection options.</param>
+    /// <param name="configureConnection">Runs once with the open connection, for example to subscribe to <see cref="RuvioConnection.ConnectionLost"/>. If it throws, the connection is disposed and the exception reaches the caller that resolved the service.</param>
+    /// <returns>The same collection, for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="configureConnection"/> is null.</exception>
+    /// <example>
+    /// <code>
+    /// builder.Services.AddRuvioClient(
+    ///     o => o.Host = "ruvio.internal",
+    ///     connection => connection.ConnectionLost += (_, notice) => logger.LogWarning("Ruvio socket lost: {Notice}", notice));
+    /// </code>
+    /// </example>
     public static IServiceCollection AddRuvioClient(
         this IServiceCollection services,
         Action<RuvioClientOptions> configure,
@@ -42,6 +72,16 @@ public static class RuvioServiceCollectionExtensions
     /// Registers a singleton <see cref="RuvioClient"/> for <paramref name="host"/>:<paramref name="port"/>,
     /// bound to <paramref name="database"/>.
     /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="host">The server host name or address.</param>
+    /// <param name="port">The RESP port, usually 6379.</param>
+    /// <param name="database">The logical database to <c>SELECT</c>. Default 0. Cluster mode supports 0 only.</param>
+    /// <returns>The same collection, for chaining.</returns>
+    /// <example>
+    /// <code>
+    /// builder.Services.AddRuvioClient("localhost", 6379);
+    /// </code>
+    /// </example>
     public static IServiceCollection AddRuvioClient(
         this IServiceCollection services,
         string host,
@@ -59,6 +99,16 @@ public static class RuvioServiceCollectionExtensions
     /// <summary>
     /// Binds <see cref="RuvioClientOptions"/> from configuration and registers a singleton <see cref="RuvioClient"/>.
     /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configuration">A configuration section whose keys are option names: <c>Host</c>, <c>Port</c>, <c>Username</c>, <c>Password</c>, <c>Database</c>, <c>ConnectTimeout</c>, <c>MaxInFlightRequests</c>, <c>DedicatedReaderThread</c>, <c>DiscoverCluster</c>, <c>Reconnect</c>, <c>MaxReconnectAttempts</c>, <c>ReconnectBaseDelay</c> and <c>ReconnectMaxDelay</c>. Missing keys keep the defaults. Time spans use the <c>hh:mm:ss</c> form.</param>
+    /// <returns>The same collection, for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="services"/> or <paramref name="configuration"/> is null.</exception>
+    /// <exception cref="FormatException">A numeric, boolean or time value in the section cannot be parsed (raised when the options are first read).</exception>
+    /// <example>
+    /// <code>
+    /// builder.Services.AddRuvioClient(builder.Configuration.GetSection("Ruvio"));
+    /// </code>
+    /// </example>
     public static IServiceCollection AddRuvioClient(
         this IServiceCollection services,
         IConfiguration configuration)

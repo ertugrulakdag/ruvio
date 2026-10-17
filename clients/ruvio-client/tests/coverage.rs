@@ -449,6 +449,10 @@ fn methods_exist() {
     let _ = Client::xsetid;
     let _ = Client::xtrim_maxlen;
     let _ = Client::xtrim_minid;
+    let _ = Client::xtrim;
+    let _ = Client::xadd_trim;
+    let _ = Client::info_section;
+    let _ = Client::client_list_type;
     let _ = Client::zadd;
     let _ = Client::zadd_incr;
     let _ = Client::zadd_with;

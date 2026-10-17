@@ -9,15 +9,18 @@ import (
 	"time"
 )
 
-// ErrIdemPending means another owner is still running the operation.
+// ErrIdemPending is returned by Idempotent when another call with the same key is still
+// running (or died before finishing). Retry later; the record expires after its ttl.
 var ErrIdemPending = errors.New("ruvio: idempotent operation pending")
 
-// ErrIdemConflict means the key was used with a different fingerprint.
+// ErrIdemConflict is returned by Idempotent when the key was already used with a
+// different fingerprint, which usually means the caller reused an idempotency key for a
+// different request.
 var ErrIdemConflict = errors.New("ruvio: idempotency key reused with a different fingerprint")
 
 // ---- cache-aside (FILLGET / FILLSET) ----------------------------------------------
 
-// GetOrCreateOptions tune GetOrCreate. Zero values pick defaults.
+// GetOrCreateOptions tunes GetOrCreate. Zero values pick the defaults.
 type GetOrCreateOptions struct {
 	// FillTimeout is how long the fill marker protects a filler (default 5s).
 	FillTimeout time.Duration
@@ -28,9 +31,22 @@ type GetOrCreateOptions struct {
 	PollMin, PollMax time.Duration
 }
 
-// GetOrCreate returns the cached value or computes it once across all callers
-// (stampede protection). While another caller fills, it polls plain FILLGET with a
-// short backoff: FILLGET ... WAIT would park the shared connection.
+// GetOrCreate returns the cached value of key, or computes it with factory exactly once
+// across all callers (stampede protection), using FILLGET and FILLSET. ttl is how long
+// the stored value stays fresh.
+//
+// On a miss one caller receives the fill token and runs factory; the others poll FILLGET
+// with exponential backoff (PollMin to PollMax). It polls instead of using FILLGET WAIT
+// because a blocking wait would park the shared connection. If Stale is set, a caller
+// that finds a stale value gets it immediately and one of them refreshes it in the
+// background.
+//
+// If factory fails, its error is returned and the fill marker lapses after FillTimeout,
+// after which another caller may try. If storing the value fails, the computed value is
+// returned together with the error. ctx cancellation stops the polling.
+//
+//	v, err := c.GetOrCreate(ctx, "report:today", time.Minute,
+//	    func(ctx context.Context) (string, error) { return buildReport(ctx) })
 func (c *cmds) GetOrCreate(ctx context.Context, key string, ttl time.Duration, factory func(ctx context.Context) (string, error), o ...GetOrCreateOptions) (string, error) {
 	var opt GetOrCreateOptions
 	if len(o) > 0 {
@@ -83,7 +99,10 @@ func (c *cmds) GetOrCreate(ctx context.Context, key string, ttl time.Duration, f
 	}
 }
 
-// GetOrCreateJSON is GetOrCreate for values encoded with encoding/json.
+// GetOrCreateJSON is GetOrCreate for any JSON-encodable type T: the factory result is
+// stored as JSON and decoded into T. It returns an error if encoding or decoding fails.
+//
+//	u, err := ruvio.GetOrCreateJSON(ctx, c, "user:1", time.Minute, loadUser)
 func GetOrCreateJSON[T any](ctx context.Context, c *Client, key string, ttl time.Duration, factory func(ctx context.Context) (T, error), o ...GetOrCreateOptions) (T, error) {
 	var out T
 	s, err := c.GetOrCreate(ctx, key, ttl, func(ctx context.Context) (string, error) {
@@ -112,10 +131,17 @@ func sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// Idempotent runs fn at most once per (key, fingerprint) within ttl and returns the
-// stored result to later callers. It returns ErrIdemPending while another caller runs
-// fn and ErrIdemConflict for a different fingerprint. Not exactly-once for external
-// effects: if fn succeeds and COMPLETE fails, a retry after ttl runs fn again.
+// Idempotent runs fn at most once for key (IDEM). fingerprint should identify the
+// request body (for example a hash); ttl is how long the record lives.
+//
+// If an earlier call completed, its stored result is returned without running fn. If one
+// is still running it returns ErrIdemPending; if the fingerprint differs it returns
+// ErrIdemConflict. If fn fails the record stays pending until ttl, so retries get
+// ErrIdemPending. If saving the result fails, the result is returned together with that
+// error.
+//
+//	out, err := c.Idempotent(ctx, "pay:"+reqID, hash, time.Hour,
+//	    func(ctx context.Context) ([]byte, error) { return charge(ctx) })
 func (c *cmds) Idempotent(ctx context.Context, key, fingerprint string, ttl time.Duration, fn func(ctx context.Context) ([]byte, error)) ([]byte, error) {
 	owner := randomToken()
 	res, err := c.IdemBegin(ctx, key, fingerprint, owner, ttl)

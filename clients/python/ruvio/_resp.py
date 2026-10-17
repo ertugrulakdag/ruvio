@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
+from ._constants import KEYWORD_TYPES
 from .errors import ProtocolError, ResponseError, make_error
 
 __all__ = ["encode", "head", "Parser", "NEED", "Push", "HiredisParser", "make_parser"]
@@ -44,7 +45,9 @@ def head(name: str) -> Head:
 def _bulk(a: Any, parts: List[bytes]) -> None:
     """Slow path for argument types other than str/bytes/small int."""
     t = type(a)
-    if t is int or t is bool:
+    if t in KEYWORD_TYPES:
+        b = a._wire
+    elif t is int or t is bool:
         b = b"%d" % a
     elif t is float:
         b = repr(a).encode()
@@ -89,6 +92,8 @@ def encode(name: str, args: Tuple[Any, ...]) -> bytes:
         elif t is int and 0 <= a < _SMALL_INTS:
             append(_INT_FRAG[a])
             continue
+        elif t in KEYWORD_TYPES:
+            b = a._wire
         else:
             _bulk(a, parts)
             continue

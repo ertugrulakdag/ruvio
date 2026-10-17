@@ -1,5 +1,6 @@
 # MIT License - Copyright (c) 2026 Salih Cantekin. See LICENSE.
-"""Pipeline / transaction command queue shared by the sync and asyncio clients."""
+"""Pipeline / transaction command queue shared by the sync and asyncio clients.
+"""
 
 from __future__ import annotations
 
@@ -14,11 +15,22 @@ _EXEC = encode("EXEC", ())
 
 
 class PipelineBase(Commands):
-    """Queues typed commands; every command method returns the pipeline for chaining."""
+    """Queues typed commands; every command method returns the pipeline for chaining.
+
+    Has every method of :class:`ruvio._commands.Commands`. Nothing is sent until ``execute()``. With
+    ``transaction=True`` the batch is wrapped in ``MULTI``/``EXEC``, so it runs atomically on one shard.
+    ``len(pipe)`` gives the number of queued commands.
+    """
 
     __slots__ = ("_client", "_cmds", "_convs", "_transaction")
 
     def __init__(self, client: Any, transaction: bool) -> None:
+        """Creates an empty pipeline. Use ``client.pipeline()`` instead.
+
+        Args:
+            client: The client that sends the batch.
+            transaction: Wrap the batch in ``MULTI``/``EXEC``.
+        """
         self._client = client
         self._cmds: List[bytes] = []
         self._convs: List[Conv] = []
@@ -33,6 +45,7 @@ class PipelineBase(Commands):
         return len(self._cmds)
 
     def reset(self) -> None:
+        """Discards all queued commands without sending them."""
         self._cmds = []
         self._convs = []
 

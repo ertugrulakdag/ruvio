@@ -10,7 +10,7 @@
 use std::time::{Duration, SystemTime};
 
 use ruvio_client::{
-    Client, FieldExpireCondition, SetMode, SortedSetAddOptions, StreamClaimOptions,
+    Client, FieldExpireCondition, GeoUnit, SetMode, SortedSetAddOptions, StreamClaimOptions,
     StreamPendingFilter, StreamReadOptions,
 };
 
@@ -117,7 +117,7 @@ fn strings(db: &mut Client) -> Result<(), ruvio_client::Error> {
     db.expire_at("{tour}:a", SystemTime::now() + Duration::from_secs(60))?;
     println!("ttl {} pttl {}", db.ttl(key)?, db.pttl(key)?);
     println!("persist {}", db.persist(key)?);
-    let page = db.scan(0, Some("{tour}:*"), Some(20))?;
+    let page = db.scan(0, Some("{tour}:*"), Some(20), None)?;
 
     println!("scan cursor={} keys={}", page.cursor, page.keys.len());
     println!("dbsize {}", db.dbsize()?);
@@ -307,7 +307,7 @@ fn sorted_sets(db: &mut Client) -> Result<(), ruvio_client::Error> {
     );
     println!(
         "geosearch {:?}",
-        db.geo_search(key, 13.36, 38.11, 20.0, "km")?
+        db.geo_search(key, 13.36, 38.11, 20.0, GeoUnit::Kilometers)?
     );
     let greater = SortedSetAddOptions {
         greater_than: true,

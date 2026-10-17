@@ -10,9 +10,10 @@ use std::time::Duration;
 
 use ruvio_client::{
     Aggregate, BitOperation, BitUnit, BloomInsertOptions, BloomReserveOptions, CacheOptions,
-    Client, Error, FillOutcome, GeoFrom, GeoSearch, GeoShape, IdemOutcome, IdemState,
-    JsonIndexType, JsonSetCondition, ListPositionOptions, RangeBy, RangeOptions, RespValue,
-    RestoreOptions, SetMode, SortedSetAddOptions, SortedSetCombine, SortedSetEntry,
+    Client, Error, FillOutcome, GeoFrom, GeoOrder, GeoSearch, GeoShape, GeoUnit, IdemOutcome,
+    IdemState, JsonIndexType, JsonSetCondition, ListPositionOptions, ListSide, RangeBy,
+    RangeOptions, RespValue, RestoreOptions, SetMode, SortedSetAddOptions, SortedSetCombine,
+    SortedSetEntry,
 };
 
 fn connect(database: u32) -> Option<Client> {
@@ -171,12 +172,12 @@ fn lists_and_sets_extensions() {
     assert_eq!(db.rpushcap("l", 2, &["d"]).unwrap(), 2);
     assert_eq!(db.lrange("l", 0, -1).unwrap(), ["b", "d"]);
     assert_eq!(
-        db.blmpop(Duration::from_secs(1), &["empty", "l"], true, 1)
+        db.blmpop(Duration::from_secs(1), &["empty", "l"], ListSide::Left, 1)
             .unwrap(),
         Some(("l".to_owned(), vec!["b".to_owned()]))
     );
     assert_eq!(
-        db.blmpop(Duration::from_secs(1), &["empty"], true, 1)
+        db.blmpop(Duration::from_secs(1), &["empty"], ListSide::Left, 1)
             .unwrap(),
         None
     );
@@ -471,7 +472,7 @@ fn sorted_set_extensions() {
                 with_distance: true,
                 with_hash: true,
                 with_coordinates: true,
-                ..GeoSearch::radius(GeoFrom::LonLat(15.0, 37.0), 400.0, "km")
+                ..GeoSearch::radius(GeoFrom::LonLat(15.0, 37.0), 400.0, GeoUnit::Kilometers)
             },
         )
         .unwrap();
@@ -487,8 +488,8 @@ fn sorted_set_extensions() {
             "g",
             &GeoSearch {
                 shape: GeoShape::Box(500.0, 500.0),
-                descending: Some(true),
-                ..GeoSearch::radius(GeoFrom::Member("Catania"), 0.0, "km")
+                order: Some(GeoOrder::Desc),
+                ..GeoSearch::radius(GeoFrom::Member("Catania"), 0.0, GeoUnit::Kilometers)
             },
         )
         .unwrap();

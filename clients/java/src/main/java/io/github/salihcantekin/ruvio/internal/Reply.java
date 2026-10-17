@@ -16,15 +16,46 @@ import java.util.Map;
 /**
  * Shared, stateless reply decoders. Scalar decoders read straight from the connection buffer;
  * aggregate shapes that need models decode a generic tree first and convert it.
+ *
+ * @param <T> the decoded type
  */
 public abstract class Reply<T> {
+    /** Creates a decoder; for subclasses. */
+    protected Reply() {
+    }
+
+    /**
+     * Decodes one reply at the reader's position.
+     *
+     * @param r the reader
+     * @param q the request, which carries the key and value codecs
+     * @return the decoded value
+     */
     public abstract T decode(RespReader r, Request<?> q);
 
-    /** Converts a generic reply tree; see {@link RespReader#readObject()} for the tree types. */
+    /**
+     * Converts a generic reply tree; see {@link RespReader#readObject()} for the tree types.
+     *
+     * @param <T> the converted type
+     */
     public interface Converter<T> {
+        /**
+         * Converts the tree.
+         *
+         * @param tree the decoded reply tree
+         * @param q the request, which carries the key and value codecs
+         * @return the converted value
+         */
         T convert(Object tree, Request<?> q);
     }
 
+    /**
+     * Creates a decoder that reads a generic tree and converts it.
+     *
+     * @param converter the conversion
+     * @param <T> the decoded type
+     * @return the decoder
+     */
     public static <T> Reply<T> of(Converter<T> converter) {
         return new Reply<T>() {
             @Override
@@ -38,6 +69,13 @@ public abstract class Reply<T> {
         };
     }
 
+    /**
+     * Casts a decoder to the expected type (unchecked).
+     *
+     * @param reply the decoder
+     * @param <T> the expected type
+     * @return the same decoder
+     */
     @SuppressWarnings("unchecked")
     public static <T> Reply<T> cast(Reply<?> reply) {
         return (Reply<T>) reply;
@@ -62,6 +100,7 @@ public abstract class Reply<T> {
         }
     };
 
+    /** A bulk or simple string as text, or null for nil. */
     public static final Reply<String> STRING = new Reply<String>() {
         @Override
         public String decode(RespReader r, Request<?> q) {
@@ -69,6 +108,7 @@ public abstract class Reply<T> {
         }
     };
 
+    /** A bulk string as bytes, or null for nil. */
     public static final Reply<byte[]> BYTES = new Reply<byte[]>() {
         @Override
         public byte[] decode(RespReader r, Request<?> q) {
@@ -76,6 +116,7 @@ public abstract class Reply<T> {
         }
     };
 
+    /** An integer, or null for nil. */
     public static final Reply<Long> LONG = new Reply<Long>() {
         @Override
         public Long decode(RespReader r, Request<?> q) {
@@ -92,6 +133,7 @@ public abstract class Reply<T> {
         }
     };
 
+    /** A floating point number, or null for nil. */
     public static final Reply<Double> DOUBLE = new Reply<Double>() {
         @Override
         public Double decode(RespReader r, Request<?> q) {
@@ -99,6 +141,7 @@ public abstract class Reply<T> {
         }
     };
 
+    /** A bulk string decoded with the value codec, or null for nil. */
     public static final Reply<Object> VALUE = new Reply<Object>() {
         @Override
         public Object decode(RespReader r, Request<?> q) {
@@ -106,6 +149,7 @@ public abstract class Reply<T> {
         }
     };
 
+    /** A bulk string decoded with the key codec, or null for nil. */
     public static final Reply<Object> KEY = new Reply<Object>() {
         @Override
         public Object decode(RespReader r, Request<?> q) {
@@ -113,6 +157,7 @@ public abstract class Reply<T> {
         }
     };
 
+    /** Any reply as a generic tree (see {@link RespReader#readObject()}). */
     public static final Reply<Object> RAW = new Reply<Object>() {
         @Override
         public Object decode(RespReader r, Request<?> q) {
@@ -122,6 +167,7 @@ public abstract class Reply<T> {
 
     // ---- arrays decoded in place ----------------------------------------------------------
 
+    /** An array of values decoded with the value codec; nil gives an empty list. */
     public static final Reply<List<Object>> VALUE_LIST = new Reply<List<Object>>() {
         @Override
         public List<Object> decode(RespReader r, Request<?> q) {
@@ -153,6 +199,7 @@ public abstract class Reply<T> {
         }
     };
 
+    /** An array of text items; nil gives an empty list. */
     public static final Reply<List<String>> STRING_LIST = new Reply<List<String>>() {
         @Override
         public List<String> decode(RespReader r, Request<?> q) {
@@ -168,6 +215,7 @@ public abstract class Reply<T> {
         }
     };
 
+    /** An array of integers (nil items stay null). */
     public static final Reply<List<Long>> LONG_LIST = new Reply<List<Long>>() {
         @Override
         public List<Long> decode(RespReader r, Request<?> q) {
@@ -183,6 +231,7 @@ public abstract class Reply<T> {
         }
     };
 
+    /** An array of integer flags, 0 as false and anything else as true. */
     public static final Reply<List<Boolean>> BOOL_LIST = new Reply<List<Boolean>>() {
         @Override
         public List<Boolean> decode(RespReader r, Request<?> q) {
@@ -199,6 +248,7 @@ public abstract class Reply<T> {
         }
     };
 
+    /** An array of numbers (nil items stay null). */
     public static final Reply<List<Double>> DOUBLE_LIST = new Reply<List<Double>>() {
         @Override
         public List<Double> decode(RespReader r, Request<?> q) {
@@ -231,6 +281,7 @@ public abstract class Reply<T> {
         }
     };
 
+    /** Flat pairs (or a RESP3 map) as a text-to-text map. */
     public static final Reply<Map<String, String>> STRING_MAP = new Reply<Map<String, String>>() {
         @Override
         public Map<String, String> decode(RespReader r, Request<?> q) {
@@ -277,6 +328,12 @@ public abstract class Reply<T> {
 
     // ---- helpers for converters -----------------------------------------------------------
 
+    /**
+     * Converts a tree leaf to text.
+     *
+     * @param o a byte array, string or null
+     * @return the UTF-8 text, or null
+     */
     public static String str(Object o) {
         if (o == null) {
             return null;
@@ -287,6 +344,12 @@ public abstract class Reply<T> {
         return o.toString();
     }
 
+    /**
+     * Converts a tree leaf to an integer.
+     *
+     * @param o a number, byte array or text; null gives 0
+     * @return the number
+     */
     public static long lng(Object o) {
         if (o instanceof Long) {
             return (Long) o;
@@ -304,6 +367,12 @@ public abstract class Reply<T> {
         return Long.parseLong(o.toString());
     }
 
+    /**
+     * Converts a tree leaf to a floating point number.
+     *
+     * @param o a number, byte array or text
+     * @return the number, or null for null
+     */
     public static Double dbl(Object o) {
         if (o == null) {
             return null;
@@ -319,6 +388,13 @@ public abstract class Reply<T> {
         return RespReader.parseDouble(b, 0, b.length);
     }
 
+    /**
+     * Views a tree node as a list; a map becomes flat key/value pairs.
+     *
+     * @param o a list, a map or null
+     * @return the items; empty for null
+     * @throws RuvioException when the node is not a list or map
+     */
     @SuppressWarnings("unchecked")
     public static List<Object> list(Object o) {
         if (o == null) {
@@ -338,6 +414,14 @@ public abstract class Reply<T> {
         throw new RuvioException("unexpected reply " + o);
     }
 
+    /**
+     * Decodes a tree leaf with a codec.
+     *
+     * @param codec the key or value codec
+     * @param o the leaf (a byte array or text), or null
+     * @param <T> the codec's type
+     * @return the decoded value, or null
+     */
     @SuppressWarnings("unchecked")
     public static <T> T decodeWith(RuvioCodec<?> codec, Object o) {
         if (o == null) {
@@ -347,7 +431,12 @@ public abstract class Reply<T> {
         return (T) codec.decode(b, 0, b.length);
     }
 
-    /** Flat pairs (or RESP3 map) into a String-keyed map; values keep their tree type. */
+    /**
+     * Flat pairs (or RESP3 map) into a String-keyed map; values keep their tree type.
+     *
+     * @param o the reply tree
+     * @return the map in reply order
+     */
     public static Map<String, Object> fieldMap(Object o) {
         List<Object> items = list(o);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -357,7 +446,12 @@ public abstract class Reply<T> {
         return out;
     }
 
-    /** Recursively turns byte[] leaves into UTF-8 Strings, for human-oriented replies. */
+    /**
+     * Recursively turns byte[] leaves into UTF-8 Strings, for human-oriented replies.
+     *
+     * @param o the reply tree
+     * @return the tree with text leaves
+     */
     @SuppressWarnings("unchecked")
     public static Object text(Object o) {
         if (o instanceof byte[]) {
@@ -381,5 +475,6 @@ public abstract class Reply<T> {
         return o;
     }
 
+    /** A reply as a tree with text leaves (see {@link #text(Object)}). */
     public static final Reply<Object> TEXT = of((o, q) -> text(o));
 }

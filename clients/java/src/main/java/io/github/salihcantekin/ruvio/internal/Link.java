@@ -21,17 +21,29 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class Link implements AutoCloseable {
     private static final AtomicInteger IDS = new AtomicInteger();
 
+    /** The settings used for every (re)connect. */
     public final RuvioOptions options;
     private final String name;
     private volatile Connection connection;
     private volatile boolean closed;
+    /** The database selected on (re)connect; follows {@code SELECT}. */
     public volatile int database;
 
+    /**
+     * Creates a link and opens the socket.
+     *
+     * @param options the connection settings
+     */
     public Link(RuvioOptions options) {
         this(options, false);
     }
 
-    /** With {@code lazy} the socket is opened by the first command (cluster nodes). */
+    /**
+     * Creates a link.
+     *
+     * @param options the connection settings
+     * @param lazy {@code true} to open the socket on the first command (cluster nodes)
+     */
     public Link(RuvioOptions options, boolean lazy) {
         this.options = options;
         this.database = options.database;
@@ -39,12 +51,22 @@ public final class Link implements AutoCloseable {
         this.connection = lazy ? null : open();
     }
 
-    /** True while the shared socket is open (no reconnect attempt). */
+    /**
+     * Tells whether the shared socket is open (no reconnect attempt).
+     *
+     * @return {@code true} while it is open
+     */
     public boolean isUp() {
         Connection c = connection;
         return c != null && c.isOpen();
     }
 
+    /**
+     * Returns the shared connection, reconnecting when it dropped.
+     *
+     * @return an open connection
+     * @throws RuvioConnectionException when it cannot be opened or the link is closed
+     */
     public Connection get() {
         Connection c = connection;
         if (c != null && c.isOpen()) {
@@ -83,7 +105,13 @@ public final class Link implements AutoCloseable {
         return c;
     }
 
-    /** AUTH, SELECT and CLIENT SETNAME, pipelined in one write. */
+    /**
+     * Sends {@code AUTH}, {@code SELECT} and {@code CLIENT SETNAME}, pipelined in one write.
+     *
+     * @param c the connection
+     * @param o the settings
+     * @param database the database to select
+     */
     public static void handshake(Connection c, RuvioOptions o, int database) {
         if (o.password == null && database == 0 && o.clientName == null) {
             return;
@@ -105,6 +133,17 @@ public final class Link implements AutoCloseable {
         }
     }
 
+    /**
+     * Waits for a future.
+     *
+     * @param f the future
+     * @param timeoutMillis the longest wait in milliseconds; 0 waits forever
+     * @param <T> the result type
+     * @return the result
+     * @throws RuvioException when there is no reply in time or the wait was interrupted
+     * @throws RuvioServerException when the server answered with an error
+     * @throws RuvioConnectionException when the connection failed
+     */
     public static <T> T await(java.util.concurrent.CompletableFuture<T> f, long timeoutMillis) {
         try {
             return timeoutMillis > 0 ? f.get(timeoutMillis, TimeUnit.MILLISECONDS) : f.get();
@@ -119,8 +158,10 @@ public final class Link implements AutoCloseable {
     }
 
     /**
-     * Re-creates a failure on the calling thread so its stack trace shows the caller, keeping the
-     * reader-thread original as the cause.
+     * Re-creates a failure on the calling thread so its stack trace shows the caller, keeping the reader-thread original as the cause.
+     *
+     * @param cause the original failure
+     * @return the exception to throw
      */
     public static RuntimeException rethrow(Throwable cause) {
         if (cause instanceof RuvioServerException) {
@@ -140,7 +181,13 @@ public final class Link implements AutoCloseable {
         return new RuvioException(String.valueOf(cause), cause);
     }
 
-    /** Opens a separate connection with the same settings (transactions, pub/sub, dedicated clients). */
+    /**
+     * Opens a separate connection with the same settings (transactions, pub/sub, dedicated clients).
+     *
+     * @param suffix a label added to the thread names
+     * @return the new, authenticated connection
+     * @throws RuvioConnectionException when it cannot be opened
+     */
     public Connection openExtra(String suffix) {
         Connection c;
         try {

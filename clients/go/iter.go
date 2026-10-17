@@ -9,11 +9,10 @@ import (
 	"iter"
 )
 
-// All adapts a Scanner to a range-over-func sequence (Go 1.23+):
+// All adapts the Scanner to a range-over-func sequence (Go 1.23+). The error, if any, is
+// yielded once as the last element.
 //
 //	for key, err := range c.ScanIter(opts).All(ctx) { ... }
-//
-// The error is yielded once, as the last element, when a page fails.
 func (s *Scanner) All(ctx context.Context) iter.Seq2[string, error] {
 	return func(yield func(string, error) bool) {
 		for s.Next(ctx) {

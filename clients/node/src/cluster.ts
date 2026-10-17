@@ -20,6 +20,7 @@ import { Subscriber, type SubscriberOptions } from './subscriber.js';
 import type { Tf } from './transforms.js';
 import type { Key, ScanOptions } from './types.js';
 
+/** Number of hash slots in a Ruvio/Redis cluster (16384). Every key maps to exactly one slot, see {@link hashSlot}. */
 export const SLOT_COUNT = 16384;
 
 // ---- hash slots -----------------------------------------------------------------------------
@@ -52,7 +53,19 @@ function slotRange(b: Uint8Array, s: number, e: number): number {
   return crc & (SLOT_COUNT - 1);
 }
 
-/** The hash slot (0..16383) of a key; `{hashtag}` aware, binary-safe for Buffers. */
+/**
+ * Computes the hash slot of a key: CRC16 (XMODEM) of the key modulo 16384. If the key contains
+ * `{tag}` with a non-empty tag, only the tag is hashed, so keys sharing a tag share a slot
+ * (needed for multi-key commands and transactions in a cluster).
+ *
+ * @param key The key as a string (hashed as UTF-8) or raw bytes.
+ * @returns The slot, 0 to 16383.
+ *
+ * @example
+ * ```ts
+ * hashSlot('user:{42}:profile') === hashSlot('user:{42}:cart'); // true
+ * ```
+ */
 export function hashSlot(key: string | Uint8Array): number {
   if (typeof key !== 'string') return slotRange(key, 0, key.length);
   const b = Buffer.from(key, 'utf8');
@@ -146,7 +159,7 @@ function nameHash(b: Uint8Array, o: number, len: number): number {
 const DEFAULT_RULE: CommandKeyRule = [KeyRule.Range, 1, 1, 1, [], 0];
 
 const SPECS = new Map<number, Spec>();
-/** Command names with a split / fan-out / blocking flag, for tests. */
+/** @internal Command names with a split / fan-out / blocking flag, for tests. */
 export const ROUTED_COMMANDS: ReadonlyMap<string, number> = (() => {
   const flags = new Map<string, number>();
   for (const [f, names] of FLAG_LISTS) for (const name of names.split(' ')) flags.set(name, (flags.get(name) ?? 0) | f);
@@ -246,7 +259,7 @@ function keyIndexes(s: Spec, b: Uint8Array): number {
   }
 }
 
-/** The key arguments of an encoded command, for tests: the keys as strings, in argument order. */
+/** @internal The key arguments of an encoded command, for tests: the keys as strings, in argument order. */
 export function keysOfFrame(frame: Uint8Array): string[] {
   scanFrame(frame, 0);
   const spec = specOfFrame(frame);
@@ -279,11 +292,16 @@ const MAX_REDIRECTS = 3;
 
 // ---- nodes ----------------------------------------------------------------------------------
 
-/** One shard: its address and its own multiplexed client. */
+/**
+ * One shard (node) of the cluster: its address and its own multiplexed {@link RuvioClient}.
+ * Obtain nodes from {@link ClusterClient.nodes} or {@link ClusterClient.nodeFor}.
+ */
 export class ClusterNode {
+  /** `host:port` of the node. */
   readonly addr: string;
-  /** Idle dedicated connections used for blocking commands. */
+  /** Idle dedicated connections kept for blocking commands. */
   readonly idle: RuvioClient[] = [];
+  /** The connection used for ordinary commands to this node. You may use it for node-specific calls such as `clusterMyid()`. */
   readonly client: RuvioClient;
   constructor(
     readonly host: string,
@@ -299,10 +317,20 @@ export class ClusterNode {
   }
 }
 
+/**
+ * Options for {@link ClusterClient}: all {@link ClientOptions}, applied to the seed and to every
+ * node discovered from it (so credentials, TLS and `db` must be the same on all nodes), plus `cluster`.
+ *
+ * @example
+ * ```ts
+ * const cluster = createClusterClient({ host: '127.0.0.1', port: 6379, password: 's3cret' });
+ * ```
+ */
 export interface ClusterOptions extends ClientOptions {
   /**
-   * `'auto'` (default): ask the seed for CLUSTER SLOTS and fall back to plain standalone mode when
-   * the server answers `cluster mode is disabled`. `true`: a standalone seed is an error.
+   * `'auto'` (default): ask the seed for `CLUSTER SLOTS` and fall back to plain standalone mode when
+   * the server answers `cluster mode is disabled` (a single-shard server). `true`: a standalone
+   * seed is an error. `false`: treated like `'auto'`.
    */
   cluster?: 'auto' | boolean;
 }
@@ -883,16 +911,48 @@ class ClusterTransactionImpl extends TransactionImpl {
 // ---- the client -----------------------------------------------------------------------------
 
 /**
- * A cluster-aware client. Same typed commands, helpers, `pipeline()` and `multi()` as
- * {@link RuvioClient}; every command is routed to the node that owns its key. Against a
- * standalone server it falls back to a plain single connection automatically.
+ * A cluster-aware client. It has the same typed commands, {@link Helpers}, `pipeline()` and
+ * `multi()` as {@link RuvioClient}, but every command goes straight to the node (shard) that owns
+ * its key, so there is no forwarding hop. Connect it to any one node (the seed): it reads
+ * `CLUSTER SLOTS` and opens one multiplexed connection per node. Against a single-shard or
+ * standalone server it falls back to a plain single connection by itself.
+ *
+ * Routing behaviour (see `docs/CLIENT_BEHAVIOR.md`):
+ * - `MGET`, `MSET`, `DEL`, `EXISTS`, `UNLINK` and `TOUCH` with keys in several slots are split per slot and
+ *   the replies merged (`MGET` keeps key order, counts are summed, `MSET` answers `OK`). This is **not atomic**.
+ * - `DBSIZE`, `KEYS`, `FLUSHDB` and `FLUSHALL` are sent to every node and merged (counts summed, key lists joined).
+ *   A plain {@link RuvioClient} would reach only the shard it is connected to.
+ * - Any other command whose keys span slots (`RENAME`, `COPY`, `LMOVE`, `SINTERSTORE`, `BITOP`, `EVAL`, ...)
+ *   rejects with {@link RuvioError} code `CROSSSLOT` before anything is sent. Use `{tag}` in key names to colocate keys.
+ *   Inside a pipeline the error sits in that command's slot and the rest still runs.
+ * - A transaction (`multi()`) must stay in one slot.
+ * - On `-MOVED` the slot is re-pointed and the command re-sent, at most 3 times; the 4th `MOVED` is returned as an error.
+ *   Ruvio normally forwards a misrouted key instead of answering `MOVED`, so redirects are rare. `-ASK` is not followed.
+ * - Blocking commands run on a dedicated connection to the owning node so they do not stall the shared one.
+ * - `SCAN` and the `CLIENT *`/`SLOWLOG`/`INFO` family reach one node only; use {@link scanIterator} to walk every node.
+ *
+ * @example
+ * ```ts
+ * const cluster = createClusterClient('redis://127.0.0.1:6379');
+ * await cluster.set('user:{42}:name', 'Ada');
+ * await cluster.mget('a', 'b', 'c');          // split across nodes if needed
+ * console.log(cluster.slotOf('user:{42}:name'), cluster.nodes.length);
+ * await cluster.quit();
+ * ```
  */
 export class ClusterClient extends Helpers {
   /** @internal */
   readonly r: Router;
+  /** The options this client was created with. */
   readonly options: ClusterOptions;
   private _binary: BinaryCommands | null = null;
 
+  /**
+   * Creates a cluster client. Nothing connects until the first command or {@link connect}.
+   *
+   * @param options {@link ClusterOptions}, or a seed URL such as `redis://user:pass@host:7000`
+   * (`rediss://` or `ruvios://` enable TLS). The seed may be any one node.
+   */
   constructor(options: ClusterOptions | string = {}) {
     super();
     const o = typeof options === 'string' ? parseSeed(options) : { ...options };
@@ -937,16 +997,21 @@ export class ClusterClient extends Helpers {
     return Promise.reject(e);
   }
 
-  /** Reads the topology from the seed (optional: the first command does it). */
+  /**
+   * Reads the slot table from the seed and connects to it. Optional: the first command does this.
+   * Call it before {@link nodeFor} or {@link nodes} so the topology is known.
+   *
+   * @throws {@link ConnectionError} when the seed is unreachable; {@link RuvioError} when `cluster: true` and the seed is standalone.
+   */
   async connect(): Promise<void> {
     await this.r.whenReady();
     await this.r.home.client.connect();
   }
-  /** Waits for in-flight replies on every node, then closes them all. */
+  /** Waits for in-flight replies on every node, then closes all node connections. The client cannot be used afterwards. */
   async quit(): Promise<void> {
     await Promise.all(this.allClients().map((c) => c.quit().catch(() => undefined)));
   }
-  /** Closes every node connection now. */
+  /** Closes every node connection immediately; calls in flight reject with {@link ConnectionError}. */
   disconnect(): void {
     for (const c of this.allClients()) c.disconnect();
   }
@@ -962,33 +1027,42 @@ export class ClusterClient extends Helpers {
     return out;
   }
 
-  /** True when the seed is a cluster (known after the first command or `connect()`). */
+  /** `true` when the seed reported a cluster topology; `false` for a standalone server or before the topology is loaded (it is known after the first command or {@link connect}). */
   get isCluster(): boolean {
     return this.r.ready && !this.r.standalone;
   }
-  /** The nodes of the current slot table. */
+  /** The nodes of the current slot table (a snapshot; the list changes after a refresh). */
   get nodes(): readonly ClusterNode[] {
     return this.r.distinctNodes();
   }
-  /** CLUSTER SLOTS refreshes done so far (after the first load). */
+  /** How many times the slot table was reloaded after the first load. Useful in tests and metrics. */
   get refreshCount(): number {
     return this.r.refreshes;
   }
-  /** `-MOVED` redirects followed so far. */
+  /** How many `-MOVED` redirects were followed so far. */
   get redirectCount(): number {
     return this.r.redirects;
   }
-  /** Commands awaiting a reply on all nodes. */
+  /** Commands waiting for a reply, summed over all node connections. */
   get inFlight(): number {
     let n = 0;
     for (const c of this.allClients()) n += c.inFlight;
     return n;
   }
-  /** Re-reads CLUSTER SLOTS now. */
+  /**
+   * Reloads the slot table from the cluster (`CLUSTER SLOTS`) now. Concurrent callers share one request.
+   * The client also does this by itself after certain `MOVED` replies.
+   */
   refreshSlots(): Promise<void> {
     return this.r.refresh();
   }
-  /** The node that owns `key` (the topology must be loaded: `await connect()` first). */
+  /**
+   * The node that currently owns a key, e.g. to run a node-specific command on it.
+   *
+   * @param key The key (its `{tag}` decides the slot).
+   * @returns The owning {@link ClusterNode}; the seed node for a standalone server.
+   * @throws Error when the topology is not loaded yet (`await connect()` first); {@link RuvioError} `CLUSTERDOWN` when no node serves the slot.
+   */
   nodeFor(key: Key): ClusterNode {
     const r = this.r;
     if (!r.ready) throw new Error('ruvio: cluster topology not loaded yet, await connect() first');
@@ -997,12 +1071,12 @@ export class ClusterClient extends Helpers {
     if (n === undefined) throw noSlot(hashSlot(key));
     return n;
   }
-  /** The hash slot of a key. */
+  /** The hash slot (0 to 16383) of a key; same as {@link hashSlot}. */
   slotOf(key: Key): number {
     return hashSlot(key);
   }
 
-  /** The same commands, resolving bulk strings as Buffers. */
+  /** The same commands with bulk strings returned as Buffers (binary-safe); shares this client's connections. See {@link RuvioClient.binary}. */
   get binary(): BinaryCommands {
     if (this._binary === null) {
       const view = Object.create(this) as ClusterClient;
@@ -1012,14 +1086,30 @@ export class ClusterClient extends Helpers {
     return this._binary;
   }
 
-  /** A new cluster client with the same options (its own connections). */
+  /**
+   * Creates a new cluster client with the same options and its own connections.
+   *
+   * @param overrides Options that replace the copied ones.
+   */
   duplicate(overrides: ClusterOptions = {}): ClusterClient {
     return new ClusterClient({ ...this.options, ...overrides });
   }
 
   /**
-   * Runs `fn` on a dedicated connection to the node that owns `key` (WATCH, or blocking reads
-   * you want kept off the shared connection), closed afterwards.
+   * Runs `fn` with a dedicated connection to the node that owns `key` (for `WATCH`, or blocking reads
+   * you want off the shared connection) and closes it afterwards, even if `fn` throws.
+   *
+   * @param key A key whose owning node is used; keep every key `fn` touches in the same slot.
+   * @param fn Receives the dedicated {@link RuvioClient}.
+   * @returns Whatever `fn` returns.
+   *
+   * @example
+   * ```ts
+   * await cluster.isolated('{acct}:1', async (c) => {
+   *   await c.watch('{acct}:1');
+   *   return c.multi().incr('{acct}:1').exec();
+   * });
+   * ```
    */
   async isolated<T>(key: Key, fn: (client: RuvioClient) => Promise<T>): Promise<T> {
     await this.r.whenReady();
@@ -1031,22 +1121,38 @@ export class ClusterClient extends Helpers {
     }
   }
 
-  /** A pipeline: commands are grouped by node, one write per node; replies come back in call order. */
+  /**
+   * Starts a {@link Pipeline}. Commands are grouped by owning node and sent with one write per node;
+   * replies come back in call order. Split commands (`MGET`, `DEL`, ...) are split as usual; other
+   * cross-slot commands leave a `CROSSSLOT` error in their slot while the rest runs.
+   */
   pipeline(): Pipeline {
     return new ClusterPipelineImpl(this.r) as unknown as Pipeline;
   }
 
-  /** A MULTI/EXEC transaction; all keys must hash to one slot (otherwise `exec()` rejects with CROSSSLOT). */
+  /**
+   * Starts a {@link Transaction}. All keys must hash to one slot (use `{tag}`), otherwise `exec()` rejects with `CROSSSLOT` and nothing is sent.
+   */
   multi(): Transaction {
     return new ClusterTransactionImpl(this.r) as unknown as Transaction;
   }
 
-  /** A Pub/Sub connection to the seed node (any node serves SUBSCRIBE/PSUBSCRIBE). */
+  /**
+   * Creates a {@link Subscriber} on the seed node. Any node serves `SUBSCRIBE`/`PSUBSCRIBE`, and `PUBLISH` reaches subscribers on every shard.
+   * For sharded channels use {@link subscriberFor}.
+   *
+   * @param opts {@link SubscriberOptions} (host, port and path are fixed by the cluster client).
+   */
   subscriber(opts: Omit<SubscriberOptions, 'host' | 'port' | 'path'> = {}): Subscriber {
     const h = this.r.home;
     return new Subscriber({ ...this.r.base, host: h.host, port: h.port, ...opts });
   }
-  /** A Pub/Sub connection to the node that owns `channel`'s slot (for SSUBSCRIBE). */
+  /**
+   * Creates a {@link Subscriber} on the node that owns `channel`'s slot, which is where `SSUBSCRIBE` and `SPUBLISH` for that channel work.
+   *
+   * @param channel A sharded channel name (its `{tag}` decides the node).
+   * @param opts {@link SubscriberOptions}.
+   */
   async subscriberFor(channel: string, opts: Omit<SubscriberOptions, 'host' | 'port' | 'path'> = {}): Promise<Subscriber> {
     await this.r.whenReady();
     const n = this.nodeFor(channel);
@@ -1054,8 +1160,15 @@ export class ClusterClient extends Helpers {
   }
 
   /**
-   * Lazily walks `SCAN` on every node, one node after the other (the keys of the whole cluster).
-   * A plain `scan(cursor)` call only reaches one node.
+   * Lazily walks `SCAN` on every node, one node after the other, so it yields the keys of the whole cluster.
+   * A plain `scan(cursor)` call reaches only one node.
+   *
+   * @param opts {@link ScanOptions}: `match`, `count`, `type`.
+   *
+   * @example
+   * ```ts
+   * for await (const key of cluster.scanIterator({ match: 'session:*' })) console.log(key);
+   * ```
    */
   override async *scanIterator(opts?: ScanOptions): AsyncGenerator<string> {
     await this.r.whenReady();
@@ -1073,8 +1186,15 @@ function parseSeed(url: string): ClusterOptions {
 }
 
 /**
- * Creates a cluster-aware client from a seed address (`'redis://127.0.0.1:7000'` or options).
- * With the default `cluster: 'auto'` a standalone seed simply works as a plain client.
+ * Creates a {@link ClusterClient}. Shorthand for `new ClusterClient(options)`.
+ *
+ * @param options A seed URL such as `'redis://127.0.0.1:7000'`, or {@link ClusterOptions}. With the
+ * default `cluster: 'auto'` a standalone seed simply works as a plain client.
+ *
+ * @example
+ * ```ts
+ * const cluster = createClusterClient({ host: '127.0.0.1', port: 6379 });
+ * ```
  */
 export function createClusterClient(options: ClusterOptions | string = {}): ClusterClient {
   return new ClusterClient(options);

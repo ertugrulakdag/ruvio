@@ -1511,6 +1511,23 @@ fn parses_slowlog_and_latency() {
     );
 }
 
+#[test]
+fn xadd_maxlen_accepts_exact_and_approximate_markers() {
+    for marker in ["=", "~"] {
+        let parsed = parse_words(&["XADD", "s", "MAXLEN", marker, "5", "*", "f", "v"]).unwrap();
+
+        assert!(matches!(
+            parsed,
+            Command::StreamAdd {
+                max_len: Some(5),
+                ..
+            }
+        ));
+    }
+
+    assert!(parse_words(&["XADD", "s", "MAXLEN", "5", "*", "f", "v"]).is_ok());
+}
+
 fn parse_words(words: &[&str]) -> Result<Command<'static>, ProtocolError> {
     parse_arguments(words.iter().map(|word| owned(word.as_bytes())).collect())
 }

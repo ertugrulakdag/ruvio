@@ -22,7 +22,23 @@ import java.util.function.Consumer;
 /**
  * Pub/Sub on its own connection. Messages are delivered to the listener on the reader thread, in
  * order; keep the listener fast. If the socket drops, the subscriber reconnects in the background
- * and subscribes again to everything it had (messages published meanwhile are lost).
+ * and subscribes again to everything it had (messages published meanwhile are lost). Get one from
+ * {@link RuvioClient#pubSub(Consumer)}; publish with {@code client.publish(channel, message)} on a
+ * normal connection (a subscriber connection can only subscribe).
+ *
+ * <p>The {@code *Async} methods return a future that completes when the server has confirmed every
+ * channel or pattern; the others wait for that confirmation (up to {@code commandTimeoutMillis}, or
+ * 10 seconds when none is set). While the socket is down they throw a {@link RuvioConnectionException}.
+ * In a cluster, plain channels and patterns live on the seed node (a message published on another
+ * node does not reach them); shard channels are subscribed on the node that owns their slot.
+ *
+ * <pre>{@code
+ * try (RuvioPubSub sub = client.pubSub(msg -> System.out.println(msg))) {
+ *     sub.subscribe("orders", "alerts");
+ *     sub.psubscribe("user:*");
+ *     Thread.sleep(60_000);
+ * }
+ * }</pre>
  */
 public final class RuvioPubSub implements AutoCloseable {
     private static final byte[] SUBSCRIBE = RespOut.fragment("SUBSCRIBE");
@@ -80,18 +96,49 @@ public final class RuvioPubSub implements AutoCloseable {
 
     // ---- API -------------------------------------------------------------------------------
 
+    /**
+     * Sends {@code SUBSCRIBE channel [channel ...]}.
+     *
+     * @param channels the channel names (at least one)
+     * @return a future that completes when the server confirmed every channel
+     * @throws IllegalArgumentException when no channel is given
+     * @throws RuvioConnectionException when the subscriber is closed or reconnecting
+     */
     public CompletableFuture<Void> subscribeAsync(String... channels) {
         return send(SUBSCRIBE, "subscribe", this.channels, true, channels);
     }
 
+    /**
+     * Sends {@code UNSUBSCRIBE [channel ...]}.
+     *
+     * @param channels the channels to leave; none leaves every exact channel
+     * @return a future that completes when the server confirmed it
+     * @throws RuvioConnectionException when the subscriber is closed or reconnecting
+     */
     public CompletableFuture<Void> unsubscribeAsync(String... channels) {
         return send(UNSUBSCRIBE, "unsubscribe", this.channels, false, channels);
     }
 
+    /**
+     * Sends {@code PSUBSCRIBE pattern [pattern ...]}. Patterns support {@code *}, {@code ?} and
+     * {@code [abc]}; matching messages arrive with kind {@code PMESSAGE}.
+     *
+     * @param patterns the glob patterns (at least one)
+     * @return a future that completes when the server confirmed every pattern
+     * @throws IllegalArgumentException when no pattern is given
+     * @throws RuvioConnectionException when the subscriber is closed or reconnecting
+     */
     public CompletableFuture<Void> psubscribeAsync(String... patterns) {
         return send(PSUBSCRIBE, "psubscribe", this.patterns, true, patterns);
     }
 
+    /**
+     * Sends {@code PUNSUBSCRIBE [pattern ...]}.
+     *
+     * @param patterns the patterns to leave; none leaves every pattern
+     * @return a future that completes when the server confirmed it
+     * @throws RuvioConnectionException when the subscriber is closed or reconnecting
+     */
     public CompletableFuture<Void> punsubscribeAsync(String... patterns) {
         return send(PUNSUBSCRIBE, "punsubscribe", this.patterns, false, patterns);
     }
@@ -99,7 +146,12 @@ public final class RuvioPubSub implements AutoCloseable {
     /**
      * SSUBSCRIBE. In cluster mode each channel is subscribed on the node that owns its slot (the
      * subscriber opens one extra connection per node it needs); plain SUBSCRIBE/PSUBSCRIBE stay on the
-     * seed connection.
+     * seed connection. Messages arrive with kind {@code SMESSAGE}.
+     *
+     * @param channels the shard channel names (at least one)
+     * @return a future that completes when the server confirmed every channel
+     * @throws IllegalArgumentException when no channel is given
+     * @throws RuvioConnectionException when the subscriber is closed or reconnecting
      */
     public CompletableFuture<Void> ssubscribeAsync(String... channels) {
         if (router != null) {
@@ -108,6 +160,13 @@ public final class RuvioPubSub implements AutoCloseable {
         return send(SSUBSCRIBE, "ssubscribe", this.shardChannels, true, channels);
     }
 
+    /**
+     * Sends {@code SUNSUBSCRIBE [channel ...]}.
+     *
+     * @param channels the shard channels to leave; none leaves every shard channel
+     * @return a future that completes when the server confirmed it
+     * @throws RuvioConnectionException when the subscriber is closed or reconnecting
+     */
     public CompletableFuture<Void> sunsubscribeAsync(String... channels) {
         if (router != null) {
             return shardFanOut(channels, false);
@@ -152,35 +211,82 @@ public final class RuvioPubSub implements AutoCloseable {
         return CompletableFuture.allOf(futures.toArray(new CompletableFuture<?>[0]));
     }
 
-    /** SUBSCRIBE channel...: returns once the server confirmed every channel. */
+    /**
+     * Sends {@code SUBSCRIBE channel [channel ...]} and waits until the server confirmed every channel.
+     *
+     * @param channels the channel names (at least one)
+     * @throws IllegalArgumentException when no channel is given
+     * @throws RuvioConnectionException when the subscriber is closed or reconnecting
+     * @throws RuvioException when the confirmation does not arrive in time
+     */
     public void subscribe(String... channels) {
         await(subscribeAsync(channels));
     }
 
-    /** UNSUBSCRIBE [channel...]: no arguments drops every exact channel. */
+    /**
+     * Sends {@code UNSUBSCRIBE [channel ...]} and waits for the confirmation.
+     *
+     * @param channels the channels to leave; none leaves every exact channel
+     * @throws RuvioConnectionException when the subscriber is closed or reconnecting
+     * @throws RuvioException when the confirmation does not arrive in time
+     */
     public void unsubscribe(String... channels) {
         await(unsubscribeAsync(channels));
     }
 
-    /** PSUBSCRIBE pattern... ({@code *} and {@code ?}). */
+    /**
+     * Sends {@code PSUBSCRIBE pattern [pattern ...]} and waits for the confirmation.
+     *
+     * @param patterns the glob patterns such as {@code news.*} (at least one)
+     * @throws IllegalArgumentException when no pattern is given
+     * @throws RuvioConnectionException when the subscriber is closed or reconnecting
+     * @throws RuvioException when the confirmation does not arrive in time
+     */
     public void psubscribe(String... patterns) {
         await(psubscribeAsync(patterns));
     }
 
+    /**
+     * Sends {@code PUNSUBSCRIBE [pattern ...]} and waits for the confirmation.
+     *
+     * @param patterns the patterns to leave; none leaves every pattern
+     * @throws RuvioConnectionException when the subscriber is closed or reconnecting
+     * @throws RuvioException when the confirmation does not arrive in time
+     */
     public void punsubscribe(String... patterns) {
         await(punsubscribeAsync(patterns));
     }
 
-    /** SSUBSCRIBE shardchannel... */
+    /**
+     * Sends {@code SSUBSCRIBE shardchannel [shardchannel ...]} and waits for the confirmation. See
+     * {@link #ssubscribeAsync(String...)} for cluster behaviour.
+     *
+     * @param channels the shard channel names (at least one)
+     * @throws IllegalArgumentException when no channel is given
+     * @throws RuvioConnectionException when the subscriber is closed or reconnecting
+     * @throws RuvioException when the confirmation does not arrive in time
+     */
     public void ssubscribe(String... channels) {
         await(ssubscribeAsync(channels));
     }
 
+    /**
+     * Sends {@code SUNSUBSCRIBE [shardchannel ...]} and waits for the confirmation.
+     *
+     * @param channels the shard channels to leave; none leaves every shard channel
+     * @throws RuvioConnectionException when the subscriber is closed or reconnecting
+     * @throws RuvioException when the confirmation does not arrive in time
+     */
     public void sunsubscribe(String... channels) {
         await(sunsubscribeAsync(channels));
     }
 
-    /** PING on the subscriber connection. */
+    /**
+     * Sends {@code PING} on the subscriber connection and waits for the reply, to check that it is alive.
+     *
+     * @throws RuvioConnectionException when the subscriber is closed or reconnecting
+     * @throws RuvioException when there is no reply in time
+     */
     public void ping() {
         SubConnection c = live();
         RespOut o = c.begin();
@@ -191,14 +297,29 @@ public final class RuvioPubSub implements AutoCloseable {
         await(r);
     }
 
+    /**
+     * Returns the exact channels this subscriber is subscribed to (they are restored after a reconnect).
+     *
+     * @return a copy of the channel names
+     */
     public synchronized Set<String> channels() {
         return new LinkedHashSet<>(channels);
     }
 
+    /**
+     * Returns the patterns this subscriber is subscribed to.
+     *
+     * @return a copy of the patterns
+     */
     public synchronized Set<String> patterns() {
         return new LinkedHashSet<>(patterns);
     }
 
+    /**
+     * Returns the shard channels this subscriber is subscribed to (across all cluster nodes).
+     *
+     * @return a copy of the shard channel names
+     */
     public synchronized Set<String> shardChannels() {
         Set<String> out = new LinkedHashSet<>(shardChannels);
         synchronized (shardSubscribers) {
@@ -249,6 +370,7 @@ public final class RuvioPubSub implements AutoCloseable {
         return c.subscribeCommand(cmd, kind, expected, names);
     }
 
+    /** Closes the subscriber connection (and the per-node shard connections). It does not reconnect afterwards. */
     @Override
     public void close() {
         closed = true;

@@ -1417,14 +1417,14 @@ public partial class CommandSurfaceTests
     [Fact]
     public void GeoHelpersArePartOfThePublicClient()
     {
-        Assert.NotNull(typeof(RuvioClient).GetMethod(nameof(RuvioClient.AddGeoAsync)));
-        Assert.NotNull(typeof(RuvioClient).GetMethod(nameof(RuvioClient.GeoDistanceAsync)));
-        Assert.NotNull(typeof(RuvioClient).GetMethod(nameof(RuvioClient.GeoHashAsync)));
-        Assert.NotNull(typeof(RuvioClient).GetMethod(nameof(RuvioClient.GeoPositionAsync)));
-        Assert.NotNull(typeof(RuvioClient).GetMethod(nameof(RuvioClient.GeoSearchAsync)));
-        Assert.NotNull(typeof(RuvioClient).GetMethod(nameof(RuvioClient.GeoSearchStoreAsync)));
-        Assert.NotNull(typeof(RuvioClient).GetMethod(nameof(RuvioClient.GeoRadiusAsync)));
-        Assert.NotNull(typeof(RuvioClient).GetMethod(nameof(RuvioClient.GeoRadiusByMemberAsync)));
+        Assert.NotNull(typeof(RuvioClient).GetMethods().FirstOrDefault(m => m.Name == nameof(RuvioClient.AddGeoAsync)));
+        Assert.NotNull(typeof(RuvioClient).GetMethods().FirstOrDefault(m => m.Name == nameof(RuvioClient.GeoDistanceAsync)));
+        Assert.NotNull(typeof(RuvioClient).GetMethods().FirstOrDefault(m => m.Name == nameof(RuvioClient.GeoHashAsync)));
+        Assert.NotNull(typeof(RuvioClient).GetMethods().FirstOrDefault(m => m.Name == nameof(RuvioClient.GeoPositionAsync)));
+        Assert.NotNull(typeof(RuvioClient).GetMethods().FirstOrDefault(m => m.Name == nameof(RuvioClient.GeoSearchAsync)));
+        Assert.NotNull(typeof(RuvioClient).GetMethods().FirstOrDefault(m => m.Name == nameof(RuvioClient.GeoSearchStoreAsync)));
+        Assert.NotNull(typeof(RuvioClient).GetMethods().FirstOrDefault(m => m.Name == nameof(RuvioClient.GeoRadiusAsync)));
+        Assert.NotNull(typeof(RuvioClient).GetMethods().FirstOrDefault(m => m.Name == nameof(RuvioClient.GeoRadiusByMemberAsync)));
     }
 
     [Fact(Timeout = 15000)]

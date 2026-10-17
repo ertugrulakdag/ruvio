@@ -19,6 +19,23 @@ import java.util.concurrent.CompletableFuture;
  * Explicit pipeline: typed commands are encoded into a private buffer and their futures complete
  * only after {@link #flush()} sends the whole batch in one write. Not thread safe; reuse after
  * flush is allowed. Do not wait on a pipeline future before flushing it.
+ *
+ * <p>All typed command methods (inherited, documented on the command families) only queue the
+ * command and return a future. A pipeline is not a transaction: other callers' commands may run
+ * between yours and one failing command does not stop the rest. In a cluster the commands are
+ * grouped per node, one write each, so replies from different nodes are not ordered against each
+ * other. A batch larger than {@code maxInFlight} fails with a {@link RuvioException}.
+ *
+ * <pre>{@code
+ * Pipeline<String, String> pipe = client.pipeline();
+ * CompletableFuture<Boolean> a = pipe.set("a", "1");
+ * CompletableFuture<Long> n = pipe.incr("counter");
+ * pipe.sync();                       // sends everything and waits
+ * long counter = n.join();
+ * }</pre>
+ *
+ * @param <K> the key type
+ * @param <V> the value type
  */
 public final class Pipeline<K, V> extends RuvioCommands<K, V> {
     private final Link link;
@@ -140,12 +157,24 @@ public final class Pipeline<K, V> extends RuvioCommands<K, V> {
         }
     }
 
-    /** Number of commands buffered and not yet flushed. */
+    /**
+     * Returns the number of commands buffered and not yet flushed.
+     *
+     * @return the queued command count
+     */
     public int size() {
         return count;
     }
 
-    /** Sends every buffered command in one write. Returns the number sent. */
+    /**
+     * Sends every buffered command in one write (one write per node in a cluster). The futures complete
+     * as the replies arrive; this call does not wait for them.
+     *
+     * @return the number of commands sent; 0 when nothing was queued
+     * @throws RuvioConnectionException when the socket cannot be used; the affected futures fail with the
+     *         same exception
+     * @throws RuvioException when the batch is larger than {@code maxInFlight}
+     */
     public int flush() {
         if (count == 0) {
             return 0;
@@ -216,7 +245,13 @@ public final class Pipeline<K, V> extends RuvioCommands<K, V> {
         return n;
     }
 
-    /** Flushes and waits for every reply. Failures stay on the individual futures. */
+    /**
+     * Flushes and waits for every reply. This method does not throw for a failed command; read the
+     * outcome from each command's own future ({@code join()} throws the error).
+     *
+     * @throws RuvioConnectionException when the flush itself fails
+     * @throws RuvioException when the batch is larger than {@code maxInFlight}
+     */
     public void sync() {
         int n = count;
         if (sent.length < n) {

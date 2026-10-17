@@ -9,28 +9,47 @@ import java.util.Arrays;
  * command allocates nothing.
  */
 public final class RespOut {
+    /** The line terminator {@code \r\n}. */
     public static final byte[] CRLF = {'\r', '\n'};
     private static final byte[] MIN_LONG = "-9223372036854775808".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
 
+    /** The output bytes; replaced by a larger array when it fills up. */
     public byte[] buf;
+    /** The number of bytes written so far (the next write position). */
     public int pos;
     /** The connection this buffer belongs to (null for private buffers). */
     public Connection owner;
     /** The cluster scratch frame this buffer belongs to (null for connection and pipeline buffers). */
     public Frame frame;
 
+    /**
+     * Creates a buffer.
+     *
+     * @param capacity the initial size in bytes
+     */
     public RespOut(int capacity) {
         buf = new byte[capacity];
     }
 
+    /** Discards everything written. */
     public void reset() {
         pos = 0;
     }
 
+    /**
+     * Returns the number of bytes written.
+     *
+     * @return the size
+     */
     public int size() {
         return pos;
     }
 
+    /**
+     * Makes room for more bytes.
+     *
+     * @param extra how many bytes are about to be written
+     */
     public void ensure(int extra) {
         int need = pos + extra;
         if (need > buf.length) {
@@ -43,7 +62,11 @@ public final class RespOut {
         buf = Arrays.copyOf(buf, capacity);
     }
 
-    /** {@code *argc\r\n}. */
+    /**
+     * Writes the array header {@code *argc\r\n}.
+     *
+     * @param argc the number of elements that follow
+     */
     public void header(int argc) {
         ensure(24);
         byte[] b = buf;
@@ -59,7 +82,11 @@ public final class RespOut {
         pos = p;
     }
 
-    /** Copies a pre-encoded fragment such as {@code $3\r\nGET\r\n}. */
+    /**
+     * Copies a pre-encoded fragment such as {@code $3\r\nGET\r\n}.
+     *
+     * @param fragment the encoded bytes
+     */
     public void raw(byte[] fragment) {
         int n = fragment.length;
         ensure(n);
@@ -67,16 +94,35 @@ public final class RespOut {
         pos += n;
     }
 
+    /**
+     * Copies already encoded bytes.
+     *
+     * @param src the source array
+     * @param off where to start
+     * @param len how many bytes
+     */
     public void raw(byte[] src, int off, int len) {
         ensure(len);
         System.arraycopy(src, off, buf, pos, len);
         pos += len;
     }
 
+    /**
+     * Writes a binary bulk string.
+     *
+     * @param value the bytes
+     */
     public void bulk(byte[] value) {
         bulk(value, 0, value.length);
     }
 
+    /**
+     * Writes part of an array as a bulk string.
+     *
+     * @param value the source array
+     * @param off where to start
+     * @param len how many bytes
+     */
     public void bulk(byte[] value, int off, int len) {
         ensure(len + 24);
         byte[] b = buf;
@@ -88,6 +134,11 @@ public final class RespOut {
         pos = p;
     }
 
+    /**
+     * Writes a text bulk string in UTF-8.
+     *
+     * @param value the text
+     */
     @SuppressWarnings("deprecation")
     public void bulk(String value) {
         int n = value.length();
@@ -115,6 +166,11 @@ public final class RespOut {
         pos = p;
     }
 
+    /**
+     * Writes an integer as a bulk string of its decimal digits.
+     *
+     * @param value the number
+     */
     public void bulk(long value) {
         ensure(48);
         byte[] b = buf;
@@ -135,6 +191,11 @@ public final class RespOut {
         pos = p;
     }
 
+    /**
+     * Writes a number as a bulk string; whole numbers are written without a fraction.
+     *
+     * @param value the number
+     */
     public void bulk(double value) {
         if (value == (long) value && Math.abs(value) < 1e15 && !(value == 0 && 1 / value < 0)) {
             bulk((long) value);
@@ -145,7 +206,12 @@ public final class RespOut {
         }
     }
 
-    /** Writes any supported argument type: byte[], CharSequence, integral Number, Double/Float. */
+    /**
+     * Writes any supported argument type: byte[], CharSequence, integral Number, Double/Float.
+     *
+     * @param value the argument
+     * @throws IllegalArgumentException for an unsupported type
+     */
     public void arg(Object value) {
         if (value instanceof byte[]) {
             bulk((byte[]) value);
@@ -174,6 +240,12 @@ public final class RespOut {
         return p;
     }
 
+    /**
+     * Counts the characters of a number in decimal, including a minus sign.
+     *
+     * @param v the number
+     * @return the character count
+     */
     public static int digitCount(long v) {
         if (v < 0) {
             return v == Long.MIN_VALUE ? 20 : 1 + digitCount(-v);
@@ -191,7 +263,14 @@ public final class RespOut {
         return n;
     }
 
-    /** Writes the ASCII digits of {@code v} at {@code p} and returns the new position. */
+    /**
+     * Writes the ASCII digits of a number.
+     *
+     * @param b the destination array
+     * @param p where to start
+     * @param v the number
+     * @return the position after the last digit
+     */
     public static int writeLong(byte[] b, int p, long v) {
         if (v < 0) {
             if (v == Long.MIN_VALUE) {
@@ -211,6 +290,13 @@ public final class RespOut {
         return end;
     }
 
+    /**
+     * Counts the UTF-8 bytes of text.
+     *
+     * @param s the text
+     * @param from the index to start counting from
+     * @return the byte count from that index
+     */
     public static int utf8Length(CharSequence s, int from) {
         int n = s.length();
         int len = from;
@@ -258,7 +344,12 @@ public final class RespOut {
         return p;
     }
 
-    /** Pre-encodes a command word as a complete RESP bulk fragment, for example {@code $3\r\nGET\r\n}. */
+    /**
+     * Pre-encodes a command word as a complete RESP bulk fragment, for example {@code $3\r\nGET\r\n}.
+     *
+     * @param word the word
+     * @return the encoded bytes
+     */
     public static byte[] fragment(String word) {
         byte[] w = word.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         String head = "$" + w.length + "\r\n";

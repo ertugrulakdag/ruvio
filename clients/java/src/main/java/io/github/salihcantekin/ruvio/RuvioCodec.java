@@ -13,21 +13,49 @@ import java.nio.charset.StandardCharsets;
  * read buffer, so neither allocates an intermediate {@code byte[]}. A custom codec pays one
  * {@code byte[]} per encoded argument.
  *
+ * <pre>{@code
+ * RuvioCodec<Integer> ints = new RuvioCodec<>() {
+ *     public byte[] encode(Integer v) { return v.toString().getBytes(StandardCharsets.UTF_8); }
+ *     public Integer decode(byte[] b, int off, int len) { return Integer.parseInt(new String(b, off, len, StandardCharsets.UTF_8)); }
+ * };
+ * }</pre>
+ *
  * @param <T> the Java type
  */
 public abstract class RuvioCodec<T> {
+    /** Creates a codec; for subclasses. */
+    protected RuvioCodec() {
+    }
+
     /** UTF-8 strings. */
     public static final RuvioCodec<String> UTF8 = new Utf8();
     /** Raw bytes, binary safe. Arrays passed in must not change until the command is sent. */
     public static final RuvioCodec<byte[]> BYTES = new Bytes();
 
-    /** Returns the bytes for {@code value}. */
+    /**
+     * Converts a value to the bytes sent to the server.
+     *
+     * @param value the value
+     * @return the encoded bytes
+     */
     public abstract byte[] encode(T value);
 
-    /** Builds a value from {@code length} bytes at {@code offset}. The array is reused afterwards. */
+    /**
+     * Builds a value from bytes received from the server. The array is reused afterwards, so copy what you keep.
+     *
+     * @param buffer the read buffer
+     * @param offset where the value starts
+     * @param length how many bytes the value has
+     * @return the decoded value
+     */
     public abstract T decode(byte[] buffer, int offset, int length);
 
-    /** Writes {@code value} as one bulk string. Built-in codecs override this to avoid a copy. */
+    /**
+     * Writes a value as one bulk string. Built-in codecs override this to avoid a copy.
+     *
+     * @param out the output buffer
+     * @param value the value
+     */
     public void write(RespOut out, T value) {
         out.bulk(encode(value));
     }

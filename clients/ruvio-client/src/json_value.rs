@@ -16,8 +16,29 @@ fn to_json<T: Serialize + ?Sized>(value: &T) -> Result<String, Error> {
 }
 
 impl Client {
-    /// Serializes `value` and sets it at `path`. `&"izmir"` is sent as `"izmir"` with quotes.
-    /// `false` when the path cannot be reached.
+    /// Serializes `value` with serde and sets it at `path` (`JSON.SET`). Requires the `serde`
+    /// feature.
+    ///
+    /// Strings are sent as JSON strings with quotes (`&"izmir"` becomes `"izmir"`). Returns
+    /// `false` when the path cannot be reached. Serializer options come from the type's serde
+    /// attributes (`rename_all`, `skip_serializing_if`, ...).
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] if serialization fails; [`Error::Server`] as for [`Client::json_set`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// use serde::Serialize;
+    /// #[derive(Serialize)]
+    /// struct User { name: String, age: u8 }
+    /// client.json_set_value("user:1", "$", &User { name: "Ada".into(), age: 36 })?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn json_set_value<T: Serialize + ?Sized>(
         &mut self,
         key: &str,
@@ -27,7 +48,8 @@ impl Client {
         self.json_set(key, path, &to_json(value)?)
     }
 
-    /// Serializes `patch` and sends it as a `JSON.MERGE` (RFC 7396) patch.
+    /// Serializes `patch` and sends it as a `JSON.MERGE` (RFC 7396) patch; `true` when applied.
+    /// Members set to `null` in the patch are deleted. Requires `serde`.
     pub fn json_merge_value<T: Serialize + ?Sized>(
         &mut self,
         key: &str,
@@ -37,7 +59,8 @@ impl Client {
         self.json_merge(key, path, &to_json(patch)?)
     }
 
-    /// Serializes `value` and appends it to the array at `path`; returns the new length.
+    /// Serializes `value` and appends it to the array at `path` (`JSON.ARRAPPEND`). Returns the
+    /// new length, or `None` when the key or path is absent. Requires `serde`.
     pub fn json_arrappend_value<T: Serialize + ?Sized>(
         &mut self,
         key: &str,
@@ -47,7 +70,26 @@ impl Client {
         self.json_arrappend(key, path, &to_json(value)?)
     }
 
-    /// Reads a JSON value and deserializes it. `None` when the key or path is absent.
+    /// Reads the JSON at `path` (`JSON.GET`) and deserializes it into `T`.
+    ///
+    /// Returns `None` when the key or path is absent. Requires `serde`.
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] when the stored JSON does not fit `T`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// use serde::Deserialize;
+    /// #[derive(Deserialize)]
+    /// struct User { name: String, age: u8 }
+    /// let user: Option<User> = client.json_get_value("user:1", "$")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn json_get_value<T: DeserializeOwned>(
         &mut self,
         key: &str,
@@ -63,7 +105,8 @@ impl Client {
 }
 
 impl Client {
-    /// Pops an array element and deserializes it. `None` for an empty array or missing key.
+    /// Pops an array element (`JSON.ARRPOP`, default the last) and deserializes it into `T`.
+    /// `None` for an empty array or missing key. Requires `serde`.
     pub fn json_arrpop_value<T: DeserializeOwned>(
         &mut self,
         key: &str,
@@ -78,7 +121,9 @@ impl Client {
         }
     }
 
-    /// Serializes `value` and sets it only when `condition` holds (`NX` / `XX`).
+    /// Serializes `value` and sets it only when `condition` holds (`NX` / `XX`, see
+    /// [`JsonSetCondition`](crate::JsonSetCondition)). Returns `false` when it was not written.
+    /// Requires `serde`.
     pub fn json_set_value_with<T: Serialize + ?Sized>(
         &mut self,
         key: &str,
@@ -89,8 +134,11 @@ impl Client {
         self.json_set_with(key, path, &to_json(value)?, condition)
     }
 
-    /// `JSON.FIND` for a typed value: serializes `value` (a string is sent without quotes,
-    /// as the index stores it) and returns the matching keys.
+    /// `JSON.FIND` for a typed value.
+    ///
+    /// Serializes `value` the way the index stores it (a string is sent without quotes, a number
+    /// or bool as its JSON text) and returns the matching keys in ascending order. `count` and
+    /// `after` page the result as in [`Client::json_find`]. Requires `serde`.
     pub fn json_find_value<T: Serialize + ?Sized>(
         &mut self,
         index: &str,

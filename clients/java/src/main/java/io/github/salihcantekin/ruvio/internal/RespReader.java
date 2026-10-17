@@ -25,29 +25,51 @@ public final class RespReader {
         }
     }
 
+    /** The shared {@link Incomplete} instance. */
     public static final Incomplete INCOMPLETE = new Incomplete();
 
-    /** RESP3 push frame ({@code >}); a list of elements. */
+    /** A RESP3 push frame ({@code >}): a list of elements. */
     public static final class Push extends ArrayList<Object> {
         Push(int n) {
             super(n);
         }
     }
 
+    /** The bytes being read. */
     public byte[] buf;
+    /** The read position. */
     public int pos;
+    /** The end of the valid bytes. */
     public int lim;
 
+    /**
+     * Creates a reader.
+     *
+     * @param buf the bytes to read; call {@link #wrap} to set the range
+     */
     public RespReader(byte[] buf) {
         this.buf = buf;
     }
 
+    /**
+     * Points the reader at a byte range.
+     *
+     * @param b the bytes
+     * @param p the first index to read
+     * @param l the end index, exclusive
+     */
     public void wrap(byte[] b, int p, int l) {
         buf = b;
         pos = p;
         lim = l;
     }
 
+    /**
+     * Returns the type byte at the read position without consuming it.
+     *
+     * @return the byte
+     * @throws Incomplete when no bytes are left
+     */
     public byte peek() {
         if (pos >= lim) {
             throw INCOMPLETE;
@@ -100,7 +122,11 @@ public final class RespReader {
         return v;
     }
 
-    /** Reads one line after the type byte as a String (simple string, error, big number). */
+    /**
+     * Reads one line after the type byte as a String (simple string, error, big number).
+     *
+     * @return the text
+     */
     public String readLine() {
         int start = pos + 1;
         int end = lineEnd(start);
@@ -109,7 +135,11 @@ public final class RespReader {
         return s;
     }
 
-    /** Returns true when the current element is a null (RESP2 nil bulk/array or RESP3 {@code _}) and consumes it. */
+    /**
+     * Consumes the current element when it is a null (RESP2 nil bulk/array or RESP3 {@code _}).
+     *
+     * @return {@code true} when it was a null
+     */
     public boolean tryNull() {
         byte t = peek();
         if (t == '_') {
@@ -125,7 +155,11 @@ public final class RespReader {
         return false;
     }
 
-    /** Throws the server error at the current position, consuming it. */
+    /**
+     * Reads the server error at the current position, consuming it.
+     *
+     * @return the exception to throw
+     */
     public RuvioServerException readError() {
         return new RuvioServerException(readLine());
     }
@@ -154,12 +188,14 @@ public final class RespReader {
         }
     }
 
-    /**
-     * Locates the payload of a string-like element. Returns the payload offset and sets {@link #span}
-     * to its length, or returns -1 for nil. Integers and doubles are returned as their text.
-     */
+    /** The length of the payload found by {@link #stringSpan()}. */
     public int span;
 
+    /**
+     * Locates the payload of a string-like element and sets {@link #span} to its length. Integers and doubles are returned as their text.
+     *
+     * @return the payload offset in {@link #buf}, or -1 for nil
+     */
     public int stringSpan() {
         skipAttributes();
         byte t = peek();
@@ -214,16 +250,33 @@ public final class RespReader {
         }
     }
 
+    /**
+     * Reads a bulk string and decodes it with a codec.
+     *
+     * @param codec the codec
+     * @param <T> the decoded type
+     * @return the value, or null for nil
+     */
     public <T> T readBulk(RuvioCodec<T> codec) {
         int off = stringSpan();
         return off < 0 ? null : codec.decode(buf, off, span);
     }
 
+    /**
+     * Reads a string-like element as UTF-8 text.
+     *
+     * @return the text, or null for nil
+     */
     public String readString() {
         int off = stringSpan();
         return off < 0 ? null : new String(buf, off, span, StandardCharsets.UTF_8);
     }
 
+    /**
+     * Reads a string-like element as a copy of its bytes.
+     *
+     * @return the bytes, or null for nil
+     */
     public byte[] readBytes() {
         int off = stringSpan();
         if (off < 0) {
@@ -234,7 +287,11 @@ public final class RespReader {
         return out;
     }
 
-    /** Integer reply (or a bulk holding decimal digits). Returns null for nil. */
+    /**
+     * Reads an integer reply (or a bulk holding decimal digits).
+     *
+     * @return the number, or null for nil
+     */
     public Long readLongOrNull() {
         skipAttributes();
         byte t = peek();
@@ -258,7 +315,11 @@ public final class RespReader {
         return parseLong(off, off + len);
     }
 
-    /** Double from a bulk, simple string, integer or RESP3 double. Returns null for nil. */
+    /**
+     * Reads a double from a bulk, simple string, integer or RESP3 double.
+     *
+     * @return the number, or null for nil
+     */
     public Double readDoubleOrNull() {
         int off = stringSpan();
         if (off < 0) {
@@ -267,6 +328,14 @@ public final class RespReader {
         return parseDouble(buf, off, span);
     }
 
+    /**
+     * Parses a number written as text, including {@code inf}, {@code -inf} and {@code nan}.
+     *
+     * @param b the bytes
+     * @param off where the text starts
+     * @param len the text length
+     * @return the number
+     */
     public static double parseDouble(byte[] b, int off, int len) {
         // Fast path: plain integers.
         boolean simple = len > 0 && len < 18;
@@ -304,8 +373,10 @@ public final class RespReader {
     }
 
     /**
-     * Reads an aggregate header and returns the element count, or -1 for nil. RESP3 maps return
-     * twice their entry count so callers can treat them as flat arrays.
+     * Reads an aggregate header. RESP3 maps return twice their entry count so callers can treat them as flat arrays.
+     *
+     * @return the element count, or -1 for nil
+     * @throws RuvioServerException when the element is an error
      */
     public int arrayLength() {
         skipAttributes();
@@ -328,6 +399,12 @@ public final class RespReader {
         throw unexpected("array");
     }
 
+    /**
+     * Builds the exception for a reply of the wrong type.
+     *
+     * @param wanted a description of the expected type
+     * @return the exception to throw
+     */
     public RuvioException unexpected(String wanted) {
         byte t = pos < lim ? buf[pos] : 0;
         return new RuvioException("unexpected reply type '" + (char) t + "', wanted " + wanted);
@@ -372,10 +449,9 @@ public final class RespReader {
     }
 
     /**
-     * Generic decode into a tree: bulk -> byte[], simple string -> String, integer -> Long,
-     * nil -> null, array/set -> List, map -> LinkedHashMap (bulk keys become Strings),
-     * error element -> {@link RuvioServerException} instance, double -> Double, boolean -> Boolean,
-     * push -> {@link Push}.
+     * Generic decode into a tree: bulk to byte[], simple string to String, integer to Long, nil to null, array/set to List, map to LinkedHashMap (bulk keys become Strings), error element to a {@link RuvioServerException} instance, double to Double, boolean to Boolean, push to {@link Push}.
+     *
+     * @return the tree
      */
     public Object readObject() {
         byte t = peek();

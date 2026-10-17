@@ -13,34 +13,57 @@ import (
 type Kind uint8
 
 const (
+	// KindNil is a null bulk, null array or RESP3 null.
 	KindNil Kind = iota
+	// KindSimple is a simple string such as +OK.
 	KindSimple
+	// KindError is an error reply; Bytes holds the message.
 	KindError
+	// KindInt is an integer reply; Int holds it.
 	KindInt
+	// KindBulk is a bulk string; Bytes holds it.
 	KindBulk
+	// KindArray is an array; Array holds the elements.
 	KindArray
-	KindDouble   // RESP3 ','
-	KindBool     // RESP3 '#'
-	KindMap      // RESP3 '%', stored flat as key, value, key, value...
-	KindSet      // RESP3 '~'
-	KindPush     // RESP3 '>'
-	KindBigNum   // RESP3 '('
+	// KindDouble is a RESP3 double.
+	KindDouble // RESP3 ','
+	// KindBool is a RESP3 boolean; Int is 0 or 1.
+	KindBool // RESP3 '#'
+	// KindMap is a RESP3 map, stored flat in Array.
+	KindMap // RESP3 '%', stored flat as key, value, key, value...
+	// KindSet is a RESP3 set.
+	KindSet // RESP3 '~'
+	// KindPush is a RESP3 out-of-band push (pub/sub, tracking).
+	KindPush // RESP3 '>'
+	// KindBigNum is a RESP3 big number; Bytes holds its digits.
+	KindBigNum // RESP3 '('
+	// KindVerbatim is a RESP3 verbatim string; Bytes holds it.
 	KindVerbatim // RESP3 '='
 )
 
-// Value is one parsed reply. Scalars live inline; Bytes owns its memory (it is never
-// a view of the connection buffer). Arrays, maps, sets and pushes use Array.
+// Value is one parsed server reply. Use Kind to see what it holds, or the conversion
+// methods (Str, AsInt64, AsFloat64, Strings). Bytes owns its memory and is never a view
+// of the connection buffer, so it is safe to keep.
+//
+// Kind says which field is set: Int for KindInt, KindBool (0 or 1) and KindDouble (IEEE
+// bits; use AsFloat64); Bytes for KindSimple, KindError, KindBulk, KindBigNum and
+// KindVerbatim; Array for KindArray, KindSet, KindPush and KindMap (flat: key, value,
+// key, value ...).
 type Value struct {
+	// Kind says which of the fields below is set.
 	Kind  Kind
 	Int   int64   // KindInt, KindBool (0/1); KindDouble keeps its IEEE bits here (use AsFloat64)
 	Bytes []byte  // KindSimple, KindError, KindBulk, KindBigNum, KindVerbatim
 	Array []Value // KindArray, KindMap (flat), KindSet, KindPush
 }
 
-// IsNil reports a null bulk, null array or RESP3 null.
+// IsNil reports whether the reply is a null: a null bulk string, a null array or a RESP3
+// null.
 func (v Value) IsNil() bool { return v.Kind == KindNil }
 
-// Str returns the textual form of a scalar without copying the bytes.
+// Str returns the text of a scalar reply (simple, bulk, error, big number, verbatim,
+// integer, boolean or double). It returns "" for a null or an aggregate. For byte kinds
+// the string shares memory with Bytes and does not copy.
 func (v Value) Str() string {
 	switch v.Kind {
 	case KindSimple, KindBulk, KindError, KindBigNum, KindVerbatim:
@@ -53,7 +76,9 @@ func (v Value) Str() string {
 	return ""
 }
 
-// AsInt64 converts integers and numeric strings.
+// AsInt64 converts an integer, boolean, double (truncated) or numeric string to int64.
+// It returns *UnexpectedReplyError for other kinds, or a parse error if the text is not
+// a number.
 func (v Value) AsInt64() (int64, error) {
 	switch v.Kind {
 	case KindInt, KindBool:
@@ -66,7 +91,8 @@ func (v Value) AsInt64() (int64, error) {
 	return 0, unexpected(v)
 }
 
-// AsFloat64 converts doubles, integers and numeric strings.
+// AsFloat64 converts a double, integer or numeric string to float64. It returns
+// *UnexpectedReplyError for other kinds.
 func (v Value) AsFloat64() (float64, error) {
 	switch v.Kind {
 	case KindDouble:
@@ -79,7 +105,9 @@ func (v Value) AsFloat64() (float64, error) {
 	return 0, unexpected(v)
 }
 
-// Strings converts an array of scalars; nil elements become "".
+// Strings converts an array, set or map reply to a slice of strings, one per element;
+// null elements become "". A null reply gives (nil, nil). Other kinds return
+// *UnexpectedReplyError.
 func (v Value) Strings() ([]string, error) {
 	if v.Kind == KindNil {
 		return nil, nil
@@ -98,7 +126,7 @@ func (v Value) isAgg() bool {
 	return v.Kind == KindArray || v.Kind == KindSet || v.Kind == KindMap || v.Kind == KindPush
 }
 
-// String renders a value for debugging.
+// String renders the value for debugging and logging. The format is not stable.
 func (v Value) String() string {
 	switch v.Kind {
 	case KindNil:
@@ -118,12 +146,22 @@ func (v Value) String() string {
 	return v.Str()
 }
 
-// Error is a server error reply (-ERR ..., -WRONGTYPE ...).
-type Error struct{ Msg string }
+// Error is a server error reply such as -ERR ..., -WRONGTYPE ... or -NOSCRIPT .... Typed
+// methods and Do return it as *Error; test it with errors.As.
+//
+//	var e *ruvio.Error
+//	if errors.As(err, &e) && e.Prefix() == "WRONGTYPE" { ... }
+type Error struct {
+	// Msg is the full server message, for example "WRONGTYPE Operation against a key
+	// holding the wrong kind of value".
+	Msg string
+}
 
+// Error returns the full server message, including its first word.
 func (e *Error) Error() string { return e.Msg }
 
-// Prefix returns the first word of the error (ERR, WRONGTYPE, NOSCRIPT, MOVED, ...).
+// Prefix returns the first word of the message (ERR, WRONGTYPE, NOSCRIPT, MOVED, BUSY
+// ...), which is the error class.
 func (e *Error) Prefix() string {
 	for i := 0; i < len(e.Msg); i++ {
 		if e.Msg[i] == ' ' {
@@ -133,7 +171,8 @@ func (e *Error) Prefix() string {
 	return e.Msg
 }
 
-// ErrProtocol is returned for malformed replies; the connection is closed.
+// ErrProtocol is returned (usually wrapped) when the server sends a malformed reply. The
+// connection is closed because the stream can no longer be trusted.
 var ErrProtocol = errors.New("ruvio: protocol error")
 
 var errIncomplete = errors.New("incomplete")
@@ -145,8 +184,13 @@ func unexpected(v Value) error {
 	return &UnexpectedReplyError{Value: v}
 }
 
-// UnexpectedReplyError is returned when a reply has a shape the typed method does not expect.
-type UnexpectedReplyError struct{ Value Value }
+// UnexpectedReplyError is returned when a reply has a shape the typed method does not
+// expect, for example an integer where an array was required. Value holds the offending
+// reply. It usually means the server is not Ruvio or Redis compatible for that command.
+type UnexpectedReplyError struct {
+	// Value is the reply that did not have the expected shape.
+	Value Value
+}
 
 func (e *UnexpectedReplyError) Error() string {
 	return "ruvio: unexpected reply " + e.Value.String()
@@ -311,8 +355,10 @@ func appendArg(b []byte, a any) ([]byte, error) {
 	return b, errors.New("ruvio: unsupported argument type")
 }
 
-// AppendCommand encodes args as one RESP command frame onto b. Exported for tooling and
-// benchmarks; the typed methods encode without boxing.
+// AppendCommand appends args to b as one RESP command frame and returns the extended
+// slice. Argument types are the same as for Do. It returns an error for an unsupported
+// type. It is exported for tooling and benchmarks; the typed methods encode without
+// boxing.
 func AppendCommand(b []byte, args ...any) ([]byte, error) {
 	b = appendArrayHeader(b, len(args))
 	var err error
@@ -581,8 +627,9 @@ func cloneBytes(b []byte) []byte {
 	return out
 }
 
-// ParseReply parses one complete reply from b and returns it with the bytes consumed.
-// It is the standalone form of the connection parser (for tests and tooling).
+// ParseReply parses one complete reply from the start of b and returns it with the
+// number of bytes used. It returns an error if b holds an incomplete or malformed reply.
+// It is the standalone form of the connection parser, for tests and tooling.
 func ParseReply(b []byte) (Value, int, error) {
 	var p parser
 	v, n, done, err := p.next(b)

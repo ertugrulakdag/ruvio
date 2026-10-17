@@ -1,13 +1,41 @@
 use std::fmt;
 
-/// A transport failure, a broken RESP frame, or a Ruvio error reply.
+/// Every way a call can fail.
+///
+/// Match on the variant to decide what to do: [`Error::Server`] is a normal refusal by the
+/// server (the connection is still usable), [`Error::Io`] means the socket failed, and
+/// [`Error::Protocol`] means the reply or an argument was malformed. The `Display` text is
+/// the bare message, e.g. `WRONGTYPE Operation against a key holding the wrong kind of value`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use ruvio_client::*;
+/// # use std::time::Duration;
+/// # fn run(client: &mut Client) -> Result<(), Error> {
+/// match client.get("counter") {
+///     Ok(value) => println!("{value:?}"),
+///     Err(Error::Server(message)) if message.starts_with("WRONGTYPE") => {
+///         println!("not a string");
+///     }
+///     Err(other) => return Err(other),
+/// }
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug)]
 pub enum Error {
-    /// The TCP connection failed or closed.
+    /// The TCP connection failed, timed out, or was closed (connect error, reset, broken pipe,
+    /// or a read timeout set with `Client::set_read_timeout`). After a failed command the
+    /// outcome is unknown; with reconnect on the next command opens a new socket.
     Io(std::io::Error),
-    /// The bytes on the socket were not a complete RESP2 value.
+    /// The bytes on the socket were not a complete RESP2 value, a reply had an unexpected shape
+    /// for the command, or the client rejected an argument before sending (for example an empty
+    /// host, an empty key list for `DEL`, or a non-UTF-8 text reply read as a `String`).
     Protocol(String),
-    /// Ruvio returned a RESP error. The connection can still run the next command.
+    /// Ruvio returned a RESP error reply; the text is the error message including its code
+    /// (`ERR ...`, `WRONGTYPE ...`, `NOAUTH ...`, `CROSSSLOT ...`, `NOPERM ...`). The connection
+    /// can still run the next command.
     Server(String),
 }
 

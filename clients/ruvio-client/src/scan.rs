@@ -13,7 +13,18 @@ use crate::models::SortedSetEntry;
 /// Turns one page of raw strings into items.
 type Decode<T> = fn(Vec<String>) -> Result<Vec<T>, Error>;
 
-/// An iterator over a `*SCAN` command. Yields `Err` once and stops if a page fails.
+/// A lazy iterator over `SCAN`, `HSCAN`, `SSCAN` or `ZSCAN`, created by
+/// [`Client::scan_iter`], [`Client::hscan_iter`], [`Client::sscan_iter`] or
+/// [`Client::zscan_iter`].
+///
+/// It holds one page at a time and asks the server for the next page only when the current
+/// one is used up, so walking a large keyspace uses flat memory. It borrows the client
+/// mutably, so nothing else can use the client until the iterator is dropped. Each item is a
+/// `Result`; after the first `Err` the iterator ends.
+///
+/// As with Redis, an element that changes during the walk may be returned twice or missed,
+/// and the same element can repeat after a table rebuild, so de-duplicate if that matters.
+/// An element present for the whole walk is returned at least once.
 pub struct ScanIter<'a, T> {
     client: &'a mut Client,
     command: &'static str,
@@ -48,7 +59,9 @@ impl<'a, T> ScanIter<'a, T> {
         }
     }
 
-    /// The cursor the next page will be requested with. 0 after the last page.
+    /// The cursor the next page will be requested with. `0` before the first page is fetched
+    /// and again after the last one. Cursors are opaque; on a sharded server the client
+    /// combines the shard number into it.
     pub fn cursor(&self) -> u64 {
         self.cursor
     }
@@ -100,20 +113,61 @@ fn pairs(raw: Vec<String>) -> Result<Vec<(String, String)>, Error> {
 }
 
 impl Client {
-    /// Walks every key of the database with `SCAN`, one page at a time.
+    /// Walks every key of the selected database with `SCAN`, one page at a time.
+    ///
+    /// On a sharded server the iterator visits each shard in turn, so it covers the whole
+    /// keyspace. On a client opened with `discover_cluster: false` it sees only the shard it is
+    /// connected to.
+    ///
+    /// # Arguments
+    /// * `pattern` - optional glob (`*`, `?`, `[a-z]`) applied to key names (`MATCH`). `None`
+    ///   returns every key. The pattern is applied after the page is read, so a page may be
+    ///   empty while the walk continues.
+    /// * `count` - optional hint for how many index slots to examine per page (`COUNT`), not a
+    ///   limit on results. The server default is 10.
+    ///
+    /// # Returns
+    /// An iterator of `Result<String, Error>` (key names).
+    ///
+    /// # Examples
     ///
     /// ```no_run
-    /// # let mut db = ruvio_client::Client::connect("127.0.0.1", 6379)?;
-    /// for key in db.scan_iter(Some("session:*"), Some(500)) {
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// for key in client.scan_iter(Some("session:*"), Some(500)) {
     ///     println!("{}", key?);
     /// }
-    /// # Ok::<(), ruvio_client::Error>(())
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn scan_iter(&mut self, pattern: Option<&str>, count: Option<u64>) -> ScanIter<'_, String> {
         ScanIter::new(self, "SCAN", None, pattern, count, keep)
     }
 
-    /// Walks a hash with `HSCAN`, yielding `(field, value)`.
+    /// Walks one hash with `HSCAN`, yielding `(field, value)` pairs.
+    ///
+    /// # Arguments
+    /// * `key` - the hash. A missing key yields nothing.
+    /// * `pattern` - optional glob on field names. `count` - page size hint, as for
+    ///   [`Client::scan_iter`].
+    ///
+    /// # Errors
+    /// Items are `Err(Error::Server)` with `WRONGTYPE` when `key` is not a hash.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// for pair in client.hscan_iter("user:1", None, None) {
+    ///     let (field, value) = pair?;
+    ///     println!("{field}={value}");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn hscan_iter(
         &mut self,
         key: &str,
@@ -123,7 +177,21 @@ impl Client {
         ScanIter::new(self, "HSCAN", Some(key), pattern, count, pairs)
     }
 
-    /// Walks a set with `SSCAN`.
+    /// Walks one set with `SSCAN`, yielding members. Arguments as for [`Client::hscan_iter`];
+    /// `pattern` matches member names.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// for member in client.sscan_iter("tags", Some("rust*"), None) {
+    ///     println!("{}", member?);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn sscan_iter(
         &mut self,
         key: &str,
@@ -133,7 +201,22 @@ impl Client {
         ScanIter::new(self, "SSCAN", Some(key), pattern, count, keep)
     }
 
-    /// Walks a sorted set with `ZSCAN`, yielding members with scores.
+    /// Walks one sorted set with `ZSCAN`, yielding a [`SortedSetEntry`] (member and score) per
+    /// element. Arguments as for [`Client::hscan_iter`]; `pattern` matches member names.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// for entry in client.zscan_iter("leaderboard", None, Some(100)) {
+    ///     let entry = entry?;
+    ///     println!("{} {}", entry.member, entry.score);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn zscan_iter(
         &mut self,
         key: &str,

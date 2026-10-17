@@ -32,12 +32,22 @@ import java.util.concurrent.atomic.AtomicInteger;
  * goes to the named node.
  */
 public final class ClusterRouter implements AutoCloseable {
+    /** The number of hash slots. */
     public static final int SLOTS = 16384;
     /** MOVED redirects followed per command (each to the node the reply names) before the error is returned. */
     public static final int MAX_REDIRECTS = 3;
 
     /** Where a routed frame goes: straight onto a connection, or into a pipeline group. */
     public interface Sink {
+        /**
+         * Sends an encoded command.
+         *
+         * @param node the node that owns it
+         * @param buf the array holding the command
+         * @param off where the command starts
+         * @param len the command length
+         * @param request the request awaiting the reply
+         */
         void send(ClusterNode node, byte[] buf, int off, int len, RoutedRequest<?> request);
     }
 
@@ -80,8 +90,11 @@ public final class ClusterRouter implements AutoCloseable {
     }
 
     /**
-     * Asks the seed for {@code CLUSTER SLOTS}. Returns null when the server is not in cluster mode
-     * (it answers with an error), in which case the caller keeps using the plain standalone path.
+     * Asks the seed for {@code CLUSTER SLOTS}. When the server is not in cluster mode (it answers with an error) the caller keeps using the plain standalone path.
+     *
+     * @param seedLink the seed node's link
+     * @param options the client settings
+     * @return the router, or null for a standalone server
      */
     public static ClusterRouter detect(Link seedLink, RuvioOptions options) {
         ClusterRouter r = new ClusterRouter(options, new ClusterNode(options.host, options.port, seedLink));
@@ -93,22 +106,42 @@ public final class ClusterRouter implements AutoCloseable {
         return r;
     }
 
+    /**
+     * Returns the seed node.
+     *
+     * @return the seed
+     */
     public ClusterNode seed() {
         return seed;
     }
 
+    /**
+     * Returns the wait used for internal calls.
+     *
+     * @return {@code commandTimeoutMillis}, or 10000 when none is set
+     */
     public long timeoutMillis() {
         return options.commandTimeoutMillis > 0 ? options.commandTimeoutMillis : 10_000;
     }
 
     // ---- topology --------------------------------------------------------------------------
 
+    /**
+     * Returns the node that owns a slot.
+     *
+     * @param slot the slot, 0 to 16383
+     * @return the owner; any node when the table has none
+     */
     public ClusterNode owner(int slot) {
         ClusterNode n = table[slot];
         return n != null ? n : anyNode();
     }
 
-    /** A node for keyless commands: the seed while its connection is up, else any live node, else the seed. */
+    /**
+     * Picks a node for keyless commands: the seed while its connection is up, else any live node, else the seed.
+     *
+     * @return the node
+     */
     public ClusterNode anyNode() {
         if (seed.link.isUp()) {
             return seed;
@@ -121,7 +154,11 @@ public final class ClusterRouter implements AutoCloseable {
         return seed;
     }
 
-    /** The distinct nodes that own slots, in slot order. */
+    /**
+     * Lists the distinct nodes that own slots, in slot order.
+     *
+     * @return the nodes
+     */
     public List<ClusterNode> masters() {
         LinkedHashSet<ClusterNode> out = new LinkedHashSet<>();
         for (ClusterNode n : table) {
@@ -132,10 +169,22 @@ public final class ClusterRouter implements AutoCloseable {
         return new ArrayList<>(out);
     }
 
+    /**
+     * Finds a known node.
+     *
+     * @param address {@code host:port}
+     * @return the node, or null
+     */
     public ClusterNode node(String address) {
         return nodes.get(address);
     }
 
+    /**
+     * Returns the node that owns a key.
+     *
+     * @param key the key bytes
+     * @return the owner
+     */
     public ClusterNode ownerOfKey(byte[] key) {
         return owner(HashSlot.of(key));
     }
@@ -214,14 +263,24 @@ public final class ClusterRouter implements AutoCloseable {
 
     // ---- routing ---------------------------------------------------------------------------
 
-    /** The calling thread's scratch buffer for the next frame. */
+    /**
+     * Returns the calling thread's scratch buffer for the next frame.
+     *
+     * @return the buffer to encode into
+     */
     public RespOut begin() {
         Frame f = FRAMES.get();
         f.reset();
         return f.out;
     }
 
-    /** Routes the frame in {@code f} (already encoded) and hands it to {@code sink}. */
+    /**
+     * Routes the frame in {@code f} (already encoded) and hands it to {@code sink}.
+     *
+     * @param f the encoded frame
+     * @param r the request awaiting the reply
+     * @param sink where the frame goes
+     */
     public void dispatch(Frame f, RoutedRequest<?> r, Sink sink) {
         f.parse();
         byte[] b = f.out.buf;
@@ -258,7 +317,13 @@ public final class ClusterRouter implements AutoCloseable {
         sink.send(slot < 0 ? anyNode() : owner(slot), buf, off, total, r);
     }
 
-    /** The slot shared by the keys of the parsed frame; -1 when it has no key; CROSSSLOT error otherwise. */
+    /**
+     * Computes the slot shared by the keys of the parsed frame.
+     *
+     * @param f the parsed frame
+     * @return the slot, or -1 when the command has no key
+     * @throws RuvioServerException {@code CROSSSLOT} when the keys do not share a slot
+     */
     public static int commonSlot(Frame f) {
         f.parse();
         byte[] b = f.out.buf;
@@ -277,6 +342,11 @@ public final class ClusterRouter implements AutoCloseable {
         return slot;
     }
 
+    /**
+     * Builds the {@code CROSSSLOT} error the client raises itself.
+     *
+     * @return the exception
+     */
     public static RuvioServerException crossSlotError() {
         return new RuvioServerException("CROSSSLOT Keys in request do not hash to the same slot (checked by the client, nothing was sent)");
     }
@@ -445,6 +515,12 @@ public final class ClusterRouter implements AutoCloseable {
 
     // ---- MOVED -----------------------------------------------------------------------------
 
+    /**
+     * Tells whether an error is a {@code MOVED} redirect.
+     *
+     * @param error the failure
+     * @return {@code true} for a server error starting with {@code MOVED}
+     */
     public static boolean isMoved(Throwable error) {
         if (!(error instanceof RuvioServerException)) {
             return false;
@@ -453,7 +529,12 @@ public final class ClusterRouter implements AutoCloseable {
         return m != null && m.startsWith("MOVED ");
     }
 
-    /** Follows a MOVED reply: patch/refresh the table, then send the saved frame to the new owner. */
+    /**
+     * Follows a MOVED reply: patch/refresh the table, then send the saved frame to the new owner.
+     *
+     * @param r the request to re-send
+     * @param moved the {@code MOVED} error
+     */
     public void redirect(RoutedRequest<?> r, Throwable moved) {
         try {
             BACKGROUND.execute(() -> followMoved(r, moved));
@@ -504,7 +585,12 @@ public final class ClusterRouter implements AutoCloseable {
         return n;
     }
 
-    /** Test hook: overwrites the owner of a slot, for example to simulate a stale table. */
+    /**
+     * Test hook: overwrites the owner of a slot, for example to simulate a stale table.
+     *
+     * @param slot the slot
+     * @param node the new owner
+     */
     public void forceSlot(int slot, ClusterNode node) {
         table[slot] = node;
     }
@@ -517,6 +603,11 @@ public final class ClusterRouter implements AutoCloseable {
         }
     }
 
+    /**
+     * Tells whether the router was closed.
+     *
+     * @return {@code true} after {@link #close()}
+     */
     public boolean isClosed() {
         return closed;
     }

@@ -129,6 +129,21 @@ impl Num {
         number
     }
 
+    /// `#n`: the n-th field of a `BITFIELD` type.
+    pub(crate) fn hash_uint(value: u64) -> Self {
+        let mut number = Self::empty();
+
+        number.push(b'#');
+
+        let digits = Self::uint(value);
+
+        for byte in digits.as_str().bytes() {
+            number.push(byte);
+        }
+
+        number
+    }
+
     /// Wide unsigned values (millisecond deadlines are `u128`); saturates at `u64::MAX`.
     #[inline]
     pub(crate) fn wide(value: u128) -> Self {

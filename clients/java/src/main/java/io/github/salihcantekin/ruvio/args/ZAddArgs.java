@@ -3,44 +3,86 @@ package io.github.salihcantekin.ruvio.args;
 
 import io.github.salihcantekin.ruvio.internal.Args;
 
-/** NX / XX / GT / LT / CH flags of ZADD. */
+/**
+ * Flags of {@code ZADD}. {@code NX} excludes {@code XX}, and {@code GT}, {@code LT} and {@code NX} exclude each other; the server answers {@code ERR} for an invalid mix.
+ *
+ * <p>{@code ZAddArgs.builder().xx().ch()}
+ */
 public final class ZAddArgs {
+    /** Creates an empty option set; the static factories are the usual way in. */
+    public ZAddArgs() {
+    }
+
     private boolean nx;
     private boolean xx;
     private boolean gt;
     private boolean lt;
     private boolean ch;
 
+    /**
+     * Starts an empty flag set.
+     *
+     * @return a new flag set
+     */
     public static ZAddArgs builder() {
         return new ZAddArgs();
     }
 
+    /**
+     * Sets {@code NX}: only add new members, never update existing ones.
+     *
+     * @return this flag set
+     */
     public ZAddArgs nx() {
         nx = true;
         return this;
     }
 
+    /**
+     * Sets {@code XX}: only update existing members, never add new ones.
+     *
+     * @return this flag set
+     */
     public ZAddArgs xx() {
         xx = true;
         return this;
     }
 
+    /**
+     * Sets {@code GT}: update an existing member only when the new score is greater (new members are still added).
+     *
+     * @return this flag set
+     */
     public ZAddArgs gt() {
         gt = true;
         return this;
     }
 
+    /**
+     * Sets {@code LT}: update an existing member only when the new score is lower (new members are still added).
+     *
+     * @return this flag set
+     */
     public ZAddArgs lt() {
         lt = true;
         return this;
     }
 
-    /** CH: count changed members, not only new ones. */
+    /**
+     * Sets {@code CH}: make the reply count changed members as well as new ones.
+     *
+     * @return this flag set
+     */
     public ZAddArgs ch() {
         ch = true;
         return this;
     }
 
+    /**
+     * Appends these options to a command being encoded. Used by the client; you do not call it.
+     *
+     * @param a the argument writer
+     */
     public void write(Args a) {
         if (nx) a.s("NX");
         if (xx) a.s("XX");

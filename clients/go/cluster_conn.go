@@ -96,8 +96,10 @@ func (d *Conn) bind(ctx context.Context, r *request, n int) (v Value, done bool,
 	return Value{}, false, nil
 }
 
-// ConnFor takes a dedicated connection to the node that owns key (cluster mode). On a
-// standalone server it is Conn.
+// ConnFor opens a dedicated connection to the node that owns key, for blocking commands
+// or other connection-bound state in cluster mode. The Conn is bound to that key's slot:
+// later keys must live on the same node or the command fails with ErrCrossSlot. On a
+// standalone server it is the same as Client.Conn. Close the connection when done.
 func (c *Client) ConnFor(ctx context.Context, key string) (*Conn, error) {
 	d, err := c.Conn(ctx)
 	if err != nil || d.cl == nil {
@@ -112,8 +114,9 @@ func (c *Client) ConnFor(ctx context.Context, key string) (*Conn, error) {
 	return d, nil
 }
 
-// TxFor is Tx on the node that owns key (cluster mode); every key used in the
-// transaction must share key's slot.
+// TxFor starts a transaction on the node that owns key (see ConnFor). Every key used in
+// the transaction, including WATCH keys, must share key's slot. On a standalone server
+// it is the same as Tx.
 func (c *Client) TxFor(ctx context.Context, key string) (*Tx, error) {
 	d, err := c.ConnFor(ctx, key)
 	if err != nil {

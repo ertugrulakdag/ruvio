@@ -9,24 +9,48 @@ import { Parser, NEED_MORE, PushMessage } from './parser.js';
 import { RuvioError, ConnectionError } from './errors.js';
 import type { Tf } from './transforms.js';
 
+/**
+ * Connection settings shared by {@link RuvioClient}, {@link ClusterClient} and {@link Subscriber}.
+ * All fields are optional.
+ *
+ * @example
+ * ```ts
+ * const client = createClient({
+ *   host: 'ruvio.internal',
+ *   port: 6379,
+ *   tls: true,
+ *   username: 'app',
+ *   password: process.env.RUVIO_PASSWORD,
+ *   db: 1,
+ *   name: 'api-worker',
+ *   connectTimeoutMs: 2000,
+ * });
+ * ```
+ */
 export interface ConnectionOptions {
+  /** Server host (default `'127.0.0.1'`). */
   host?: string;
+  /** Server port (default `6379`). */
   port?: number;
-  /** Unix socket path (instead of host/port). */
+  /** Unix socket path, used instead of host/port. Not combined with `tls`. */
   path?: string;
-  /** TLS options; `true` for defaults. */
+  /** Use TLS: `true` for defaults, or Node's `tls.ConnectionOptions` (CA, client certificate, `servername`, ...). Default: plain TCP. */
   tls?: boolean | tls.ConnectionOptions;
+  /** ACL user name sent with the password on connect (default user when omitted). Needs `password`. */
   username?: string;
+  /** Password sent on every (re)connect (`AUTH`, or inside `HELLO 3`). A wrong password makes the connect fail. */
   password?: string;
-  /** Logical database selected on every (re)connect. */
+  /** Logical database selected on every (re)connect (default 0). A cluster-mode server allows only 0. */
   db?: number;
-  /** `CLIENT SETNAME` on every (re)connect. */
+  /** Connection name set with `CLIENT SETNAME` on every (re)connect. */
   name?: string;
-  /** 2 (default) or 3 (sends `HELLO 3` on connect). */
+  /** RESP protocol version: 2 (default) or 3 (sends `HELLO 3` on connect; enables push messages such as client-side-cache invalidation). */
   protocol?: 2 | 3;
+  /** Abort a connection attempt after this many milliseconds with a {@link ConnectionError}. Default: no timeout. There is no per-command timeout. */
   connectTimeoutMs?: number;
-  /** Disable Nagle (default true). */
+  /** Disable Nagle's algorithm (`TCP_NODELAY`). Default true. */
   noDelay?: boolean;
+  /** Enable TCP keep-alive probes after 30 s idle. Default true. */
   keepAlive?: boolean;
   /**
    * How frames queued by concurrent callers are coalesced into one socket write:
@@ -35,9 +59,12 @@ export interface ConnectionOptions {
    * Neither adds a timer delay.
    */
   flush?: 'microtask' | 'immediate';
-  /** Reopen the socket lazily on the next command after a drop (default true). */
+  /**
+   * Reopen the socket lazily on the next command after a drop (default true). With `false` the
+   * first drop closes the client for good and later commands reject with {@link ConnectionError}.
+   */
   reconnect?: boolean;
-  /** Size of the reused socket read buffer (default 64 KiB). */
+  /** Size in bytes of the reused socket read buffer (default 65536). */
   readBufferSize?: number;
 }
 

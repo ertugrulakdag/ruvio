@@ -12,13 +12,28 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * Asynchronous commands on the shared multiplexed connection. Thread safe; every method returns
- * immediately with a future completed by the reader thread in reply order.
+ * immediately with a future completed by the reader thread in reply order. Get one from
+ * {@link RuvioClient#async()}. Every command method is documented on the command family classes this
+ * class inherits from (strings, keys, hashes, lists, sets, sorted sets, geo, streams, JSON, scripting
+ * and Ruvio-specific commands).
  *
  * <p>Futures complete on the connection's reader thread: callbacks attached with
  * {@code thenApply}/{@code thenAccept} run there and must not block (use the {@code *Async}
  * variants with an executor for slow work).
+ *
+ * <p>Errors complete the future exceptionally: {@link RuvioServerException} for a server error reply,
+ * {@link RuvioConnectionException} when the socket fails, {@link RuvioException} for a timeout.
+ *
+ * <pre>{@code
+ * RuvioAsync<String, String> async = client.async();
+ * async.set("k", "v").thenCompose(ok -> async.get("k")).thenAccept(System.out::println);
+ * }</pre>
+ *
+ * @param <K> the key type
+ * @param <V> the value type
  */
 public final class RuvioAsync<K, V> extends RuvioCommands<K, V> {
+    /** The shared connection (the seed node's in cluster mode). */
     final Link link;
     /** Non-null in cluster mode: every command is routed by its key; {@code link} is then the seed's. */
     final ClusterRouter router;
@@ -59,12 +74,31 @@ public final class RuvioAsync<K, V> extends RuvioCommands<K, V> {
         return request;
     }
 
-    /** Same connection, other codecs (for example String keys with byte[] values). */
+    /**
+     * Returns a view on the same connection that uses other codecs, for example String keys with
+     * {@code byte[]} values.
+     *
+     * <pre>{@code
+     * RuvioAsync<String, byte[]> raw = async.withCodecs(RuvioCodec.UTF8, RuvioCodec.BYTES);
+     * }</pre>
+     *
+     * @param keys the codec for keys
+     * @param values the codec for values
+     * @param <K2> the new key type
+     * @param <V2> the new value type
+     * @return a new async facade; the connection, cluster routing and pipelines are shared
+     */
     public <K2, V2> RuvioAsync<K2, V2> withCodecs(RuvioCodec<K2> keys, RuvioCodec<V2> values) {
         return new RuvioAsync<>(link, router, keys, values);
     }
 
-    /** SELECT on the shared connection; also remembered for reconnects. */
+    /**
+     * Sends {@code SELECT db} on the shared connection. The client remembers the index and selects it
+     * again after a reconnect.
+     *
+     * @param database the index, from 0 to {@code databases - 1} (16 by default)
+     * @return a future that completes when the server accepted the switch
+     */
     @Override
     public CompletableFuture<Void> select(int database) {
         CompletableFuture<Void> f = super.select(database);
@@ -72,7 +106,12 @@ public final class RuvioAsync<K, V> extends RuvioCommands<K, V> {
         return f;
     }
 
-    /** A new explicit pipeline: commands are buffered locally and sent in one write by {@code flush()}. */
+    /**
+     * Starts an explicit pipeline: commands are buffered locally and sent in one write by
+     * {@link Pipeline#flush()}.
+     *
+     * @return a new pipeline (not thread safe) that uses this facade's codecs
+     */
     public Pipeline<K, V> pipeline() {
         return new Pipeline<>(link, router, kc, vc);
     }

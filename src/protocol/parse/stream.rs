@@ -138,7 +138,7 @@ pub(in crate::protocol) fn parse_xadd<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
 
             index += 1;
 
-            if index < args.len() && args.bytes(index) == b"~" {
+            if index < args.len() && matches!(args.bytes(index), b"~" | b"=") {
                 index += 1;
             }
 

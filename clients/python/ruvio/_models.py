@@ -1,5 +1,9 @@
 # MIT License - Copyright (c) 2026 Salih Cantekin. See LICENSE.
-"""Small result types returned by typed commands."""
+"""Small result types returned by typed commands.
+
+They are :class:`typing.NamedTuple` classes, so they unpack like tuples (``state, value, token = r``)
+and also have named attributes (``r.state``).
+"""
 
 from __future__ import annotations
 
@@ -22,11 +26,18 @@ Value = Union[str, bytes]
 
 
 class FillResult(NamedTuple):
-    """``FILLGET`` outcome. ``state`` is ``HIT``, ``FILL``, ``BUSY`` or ``STALE``.
+    """Outcome of ``FILLGET`` (see :meth:`ruvio._commands.Commands.fillget`).
 
-    ``HIT``: ``value`` is the cached value. ``FILL``: this caller must build the value
-    and call ``FILLSET`` with ``token``. ``BUSY``: someone else is filling. ``STALE``:
-    ``value`` is a stale copy and ``token`` (when not None) makes this caller the refresher.
+    Attributes:
+        state: ``"HIT"``, ``"FILL"``, ``"BUSY"`` or ``"STALE"``.
+        value: The cached value for ``HIT`` and ``STALE``; ``None`` otherwise.
+        token: For ``FILL``: the token to pass to ``fillset``. For ``STALE``: a token when this caller must
+            refresh the value, ``None`` when someone else already does. ``None`` for ``HIT`` and ``BUSY``.
+
+    * ``HIT``: use ``value``.
+    * ``FILL``: build the value and call ``fillset`` with ``token``.
+    * ``BUSY``: another caller is filling; ask again shortly.
+    * ``STALE``: ``value`` is a stale copy; refresh it if ``token`` is set.
     """
 
     state: str
@@ -35,19 +46,38 @@ class FillResult(NamedTuple):
 
 
 class IdemResult(NamedTuple):
-    """``IDEM BEGIN`` outcome: ``acquired``, ``pending``, ``conflict`` or ``completed`` (+ result)."""
+    """Outcome of ``IDEM BEGIN`` (see :meth:`ruvio._commands.Commands.idem_begin`).
+
+    Attributes:
+        state: ``"acquired"`` (run the operation now), ``"pending"`` (same request still running),
+            ``"conflict"`` (different fingerprint) or ``"completed"``.
+        result: The stored result for ``"completed"``, otherwise ``None``.
+    """
 
     state: str
     result: Optional[Value]
 
 
 class StreamEntry(NamedTuple):
+    """One stream entry.
+
+    Attributes:
+        id: The entry id as text, ``"<ms>-<seq>"``.
+        fields: ``{field: value}`` of the entry.
+    """
     id: str
     fields: Dict[Any, Any]
 
 
 class GeoResult(NamedTuple):
-    """One ``GEOSEARCH``/``GEORADIUS`` row when WITHDIST/WITHHASH/WITHCOORD is used."""
+    """One ``GEOSEARCH``/``GEORADIUS`` row when ``withdist``, ``withhash`` or ``withcoord`` is used.
+
+    Attributes:
+        member: The member name.
+        dist: Distance from the center in the requested unit, or ``None`` if ``withdist`` was not set.
+        hash: The raw 52-bit geohash integer, or ``None`` if ``withhash`` was not set.
+        coord: ``(longitude, latitude)``, or ``None`` if ``withcoord`` was not set.
+    """
 
     member: Value
     dist: Optional[float]
@@ -56,6 +86,14 @@ class GeoResult(NamedTuple):
 
 
 class PendingSummary(NamedTuple):
+    """Summary form of ``XPENDING`` (see :meth:`ruvio._commands.Commands.xpending`).
+
+    Attributes:
+        count: Number of pending entries in the group.
+        min_id: Smallest pending id, ``None`` when there are none.
+        max_id: Greatest pending id, ``None`` when there are none.
+        consumers: ``[(consumer_name, pending_count), ...]``.
+    """
     count: int
     min_id: Optional[str]
     max_id: Optional[str]
@@ -63,6 +101,14 @@ class PendingSummary(NamedTuple):
 
 
 class PendingEntry(NamedTuple):
+    """One row of the extended ``XPENDING``.
+
+    Attributes:
+        id: Entry id.
+        consumer: Name of the consumer that holds it.
+        idle_ms: Milliseconds since it was last delivered.
+        deliveries: How many times it was delivered.
+    """
     id: str
     consumer: str
     idle_ms: int
@@ -70,15 +116,29 @@ class PendingEntry(NamedTuple):
 
 
 class AutoClaimResult(NamedTuple):
+    """Reply of ``XAUTOCLAIM`` (see :meth:`ruvio._commands.Commands.xautoclaim`).
+
+    Attributes:
+        next_id: Id to continue scanning from; ``"0-0"`` when the scan is complete.
+        claimed: Claimed :class:`StreamEntry` objects (or ids with ``justid``).
+        deleted: Pending ids whose stream entry no longer exists.
+    """
     next_id: str
     claimed: List[Any]
     deleted: List[str]
 
 
 class Message(NamedTuple):
-    """A Pub/Sub delivery. ``kind`` is ``message``, ``pmessage``, ``smessage``,
-    ``subscribe``, ``unsubscribe``, ``psubscribe``, ``punsubscribe``, ``ssubscribe``,
-    ``sunsubscribe`` or ``pong``."""
+    """A Pub/Sub delivery.
+
+    Attributes:
+        kind: ``message``, ``pmessage`` (pattern match), ``smessage`` (sharded channel), ``subscribe``,
+            ``unsubscribe``, ``psubscribe``, ``punsubscribe``, ``ssubscribe``, ``sunsubscribe`` or ``pong``.
+            Any non-message reply carries kind ``reply``.
+        channel: The channel (``None`` for ``pong``).
+        data: The payload; for subscription confirmations, the number of active subscriptions.
+        pattern: The matching pattern for ``pmessage``, otherwise ``None``.
+    """
 
     kind: str
     channel: Optional[Value]
