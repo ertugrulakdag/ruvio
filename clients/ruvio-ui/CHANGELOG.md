@@ -4,6 +4,10 @@ Notable changes to `ruvio-ui`, the web console (Docker image and host binaries).
 
 ## Unreleased
 
+## 0.1.8 - 2026-10-17
+
+No recorded changes.
+
 ## 0.1.7
 
 Earlier versions were not recorded in a changelog.
