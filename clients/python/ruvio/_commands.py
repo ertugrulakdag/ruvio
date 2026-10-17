@@ -1862,60 +1862,296 @@ class Commands:
 
     # ======================================================= lists
     def lpush(self, key: KeyT, *values: Arg) -> Any:
+        """``LPUSH key value [value ...]`` - pushes values onto the head of a list (creates it).
+
+        Values are pushed one after the other, so ``lpush("l", "a", "b")`` leaves ``["b", "a"]``.
+
+        Args:
+            key: The list key.
+            *values: One or more values.
+
+        Returns:
+            The length of the list after the push.
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+        """
         return self._c(None, "LPUSH", key, *values)
 
     def rpush(self, key: KeyT, *values: Arg) -> Any:
+        """``RPUSH key value [value ...]`` - appends values to the tail of a list (creates it).
+
+        Args:
+            key: The list key.
+            *values: One or more values.
+
+        Returns:
+            The length of the list after the push.
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+
+        Example:
+            client.rpush("queue", "a", "b")   # -> 2
+        """
         return self._c(None, "RPUSH", key, *values)
 
     def lpushx(self, key: KeyT, *values: Arg) -> Any:
+        """``LPUSHX key value [value ...]`` - like :meth:`lpush` but only when the list already exists.
+
+        Args:
+            key: The list key.
+            *values: One or more values.
+
+        Returns:
+            The new length, or ``0`` when the list does not exist (nothing is created).
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+        """
         return self._c(None, "LPUSHX", key, *values)
 
     def rpushx(self, key: KeyT, *values: Arg) -> Any:
+        """``RPUSHX key value [value ...]`` - like :meth:`rpush` but only when the list already exists.
+
+        Args:
+            key: The list key.
+            *values: One or more values.
+
+        Returns:
+            The new length, or ``0`` when the list does not exist.
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+        """
         return self._c(None, "RPUSHX", key, *values)
 
     def lpushcap(self, key: KeyT, cap: int, *values: Arg) -> Any:
-        """``LPUSHCAP key cap value...`` - push to the head, keep at most ``cap`` items."""
+        """``LPUSHCAP key cap value [value ...]`` - pushes to the head and keeps at most ``cap`` items. Ruvio extension.
+
+        After the push the oldest items (from the tail) are dropped until ``cap`` remain, in one atomic
+        step. Useful for "last N events" lists.
+
+        Args:
+            key: The list key.
+            cap: Maximum list length to keep (positive integer).
+            *values: One or more values.
+
+        Returns:
+            The length of the list after the push and trim (never more than ``cap``).
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+            ResponseError: ``cap`` is not a positive integer.
+
+        Example:
+            client.lpushcap("recent", 100, "event")
+        """
         return self._c(None, "LPUSHCAP", key, cap, *values)
 
     def rpushcap(self, key: KeyT, cap: int, *values: Arg) -> Any:
-        """``RPUSHCAP key cap value...`` - push to the tail, keep at most ``cap`` items."""
+        """``RPUSHCAP key cap value [value ...]`` - appends to the tail and keeps at most ``cap`` items. Ruvio extension.
+
+        After the push the oldest items (from the head) are dropped until ``cap`` remain.
+
+        Args:
+            key: The list key.
+            cap: Maximum list length to keep (positive integer).
+            *values: One or more values.
+
+        Returns:
+            The length of the list after the push and trim (never more than ``cap``).
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+            ResponseError: ``cap`` is not a positive integer.
+        """
         return self._c(None, "RPUSHCAP", key, cap, *values)
 
     def push_recent(self, key: KeyT, value: Arg, keep: int) -> Any:
-        """"Recent items" helper: newest first, at most ``keep`` items (``LPUSHCAP``)."""
+        """"Recent items" helper: ``LPUSHCAP key keep value`` - newest first, at most ``keep`` items.
+
+        Args:
+            key: The list key.
+            value: The item to add at the head.
+            keep: How many items to keep.
+
+        Returns:
+            The list length after the push (at most ``keep``).
+
+        Example:
+            client.push_recent("activity:7", "logged in", keep=50)
+            client.lrange("activity:7", 0, 9)   # the ten newest
+        """
         return self._c(None, "LPUSHCAP", key, keep, value)
 
     def lpop(self, key: KeyT, count: Optional[int] = None) -> Any:
+        """``LPOP key [count]`` - removes and returns elements from the head.
+
+        Args:
+            key: The list key.
+            count: How many elements to pop (positive integer). Omit for a single element.
+
+        Returns:
+            Without ``count``: the element, or ``None`` when the list is empty or missing. With
+            ``count``: a list of up to ``count`` elements, or ``None`` when the list is missing.
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+        """
         return self._c(None, "LPOP", key) if count is None else self._c(None, "LPOP", key, count)
 
     def rpop(self, key: KeyT, count: Optional[int] = None) -> Any:
+        """``RPOP key [count]`` - removes and returns elements from the tail.
+
+        Args:
+            key: The list key.
+            count: How many elements to pop (positive integer). Omit for a single element.
+
+        Returns:
+            Without ``count``: the element, or ``None`` when the list is empty or missing. With
+            ``count``: a list of up to ``count`` elements, or ``None`` when the list is missing.
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+        """
         return self._c(None, "RPOP", key) if count is None else self._c(None, "RPOP", key, count)
 
     def llen(self, key: KeyT) -> Any:
+        """``LLEN key`` - length of a list.
+
+        Args:
+            key: The list key.
+
+        Returns:
+            The length; ``0`` when the key does not exist.
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+        """
         return self._c(None, "LLEN", key)
 
     def lindex(self, key: KeyT, index: int) -> Any:
+        """``LINDEX key index`` - the element at a position.
+
+        Args:
+            key: The list key.
+            index: Zero-based position; negative counts from the tail (``-1`` is the last).
+
+        Returns:
+            The element, or ``None`` when the index is out of range or the key is missing.
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+        """
         return self._c(None, "LINDEX", key, index)
 
     def lrange(self, key: KeyT, start: int, stop: int) -> Any:
+        """``LRANGE key start stop`` - a slice of a list, both ends inclusive.
+
+        Args:
+            key: The list key.
+            start: First position; negative counts from the tail.
+            stop: Last position, inclusive (``-1`` for the end).
+
+        Returns:
+            A list of elements; empty when the key is missing or the range is empty.
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+
+        Example:
+            client.rpush("l", "a", "b", "c")
+            client.lrange("l", 0, -1)   # -> ["a", "b", "c"]
+        """
         return self._c(None, "LRANGE", key, start, stop)
 
     def ltrim(self, key: KeyT, start: int, stop: int) -> Any:
+        """``LTRIM key start stop`` - keeps only the elements in the range.
+
+        Args:
+            key: The list key.
+            start: First position to keep; negative counts from the tail.
+            stop: Last position to keep, inclusive.
+
+        Returns:
+            ``True``. A range that selects nothing deletes the list.
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+        """
         return self._c(_ok, "LTRIM", key, start, stop)
 
     def lset(self, key: KeyT, index: int, value: Arg) -> Any:
+        """``LSET key index value`` - replaces the element at a position (rewrites the list, O(N)).
+
+        Args:
+            key: The list key.
+            index: Position; negative counts from the tail.
+            value: New element.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: The key does not exist (``no such key``) or ``index`` is out of range.
+            WrongTypeError: The key holds a non-list type.
+        """
         return self._c(_ok, "LSET", key, index, value)
 
     def lrem(self, key: KeyT, count: int, value: Arg) -> Any:
+        """``LREM key count value`` - removes matching elements (rewrites the list, O(N)).
+
+        Args:
+            key: The list key.
+            count: ``> 0`` removes up to that many from the head, ``< 0`` from the tail, ``0``
+                removes all matches.
+            value: The element to remove.
+
+        Returns:
+            The number of removed elements (``0`` when the key is missing).
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+        """
         return self._c(None, "LREM", key, count, value)
 
     def linsert(self, key: KeyT, where: str, pivot: Arg, value: Arg) -> Any:
-        """``where`` is ``BEFORE`` or ``AFTER``."""
+        """``LINSERT key BEFORE|AFTER pivot value`` - inserts next to an existing element (O(N)).
+
+        Args:
+            key: The list key.
+            where: ``"BEFORE"`` or ``"AFTER"``.
+            pivot: The existing element to insert next to (first match from the head).
+            value: The element to insert.
+
+        Returns:
+            The new length, ``-1`` when ``pivot`` is not in the list, ``0`` when the key is missing.
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+        """
         return self._c(None, "LINSERT", key, where, pivot, value)
 
     def lpos(
         self, key: KeyT, element: Arg, rank: Optional[int] = None, count: Optional[int] = None, maxlen: Optional[int] = None
     ) -> Any:
+        """``LPOS key element [RANK n] [COUNT n] [MAXLEN n]`` - position of an element (read-only, O(N)).
+
+        Args:
+            key: The list key.
+            element: The element to look for.
+            rank: Which match to return; ``2`` is the second match, negative scans from the tail.
+            count: Return up to this many matches as a list (``0`` for all).
+            maxlen: Compare at most this many elements.
+
+        Returns:
+            Without ``count``: the zero-based position, or ``None`` when not found. With ``count``: a
+            list of positions (empty when none).
+
+        Raises:
+            WrongTypeError: The key holds a non-list type.
+        """
         args: List[Any] = [key, element]
         if rank is not None:
             args += ["RANK", rank]
@@ -1926,24 +2162,104 @@ class Commands:
         return self._c(None, "LPOS", *args)
 
     def lmove(self, src: KeyT, dst: KeyT, wherefrom: str = "LEFT", whereto: str = "RIGHT") -> Any:
+        """``LMOVE src dst LEFT|RIGHT LEFT|RIGHT`` - atomically pops from one list and pushes to another.
+
+        Args:
+            src: Source list.
+            dst: Destination list (may equal ``src`` to rotate).
+            wherefrom: End of ``src`` to pop from, ``"LEFT"`` (head) or ``"RIGHT"`` (tail).
+            whereto: End of ``dst`` to push to, ``"LEFT"`` or ``"RIGHT"``.
+
+        Returns:
+            The moved element, or ``None`` when ``src`` is empty or missing.
+
+        Raises:
+            WrongTypeError: A key holds a non-list type.
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._c(None, "LMOVE", src, dst, wherefrom, whereto)
 
     def rpoplpush(self, src: KeyT, dst: KeyT) -> Any:
+        """``RPOPLPUSH src dst`` - pops the tail of ``src`` and pushes it to the head of ``dst`` (same as ``lmove(src, dst, "RIGHT", "LEFT")``).
+
+        Args:
+            src: Source list.
+            dst: Destination list.
+
+        Returns:
+            The moved element, or ``None`` when ``src`` is empty or missing.
+
+        Raises:
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._c(None, "RPOPLPUSH", src, dst)
 
     def blmove(self, src: KeyT, dst: KeyT, timeout: float, wherefrom: str = "LEFT", whereto: str = "RIGHT") -> Any:
-        """Blocking; on the shared asyncio connection it holds every other caller too."""
+        """``BLMOVE src dst LEFT|RIGHT LEFT|RIGHT timeout`` - blocking :meth:`lmove`.
+
+        The server polls every 5 ms instead of parking a waiter and counts it against the limit of
+        1,024 blocked clients per shard. Not allowed inside a transaction or script. It occupies the
+        connection: on the shared asyncio connection every other caller waits too, so run it on
+        :meth:`dedicated`. With a sync ``socket_timeout`` shorter than ``timeout`` the call raises
+        :class:`TimeoutError`.
+
+        Args:
+            src: Source list.
+            dst: Destination list.
+            timeout: Seconds to wait (float); ``0`` waits until an element arrives.
+            wherefrom: ``"LEFT"`` or ``"RIGHT"`` end of ``src``.
+            whereto: ``"LEFT"`` or ``"RIGHT"`` end of ``dst``.
+
+        Returns:
+            The moved element, or ``None`` when the timeout elapsed.
+        """
         return self._c(None, "BLMOVE", src, dst, wherefrom, whereto, timeout)
 
     def blpop(self, keys: Union[KeyT, Sequence[KeyT]], timeout: float = 0) -> Any:
-        """``(key, value)`` or None on timeout. Blocks the connection."""
+        """``BLPOP key [key ...] timeout`` - pops from the head of the first non-empty list, waiting if needed.
+
+        Blocks this connection (asyncio: use :meth:`dedicated`). At most 1,024 clients may block per
+        shard. All keys must be in one shard/slot.
+
+        Args:
+            keys: One key or a list of keys, checked in order.
+            timeout: Seconds to wait (float); ``0`` waits until data arrives or the server stops.
+
+        Returns:
+            ``(key, value)``, or ``None`` on timeout.
+
+        Example:
+            item = client.blpop("jobs", timeout=5)
+            if item:
+                key, value = item
+        """
         return self._c(_key_value, "BLPOP", *_keys(keys), timeout)
 
     def brpop(self, keys: Union[KeyT, Sequence[KeyT]], timeout: float = 0) -> Any:
+        """``BRPOP key [key ...] timeout`` - pops from the tail of the first non-empty list, waiting if needed.
+
+        Same blocking rules as :meth:`blpop`.
+
+        Args:
+            keys: One key or a list of keys, checked in order.
+            timeout: Seconds to wait (float); ``0`` waits until data arrives.
+
+        Returns:
+            ``(key, value)``, or ``None`` on timeout.
+        """
         return self._c(_key_value, "BRPOP", *_keys(keys), timeout)
 
     def lmpop(self, keys: Union[KeyT, Sequence[KeyT]], direction: str = "LEFT", count: Optional[int] = None) -> Any:
-        """``(key, [values])`` or None."""
+        """``LMPOP numkeys key [key ...] LEFT|RIGHT [COUNT n]`` - pops from the first non-empty list.
+
+        Args:
+            keys: One key or a list of keys, checked in order.
+            direction: ``"LEFT"`` (head) or ``"RIGHT"`` (tail).
+            count: Maximum number of elements to pop (default one).
+
+        Returns:
+            ``(key, [values])``, or ``None`` when all lists are empty.
+        """
         k = _keys(keys)
         args: List[Any] = [len(k), *k, direction]
         if count is not None:
@@ -1953,6 +2269,19 @@ class Commands:
     def blmpop(
         self, timeout: float, keys: Union[KeyT, Sequence[KeyT]], direction: str = "LEFT", count: Optional[int] = None
     ) -> Any:
+        """``BLMPOP timeout numkeys key [key ...] LEFT|RIGHT [COUNT n]`` - blocking :meth:`lmpop`.
+
+        Polls every 5 ms; same blocking rules as :meth:`blmove`.
+
+        Args:
+            timeout: Seconds to wait (float); ``0`` waits until data arrives.
+            keys: One key or a list of keys, checked in order.
+            direction: ``"LEFT"`` or ``"RIGHT"``.
+            count: Maximum number of elements to pop.
+
+        Returns:
+            ``(key, [values])``, or ``None`` on timeout.
+        """
         k = _keys(keys)
         args: List[Any] = [timeout, len(k), *k, direction]
         if count is not None:
@@ -1961,57 +2290,244 @@ class Commands:
 
     # ======================================================= sets
     def sadd(self, key: KeyT, *members: Arg) -> Any:
+        """``SADD key member [member ...]`` - adds members to a set (creates it).
+
+        Args:
+            key: The set key.
+            *members: One or more members.
+
+        Returns:
+            The number of members that were new.
+
+        Raises:
+            WrongTypeError: The key holds a non-set type.
+        """
         return self._c(None, "SADD", key, *members)
 
     def srem(self, key: KeyT, *members: Arg) -> Any:
+        """``SREM key member [member ...]`` - removes members from a set.
+
+        Args:
+            key: The set key.
+            *members: One or more members.
+
+        Returns:
+            The number of members that were present and removed.
+
+        Raises:
+            WrongTypeError: The key holds a non-set type.
+        """
         return self._c(None, "SREM", key, *members)
 
     def sismember(self, key: KeyT, member: Arg) -> Any:
+        """``SISMEMBER key member`` - tests membership.
+
+        Args:
+            key: The set key.
+            member: The member.
+
+        Returns:
+            ``True`` if it is a member, ``False`` otherwise (also when the key is missing).
+        """
         return self._c(_bool, "SISMEMBER", key, member)
 
     def smismember(self, key: KeyT, *members: Arg) -> Any:
+        """``SMISMEMBER key member [member ...]`` - tests several members at once.
+
+        Args:
+            key: The set key.
+            *members: Members to test.
+
+        Returns:
+            A list of booleans in the order of ``members``.
+        """
         return self._c(_bools, "SMISMEMBER", key, *members)
 
     def scard(self, key: KeyT) -> Any:
+        """``SCARD key`` - number of members.
+
+        Args:
+            key: The set key.
+
+        Returns:
+            The count; ``0`` when the key is missing.
+        """
         return self._c(None, "SCARD", key)
 
     def smembers(self, key: KeyT) -> Any:
+        """``SMEMBERS key`` - all members.
+
+        Args:
+            key: The set key.
+
+        Returns:
+            A Python ``set`` (empty when the key is missing). The server sends them sorted; the
+            ``set`` has no order.
+
+        Raises:
+            WrongTypeError: The key holds a non-set type.
+        """
         return self._c(_set, "SMEMBERS", key)
 
     def sinter(self, *keys: KeyT) -> Any:
+        """``SINTER key [key ...]`` - members present in every set.
+
+        Args:
+            *keys: Set keys (same slot on a cluster).
+
+        Returns:
+            A ``set``; empty if any key is missing.
+
+        Raises:
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._c(_set, "SINTER", *keys)
 
     def sunion(self, *keys: KeyT) -> Any:
+        """``SUNION key [key ...]`` - members present in any set.
+
+        Args:
+            *keys: Set keys (same slot on a cluster).
+
+        Returns:
+            A ``set``.
+
+        Raises:
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._c(_set, "SUNION", *keys)
 
     def sdiff(self, *keys: KeyT) -> Any:
+        """``SDIFF key [key ...]`` - members of the first set that are in none of the others.
+
+        Args:
+            *keys: Set keys, the first is the base (same slot on a cluster).
+
+        Returns:
+            A ``set``.
+
+        Raises:
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._c(_set, "SDIFF", *keys)
 
     def sinterstore(self, dst: KeyT, *keys: KeyT) -> Any:
+        """``SINTERSTORE dst key [key ...]`` - stores the intersection in ``dst``.
+
+        Args:
+            dst: Destination key (overwritten; removed if the result is empty).
+            *keys: Source set keys.
+
+        Returns:
+            The size of the stored set.
+
+        Raises:
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._c(None, "SINTERSTORE", dst, *keys)
 
     def sunionstore(self, dst: KeyT, *keys: KeyT) -> Any:
+        """``SUNIONSTORE dst key [key ...]`` - stores the union in ``dst``.
+
+        Args:
+            dst: Destination key (overwritten).
+            *keys: Source set keys.
+
+        Returns:
+            The size of the stored set.
+
+        Raises:
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._c(None, "SUNIONSTORE", dst, *keys)
 
     def sdiffstore(self, dst: KeyT, *keys: KeyT) -> Any:
+        """``SDIFFSTORE dst key [key ...]`` - stores the difference in ``dst``.
+
+        Args:
+            dst: Destination key (overwritten).
+            *keys: Source set keys, the first is the base.
+
+        Returns:
+            The size of the stored set.
+
+        Raises:
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._c(None, "SDIFFSTORE", dst, *keys)
 
     def sintercard(self, keys: Sequence[KeyT], limit: Optional[int] = None) -> Any:
+        """``SINTERCARD numkeys key [key ...] [LIMIT n]`` - size of the intersection without building it.
+
+        Args:
+            keys: A sequence of set keys (same slot on a cluster).
+            limit: Stop counting at this many (``0``/``None`` for no limit).
+
+        Returns:
+            The intersection size (``int``).
+        """
         if limit is None:
             return self._c(None, "SINTERCARD", len(keys), *keys)
         return self._c(None, "SINTERCARD", len(keys), *keys, "LIMIT", limit)
 
     def smove(self, src: KeyT, dst: KeyT, member: Arg) -> Any:
+        """``SMOVE src dst member`` - moves a member from one set to another.
+
+        Args:
+            src: Source set.
+            dst: Destination set.
+            member: The member to move.
+
+        Returns:
+            ``True`` if moved, ``False`` if it was not in ``src``.
+
+        Raises:
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._c(_bool, "SMOVE", src, dst, member)
 
     def spop(self, key: KeyT, count: Optional[int] = None) -> Any:
+        """``SPOP key [count]`` - removes and returns random members.
+
+        Args:
+            key: The set key.
+            count: How many members to pop. Omit for one.
+
+        Returns:
+            Without ``count``: a member or ``None`` when the set is empty/missing. With ``count``: a list.
+        """
         return self._c(None, "SPOP", key) if count is None else self._c(None, "SPOP", key, count)
 
     def srandmember(self, key: KeyT, count: Optional[int] = None) -> Any:
+        """``SRANDMEMBER key [count]`` - random members without removing them.
+
+        Args:
+            key: The set key.
+            count: Omit for one member. Positive: up to ``count`` distinct members. Negative: ``-count``
+                members that may repeat (limited to 1,048,576). ``0`` gives an empty list.
+
+        Returns:
+            Without ``count``: a member or ``None`` when missing. With ``count``: a list. Members of a
+            count are near each other in the table, so they are random between calls but not independent draws.
+        """
         return self._c(None, "SRANDMEMBER", key) if count is None else self._c(None, "SRANDMEMBER", key, count)
 
     def sscan(self, key: KeyT, cursor: int = 0, match: Optional[str] = None, count: Optional[int] = None) -> Any:
-        """``(next_cursor, members)``. See :meth:`sscan_iter`."""
+        """``SSCAN key cursor [MATCH pattern] [COUNT n]`` - one page of set members.
+
+        Start with cursor ``0`` and repeat with the returned cursor until it is ``0`` (see
+        :meth:`sscan_iter`). A member can appear twice if the table was rebuilt between pages, but is
+        never missed.
+
+        Args:
+            key: The set key.
+            cursor: ``0`` to start.
+            match: Glob pattern for members.
+            count: Work hint per page.
+
+        Returns:
+            ``(next_cursor, members)``; a missing key gives ``(0, [])``.
+        """
         args: List[Any] = [key, cursor]
         if match is not None:
             args += ["MATCH", match]
@@ -2027,7 +2543,26 @@ class Commands:
         value: Optional[Arg] = None,
         mapping: Optional[Union[Mapping[Any, Any], Iterable[Tuple[Any, Any]]]] = None,
     ) -> Any:
-        """``HSET key field value`` and/or ``mapping`` - number of new fields."""
+        """``HSET key field value [field value ...]`` - sets hash fields.
+
+        Give either ``field`` and ``value``, or ``mapping``, or both. Setting a field drops its field TTL.
+
+        Args:
+            key: The hash key.
+            field: Field name (with ``value``).
+            value: Field value.
+            mapping: A ``dict`` or iterable of ``(field, value)`` pairs to set as well.
+
+        Returns:
+            The number of fields that were new.
+
+        Raises:
+            WrongTypeError: The key holds a non-hash type.
+
+        Example:
+            client.hset("user:1", mapping={"name": "Ada", "age": 36})   # -> 2
+            client.hset("user:1", "city", "London")                     # -> 1
+        """
         if mapping is None:
             return self._c(None, "HSET", key, field, value)
         pairs = _flat_pairs(mapping)
@@ -2036,6 +2571,18 @@ class Commands:
         return self._c(None, "HSET", key, *pairs)
 
     def hget(self, key: KeyT, field: Arg) -> Any:
+        """``HGET key field`` - value of one field.
+
+        Args:
+            key: The hash key.
+            field: Field name.
+
+        Returns:
+            The value, or ``None`` when the field or key is missing.
+
+        Raises:
+            WrongTypeError: The key holds a non-hash type.
+        """
         if type(key) is str and type(field) is str:
             k = key.encode("utf-8", "surrogateescape")
             f = field.encode("utf-8", "surrogateescape")
@@ -2046,42 +2593,162 @@ class Commands:
         return self._c(None, "HGET", key, field)
 
     def hdel(self, key: KeyT, *fields: Arg) -> Any:
+        """``HDEL key field [field ...]`` - deletes fields.
+
+        Args:
+            key: The hash key.
+            *fields: One or more field names.
+
+        Returns:
+            The number of fields removed. The hash disappears with its last field.
+        """
         return self._c(None, "HDEL", key, *fields)
 
     def hlen(self, key: KeyT) -> Any:
+        """``HLEN key`` - number of fields.
+
+        Args:
+            key: The hash key.
+
+        Returns:
+            The count; ``0`` when the key is missing.
+        """
         return self._c(None, "HLEN", key)
 
     def hgetall(self, key: KeyT) -> Any:
+        """``HGETALL key`` - all fields and values.
+
+        Args:
+            key: The hash key.
+
+        Returns:
+            A ``dict`` of field to value (empty when the key is missing). Order is unspecified.
+
+        Raises:
+            WrongTypeError: The key holds a non-hash type.
+        """
         return self._c(_pairs, "HGETALL", key)
 
     def hmget(self, key: KeyT, *fields: Arg) -> Any:
+        """``HMGET key field [field ...]`` - values of several fields.
+
+        Args:
+            key: The hash key.
+            *fields: Field names, as arguments or as one list.
+
+        Returns:
+            A list in the order of ``fields`` with ``None`` for missing fields.
+        """
         if len(fields) == 1 and not isinstance(fields[0], (str, bytes, int, float)):
             fields = tuple(fields[0])  # type: ignore[arg-type]
         return self._c(None, "HMGET", key, *fields)
 
     def hexists(self, key: KeyT, field: Arg) -> Any:
+        """``HEXISTS key field`` - does the field exist.
+
+        Args:
+            key: The hash key.
+            field: Field name.
+
+        Returns:
+            ``True`` or ``False``.
+        """
         return self._c(_bool, "HEXISTS", key, field)
 
     def hkeys(self, key: KeyT) -> Any:
+        """``HKEYS key`` - all field names (unspecified order).
+
+        Args:
+            key: The hash key.
+
+        Returns:
+            A list of names (empty when missing).
+        """
         return self._c(None, "HKEYS", key)
 
     def hvals(self, key: KeyT) -> Any:
+        """``HVALS key`` - all values (unspecified order).
+
+        Args:
+            key: The hash key.
+
+        Returns:
+            A list of values (empty when missing).
+        """
         return self._c(None, "HVALS", key)
 
     def hincrby(self, key: KeyT, field: Arg, amount: int = 1) -> Any:
+        """``HINCRBY key field amount`` - adds an integer to a field (missing counts as 0). Keeps a field TTL.
+
+        Args:
+            key: The hash key.
+            field: Field name.
+            amount: Integer to add (default 1); may be negative.
+
+        Returns:
+            The new value (``int``).
+
+        Raises:
+            ResponseError: The field is not an integer or the result overflows.
+            WrongTypeError: The key holds a non-hash type.
+        """
         return self._c(None, "HINCRBY", key, field, amount)
 
     def hincrbyfloat(self, key: KeyT, field: Arg, amount: float) -> Any:
+        """``HINCRBYFLOAT key field amount`` - adds a float to a field (15 significant digits). Keeps a field TTL.
+
+        Args:
+            key: The hash key.
+            field: Field name.
+            amount: Number to add.
+
+        Returns:
+            The new value as ``float``.
+
+        Raises:
+            ResponseError: The field is not a valid float or the result is not finite.
+        """
         return self._c(float, "HINCRBYFLOAT", key, field, amount)
 
     def hsetnx(self, key: KeyT, field: Arg, value: Arg) -> Any:
+        """``HSETNX key field value`` - sets a field only when it does not exist.
+
+        Args:
+            key: The hash key.
+            field: Field name.
+            value: Value.
+
+        Returns:
+            ``True`` when set, ``False`` when the field existed (nothing written).
+        """
         return self._c(_bool, "HSETNX", key, field, value)
 
     def hstrlen(self, key: KeyT, field: Arg) -> Any:
+        """``HSTRLEN key field`` - length of a field value in bytes.
+
+        Args:
+            key: The hash key.
+            field: Field name.
+
+        Returns:
+            The length; ``0`` when the key or field is missing.
+        """
         return self._c(None, "HSTRLEN", key, field)
 
     def hscan(self, key: KeyT, cursor: int = 0, match: Optional[str] = None, count: Optional[int] = None) -> Any:
-        """``(next_cursor, {field: value})``. See :meth:`hscan_iter`."""
+        """``HSCAN key cursor [MATCH pattern] [COUNT n]`` - one page of a hash.
+
+        See :meth:`hscan_iter` for the loop. A field can repeat if the table was rebuilt between pages.
+
+        Args:
+            key: The hash key.
+            cursor: ``0`` to start.
+            match: Glob pattern for field names.
+            count: Work hint per page.
+
+        Returns:
+            ``(next_cursor, {field: value})``; a missing key gives ``(0, {})``.
+        """
         args: List[Any] = [key, cursor]
         if match is not None:
             args += ["MATCH", match]
@@ -2090,6 +2757,18 @@ class Commands:
         return self._c(_scan_pairs, "HSCAN", *args)
 
     def hrandfield(self, key: KeyT, count: Optional[int] = None, withvalues: bool = False) -> Any:
+        """``HRANDFIELD key [count [WITHVALUES]]`` - random fields (reads the whole hash, O(N)).
+
+        Args:
+            key: The hash key.
+            count: Omit for one field. Positive: up to ``count`` distinct fields. Negative: ``-count``
+                fields that may repeat (limited to 1,048,576).
+            withvalues: With ``count``, return ``(field, value)`` pairs.
+
+        Returns:
+            Without ``count``: a field or ``None`` when missing. With ``count``: a list of fields, or of
+            ``(field, value)`` tuples with ``withvalues``.
+        """
         if count is None:
             return self._c(None, "HRANDFIELD", key)
         if withvalues:
@@ -2102,37 +2781,144 @@ class Commands:
     def hexpire(
         self, key: KeyT, seconds: int, *fields: Arg, nx: bool = False, xx: bool = False, gt: bool = False, lt: bool = False
     ) -> Any:
-        """Per-field TTL. Replies per field: -2 missing, 0 condition not met, 1 set, 2 deleted."""
+        """``HEXPIRE key seconds [NX|XX|GT|LT] FIELDS n field...`` - per-field TTL in seconds.
+
+        Field TTLs follow Redis 7.4. ``HSET`` and ``HDEL`` drop a field TTL; ``HINCRBY`` keeps it. A hash
+        whose every field is expired counts as a missing key.
+
+        Args:
+            key: The hash key.
+            seconds: Time to live; zero or past deletes the field.
+            *fields: Field names (at least one).
+            nx: Only set when the field has no TTL.
+            xx: Only set when the field already has a TTL.
+            gt: Only set when the new TTL is greater.
+            lt: Only set when the new TTL is smaller.
+
+        Returns:
+            A list with one code per field: ``-2`` no such field, ``0`` condition not met, ``1`` TTL
+            set, ``2`` field deleted (zero/past time).
+
+        Raises:
+            ResponseError: Conflicting conditions or invalid time.
+        """
         return self._hfield_ttl("HEXPIRE", key, seconds, fields, _expire_cond(nx, xx, gt, lt))
 
     def hpexpire(
         self, key: KeyT, ms: int, *fields: Arg, nx: bool = False, xx: bool = False, gt: bool = False, lt: bool = False
     ) -> Any:
+        """``HPEXPIRE key ms [NX|XX|GT|LT] FIELDS n field...`` - per-field TTL in milliseconds.
+
+        Args:
+            key: The hash key.
+            ms: Time to live in milliseconds.
+            *fields: Field names.
+            nx: Only set when the field has no TTL.
+            xx: Only set when the field has a TTL.
+            gt: Only set when greater than the current TTL.
+            lt: Only set when smaller than the current TTL.
+
+        Returns:
+            One code per field, as in :meth:`hexpire`.
+        """
         return self._hfield_ttl("HPEXPIRE", key, ms, fields, _expire_cond(nx, xx, gt, lt))
 
     def hexpireat(
         self, key: KeyT, when: int, *fields: Arg, nx: bool = False, xx: bool = False, gt: bool = False, lt: bool = False
     ) -> Any:
+        """``HEXPIREAT key when [NX|XX|GT|LT] FIELDS n field...`` - per-field expiry at a Unix time in seconds.
+
+        Args:
+            key: The hash key.
+            when: Unix time in seconds; a past time deletes the field.
+            *fields: Field names.
+            nx: Only set when the field has no TTL.
+            xx: Only set when the field has a TTL.
+            gt: Only set when later than the current expiry.
+            lt: Only set when earlier than the current expiry.
+
+        Returns:
+            One code per field, as in :meth:`hexpire`.
+        """
         return self._hfield_ttl("HEXPIREAT", key, when, fields, _expire_cond(nx, xx, gt, lt))
 
     def hpexpireat(
         self, key: KeyT, when_ms: int, *fields: Arg, nx: bool = False, xx: bool = False, gt: bool = False, lt: bool = False
     ) -> Any:
+        """``HPEXPIREAT key when_ms [NX|XX|GT|LT] FIELDS n field...`` - per-field expiry at a Unix time in ms.
+
+        Args:
+            key: The hash key.
+            when_ms: Unix time in milliseconds; a past time deletes the field.
+            *fields: Field names.
+            nx: Only set when the field has no TTL.
+            xx: Only set when the field has a TTL.
+            gt: Only set when later than the current expiry.
+            lt: Only set when earlier than the current expiry.
+
+        Returns:
+            One code per field, as in :meth:`hexpire`.
+        """
         return self._hfield_ttl("HPEXPIREAT", key, when_ms, fields, _expire_cond(nx, xx, gt, lt))
 
     def httl(self, key: KeyT, *fields: Arg) -> Any:
+        """``HTTL key FIELDS n field...`` - remaining field TTL in seconds (rounded up).
+
+        Args:
+            key: The hash key.
+            *fields: Field names.
+
+        Returns:
+            A list per field: seconds left, ``-1`` field has no TTL, ``-2`` field or key missing.
+        """
         return self._c(None, "HTTL", key, "FIELDS", len(fields), *fields)
 
     def hpttl(self, key: KeyT, *fields: Arg) -> Any:
+        """``HPTTL key FIELDS n field...`` - remaining field TTL in milliseconds.
+
+        Args:
+            key: The hash key.
+            *fields: Field names.
+
+        Returns:
+            A list per field: ms left, ``-1`` no TTL, ``-2`` field or key missing.
+        """
         return self._c(None, "HPTTL", key, "FIELDS", len(fields), *fields)
 
     def hexpiretime(self, key: KeyT, *fields: Arg) -> Any:
+        """``HEXPIRETIME key FIELDS n field...`` - field expiry as Unix seconds (rounded up).
+
+        Args:
+            key: The hash key.
+            *fields: Field names.
+
+        Returns:
+            A list per field: Unix time, ``-1`` no TTL, ``-2`` missing.
+        """
         return self._c(None, "HEXPIRETIME", key, "FIELDS", len(fields), *fields)
 
     def hpexpiretime(self, key: KeyT, *fields: Arg) -> Any:
+        """``HPEXPIRETIME key FIELDS n field...`` - field expiry as Unix milliseconds.
+
+        Args:
+            key: The hash key.
+            *fields: Field names.
+
+        Returns:
+            A list per field: Unix time in ms, ``-1`` no TTL, ``-2`` missing.
+        """
         return self._c(None, "HPEXPIRETIME", key, "FIELDS", len(fields), *fields)
 
     def hpersist(self, key: KeyT, *fields: Arg) -> Any:
+        """``HPERSIST key FIELDS n field...`` - removes field TTLs.
+
+        Args:
+            key: The hash key.
+            *fields: Field names.
+
+        Returns:
+            A list per field: ``1`` TTL removed, ``-1`` field had none, ``-2`` field or key missing.
+        """
         return self._c(None, "HPERSIST", key, "FIELDS", len(fields), *fields)
 
     # ======================================================= sorted sets
@@ -2147,8 +2933,31 @@ class Commands:
         ch: bool = False,
         incr: bool = False,
     ) -> Any:
-        """``ZADD key [NX|XX] [GT|LT] [CH] [INCR] score member ...`` (mapping is member -> score).
-        With ``incr`` the reply is the new score or None."""
+        """``ZADD key [NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]`` - adds or updates sorted-set members.
+
+        Args:
+            key: The sorted-set key (created when missing).
+            mapping: ``{member: score}`` or an iterable of ``(member, score)`` pairs. Scores are floats;
+                ``inf``/``-inf`` are accepted.
+            nx: Only add new members, never update existing ones.
+            xx: Only update existing members, never add.
+            gt: Update only when the new score is greater (new members are still added).
+            lt: Update only when the new score is lower (new members are still added).
+            ch: Count changed members (new plus updated) instead of only new ones.
+            incr: Treat the single pair as an increment, like :meth:`zincrby`.
+
+        Returns:
+            The number of new members (or changed ones with ``ch``). With ``incr``: the new score as
+            ``float``, or ``None`` when a condition refused the update.
+
+        Raises:
+            WrongTypeError: The key holds a non-sorted-set type.
+            ResponseError: Conflicting options or a score that is not a number.
+
+        Example:
+            client.zadd("board", {"ann": 10, "bob": 7})   # -> 2
+            client.zadd("board", {"ann": 12}, ch=True)    # -> 1
+        """
         args: List[Any] = [key, *_expire_cond(nx, xx, gt, lt)]
         if ch:
             args.append("CH")
@@ -2172,7 +2981,36 @@ class Commands:
         count: Optional[int] = None,
         withscores: bool = False,
     ) -> Any:
-        """``ZRANGE`` - members, or ``[(member, score)]`` with ``withscores``."""
+        """``ZRANGE key start stop [BYSCORE|BYLEX] [REV] [LIMIT offset count] [WITHSCORES]`` - members in a range.
+
+        By default ``start``/``stop`` are zero-based ranks (negative counts from the end). With
+        ``byscore`` they are score bounds (``-inf``, ``+inf``, ``(5`` for exclusive); with ``bylex``
+        they are lex bounds (``-``, ``+``, ``[member``, ``(member``). With ``rev`` the order is
+        descending and, for ``byscore``/``bylex``, ``start`` is the high bound.
+
+        Args:
+            key: The sorted-set key.
+            start: Range start (rank, score or lex bound).
+            stop: Range end.
+            byscore: Interpret the bounds as scores.
+            bylex: Interpret the bounds as lexicographic member bounds (scores must be equal).
+            rev: Reverse the order.
+            offset: Skip this many results (needs ``count``; only with ``byscore``/``bylex``).
+            count: Return at most this many (negative returns the rest).
+            withscores: Return scores too.
+
+        Returns:
+            A list of members, or a list of ``(member, score)`` tuples with ``withscores``. Empty when
+            the key is missing.
+
+        Raises:
+            ValueError: Only one of ``offset`` and ``count`` was given.
+            WrongTypeError: The key holds a non-sorted-set type.
+
+        Example:
+            client.zrange("board", 0, -1, withscores=True)   # -> [("bob", 7.0), ("ann", 12.0)]
+            client.zrange("board", "(5", "+inf", byscore=True)
+        """
         args: List[Any] = [key, start, stop]
         if byscore:
             args.append("BYSCORE")
@@ -2187,6 +3025,17 @@ class Commands:
         return self._c(None, "ZRANGE", *args)
 
     def zrevrange(self, key: KeyT, start: int, stop: int, withscores: bool = False) -> Any:
+        """``ZREVRANGE key start stop [WITHSCORES]`` - members by rank, highest score first.
+
+        Args:
+            key: The sorted-set key.
+            start: First rank (``0`` is the highest score); negative counts from the end.
+            stop: Last rank, inclusive.
+            withscores: Return ``(member, score)`` tuples.
+
+        Returns:
+            A list of members or tuples; empty when the key is missing.
+        """
         if withscores:
             return self._c(_scored, "ZREVRANGE", key, start, stop, "WITHSCORES")
         return self._c(None, "ZREVRANGE", key, start, stop)
@@ -2200,6 +3049,22 @@ class Commands:
         count: Optional[int] = None,
         withscores: bool = False,
     ) -> Any:
+        """``ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`` - members with scores in a range, lowest first.
+
+        Args:
+            key: The sorted-set key.
+            min: Lower bound: a number, ``"-inf"`` or ``"(5"`` for exclusive.
+            max: Upper bound: a number, ``"+inf"`` or ``"(9"`` for exclusive.
+            offset: Skip this many (needs ``count``).
+            count: Return at most this many (negative returns the rest).
+            withscores: Return ``(member, score)`` tuples.
+
+        Returns:
+            A list of members or tuples.
+
+        Raises:
+            ValueError: Only one of ``offset`` and ``count`` was given.
+        """
         args: List[Any] = [key, min, max]
         if withscores:
             args.append("WITHSCORES")
@@ -2209,6 +3074,21 @@ class Commands:
     def zrangebylex(
         self, key: KeyT, min: Arg, max: Arg, offset: Optional[int] = None, count: Optional[int] = None  # noqa: A002
     ) -> Any:
+        """``ZRANGEBYLEX key min max [LIMIT offset count]`` - members in a lexicographic range (equal scores).
+
+        Args:
+            key: The sorted-set key.
+            min: Lower bound: ``"-"``, ``"[member"`` (inclusive) or ``"(member"`` (exclusive).
+            max: Upper bound: ``"+"``, ``"[member"`` or ``"(member"``.
+            offset: Skip this many (needs ``count``).
+            count: Return at most this many.
+
+        Returns:
+            A list of members, ascending.
+
+        Raises:
+            ValueError: Only one of ``offset`` and ``count`` was given.
+        """
         args: List[Any] = [key, min, max]
         _limit_args(args, offset, count)
         return self._c(None, "ZRANGEBYLEX", *args)
@@ -2216,58 +3096,225 @@ class Commands:
     def zrevrangebylex(
         self, key: KeyT, max: Arg, min: Arg, offset: Optional[int] = None, count: Optional[int] = None  # noqa: A002
     ) -> Any:
+        """``ZREVRANGEBYLEX key max min [LIMIT offset count]`` - lexicographic range, descending.
+
+        Args:
+            key: The sorted-set key.
+            max: High bound (first!): ``"+"``, ``"[member"`` or ``"(member"``.
+            min: Low bound: ``"-"``, ``"[member"`` or ``"(member"``.
+            offset: Skip this many (needs ``count``).
+            count: Return at most this many.
+
+        Returns:
+            A list of members, descending.
+
+        Raises:
+            ValueError: Only one of ``offset`` and ``count`` was given.
+        """
         args: List[Any] = [key, max, min]
         _limit_args(args, offset, count)
         return self._c(None, "ZREVRANGEBYLEX", *args)
 
     def zrem(self, key: KeyT, *members: Arg) -> Any:
+        """``ZREM key member [member ...]`` - removes members.
+
+        Args:
+            key: The sorted-set key.
+            *members: One or more members.
+
+        Returns:
+            The number removed. The key disappears with its last member.
+        """
         return self._c(None, "ZREM", key, *members)
 
     def zincrby(self, key: KeyT, amount: float, member: Arg) -> Any:
+        """``ZINCRBY key amount member`` - adds to a member's score (member created at ``amount`` if new).
+
+        Args:
+            key: The sorted-set key.
+            amount: Number to add; may be negative.
+            member: The member.
+
+        Returns:
+            The new score as ``float``.
+        """
         return self._c(float, "ZINCRBY", key, amount, member)
 
     def zcard(self, key: KeyT) -> Any:
+        """``ZCARD key`` - number of members.
+
+        Args:
+            key: The sorted-set key.
+
+        Returns:
+            The count; ``0`` when the key is missing.
+        """
         return self._c(None, "ZCARD", key)
 
     def zscore(self, key: KeyT, member: Arg) -> Any:
+        """``ZSCORE key member`` - a member's score.
+
+        Args:
+            key: The sorted-set key.
+            member: The member.
+
+        Returns:
+            The score as ``float``, or ``None`` when the member or key is missing.
+        """
         return self._c(_float, "ZSCORE", key, member)
 
     def zmscore(self, key: KeyT, *members: Arg) -> Any:
+        """``ZMSCORE key member [member ...]`` - scores of several members.
+
+        Args:
+            key: The sorted-set key.
+            *members: Members.
+
+        Returns:
+            A list of ``float`` or ``None`` per member.
+        """
         return self._c(_floats, "ZMSCORE", key, *members)
 
     def zrank(self, key: KeyT, member: Arg) -> Any:
+        """``ZRANK key member`` - zero-based rank, lowest score first.
+
+        Args:
+            key: The sorted-set key.
+            member: The member.
+
+        Returns:
+            The rank (``int``), or ``None`` when the member or key is missing.
+        """
         return self._c(None, "ZRANK", key, member)
 
     def zrevrank(self, key: KeyT, member: Arg) -> Any:
+        """``ZREVRANK key member`` - zero-based rank, highest score first.
+
+        Args:
+            key: The sorted-set key.
+            member: The member.
+
+        Returns:
+            The rank (``int``), or ``None`` when missing.
+        """
         return self._c(None, "ZREVRANK", key, member)
 
     def zcount(self, key: KeyT, min: Arg, max: Arg) -> Any:  # noqa: A002
+        """``ZCOUNT key min max`` - number of members with a score in a range.
+
+        Args:
+            key: The sorted-set key.
+            min: Lower bound: number, ``"-inf"`` or ``"(5"`` (exclusive).
+            max: Upper bound: number, ``"+inf"`` or ``"(9"`` (exclusive).
+
+        Returns:
+            The count (``0`` when the key is missing).
+        """
         return self._c(None, "ZCOUNT", key, min, max)
 
     def zlexcount(self, key: KeyT, min: Arg, max: Arg) -> Any:  # noqa: A002
+        """``ZLEXCOUNT key min max`` - number of members in a lexicographic range.
+
+        Args:
+            key: The sorted-set key.
+            min: ``"-"``, ``"[member"`` or ``"(member"``.
+            max: ``"+"``, ``"[member"`` or ``"(member"``.
+
+        Returns:
+            The count.
+        """
         return self._c(None, "ZLEXCOUNT", key, min, max)
 
     def zpopmin(self, key: KeyT, count: Optional[int] = None) -> Any:
-        """``[(member, score)]``."""
+        """``ZPOPMIN key [count]`` - removes and returns the lowest-scored members.
+
+        Args:
+            key: The sorted-set key.
+            count: How many to pop (default one).
+
+        Returns:
+            A list of ``(member, score)`` tuples, lowest first; empty when the key is missing.
+        """
         return self._c(_scored, "ZPOPMIN", key) if count is None else self._c(_scored, "ZPOPMIN", key, count)
 
     def zpopmax(self, key: KeyT, count: Optional[int] = None) -> Any:
+        """``ZPOPMAX key [count]`` - removes and returns the highest-scored members.
+
+        Args:
+            key: The sorted-set key.
+            count: How many to pop (default one).
+
+        Returns:
+            A list of ``(member, score)`` tuples, highest first; empty when the key is missing.
+        """
         return self._c(_scored, "ZPOPMAX", key) if count is None else self._c(_scored, "ZPOPMAX", key, count)
 
     def bzpopmin(self, keys: Union[KeyT, Sequence[KeyT]], timeout: float = 0) -> Any:
-        """``(key, member, score)`` or None. Blocks the connection."""
+        """``BZPOPMIN key [key ...] timeout`` - blocking :meth:`zpopmin` over several keys.
+
+        Blocks the connection (asyncio: use :meth:`dedicated`); at most 1,024 blocked clients per shard;
+        keys must share a shard.
+
+        Args:
+            keys: One key or a list of keys, checked in order.
+            timeout: Seconds to wait (float); ``0`` waits until data arrives.
+
+        Returns:
+            ``(key, member, score)``, or ``None`` on timeout.
+        """
         return self._c(_bzpop, "BZPOPMIN", *_keys(keys), timeout)
 
     def bzpopmax(self, keys: Union[KeyT, Sequence[KeyT]], timeout: float = 0) -> Any:
+        """``BZPOPMAX key [key ...] timeout`` - blocking :meth:`zpopmax` over several keys.
+
+        Same blocking rules as :meth:`bzpopmin`.
+
+        Args:
+            keys: One key or a list of keys.
+            timeout: Seconds to wait (float); ``0`` waits until data arrives.
+
+        Returns:
+            ``(key, member, score)``, or ``None`` on timeout.
+        """
         return self._c(_bzpop, "BZPOPMAX", *_keys(keys), timeout)
 
     def zremrangebyrank(self, key: KeyT, start: int, stop: int) -> Any:
+        """``ZREMRANGEBYRANK key start stop`` - removes members by rank.
+
+        Args:
+            key: The sorted-set key.
+            start: First rank (negative counts from the end).
+            stop: Last rank, inclusive.
+
+        Returns:
+            The number removed.
+        """
         return self._c(None, "ZREMRANGEBYRANK", key, start, stop)
 
     def zremrangebyscore(self, key: KeyT, min: Arg, max: Arg) -> Any:  # noqa: A002
+        """``ZREMRANGEBYSCORE key min max`` - removes members with a score in a range.
+
+        Args:
+            key: The sorted-set key.
+            min: Lower bound: number, ``"-inf"`` or ``"(5"`` (exclusive).
+            max: Upper bound: number, ``"+inf"`` or ``"(9"`` (exclusive).
+
+        Returns:
+            The number removed.
+        """
         return self._c(None, "ZREMRANGEBYSCORE", key, min, max)
 
     def zremrangebylex(self, key: KeyT, min: Arg, max: Arg) -> Any:  # noqa: A002
+        """``ZREMRANGEBYLEX key min max`` - removes members in a lexicographic range.
+
+        Args:
+            key: The sorted-set key.
+            min: ``"-"``, ``"[member"`` or ``"(member"``.
+            max: ``"+"``, ``"[member"`` or ``"(member"``.
+
+        Returns:
+            The number removed.
+        """
         return self._c(None, "ZREMRANGEBYLEX", key, min, max)
 
     def _zcombine(
@@ -2295,14 +3342,55 @@ class Commands:
     def zunionstore(
         self, dst: KeyT, keys: Sequence[KeyT], weights: Optional[Sequence[float]] = None, aggregate: Optional[str] = None
     ) -> Any:
+        """``ZUNIONSTORE dst numkeys key [key ...] [WEIGHTS w ...] [AGGREGATE SUM|MIN|MAX]`` - stores a union.
+
+        Inputs may be sorted sets or plain sets (every member scores 1). An empty result removes ``dst``.
+
+        Args:
+            dst: Destination key (overwritten).
+            keys: Source keys (same slot on a cluster).
+            weights: One multiplier per source key.
+            aggregate: How to combine equal members: ``"SUM"`` (default), ``"MIN"`` or ``"MAX"``.
+
+        Returns:
+            The number of members stored in ``dst``.
+
+        Raises:
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._zcombine("ZUNIONSTORE", dst, keys, weights, aggregate, False)
 
     def zinterstore(
         self, dst: KeyT, keys: Sequence[KeyT], weights: Optional[Sequence[float]] = None, aggregate: Optional[str] = None
     ) -> Any:
+        """``ZINTERSTORE dst numkeys key [key ...] [WEIGHTS w ...] [AGGREGATE SUM|MIN|MAX]`` - stores an intersection.
+
+        Inputs may be sorted sets or plain sets (score 1). An empty result removes ``dst``.
+
+        Args:
+            dst: Destination key (overwritten).
+            keys: Source keys (same slot on a cluster).
+            weights: One multiplier per source key.
+            aggregate: ``"SUM"`` (default), ``"MIN"`` or ``"MAX"``.
+
+        Returns:
+            The number of members stored.
+
+        Raises:
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._zcombine("ZINTERSTORE", dst, keys, weights, aggregate, False)
 
     def zdiffstore(self, dst: KeyT, keys: Sequence[KeyT]) -> Any:
+        """``ZDIFFSTORE dst numkeys key [key ...]`` - stores members of the first set absent from the others.
+
+        Args:
+            dst: Destination key (overwritten; removed if the result is empty).
+            keys: Source keys, the first is the base (same slot on a cluster).
+
+        Returns:
+            The number of members stored.
+        """
         return self._zcombine("ZDIFFSTORE", dst, keys, None, None, False)
 
     def zunion(
@@ -2312,6 +3400,17 @@ class Commands:
         aggregate: Optional[str] = None,
         withscores: bool = False,
     ) -> Any:
+        """``ZUNION numkeys key [key ...] [WEIGHTS ...] [AGGREGATE ...] [WITHSCORES]`` - union without storing.
+
+        Args:
+            keys: Source keys (same slot on a cluster).
+            weights: One multiplier per source key.
+            aggregate: ``"SUM"`` (default), ``"MIN"`` or ``"MAX"``.
+            withscores: Return ``(member, score)`` tuples.
+
+        Returns:
+            A list of members, or of tuples with ``withscores``.
+        """
         return self._zcombine("ZUNION", None, keys, weights, aggregate, withscores)
 
     def zinter(
@@ -2321,12 +3420,43 @@ class Commands:
         aggregate: Optional[str] = None,
         withscores: bool = False,
     ) -> Any:
+        """``ZINTER numkeys key [key ...] [WEIGHTS ...] [AGGREGATE ...] [WITHSCORES]`` - intersection without storing.
+
+        Args:
+            keys: Source keys (same slot on a cluster).
+            weights: One multiplier per source key.
+            aggregate: ``"SUM"`` (default), ``"MIN"`` or ``"MAX"``.
+            withscores: Return ``(member, score)`` tuples.
+
+        Returns:
+            A list of members, or of tuples with ``withscores``.
+        """
         return self._zcombine("ZINTER", None, keys, weights, aggregate, withscores)
 
     def zdiff(self, keys: Sequence[KeyT], withscores: bool = False) -> Any:
+        """``ZDIFF numkeys key [key ...] [WITHSCORES]`` - members of the first set absent from the others.
+
+        Args:
+            keys: Source keys, the first is the base (same slot on a cluster).
+            withscores: Return ``(member, score)`` tuples.
+
+        Returns:
+            A list of members, or of tuples with ``withscores``.
+        """
         return self._zcombine("ZDIFF", None, keys, None, None, withscores)
 
     def zrandmember(self, key: KeyT, count: Optional[int] = None, withscores: bool = False) -> Any:
+        """``ZRANDMEMBER key [count [WITHSCORES]]`` - random members (reads the whole set, O(N)).
+
+        Args:
+            key: The sorted-set key.
+            count: Omit for one member. Positive: distinct members. Negative: ``-count`` members that
+                may repeat (limited to 1,048,576).
+            withscores: With ``count``, return ``(member, score)`` tuples.
+
+        Returns:
+            Without ``count``: a member or ``None``. With ``count``: a list.
+        """
         if count is None:
             return self._c(None, "ZRANDMEMBER", key)
         if withscores:
@@ -2334,7 +3464,19 @@ class Commands:
         return self._c(None, "ZRANDMEMBER", key, count)
 
     def zscan(self, key: KeyT, cursor: int = 0, match: Optional[str] = None, count: Optional[int] = None) -> Any:
-        """``(next_cursor, [(member, score)])``. See :meth:`zscan_iter`."""
+        """``ZSCAN key cursor [MATCH pattern] [COUNT n]`` - one page of members with scores, in score order.
+
+        See :meth:`zscan_iter`. Pages are by position, so a concurrent write can shift members between pages.
+
+        Args:
+            key: The sorted-set key.
+            cursor: ``0`` to start.
+            match: Glob pattern for members.
+            count: Work hint per page.
+
+        Returns:
+            ``(next_cursor, [(member, score), ...])``; a missing key gives ``(0, [])``.
+        """
         args: List[Any] = [key, cursor]
         if match is not None:
             args += ["MATCH", match]
@@ -2346,7 +3488,30 @@ class Commands:
     def geoadd(
         self, key: KeyT, values: Iterable[Tuple[float, float, Arg]], nx: bool = False, xx: bool = False, ch: bool = False
     ) -> Any:
-        """``values`` is ``[(longitude, latitude, member), ...]``."""
+        """``GEOADD key [NX|XX] [CH] longitude latitude member [...]`` - adds places to a geo index.
+
+        A geo index is a sorted set whose score is a 52-bit geohash, so ``type`` reports ``zset`` and the
+        ``z*`` commands work on it. Coordinates are stored with about 0.6 m precision, so
+        :meth:`geopos` can differ slightly from what you added.
+
+        Args:
+            key: The geo key (created when missing).
+            values: Iterable of ``(longitude, latitude, member)`` tuples. Longitude must be in
+                -180..180 and latitude in -85.05112878..85.05112878 (decimal degrees).
+            nx: Only add new members.
+            xx: Only update existing members.
+            ch: Count changed members instead of only new ones.
+
+        Returns:
+            The number of members added (or changed with ``ch``).
+
+        Raises:
+            ResponseError: A coordinate is out of range (``invalid longitude,latitude pair``).
+            WrongTypeError: The key holds a non-sorted-set type.
+
+        Example:
+            client.geoadd("shops", [(13.361389, 38.115556, "palermo"), (15.087269, 37.502669, "catania")])
+        """
         args: List[Any] = [key]
         if nx:
             args.append("NX")
@@ -2359,15 +3524,49 @@ class Commands:
         return self._c(None, "GEOADD", *args)
 
     def geodist(self, key: KeyT, member1: Arg, member2: Arg, unit: Optional[str] = None) -> Any:
+        """``GEODIST key member1 member2 [unit]`` - distance between two members.
+
+        Args:
+            key: The geo key.
+            member1: First member.
+            member2: Second member.
+            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"``.
+
+        Returns:
+            The distance as ``float`` in ``unit``, or ``None`` when a member or the key is missing.
+
+        Raises:
+            ResponseError: Unsupported unit.
+
+        Example:
+            client.geodist("shops", "palermo", "catania", "km")   # -> 166.27
+        """
         if unit is None:
             return self._c(_float, "GEODIST", key, member1, member2)
         return self._c(_float, "GEODIST", key, member1, member2, unit)
 
     def geohash(self, key: KeyT, *members: Arg) -> Any:
+        """``GEOHASH key member [member ...]`` - standard geohash strings.
+
+        Args:
+            key: The geo key.
+            *members: One or more members.
+
+        Returns:
+            A list of 11-character strings, ``None`` for a missing member.
+        """
         return self._c(None, "GEOHASH", key, *members)
 
     def geopos(self, key: KeyT, *members: Arg) -> Any:
-        """``[(longitude, latitude) | None]``."""
+        """``GEOPOS key member [member ...]`` - coordinates of members.
+
+        Args:
+            key: The geo key.
+            *members: One or more members.
+
+        Returns:
+            A list of ``(longitude, latitude)`` float tuples, ``None`` for a missing member.
+        """
         return self._c(_geopos, "GEOPOS", key, *members)
 
     @staticmethod
@@ -2416,8 +3615,39 @@ class Commands:
         withdist: bool = False,
         withhash: bool = False,
     ) -> Any:
-        """``GEOSEARCH`` from a member or lon/lat, by radius or box. Members, or
-        :class:`GeoResult` rows when any WITH* flag is set."""
+        """``GEOSEARCH key FROMMEMBER m|FROMLONLAT lon lat BYRADIUS r unit|BYBOX w h unit [ASC|DESC] [COUNT n [ANY]] [WITH...]`` - finds members in an area.
+
+        Give exactly one center (``member`` or ``longitude`` + ``latitude``) and exactly one shape
+        (``radius`` or ``width`` + ``height``).
+
+        Args:
+            key: The geo key.
+            member: Center on this existing member.
+            longitude: Center longitude (-180..180); use with ``latitude``.
+            latitude: Center latitude (-85.05112878..85.05112878).
+            radius: Circle radius, in ``unit`` (non-negative).
+            width: Box width, in ``unit`` (non-negative); use with ``height``.
+            height: Box height, in ``unit``.
+            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"``; also the unit of returned distances.
+            sort: ``"ASC"`` (nearest first) or ``"DESC"``. Unsorted when omitted and no ``count``.
+            count: Return at most this many (positive). Without ``any`` the nearest are returned.
+            any: Stop at the first ``count`` matches (faster, not the nearest). Needs ``count``.
+            withcoord: Include coordinates.
+            withdist: Include the distance from the center.
+            withhash: Include the raw 52-bit geohash integer.
+
+        Returns:
+            A list of members. If any ``with*`` flag is set: a list of :class:`GeoResult`
+            ``(member, dist, hash, coord)`` where unrequested parts are ``None``. Empty when the key is missing.
+
+        Raises:
+            ResponseError: Missing center or shape, both given, ``any`` without ``count``, bad unit, or
+                a center ``member`` that does not exist.
+
+        Example:
+            client.geosearch("shops", longitude=15, latitude=37, radius=200, unit="km",
+                             sort="ASC", withdist=True)
+        """
         args: List[Any] = [key]
         self._geo_shape(args, member, longitude, latitude, radius, width, height, unit)
         self._geo_tail(args, sort, count, any)
@@ -2445,6 +3675,31 @@ class Commands:
         any: bool = False,  # noqa: A002
         storedist: bool = False,
     ) -> Any:
+        """``GEOSEARCHSTORE dst src FROM... BY... [ASC|DESC] [COUNT n [ANY]] [STOREDIST]`` - like :meth:`geosearch`, stores the result.
+
+        The destination is replaced with a geo sorted set of the matches.
+
+        Args:
+            dst: Destination key.
+            src: Source geo key.
+            member: Center on this member.
+            longitude: Center longitude; use with ``latitude``.
+            latitude: Center latitude.
+            radius: Circle radius in ``unit``.
+            width: Box width in ``unit``; use with ``height``.
+            height: Box height in ``unit``.
+            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"``.
+            sort: ``"ASC"`` or ``"DESC"``.
+            count: Keep at most this many.
+            any: Stop at the first ``count`` matches. Needs ``count``.
+            storedist: Store the distance (in ``unit``) as the score instead of the geohash.
+
+        Returns:
+            The number of members stored.
+
+        Raises:
+            CrossSlotError: Cluster client - ``dst`` and ``src`` are in different slots.
+        """
         args: List[Any] = [dst, src]
         self._geo_shape(args, member, longitude, latitude, radius, width, height, unit)
         self._geo_tail(args, sort, count, any)
@@ -2496,6 +3751,30 @@ class Commands:
         store: Optional[KeyT] = None,
         storedist: Optional[KeyT] = None,
     ) -> Any:
+        """``GEORADIUS key longitude latitude radius unit [WITH...] [COUNT n [ANY]] [ASC|DESC] [STORE k] [STOREDIST k]`` - legacy radius search; prefer :meth:`geosearch`.
+
+        Args:
+            key: The geo key.
+            longitude: Center longitude (-180..180).
+            latitude: Center latitude (-85.05112878..85.05112878).
+            radius: Radius in ``unit`` (non-negative).
+            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"``.
+            withcoord: Include coordinates.
+            withdist: Include distance from the center.
+            withhash: Include the geohash integer.
+            count: Return at most this many.
+            any: Stop at the first ``count`` matches (needs ``count``).
+            sort: ``"ASC"`` or ``"DESC"``.
+            store: Store matching members (geohash scores) in this key instead of returning them.
+            storedist: Store matching members with their distance as score in this key.
+
+        Returns:
+            Members, or :class:`GeoResult` rows when a ``with*`` flag is set. With ``store`` or
+            ``storedist``: the number of stored members. ``with*`` cannot be combined with storing.
+
+        Raises:
+            CrossSlotError: Cluster client - the store key is in another slot.
+        """
         return self._georadius(
             "GEORADIUS", [key, longitude, latitude, radius, unit], withcoord, withdist, withhash, count, any, sort, store, storedist
         )
@@ -2515,6 +3794,28 @@ class Commands:
         store: Optional[KeyT] = None,
         storedist: Optional[KeyT] = None,
     ) -> Any:
+        """``GEORADIUSBYMEMBER key member radius unit [...]`` - like :meth:`georadius` centered on a member.
+
+        Args:
+            key: The geo key.
+            member: Existing member to center on.
+            radius: Radius in ``unit`` (non-negative).
+            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"``.
+            withcoord: Include coordinates.
+            withdist: Include distance from the member.
+            withhash: Include the geohash integer.
+            count: Return at most this many.
+            any: Stop at the first ``count`` matches (needs ``count``).
+            sort: ``"ASC"`` or ``"DESC"``.
+            store: Store matches in this key instead of returning them.
+            storedist: Store matches with distance as score in this key.
+
+        Returns:
+            Members, :class:`GeoResult` rows, or the number stored; see :meth:`georadius`.
+
+        Raises:
+            ResponseError: ``member`` does not exist.
+        """
         return self._georadius(
             "GEORADIUSBYMEMBER", [key, member, radius, unit], withcoord, withdist, withhash, count, any, sort, store, storedist
         )
