@@ -149,9 +149,10 @@ python3 scripts/model_check.py --seed 1 --duration 3600 --config all \
 
 `--config` takes one name, a comma list or `all` (`memory-1`, `everysec-1`, `everysec-2`,
 `always-1`, `always-worker`, `always-2`, `snapshot-1`, `snapshot-2`, `replica`,
-`replica-always`, `maxmemory`); `--duration` is split evenly between them. The seed is printed
-and fixes every random choice; which commands overlap and where a kill lands still depend on
-timing. A failure writes a directory under `--results` with `summary.txt` (seed, config, the
+`replica-always`, `maxmemory`); `--duration` is nominal work (1000 commands per second), split
+evenly between them, so wall time follows the machine. The seed is printed and fixes the whole
+schedule: the epochs, the events, where a disk fault starts and whether a kill is SIGKILL or
+SIGTERM. Which commands overlap and where inside a write a kill lands still depend on timing. A failure writes a directory under `--results` with `summary.txt` (seed, config, the
 command that repeats the run), `diff.txt` (expected against actual), `oplog.txt` (the last
 commands with their replies), and the server log, config and injected-fault log.
 `--known save-hang` lets a run continue past the known multi-shard `SAVE` wait under a
