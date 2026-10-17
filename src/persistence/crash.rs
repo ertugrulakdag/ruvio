@@ -239,6 +239,8 @@ mod tests {
         // stall it and the test reads it after the child is gone.
         let logs = tempdir().expect("tempdir");
         let log_path = logs.path().join("stderr");
+        // Not while a parallel test probes ports: see `test_ports::spawn_lock`.
+        let spawning = crate::test_ports::spawn_lock();
         let mut child = Command::new(std::env::current_exe().expect("test executable"))
             .arg(TEST_NAME)
             .arg("--exact")
@@ -252,6 +254,7 @@ mod tests {
             .stderr(File::create(&log_path).expect("child log"))
             .spawn()
             .expect("spawn crash child");
+        drop(spawning);
         // Eight small records take milliseconds; a child that hangs fails the trial.
         let deadline = Instant::now() + Duration::from_secs(60);
         let status = loop {

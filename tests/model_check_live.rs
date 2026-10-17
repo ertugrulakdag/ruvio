@@ -82,6 +82,8 @@ fn run_checker(args: &[&str], timeout: Duration) -> Option<(bool, String)> {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/model_check.py");
     // Held until the checker and its servers are gone: the checker uses these ports as given.
     let ports = test_ports::reserve();
+    // Not while a parallel test probes ports: see `test_ports::spawn_lock`.
+    let spawning = test_ports::spawn_lock();
     let mut checker = CheckerProcess(Some(
         Command::new("python3")
             .arg(script)
@@ -98,6 +100,7 @@ fn run_checker(args: &[&str], timeout: Duration) -> Option<(bool, String)> {
             .spawn()
             .unwrap(),
     ));
+    drop(spawning);
     let deadline = Instant::now() + timeout;
 
     while !checker.exited() {

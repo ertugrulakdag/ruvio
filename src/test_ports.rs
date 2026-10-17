@@ -13,12 +13,21 @@
 //! Each port is bound once before the block is handed out, so one held by an unrelated program
 //! is skipped.
 //!
+//! A child process holds a copy of every open descriptor from `fork` until its `exec` closes
+//! them. A probe listener copied that way keeps its port bound after the probe drops it, so the
+//! server meant to bind the port, or the test, finds it taken. The probes run under
+//! [`spawn_lock`], and a test that starts processes while others reserve ports spawns under it
+//! too: `Command::spawn` returns only after the child's `exec`, so no copy outlives the lock.
+//!
 //! This file is shared with the integration tests (`tests/common/mod.rs` includes it).
 
 use std::{
     fs::{File, OpenOptions},
     net::{Ipv4Addr, SocketAddr, TcpListener},
-    sync::atomic::{AtomicU32, Ordering},
+    sync::{
+        Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicU32, Ordering},
+    },
 };
 
 /// Ports per block: one data port per shard, replication ports and spares.
@@ -52,6 +61,14 @@ impl PortBlock {
     }
 }
 
+/// Held while ports are probed and while a child process is spawned, so no child forked in
+/// this process holds a copy of a probe listener (see the module documentation).
+pub fn spawn_lock() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Reserves a block of [`BLOCK`] consecutive free ports.
 pub fn reserve() -> PortBlock {
     static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -80,8 +97,12 @@ pub fn reserve() -> PortBlock {
             continue;
         }
 
-        if (0..BLOCK).all(|offset| TcpListener::bind((Ipv4Addr::LOCALHOST, base + offset)).is_ok())
-        {
+        let probing = spawn_lock();
+        let free = (0..BLOCK)
+            .all(|offset| TcpListener::bind((Ipv4Addr::LOCALHOST, base + offset)).is_ok());
+
+        drop(probing);
+        if free {
             return PortBlock { base, _lock: lock };
         }
     }

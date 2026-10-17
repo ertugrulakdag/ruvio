@@ -107,7 +107,11 @@ impl Server {
             command.env(key, value);
         }
 
+        // Not while this process probes ports: see `test_ports::spawn_lock`.
+        let spawning = test_ports::spawn_lock();
+
         self.child = Some(command.spawn().unwrap());
+        drop(spawning);
     }
 
     fn log_text(&self) -> String {
