@@ -114,24 +114,34 @@ class StreamsLiveTest {
         assertFalse(c.xinfoConsumers("gs", "g").isEmpty());
         assertTrue(c.xgroupDestroy("gs", "g2"));
         assertFalse(c.xgroupDestroy("gs", "g2"));
-        // DELAY hides the entry from XREADGROUP until it passes
+        // DELAY hides the entry from XREADGROUP until it passes. The 3 s delay leaves the read
+        // right after a wide margin; the entry then shows up within a deadline.
         c.xgroupCreate("ds", "dg", "$", true);
-        c.xadd("ds", XAddArgs.builder().delay(150), f("d", "1"));
+        c.xadd("ds", XAddArgs.builder().delay(3_000), f("d", "1"));
         Map<String, List<StreamEntry<String, String>>> early = c.xreadgroup("dg", "x", "ds");
         assertTrue(early.isEmpty() || early.get("ds").isEmpty());
-        Thread.sleep(250);
-        assertEquals(1, c.xreadgroup("dg", "x", "ds").get("ds").size());
+        long deadline = System.nanoTime() + 15_000_000_000L;
+        Map<String, List<StreamEntry<String, String>>> late = Map.of();
+        while ((late.isEmpty() || late.get("ds").isEmpty()) && System.nanoTime() < deadline) {
+            Thread.sleep(50);
+            late = c.xreadgroup("dg", "x", "ds");
+        }
+        assertEquals(1, late.get("ds").size());
     }
 
     @Test
     void blockingRead() throws Exception {
         try (RuvioClient<String, String> d = c.dedicated()) {
-            Map<String, String> s = new LinkedHashMap<>();
-            s.put("bs", "$");
-            var waiting = d.async().xread(XReadArgs.builder().block(5_000).count(1), s);
+            // From 0-0 on the empty stream rather than `$`: the XADD may reach the server before
+            // the blocking read does, and `$` would then miss it.
+            Map<String, String> fromStart = new LinkedHashMap<>();
+            fromStart.put("bs", "0-0");
+            var waiting = d.async().xread(XReadArgs.builder().block(10_000).count(1), fromStart);
             Thread.sleep(50);
             c.xadd("bs", f("k", "v"));
-            assertEquals("v", waiting.get(5, java.util.concurrent.TimeUnit.SECONDS).get("bs").get(0).fields().get("k"));
+            assertEquals("v", waiting.get(15, java.util.concurrent.TimeUnit.SECONDS).get("bs").get(0).fields().get("k"));
+            Map<String, String> s = new LinkedHashMap<>();
+            s.put("bs", "$");
             assertTrue(d.xread(XReadArgs.builder().block(20), s).isEmpty());
         }
     }
