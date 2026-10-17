@@ -14,11 +14,13 @@ import check_compatibility_matrix as matrix
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# One suite command may run this long; a hung test then fails the run instead of blocking it.
+SUITE_TIMEOUT_SECONDS = 15 * 60
 
 
 def run(command: list[str], *, cwd: Path, env: dict[str, str]) -> None:
     print("+", " ".join(command), flush=True)
-    subprocess.run(command, cwd=cwd, env=env, check=True)
+    subprocess.run(command, cwd=cwd, env=env, check=True, timeout=SUITE_TIMEOUT_SECONDS)
 
 
 def have(executable: str) -> bool:
@@ -58,7 +60,7 @@ def run_csharp(host: str, port: int) -> None:
         *sorted((ROOT / "integrations" / "dotnet").glob("*Tests/*Tests.csproj")),
     ):
         run(
-            ["dotnet", "test", str(project), "--nologo"],
+            ["dotnet", "test", str(project), "--nologo", "--blame-hang-timeout", "5m"],
             cwd=ROOT,
             env=env,
         )
@@ -110,6 +112,8 @@ def main() -> int:
             runner(args.host, args.port)
         except subprocess.CalledProcessError as error:
             failed.append(f"{language}: exit {error.returncode}")
+        except subprocess.TimeoutExpired as error:
+            failed.append(f"{language}: {' '.join(error.cmd)} ran longer than {error.timeout} s")
 
     for item in skipped:
         print(f"skipped {item}")

@@ -3,9 +3,9 @@
 
 import argparse
 import socket
-import time
 
-from resp_conformance import encode, read_response
+from _ruvio import wait_ready
+from resp_conformance import encode, read_response, request
 
 UNORDERED = {b"KEYS", b"SMEMBERS", b"SINTER", b"SUNION", b"SDIFF", b"HKEYS", b"HVALS"}
 
@@ -752,14 +752,9 @@ def same_float(name, actual, expected) -> bool:
 
 
 def connect(host: str, port: int):
-    for attempt in range(50):
-        try:
-            connection = socket.create_connection((host, port), timeout=1)
-            break
-        except OSError:
-            if attempt == 49:
-                raise
-            time.sleep(0.1)
+    wait_ready(port, host=host)
+    # The timeout only stops a lost reply from hanging the check.
+    connection = socket.create_connection((host, port), timeout=10)
     return connection, connection.makefile("rwb", buffering=0)
 
 
@@ -767,6 +762,9 @@ def run(host: str, ruvio_port: int, redis_port: int, commands=None):
     ruvio_connection, ruvio = connect(host, ruvio_port)
     redis_connection, redis = connect(host, redis_port)
     try:
+        # Both start empty, whatever an earlier check or a restart left behind.
+        for stream in (ruvio, redis):
+            assert request(stream, b"FLUSHALL") == (b"+", b"OK")
         for command in commands or COMMANDS:
             frame = encode(*command)
             # Ruvio scripts call `ruvio.call`; Redis names the same table `redis`.

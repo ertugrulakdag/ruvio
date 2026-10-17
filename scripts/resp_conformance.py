@@ -3,22 +3,15 @@
 
 import argparse
 import socket
-import time
 
 # Re-exported: several scripts import these names from this module.
-from _ruvio import encode, read_response, request  # noqa: F401
+from _ruvio import encode, read_response, request, wait_ready  # noqa: F401
 
 
 def run(host: str, port: int):
-    connection = None
-    for attempt in range(50):
-        try:
-            connection = socket.create_connection((host, port), timeout=1)
-            break
-        except OSError:
-            if attempt == 49:
-                raise
-            time.sleep(0.1)
+    wait_ready(port, host=host)
+    # The timeout only stops a lost reply from hanging the check.
+    connection = socket.create_connection((host, port), timeout=10)
     with connection:
         stream = connection.makefile("rwb", buffering=0)
         assert request(stream, b"PING") == (b"+", b"PONG")

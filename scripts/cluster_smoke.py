@@ -3,7 +3,8 @@ import argparse
 import binascii
 import socket
 import sys
-import time
+
+from _ruvio import wait_ready
 
 
 class RespError(Exception):
@@ -49,19 +50,10 @@ def decode(stream):
 
 
 def command(port: int, *arguments: str):
-    with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
+    # The timeout only stops a lost reply from hanging the check.
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as client:
         client.sendall(encode(*arguments))
         return decode(client.makefile("rb"))
-
-
-def wait_ready(port: int) -> None:
-    for _ in range(100):
-        try:
-            if command(port, "PING") == b"PONG":
-                return
-        except OSError:
-            time.sleep(0.05)
-    raise RuntimeError(f"server on port {port} did not become ready")
 
 
 def slot(key: str) -> int:

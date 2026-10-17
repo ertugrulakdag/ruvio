@@ -80,7 +80,8 @@ jobs:
         run: |
           set -euo pipefail
           data_dir="$(mktemp -d)"
-          trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; rm -rf "$data_dir"' EXIT
+          # On a failure the server log is printed before the data directory is removed.
+          trap 'status=$?; kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; if [ "$status" -ne 0 ]; then cat "$data_dir/server.log" >&2 || true; fi; rm -rf "$data_dir"' EXIT
           export RUVIO_ADDR=127.0.0.1:16382
           export RUVIO_SHARDS=2
           export RUVIO_PORT_MODE=per-shard
