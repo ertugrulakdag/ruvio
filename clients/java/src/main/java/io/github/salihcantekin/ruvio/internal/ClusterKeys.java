@@ -13,12 +13,16 @@ import java.util.Map;
  * argument.
  */
 public final class ClusterKeys {
-    /** Cross-slot calls are split by slot and the replies re-assembled. */
+    /** Split mode: the command is never split; all keys must share a slot. */
     public static final int NO_SPLIT = 0;
+    /** Split mode: split by slot and put the per-key replies back in key order (MGET). */
     public static final int SPLIT_LIST = 1;
+    /** Split mode: split by slot and add the integer replies (DEL, EXISTS, UNLINK, TOUCH). */
     public static final int SPLIT_SUM = 2;
+    /** Split mode: split by slot and reply OK when every part succeeded (MSET). */
     public static final int SPLIT_VOID = 3;
 
+    /** The routing rule of one command: where its keys are and how a cross-slot call is split. */
     public static final class Spec {
         final String name;
         final byte[] upper;
@@ -82,7 +86,14 @@ public final class ClusterKeys {
         return c >= 'a' && c <= 'z' ? c - 32 : c;
     }
 
-    /** The routing rule of the command word {@code name[off, off + len)}. */
+    /**
+     * Looks up the routing rule of the command word {@code name[off, off + len)}.
+     *
+     * @param name the array holding the command word
+     * @param off where the word starts
+     * @param len the word length
+     * @return the rule; a default single-key rule for an unlisted command
+     */
     public static Spec spec(byte[] name, int off, int len) {
         int h = hash(name, off, len) & MASK;
         for (Spec s; (s = TABLE[h]) != null; h = (h + 1) & MASK) {
@@ -100,14 +111,23 @@ public final class ClusterKeys {
         return DEFAULT;
     }
 
+    /**
+     * Looks up the routing rule of a command word.
+     *
+     * @param name the command name (any case)
+     * @return the rule; a default single-key rule for an unlisted command
+     */
     public static Spec spec(String name) {
         byte[] b = name.getBytes(StandardCharsets.UTF_8);
         return spec(b, 0, b.length);
     }
 
     /**
-     * Fills {@code f.keyIdx} with the argument indexes of the command's keys, in argument order, and
-     * returns how many there are (0 for keyless commands). {@code f} must be parsed.
+     * Fills {@code f.keyIdx} with the argument indexes of the command's keys, in argument order. {@code f} must be parsed.
+     *
+     * @param spec the command's rule
+     * @param f the parsed frame
+     * @return how many keys there are (0 for keyless commands)
      */
     public static int keys(Spec spec, Frame f) {
         int argc = f.argc;
@@ -211,6 +231,14 @@ public final class ClusterKeys {
         return false;
     }
 
+    /**
+     * Compares an argument with an upper-case word, ignoring case.
+     *
+     * @param f the parsed frame
+     * @param arg the argument index
+     * @param word the upper-case word
+     * @return {@code true} when equal
+     */
     public static boolean equalsIgnoreCase(Frame f, int arg, String word) {
         int l = f.len[arg];
         if (l != word.length()) {

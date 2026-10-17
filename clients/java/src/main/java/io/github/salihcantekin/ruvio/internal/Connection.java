@@ -32,7 +32,9 @@ public class Connection implements AutoCloseable {
     private static final int WRITE_BUFFER = 16 * 1024;
     private static final int SHRINK_ABOVE = 1024 * 1024;
 
+    /** The server host. */
     public final String host;
+    /** The server port. */
     public final int port;
     private final SocketChannel channel;
     private final ReentrantLock lock = new ReentrantLock();
@@ -57,6 +59,16 @@ public class Connection implements AutoCloseable {
     private ByteBuffer writeView;
     private byte[] writeViewArray;
 
+    /**
+     * Opens the socket and starts the reader and writer threads.
+     *
+     * @param host the server host
+     * @param port the server port
+     * @param connectTimeoutMs the connect timeout in milliseconds
+     * @param maxInFlight the most replies outstanding at once (rounded up to a power of two)
+     * @param name the name used for the threads
+     * @throws IOException when the socket cannot be opened
+     */
     public Connection(String host, int port, int connectTimeoutMs, int maxInFlight, String name) throws IOException {
         this.host = host;
         this.port = port;
@@ -83,21 +95,41 @@ public class Connection implements AutoCloseable {
         reader.start();
     }
 
+    /**
+     * Sets the receiver of RESP3 push frames; it runs on the reader thread.
+     *
+     * @param handler the receiver, or null
+     */
     public void setPushHandler(Consumer<Object> handler) {
         this.pushHandler = handler;
     }
 
+    /**
+     * Tells whether the connection is still usable.
+     *
+     * @return {@code true} until it fails or is closed
+     */
     public boolean isOpen() {
         return closed == null;
     }
 
+    /**
+     * Returns how many requests wait for a reply.
+     *
+     * @return the count
+     */
     public int inFlight() {
         return (int) (tail - head);
     }
 
     // ---- write side -----------------------------------------------------------------------
 
-    /** Locks the output buffer for one frame. Must be followed by {@link #end} or {@link #abort}. */
+    /**
+     * Locks the output buffer for one frame, waiting while the ring of outstanding requests is full. Must be followed by {@link #end} or {@link #abort}.
+     *
+     * @return the buffer to encode into
+     * @throws RuvioConnectionException when the connection is closed
+     */
     public RespOut begin() {
         lock.lock();
         for (;;) {
@@ -117,12 +149,17 @@ public class Connection implements AutoCloseable {
         }
     }
 
+    /** Drops the partly encoded frame and releases the lock. */
     public void abort() {
         out.pos = mark;
         lock.unlock();
     }
 
-    /** Enqueues {@code request} for the frame just encoded and releases the lock. */
+    /**
+     * Enqueues {@code request} for the frame just encoded and releases the lock.
+     *
+     * @param request the request that will receive the reply
+     */
     public void end(Request<?> request) {
         long t = tail;
         boolean serial = t == head;
@@ -131,7 +168,13 @@ public class Connection implements AutoCloseable {
         submitLocked(serial);
     }
 
-    /** Enqueues several requests whose frames were appended in order (pipelines). */
+    /**
+     * Enqueues several requests whose frames were appended in order (pipelines).
+     *
+     * @param requests the requests, in frame order
+     * @param count how many entries of {@code requests} to use
+     * @throws RuvioException when {@code count} exceeds the ring size
+     */
     public void endMany(Request<?>[] requests, int count) {
         if (tail - head + count > ring.length) {
             // Too many for the ring at once: fail fast rather than deadlock.
@@ -147,6 +190,11 @@ public class Connection implements AutoCloseable {
         submitLocked(serial);
     }
 
+    /**
+     * Returns the size of the ring of outstanding requests.
+     *
+     * @return the most replies that can be outstanding
+     */
     public int capacity() {
         return ring.length;
     }
@@ -299,7 +347,11 @@ public class Connection implements AutoCloseable {
         }
     }
 
-    /** Pending request at the head of the FIFO, or null. Reader thread only. */
+    /**
+     * Returns the pending request at the head of the FIFO. Reader thread only.
+     *
+     * @return the request, or null when none is pending
+     */
     public final Request<?> peekRequest() {
         long h = head;
         if (h == tail) {
@@ -308,13 +360,18 @@ public class Connection implements AutoCloseable {
         return ring[(int) (h & mask)];
     }
 
+    /** Removes the request at the head of the FIFO. Reader thread only. */
     public final void popRequest() {
         long h = head;
         ring[(int) (h & mask)] = null;
         head = h + 1;
     }
 
-    /** Decodes one complete reply at the reader position. Throws Incomplete to wait for bytes. */
+    /**
+     * Decodes one complete reply at the reader position. Throws Incomplete to wait for bytes.
+     *
+     * @param r the reader
+     */
     public void dispatch(RespReader r) {
         byte t = r.peek();
         if (t == '>') {
@@ -366,6 +423,11 @@ public class Connection implements AutoCloseable {
         return new RuvioConnectionException("connection closed", c);
     }
 
+    /**
+     * Closes the connection and fails every pending request with this cause.
+     *
+     * @param cause why the connection failed
+     */
     public void fail(Throwable cause) {
         lock.lock();
         try {
@@ -405,7 +467,11 @@ public class Connection implements AutoCloseable {
         onClosed(cause);
     }
 
-    /** Hook for subclasses (pub/sub reconnect). */
+    /**
+     * Hook for subclasses (pub/sub reconnect), called after the connection failed.
+     *
+     * @param cause why it failed
+     */
     public void onClosed(Throwable cause) {
     }
 

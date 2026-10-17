@@ -36,9 +36,10 @@ def gen_cmd():
                 with open(os.path.join(directory, name)) as source:
                     idents.update(re.findall(r"\bCmd\.([A-Z][A-Z0-9_]*)\b", source.read()))
     lines = [BANNER, "package io.github.salihcantekin.ruvio.internal;\n\n",
-             "/** Command words pre-encoded as complete RESP bulk fragments ({@code $3\\r\\nGET\\r\\n}). */\n",
+             "/**\n * Command and keyword words pre-encoded as complete RESP bulk fragments ({@code $3\\r\\nGET\\r\\n}).\n * Internal: not part of the supported API.\n */\n",
              "public final class Cmd {\n    private Cmd() {\n    }\n\n"]
     for ident in sorted(idents):
+        lines.append('    /** The word {@code %s}, pre-encoded as a RESP bulk string. */\n' % word_for(ident))
         lines.append('    public static final byte[] %s = RespOut.fragment("%s");\n' % (ident, word_for(ident)))
     lines.append("}\n")
     return "".join(lines), len(idents)

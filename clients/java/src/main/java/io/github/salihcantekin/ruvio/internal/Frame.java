@@ -10,6 +10,7 @@ public final class Frame {
     private static final int ARENA = 8192;
     private static final int MIN_ROOM = 1024;
 
+    /** The buffer the command is encoded into. */
     public final RespOut out;
     /**
      * Where the current frame starts in {@code out.buf}. A retaining frame ({@link #Frame(boolean)}) encodes
@@ -18,22 +19,32 @@ public final class Frame {
      */
     public int base;
     private final boolean retain;
+    /** Start offset of each argument's bytes in the buffer, filled by {@link #parse()}. */
     public int[] off = new int[16];
+    /** Length of each argument, filled by {@link #parse()}. */
     public int[] len = new int[16];
     /** Argument indexes of the command's keys, filled by {@link ClusterKeys#keys}. */
     public int[] keyIdx = new int[16];
+    /** Number of arguments of the parsed frame. */
     public int argc;
 
+    /** Creates a frame that is reused for every command. */
     public Frame() {
         this(false);
     }
 
+    /**
+     * Creates a frame.
+     *
+     * @param retain {@code true} to keep each encoded command in the array so a request can re-send it after a redirect
+     */
     public Frame(boolean retain) {
         this.retain = retain;
         this.out = new RespOut(retain ? ARENA : 512);
         out.frame = this;
     }
 
+    /** Starts a new frame. */
     public void reset() {
         if (retain) {
             if (out.buf.length != ARENA || out.buf.length - base < MIN_ROOM) {
@@ -49,6 +60,11 @@ public final class Frame {
         }
     }
 
+    /**
+     * Tells whether this frame keeps encoded commands.
+     *
+     * @return {@code true} for a retaining frame
+     */
     public boolean retains() {
         return retain;
     }
@@ -85,6 +101,12 @@ public final class Frame {
         argc = n;
     }
 
+    /**
+     * Returns a scratch array for key argument indexes, grown when needed.
+     *
+     * @param needed the number of entries required
+     * @return the array
+     */
     public int[] keyBuffer(int needed) {
         if (needed > keyIdx.length) {
             keyIdx = new int[needed + (needed >> 1)];
