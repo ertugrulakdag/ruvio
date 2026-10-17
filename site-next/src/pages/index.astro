@@ -252,10 +252,10 @@ $ redis-cli -a change-me
   .hero-in { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr); gap: 56px; align-items: center; padding-block: 88px 112px; }
   .hero-in > * { min-width: 0; }
   .hero h1 { font-size: clamp(36px, 4.8vw, 60px); line-height: 1.06; margin: 0 0 22px; max-width: 17ch; }
-  .hero-lede { font-size: 18.5px; color: var(--mute); max-width: 46ch; margin: 0 0 30px; }
+  .hero-lede { font-size: 19.5px; color: var(--mute); max-width: 46ch; margin: 0 0 30px; }
   .hero-lede code { font-size: 0.9em; }
   .ctas { display: flex; flex-wrap: wrap; gap: 12px; }
-  .facts { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 30px 0 0; padding: 0; list-style: none; font-size: 14px; color: var(--mute); }
+  .facts { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 30px 0 0; padding: 0; list-style: none; font-size: 15px; color: var(--mute); }
   .facts li::before { content: ""; display: inline-block; width: 4px; height: 4px; background: var(--mute); margin-right: 9px; vertical-align: 3px; }
 
   .job .chips { margin-bottom: 4px; }
@@ -265,13 +265,14 @@ $ redis-cli -a change-me
   .speed > * { min-width: 0; }
   .chart { position: relative; }
   .lists { display: grid; gap: 26px; }
-  .lists h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--mute); letter-spacing: 0; }
+  .lists h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--mute); letter-spacing: 0; }
   .lists ol { list-style: none; margin: 0; padding: 0; }
   .lists li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 14px; padding: 9px 0; border-bottom: 1px solid var(--line); }
-  .lists .n { font-weight: 600; font-size: 14.5px; overflow-wrap: anywhere; }
+  .lists li:hover { background: var(--row-hover); }
+  .lists .n { font-weight: 600; font-size: 15.5px; overflow-wrap: anywhere; }
   .lists .x { font-family: var(--f-mono); font-weight: 500; font-variant-numeric: tabular-nums; }
   .lists .x.lo { color: var(--mute); }
-  .lists .ops { grid-column: 1 / -1; font-family: var(--f-mono); font-size: 12px; color: var(--faint); }
+  .lists .ops { grid-column: 1 / -1; font-family: var(--f-mono); font-size: 13px; color: var(--faint); }
 
   .arch { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 48px; align-items: center; }
   .more-link { margin: 18px 0 0; font-weight: 600; }
@@ -281,20 +282,20 @@ $ redis-cli -a change-me
   .shard.focus { opacity: 1; border-color: color-mix(in srgb, var(--c1) 60%, var(--line)); }
   .shard-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 12px; }
   .shard-head span { font-weight: 600; }
-  .shard-head small { font-size: 12px; color: var(--faint); }
+  .shard-head small { font-size: 13px; color: var(--faint); }
   .shard ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; counter-reset: s; }
   .shard li { position: relative; padding: 0 0 14px 22px; display: grid; gap: 2px; }
   .shard li::before { content: ""; position: absolute; left: 3px; top: 7px; width: 8px; height: 8px; border-radius: 50%; background: var(--c3); }
   .shard.focus li::before { background: var(--c1); }
   .shard li:not(:last-child)::after { content: ""; position: absolute; left: 6.5px; top: 18px; bottom: 2px; width: 1px; background: var(--line); }
-  .shard li b { font-size: 14px; }
-  .shard li span { font-size: 12.5px; color: var(--mute); line-height: 1.45; }
+  .shard li b { font-size: 15px; }
+  .shard li span { font-size: 13.5px; color: var(--mute); line-height: 1.45; }
 
   .client-row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-top: 40px; }
   .client { display: grid; gap: 4px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); min-width: 0; }
   .client:hover { border-color: color-mix(in srgb, var(--ink) 30%, var(--line)); }
-  .client code { font-size: 11.5px; color: var(--mute); overflow-wrap: anywhere; }
-  .client small { font-size: 12px; color: var(--faint); }
+  .client code { font-size: 12.5px; color: var(--mute); overflow-wrap: anywhere; }
+  .client small { font-size: 13px; color: var(--faint); }
 
   .cta { border-top: 1px solid var(--line); background: linear-gradient(180deg, var(--bg), var(--sky-1)); }
   .cta-in { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 24px; padding-block: 64px; }

@@ -276,7 +276,7 @@ docker run --rm -p 8080:8080 \\
   .step h2 { display: flex; align-items: center; gap: 14px; margin: 0 0 4px; font-size: 24px; line-height: 1.25; color: var(--ink); }
   .step-no {
     display: inline-grid; place-items: center; width: 30px; height: 30px; flex: none;
-    font-family: var(--f-mono); font-size: 13px; font-weight: 500; color: var(--c1);
+    font-family: var(--f-mono); font-size: 14px; font-weight: 500; color: var(--c1);
     border: 1px solid color-mix(in srgb, var(--c1) 45%, var(--paper-line)); border-radius: 4px;
   }
   .table-wrap { border-color: var(--paper-line); }
@@ -284,7 +284,7 @@ docker run --rm -p 8080:8080 \\
   .table-wrap td { color: var(--ink-body); }
 
   .expand { border: 1px solid var(--paper-line); border-radius: var(--radius-s); background: var(--surface); }
-  .expand summary { cursor: pointer; padding: 12px 16px; font-weight: 600; font-size: 15px; color: var(--ink); }
+  .expand summary { cursor: pointer; padding: 12px 16px; font-weight: 600; font-size: 16px; color: var(--ink); }
   .expand[open] { display: grid; gap: 14px; padding-bottom: 16px; }
   .expand[open] > :not(summary) { margin-inline: 16px; }
   .expand[open] summary { border-bottom: 1px solid var(--line); }
@@ -292,11 +292,11 @@ docker run --rm -p 8080:8080 \\
   .client-list { list-style: none; margin: 4px 0; padding: 0; display: grid; gap: 14px; container-type: inline-size; }
   .client { display: grid; gap: 12px; align-content: start; padding: 18px; border: 1px solid var(--paper-line); border-radius: var(--radius); background: var(--surface); min-width: 0; }
   .client-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-  .client h3 { margin: 0; font-size: 17px; color: var(--ink); }
-  .client .registry { font-size: 13px; color: var(--mute); text-decoration: none; }
-  .client .guide { font-size: 14px; font-weight: 600; text-decoration: none; }
+  .client h3 { margin: 0; font-size: 18px; color: var(--ink); }
+  .client .registry { font-size: 14px; color: var(--mute); text-decoration: none; }
+  .client .guide { font-size: 15px; font-weight: 600; text-decoration: none; }
   .client .guide::after { content: " →"; color: var(--mute); }
-  .client :global(pre) { font-size: 13px; padding: 12px 14px 14px; }
+  .client :global(pre) { font-size: 14px; padding: 12px 14px 14px; }
   @supports (container-type: inline-size) {
     .step { container-type: inline-size; }
   }
@@ -304,7 +304,7 @@ docker run --rm -p 8080:8080 \\
 
   .next-grid { gap: 16px; }
   .next-grid .card { padding: 20px 22px; background: var(--surface); border-color: var(--paper-line); }
-  .next-grid .card h3 { font-size: 17px; color: var(--ink); }
+  .next-grid .card h3 { font-size: 18px; color: var(--ink); }
   @media (max-width: 900px) {
     .step { scroll-margin-top: 124px; }
     .step h2 { font-size: 21px; }
