@@ -29,10 +29,7 @@ pub(super) fn attach_replication(
 
             Ok(Some(crate::replication::spawn_primary(
                 crate::replication::Shipment {
-                    listen: SocketAddr::new(
-                        listen.ip(),
-                        listen.port().wrapping_add(shard_id as u16),
-                    ),
+                    listen: shard_port(listen, shard_id)?,
                     shard_id,
                     published,
                     data_dir: state.published_config.persistence.data_dir.clone(),
@@ -77,10 +74,7 @@ pub(super) fn attach_replication(
             let (inbound, outbound) = mpsc::sync_channel(crate::replication::QUEUE_FRAMES);
             let thread =
                 crate::replication::spawn_replica_reader(crate::replication::ReplicaLink {
-                    primary: SocketAddr::new(
-                        primary.ip(),
-                        primary.port().wrapping_add(shard_id as u16),
-                    ),
+                    primary: shard_port(primary, shard_id)?,
                     primary_name,
                     shard_id,
                     wal: Arc::clone(&state.persistence),
@@ -103,6 +97,24 @@ pub(super) fn attach_replication(
             Ok(Some(thread))
         }
     }
+}
+
+/// Shard `shard_id`'s replication address: `base`'s port plus the shard id. A port past
+/// 65535 is an error; wrapping around would bind or dial a port nobody configured.
+pub(super) fn shard_port(base: SocketAddr, shard_id: u32) -> io::Result<SocketAddr> {
+    u16::try_from(shard_id)
+        .ok()
+        .and_then(|offset| base.port().checked_add(offset))
+        .map(|port| SocketAddr::new(base.ip(), port))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "replication port {} plus shard {shard_id} exceeds 65535",
+                    base.port()
+                ),
+            )
+        })
 }
 
 pub(super) fn install_replica_snapshot(

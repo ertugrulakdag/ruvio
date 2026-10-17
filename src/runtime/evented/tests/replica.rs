@@ -1145,3 +1145,24 @@ fn replica_follows_a_new_link_that_resends_queued_frames_and_resyncs_on_a_gap() 
     assert_eq!(resync.version, crate::replication::VERSION_RESYNC);
     assert_eq!(resync.after_sequence, 10);
 }
+
+/// Shard 1 of a replication port 65535 would wrap to port 0, which binds a random port or
+/// dials nothing; the start is refused instead.
+#[test]
+fn a_replication_port_past_65535_is_refused_instead_of_wrapping() {
+    let base: SocketAddr = "127.0.0.1:65535".parse().unwrap();
+
+    assert_eq!(super::super::replica::shard_port(base, 0).unwrap(), base);
+    assert_eq!(
+        super::super::replica::shard_port(base, 1)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    assert_eq!(
+        super::super::replica::shard_port("127.0.0.1:20000".parse().unwrap(), 3)
+            .unwrap()
+            .port(),
+        20_003
+    );
+}
