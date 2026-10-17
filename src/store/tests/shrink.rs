@@ -196,6 +196,10 @@ fn deleting_a_large_collection_frees_it_off_the_shard_thread() {
     let charged = shard.memory_usage();
     assert!(charged.collection_bytes + charged.value_bytes >= crate::lazy_free::MIN_DEFERRED_BYTES);
 
+    // A queue another test filled would make the delete drop the set in place.
+    let _serial = crate::lazy_free::tests::QUEUE_BOUNDS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let _ = crate::lazy_free::take_last_deferred();
     assert!(shard.delete(b"big"));
     assert_eq!(shard.set_card(b"big"), Ok(0));

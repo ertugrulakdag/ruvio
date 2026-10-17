@@ -133,15 +133,16 @@ fn enqueue<T: Send + 'static>(value: T, bytes: usize) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::{
         sync::{Arc, atomic::AtomicBool},
         time::{Duration, Instant},
     };
 
-    /// The queue bounds are process-wide; tests that fill them must not overlap.
-    static QUEUE_BOUNDS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// The queue bounds are process-wide; tests that fill them must not overlap, and a test
+    /// that needs its value deferred (not dropped in place for a full queue) holds this too.
+    pub(crate) static QUEUE_BOUNDS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     struct Flag(Arc<AtomicBool>);
 
@@ -170,6 +171,9 @@ mod tests {
 
     #[test]
     fn large_values_drop_on_the_background_thread() {
+        let _serial = QUEUE_BOUNDS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let dropped = Arc::new(AtomicBool::new(false));
         let caller = std::thread::current().id();
         let seen = Arc::new(std::sync::Mutex::new(None));
