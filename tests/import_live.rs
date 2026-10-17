@@ -206,7 +206,9 @@ fn collections_larger_than_one_page_are_copied_completely() {
 #[test]
 fn bad_endpoints_and_unreachable_servers_are_errors() {
     let live = Server::start();
-    let dead = format!("127.0.0.1:{}", common::free_port());
+    // Nothing listens on port 1 (tcpmux, long unused), and no test can take it the way it
+    // could take a port picked by binding and closing.
+    let dead = "127.0.0.1:1".to_owned();
     let run_with = |from: &str, to: &str| {
         run(
             &ImportOptions {

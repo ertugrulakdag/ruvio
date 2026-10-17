@@ -1,20 +1,30 @@
-//! Helpers shared by the live integration tests: a real `ruvio` process on a free port and a tiny RESP client.
+//! Helpers shared by the live integration tests: a real `ruvio` process on a reserved port and a tiny RESP client.
 #![allow(dead_code)]
 
+#[path = "../../src/test_ports.rs"]
+pub mod test_ports;
+
 use std::{
+    fs::OpenOptions,
     io::{BufRead, BufReader, Read, Write},
-    net::{TcpListener, TcpStream},
+    net::TcpStream,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
+
+use test_ports::PortBlock;
 
 pub struct Server {
     child: Option<Child>,
     pub address: String,
     pub data_dir: PathBuf,
     config: PathBuf,
+    log: PathBuf,
     env: Vec<(String, String)>,
+    /// Held for the server's whole life, restarts included, so no other test takes its ports
+    /// while it is down.
+    ports: PortBlock,
     _dir: tempfile::TempDir,
 }
 
@@ -22,14 +32,6 @@ impl Drop for Server {
     fn drop(&mut self) {
         self.stop();
     }
-}
-
-pub fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
 }
 
 impl Server {
@@ -49,42 +51,57 @@ impl Server {
         )
         .unwrap();
 
+        let ports = test_ports::reserve();
         let mut server = Self {
             child: None,
-            address: format!("127.0.0.1:{}", free_port()),
+            address: ports.address_at(0).to_string(),
             data_dir: dir.path().join("data"),
             config,
+            log: dir.path().join("server.log"),
             env: env
                 .iter()
                 .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
                 .collect(),
+            ports,
             _dir: dir,
         };
 
-        // `free_port` releases the port before the server binds it, so another test can take
-        // it in between; then this server exits or a stranger answers, and a new port is tried.
-        for _ in 0..5 {
+        // The block is reserved against every test, but a program outside the tests may still
+        // take one of its ports; then this server exits or a stranger answers, and another
+        // block is tried.
+        for _ in 0..3 {
             server.spawn();
             if server.wait_ready() {
                 return server;
             }
             server.stop();
-            server.address = format!("127.0.0.1:{}", free_port());
+            server.ports = test_ports::reserve();
+            server.address = server.ports.address_at(0).to_string();
         }
 
-        panic!("server did not start on any of five ports");
+        panic!(
+            "server did not start on any of three port blocks:\n{}",
+            server.log_text()
+        );
     }
 
     fn spawn(&mut self) {
         let mut command = Command::new(env!("CARGO_BIN_EXE_ruvio"));
+        // Appended across restarts, so a failure shows every run of this server.
+        let log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log)
+            .unwrap();
 
         command
             .arg("--config")
             .arg(&self.config)
             .args(["--address", &self.address, "--data-dir"])
             .arg(&self.data_dir)
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(log);
 
         for (key, value) in &self.env {
             command.env(key, value);
@@ -93,8 +110,12 @@ impl Server {
         self.child = Some(command.spawn().unwrap());
     }
 
+    fn log_text(&self) -> String {
+        std::fs::read_to_string(&self.log).unwrap_or_default()
+    }
+
     /// Waits until this server answers on its address. False when the process exited first,
-    /// or when another process answers there (the port was taken after `free_port`).
+    /// or when another process answers there.
     fn wait_ready(&mut self) -> bool {
         let deadline = Instant::now() + Duration::from_secs(20);
 
@@ -104,14 +125,16 @@ impl Server {
             if child.try_wait().unwrap().is_some() {
                 return false;
             }
-            if TcpStream::connect(&self.address).is_ok() {
-                // A reset or timeout means whoever answered went away mid-probe (a stranger
-                // that was stopped, for example); look again.
-                if let Ok(ours) = self.answers_as_this_server() {
-                    return ours;
-                }
+            // A reset, a timeout or an error reply means whoever answered is not ready or
+            // went away mid-probe (a stranger that was stopped, for example); look again.
+            if let Ok(ours) = self.answers_as_this_server() {
+                return ours;
             }
-            assert!(Instant::now() < deadline, "server did not start");
+            assert!(
+                Instant::now() < deadline,
+                "server did not start:\n{}",
+                self.log_text()
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
     }
@@ -126,7 +149,7 @@ impl Server {
         answers_as(&self.address, &self.data_dir, password)
     }
 
-    /// Kills the process without a clean shutdown (like a crash).
+    /// Kills the process without a clean shutdown (like a crash) and waits until it is gone.
     pub fn stop(&mut self) {
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
@@ -137,19 +160,57 @@ impl Server {
     /// Starts the same server again on the same address and data directory.
     pub fn restart(&mut self) {
         self.stop();
+        self.wait_for_data_directory_lock();
         self.spawn();
         assert!(
             self.wait_ready(),
-            "server did not restart on {}",
-            self.address
+            "server did not restart on {}:\n{}",
+            self.address,
+            self.log_text()
         );
+    }
+
+    /// Windows releases the lock a killed process held on the data directory "after a delay
+    /// that depends on system resources" (`LockFileEx`), so a server started at once may
+    /// still find it taken. Waits until the lock can be taken, and lets it go again.
+    ///
+    /// Elsewhere the lock is gone with the process `stop` waited for. Probing it there would
+    /// even add a race: a parallel test that spawns a server forks a copy of every open
+    /// descriptor, the probe's included, which holds the lock until that child's `exec`.
+    #[cfg(windows)]
+    fn wait_for_data_directory_lock(&self) {
+        let Ok(file) = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(self.data_dir.join("LOCK"))
+        else {
+            // No persistent data directory, so nothing to wait for.
+            return;
+        };
+        let deadline = Instant::now() + Duration::from_secs(20);
+
+        while file.try_lock().is_err() {
+            assert!(
+                Instant::now() < deadline,
+                "the killed server's data directory lock was not released within 20 s"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn wait_for_data_directory_lock(&self) {}
+
+    /// The reserved ports after the server's own, for tests that need more servers or peers.
+    pub fn ports(&self) -> &PortBlock {
+        &self.ports
     }
 }
 
-/// Whether the server on `address` uses `data_dir`, read from `CONFIG GET dir`; a server that
-/// refuses the command (for example behind a password) is taken as that one. Fails instead of
-/// panicking when the connection breaks, since the answering process may be a stranger that
-/// took the port after `free_port` released it.
+/// Whether the server on `address` uses `data_dir`, read from `CONFIG GET dir`. An error
+/// reply (a server not ready yet, or one behind another password) proves nothing either way
+/// and is an error, as is a broken connection, since the answering process may be a stranger
+/// that is going away.
 pub fn answers_as(address: &str, data_dir: &Path, password: Option<&str>) -> std::io::Result<bool> {
     let stream = TcpStream::connect(address)?;
 
@@ -176,7 +237,10 @@ pub fn answers_as(address: &str, data_dir: &Path, password: Option<&str>) -> std
     read_line(&mut reader, &mut line)?;
 
     if line.starts_with('-') {
-        return Ok(true);
+        return Err(std::io::Error::other(format!(
+            "CONFIG GET dir was refused: {}",
+            line.trim_end()
+        )));
     }
 
     // `*2`, then `dir` and the path as two bulk strings (four lines).

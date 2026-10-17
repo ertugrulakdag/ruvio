@@ -11,11 +11,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use common::{Client, answers_as, free_port};
+use common::{Client, answers_as, test_ports};
 
 struct Process {
     child: Child,
     address: String,
+    /// Held until the process is gone, so no other test takes its ports meanwhile.
+    _ports: test_ports::PortBlock,
 }
 
 impl Drop for Process {
@@ -25,10 +27,10 @@ impl Drop for Process {
     }
 }
 
-/// Starts `ruvio` on a free port with a copy of the repository config; `shell_prefix` runs
-/// before `exec` (for example a descriptor limit). `free_port` releases the port before the
-/// server binds it, so another test's server can take it in between (the kill test restarts
-/// its servers); then this one exits or a stranger answers, and a new port is tried.
+/// Starts `ruvio` on a reserved port with a copy of the repository config; `shell_prefix`
+/// runs before `exec` (for example a descriptor limit). The block is reserved against every
+/// test, but a program outside the tests may still take the port; then this server exits or
+/// a stranger answers, and another block is tried.
 fn start(dir: &Path, env: &[(&str, &str)], shell_prefix: &str) -> Process {
     let config = dir.join("ruvio.toml");
 
@@ -40,8 +42,9 @@ fn start(dir: &Path, env: &[(&str, &str)], shell_prefix: &str) -> Process {
         .unwrap();
     }
 
-    for _ in 0..5 {
-        let address = format!("127.0.0.1:{}", free_port());
+    for _ in 0..3 {
+        let ports = test_ports::reserve();
+        let address = ports.address_at(0).to_string();
         let mut command = Command::new("sh");
 
         command
@@ -61,6 +64,7 @@ fn start(dir: &Path, env: &[(&str, &str)], shell_prefix: &str) -> Process {
         let mut process = Process {
             child: command.spawn().unwrap(),
             address,
+            _ports: ports,
         };
 
         if process.wait_ready(&dir.join("data")) {
@@ -68,7 +72,7 @@ fn start(dir: &Path, env: &[(&str, &str)], shell_prefix: &str) -> Process {
         }
     }
 
-    panic!("server did not start on any of five ports");
+    panic!("server did not start on any of three port blocks");
 }
 
 impl Process {
@@ -81,11 +85,10 @@ impl Process {
             if self.child.try_wait().unwrap().is_some() {
                 return false;
             }
-            if TcpStream::connect(&self.address).is_ok() {
-                // A broken probe means whoever answered went away mid-probe; look again.
-                if let Ok(ours) = answers_as(&self.address, data_dir, None) {
-                    return ours;
-                }
+            // A broken probe or an error reply means whoever answered is not ready or went
+            // away mid-probe; look again.
+            if let Ok(ours) = answers_as(&self.address, data_dir, None) {
+                return ours;
             }
             assert!(Instant::now() < deadline, "server did not start");
             std::thread::sleep(Duration::from_millis(10));
