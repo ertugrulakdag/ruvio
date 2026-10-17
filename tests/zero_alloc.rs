@@ -5,6 +5,7 @@
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
+    time::Duration,
 };
 
 use ruvio::{
@@ -153,6 +154,10 @@ fn everysec_durability_hot_path_allocates_nothing() {
         // command. A 4 MiB segment is one chunk, so the measured rounds see no request and this test
         // keeps checking the per-command path only.
         wal_segment_bytes: 4 * 1024 * 1024,
+        // Once a sync interval has passed with dirty bytes, an append starts a background sync
+        // thread, which allocates. A slow runner can take longer than the default second over
+        // the measured rounds, so the interval is far beyond the test's run time.
+        sync_interval: Duration::from_secs(3600),
         ..PersistenceConfig::default()
     };
     let (mut wal, _, _) = WalSink::open(config, 0, ProtocolLimits::default()).unwrap();
