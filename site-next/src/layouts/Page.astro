@@ -2,6 +2,7 @@
 import "../styles/global.css";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
+import Lightbox from "../components/Lightbox.astro";
 import { site } from "../config/site";
 
 interface Props { title?: string; description?: string }
@@ -33,5 +34,6 @@ const canonical = new URL(Astro.url.pathname, site.url);
       <slot />
     </main>
     <Footer />
+    <Lightbox />
   </body>
 </html>
