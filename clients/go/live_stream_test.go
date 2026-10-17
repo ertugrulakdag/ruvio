@@ -40,11 +40,14 @@ func TestLiveStreams(t *testing.T) {
 	eq(t, len(rd), 1)
 	eq(t, rd[0].Stream, "s")
 	eq(t, rd[0].Messages[0].Values, []string{"c", "3"})
+	// Read after the newest ID rather than `$`: the blocking read dials its own connection, and
+	// the XADD below may land before it is parked, which `$` would miss.
 	go func() {
 		time.Sleep(30 * time.Millisecond)
 		c.XAdd(ctx, XAddArgs{Stream: "s", Values: []string{"live", "1"}})
 	}()
-	rd = must[[]XStream](t)(c.XRead(ctx, XReadArgs{Streams: []string{"s"}, IDs: []string{"$"}, Block: 2 * time.Second}))
+	rd = must[[]XStream](t)(c.XRead(ctx, XReadArgs{Streams: []string{"s"}, IDs: []string{rev[0].ID}, Block: 10 * time.Second}))
+	eq(t, len(rd), 1)
 	eq(t, rd[0].Messages[0].Values, []string{"live", "1"})
 	rd = must[[]XStream](t)(c.XRead(ctx, XReadArgs{Streams: []string{"s"}, IDs: []string{"$"}, Block: 30 * time.Millisecond}))
 	eq(t, len(rd), 0)
@@ -90,7 +93,7 @@ func TestLiveStreams(t *testing.T) {
 		time.Sleep(30 * time.Millisecond)
 		c.XAdd(ctx, XAddArgs{Stream: "q", Values: []string{"late", "1"}})
 	}()
-	got := must[[]XMessage](t)(c.XReadGroup(ctx, XReadGroupArgs{Group: "g", Consumer: "dave", Stream: "q", Count: 10, Block: 2 * time.Second, NoAck: true}))
+	got := must[[]XMessage](t)(c.XReadGroup(ctx, XReadGroupArgs{Group: "g", Consumer: "dave", Stream: "q", Count: 10, Block: 10 * time.Second, NoAck: true}))
 	if len(got) != 1 || got[0].Map()["late"] != "1" {
 		t.Fatalf("blocking XREADGROUP returned %+v", got)
 	}
@@ -111,14 +114,18 @@ func TestLiveStreams(t *testing.T) {
 	eq(t, must[bool](t)(c.XGroupDestroy(ctx, "q", "g")), true)
 	eq(t, must[bool](t)(c.XGroupDestroy(ctx, "q", "g")), false)
 
-	// DELAY hides the entry from XREADGROUP until it elapses
+	// DELAY hides the entry from XREADGROUP until it elapses. The 3 s delay leaves the read
+	// right after a wide margin; the entry then shows up within a deadline.
 	noErr(t, c.XGroupCreate(ctx, "dq", "g", "$", true))
-	_, ok, err = c.XAdd(ctx, XAddArgs{Stream: "dq", Delay: 150 * time.Millisecond, Values: []string{"later", "1"}})
+	_, ok, err = c.XAdd(ctx, XAddArgs{Stream: "dq", Delay: 3 * time.Second, Values: []string{"later", "1"}})
 	noErr(t, err)
 	eq(t, ok, true)
 	early := must[[]XMessage](t)(c.XReadGroup(ctx, XReadGroupArgs{Group: "g", Consumer: "a", Stream: "dq"}))
 	eq(t, len(early), 0)
-	time.Sleep(200 * time.Millisecond)
-	late := must[[]XMessage](t)(c.XReadGroup(ctx, XReadGroupArgs{Group: "g", Consumer: "a", Stream: "dq"}))
+	var late []XMessage
+	for deadline := time.Now().Add(15 * time.Second); len(late) == 0 && time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+		late = must[[]XMessage](t)(c.XReadGroup(ctx, XReadGroupArgs{Group: "g", Consumer: "a", Stream: "dq"}))
+	}
 	eq(t, len(late), 1)
 }

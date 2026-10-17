@@ -166,6 +166,10 @@ func TestAllocations(t *testing.T) {
 	if a := testing.AllocsPerRun(1000, func() { p.next(bulk) }); a != 1 {
 		t.Fatalf("bulk reply allocs = %v, want 1 (the value)", a)
 	}
+	// The request comes from a sync.Pool, which the race detector empties at random.
+	if raceEnabled {
+		return
+	}
 	if a := testing.AllocsPerRun(1000, func() {
 		r := newCmd(3, cSET).s("key:1").s("value").i(42)
 		putReq(r)

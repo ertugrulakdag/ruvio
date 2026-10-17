@@ -185,12 +185,19 @@ func TestCancelledAndExpiredContexts(t *testing.T) {
 		t.Fatal("a cancelled context must fail the call")
 	}
 
+	// The reply is held until the test ends, so only the 30 ms deadline can end the call. The
+	// 5 s bound is far from both an honoured deadline and a call that waits for the reply.
+	release := make(chan struct{})
 	slow := newFakeNode(t, func(f *fakeNode, args []string) string {
 		if args[0] == "GET" {
-			time.Sleep(300 * time.Millisecond)
+			select {
+			case <-release:
+			case <-time.After(30 * time.Second):
+			}
 		}
 		return "+OK\r\n"
 	})
+	t.Cleanup(func() { close(release) })
 	cl2 := NewClient(Options{Addr: slow.addr})
 	defer cl2.Close()
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Millisecond)
@@ -199,7 +206,7 @@ func TestCancelledAndExpiredContexts(t *testing.T) {
 	if _, _, err := cl2.Get(ctx2, "k"); err == nil {
 		t.Fatal("a slow reply must hit the context deadline")
 	}
-	if time.Since(start) > 250*time.Millisecond {
+	if time.Since(start) > 5*time.Second {
 		t.Fatalf("the call waited %v instead of honouring the deadline", time.Since(start))
 	}
 }
