@@ -34,7 +34,8 @@ fn file_keys() -> Vec<String> {
 
 /// Environment variable names read by `apply_environment`.
 fn environment_names() -> Vec<String> {
-    let source = include_str!("../config.rs");
+    // Line endings as committed, even in a checkout that turned them into CRLF.
+    let source = include_str!("../config.rs").replace("\r\n", "\n");
     let start = source
         .find("pub fn apply_environment")
         .expect("apply_environment");

@@ -1,0 +1,18 @@
+# Text files are checked out with LF on every OS, Windows included: tests compare source files
+# and fixtures byte for byte, and shell scripts run in containers.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.snk binary

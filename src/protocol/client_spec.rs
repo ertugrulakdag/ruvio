@@ -465,7 +465,11 @@ fn client_command_spec_matches_the_server() {
         return;
     }
     for (name, contents) in files {
-        let current = std::fs::read_to_string(root.join(name)).unwrap_or_default();
+        // A checkout that turned LF into CRLF (Windows without `.gitattributes`) is not out
+        // of date.
+        let current = std::fs::read_to_string(root.join(name))
+            .unwrap_or_default()
+            .replace("\r\n", "\n");
         assert!(
             current == *contents,
             "clients/testdata/{name} is out of date; run RUVIO_WRITE_CLIENT_SPEC=1 cargo test --lib client_spec"
