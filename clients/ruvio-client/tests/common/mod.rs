@@ -1,6 +1,11 @@
-//! Helpers shared by the integration tests that run a fake server thread.
+//! Helpers shared by the integration tests.
 
+// Each test binary compiles this module on its own and uses only some of the helpers.
+#![allow(dead_code)]
+
+use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -33,4 +38,27 @@ pub fn accept_within_deadline(listener: &TcpListener) -> (TcpStream, SocketAddr)
             Err(error) => panic!("fake server: accept failed: {error}"),
         }
     }
+}
+
+/// Records that the calling test owns `database` on the shared live server.
+///
+/// The live tests of one binary run in parallel against one server and flush their database
+/// when they start, so two tests on the same database would wipe each other's keys. Panics
+/// when a second test claims a database another test already holds.
+pub fn claim_database(database: u32) {
+    static OWNERS: Mutex<Option<HashMap<u32, String>>> = Mutex::new(None);
+
+    let test = thread::current().name().unwrap_or("main").to_owned();
+    let mut owners = OWNERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let owner = owners
+        .get_or_insert_with(HashMap::new)
+        .entry(database)
+        .or_insert_with(|| test.clone());
+
+    assert_eq!(
+        *owner, test,
+        "database {database} is used by both {owner} and {test}; give each test its own"
+    );
 }

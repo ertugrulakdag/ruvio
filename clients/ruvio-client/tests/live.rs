@@ -1,6 +1,8 @@
 //! Runs against a live server when `RUVIO_TEST_ADDR` is set, for example
 //! `RUVIO_TEST_ADDR=127.0.0.1:16390 cargo test`. Each test uses its own database.
 
+mod common;
+
 use std::net::SocketAddr;
 
 use std::time::{Duration, SystemTime};
@@ -12,6 +14,9 @@ use ruvio_client::{
 
 fn connect(database: u32) -> Option<Client> {
     let address: SocketAddr = std::env::var("RUVIO_TEST_ADDR").ok()?.parse().ok()?;
+
+    common::claim_database(database);
+
     let mut client = Client::connect_addr(address, database).unwrap();
 
     client
@@ -50,7 +55,7 @@ fn strings_keys_and_expiry() {
             .as_deref(),
         Some("100")
     );
-    assert!(db.expire("a", Duration::from_millis(1500)).unwrap());
+    assert!(db.expire("a", Duration::from_millis(60_500)).unwrap());
     assert!(db.pttl("a").unwrap() > 0);
     assert!(db.set_keep_ttl("a", "z", SetMode::Always).unwrap());
     assert!(db.ttl("a").unwrap() > 0);
@@ -427,6 +432,7 @@ fn databases_transactions_and_scripts() {
     let Some(mut db) = connect(5) else { return };
 
     db.set("k", "v").unwrap();
+    common::claim_database(6);
     assert!(db.move_key("k", 6).unwrap());
 
     let mut other = Client::connect_database("127.0.0.1", port(), 0)
@@ -639,7 +645,7 @@ fn compatibility_commands_and_fill() {
 
 #[test]
 fn json_documents_round_trip() {
-    let Some(mut db) = connect(2) else { return };
+    let Some(mut db) = connect(13) else { return };
 
     assert!(db.json_set("{j}a", "$", r#"{"n":1}"#).unwrap());
     assert_eq!(
@@ -668,7 +674,7 @@ fn json_documents_round_trip() {
 
 #[test]
 fn json_value_commands_round_trip() {
-    let Some(mut db) = connect(3) else { return };
+    let Some(mut db) = connect(14) else { return };
 
     assert!(
         db.json_set(
@@ -707,7 +713,7 @@ fn json_typed_values_round_trip() {
         zip: u32,
     }
 
-    let Some(mut db) = connect(4) else { return };
+    let Some(mut db) = connect(15) else { return };
 
     assert!(
         db.json_set_value("doc", "$", &serde_json::json!({"l": []}))
@@ -756,19 +762,19 @@ fn json_typed_values_round_trip() {
 
 #[test]
 fn read_timeout_on_a_command_reply_reopens_the_connection() {
-    let Some(mut db) = connect(1) else { return };
+    let Some(mut db) = connect(8) else { return };
 
     db.set_read_timeout(Some(Duration::from_millis(150)))
         .unwrap();
 
     // The server answers after the client gave up: that late reply must never be read as the
-    // answer to a later command.
+    // answer to a later command. The 2 s block leaves the 150 ms read timeout a wide margin.
     assert!(
-        db.blpop_key("timeout:never", Duration::from_secs(1))
+        db.blpop_key("timeout:never", Duration::from_secs(2))
             .is_err()
     );
 
-    std::thread::sleep(Duration::from_millis(1100));
+    std::thread::sleep(Duration::from_millis(2100));
     db.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     db.set("timeout:probe", "ok").unwrap();
     assert_eq!(

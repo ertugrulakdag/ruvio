@@ -3,6 +3,8 @@
 //! owns one logical database (8 to 14, and 0 for `JSON.INDEX`, which is database-0 only) and
 //! flushes it first.
 
+mod common;
+
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -15,6 +17,9 @@ use ruvio_client::{
 
 fn connect(database: u32) -> Option<Client> {
     let address: SocketAddr = std::env::var("RUVIO_TEST_ADDR").ok()?.parse().ok()?;
+
+    common::claim_database(database);
+
     let mut client = Client::connect_addr(address, database).unwrap();
 
     // 70 s: get_or_create tests wait out a 60 s fill; nothing may wait longer.
@@ -787,9 +792,10 @@ fn helpers_lock_lease_semaphore_limit() {
             .unwrap()
     );
 
-    // lock() polls until the holder releases.
+    // lock() polls until the holder releases. The holder's 2 s lease outlives the 5 ms wait
+    // by far, and the 10 s wait outlives the lease.
     other
-        .acquire_lock("lock3", "theirs", Duration::from_millis(60))
+        .acquire_lock("lock3", "theirs", Duration::from_secs(2))
         .unwrap();
     assert!(
         db.lock("lock3", Duration::from_secs(5), Duration::from_millis(5))
@@ -797,7 +803,7 @@ fn helpers_lock_lease_semaphore_limit() {
             .is_none()
     );
     assert!(
-        db.lock("lock3", Duration::from_secs(5), Duration::from_secs(2))
+        db.lock("lock3", Duration::from_secs(5), Duration::from_secs(10))
             .unwrap()
             .is_some()
     );

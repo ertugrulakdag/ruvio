@@ -5,8 +5,8 @@ use std::io::{BufReader, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use ruvio_client::__bench::parse;
 use ruvio_client::{
@@ -27,6 +27,7 @@ struct Server {
     log: Log,
     connections: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
+    accept: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Server {
@@ -39,7 +40,7 @@ impl Server {
         let stop = Arc::new(AtomicBool::new(false));
         let handler = Arc::new(handler);
 
-        {
+        let accept = {
             let log = Arc::clone(&log);
             let connections = Arc::clone(&connections);
             let stop = Arc::clone(&stop);
@@ -49,6 +50,7 @@ impl Server {
 
                 loop {
                     match listener.accept() {
+                        Ok(_) if stop.load(Ordering::SeqCst) => return,
                         Ok((socket, _)) => {
                             socket.set_nonblocking(false).unwrap();
 
@@ -106,14 +108,15 @@ impl Server {
                         Err(_) => return,
                     }
                 }
-            });
-        }
+            })
+        };
 
         Self {
             port,
             log,
             connections,
             stop,
+            accept: Mutex::new(Some(accept)),
         }
     }
 
@@ -154,16 +157,36 @@ impl Server {
             .collect()
     }
 
+    /// The connections accepted so far, for checks that no new connection was opened: it
+    /// gives the accept loop, which polls every few milliseconds, time to see a stray one.
     fn connection_count(&self) -> usize {
-        // The accept loop polls every few milliseconds.
         thread::sleep(Duration::from_millis(40));
         self.connections.load(Ordering::SeqCst)
     }
 
-    /// Stops accepting: the port refuses connections shortly after.
+    /// Waits until at least `expected` connections were accepted, or 10 s passed, and returns
+    /// the count.
+    fn wait_for_connections(&self, expected: usize) -> usize {
+        let deadline = Instant::now() + Duration::from_secs(10);
+
+        loop {
+            let count = self.connections.load(Ordering::SeqCst);
+
+            if count >= expected || Instant::now() >= deadline {
+                return count;
+            }
+
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// Stops accepting and closes the listener: the port refuses connections when this returns.
     fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
-        thread::sleep(Duration::from_millis(30));
+
+        if let Some(accept) = self.accept.lock().unwrap().take() {
+            accept.join().unwrap();
+        }
     }
 }
 
@@ -343,7 +366,7 @@ fn with_reconnect_off_a_dropped_socket_stays_closed_until_reconnect() {
     assert_eq!(server.connection_count(), 1);
 
     client.reconnect().unwrap();
-    assert_eq!(server.connection_count(), 2);
+    assert_eq!(server.wait_for_connections(2), 2);
     assert_eq!(client.ping().unwrap(), "PONG");
 
     // Reconnecting a healthy client does nothing.

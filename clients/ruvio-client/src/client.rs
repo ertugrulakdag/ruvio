@@ -1093,7 +1093,7 @@ mod tests {
     fn connect_asks_for_cluster_slots_then_is_quiet() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let accepted = thread::spawn(move || bound(listener.accept().unwrap().0));
+        let accepted = thread::spawn(move || bound(crate::test_support::accept(&listener).0));
         let connecting = thread::spawn(move || Client::connect("127.0.0.1", port).unwrap());
         let mut server = accepted.join().unwrap();
 
@@ -1125,7 +1125,7 @@ mod tests {
     fn discover_cluster_off_sends_nothing_until_the_first_command() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let accepted = thread::spawn(move || bound(listener.accept().unwrap().0));
+        let accepted = thread::spawn(move || bound(crate::test_support::accept(&listener).0));
         let mut client = Client::connect_with(ClientOptions {
             host: "127.0.0.1".to_owned(),
             port,
@@ -1158,7 +1158,7 @@ mod tests {
     fn a_server_error_leaves_the_next_command_usable() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let accepted = thread::spawn(move || bound(listener.accept().unwrap().0));
+        let accepted = thread::spawn(move || bound(crate::test_support::accept(&listener).0));
         let connecting = thread::spawn(move || Client::connect("127.0.0.1", port).unwrap());
         let mut server = accepted.join().unwrap();
 
@@ -1187,7 +1187,7 @@ mod tests {
     fn password_is_sent_as_auth() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let accepted = thread::spawn(move || bound(listener.accept().unwrap().0));
+        let accepted = thread::spawn(move || bound(crate::test_support::accept(&listener).0));
         let connecting = thread::spawn(move || {
             Client::connect_with(ClientOptions {
                 host: "127.0.0.1".to_owned(),
@@ -1214,7 +1214,7 @@ mod tests {
     fn database_is_selected_after_auth() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let accepted = thread::spawn(move || bound(listener.accept().unwrap().0));
+        let accepted = thread::spawn(move || bound(crate::test_support::accept(&listener).0));
         let connecting = thread::spawn(move || {
             Client::connect_with(ClientOptions {
                 host: "127.0.0.1".to_owned(),
@@ -1247,7 +1247,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let connecting = thread::spawn(move || Client::connect("127.0.0.1", port).unwrap());
-        let mut command = bound(listener.accept().unwrap().0);
+        let mut command = bound(crate::test_support::accept(&listener).0);
 
         reply_standalone_cluster(&mut command);
 
@@ -1259,7 +1259,7 @@ mod tests {
             (confirms.len(), pong)
         });
 
-        let mut subscriber = bound(listener.accept().unwrap().0);
+        let mut subscriber = bound(crate::test_support::accept(&listener).0);
         let expected = b"*2\r\n$9\r\nSUBSCRIBE\r\n$4\r\nnews\r\n";
         let mut got = vec![0_u8; expected.len()];
 
@@ -1286,7 +1286,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let connecting = thread::spawn(move || Client::connect("127.0.0.1", port).unwrap());
-        let mut command = bound(listener.accept().unwrap().0);
+        let mut command = bound(crate::test_support::accept(&listener).0);
 
         reply_standalone_cluster(&mut command);
 
@@ -1297,7 +1297,7 @@ mod tests {
             subscriber.subscribe(&["news"]).unwrap();
         });
 
-        let mut subscriber = bound(listener.accept().unwrap().0);
+        let mut subscriber = bound(crate::test_support::accept(&listener).0);
         let expected = b"*2\r\n$9\r\nSUBSCRIBE\r\n$4\r\nnews\r\n";
         let mut got = vec![0_u8; expected.len()];
 
@@ -1328,7 +1328,7 @@ mod tests {
             .unwrap()
         });
 
-        let accepted = bound(listener.accept().unwrap().0);
+        let accepted = bound(crate::test_support::accept(&listener).0);
 
         drop(accepted);
 
@@ -1339,7 +1339,7 @@ mod tests {
             client.ping().unwrap()
         });
 
-        let mut again = bound(listener.accept().unwrap().0);
+        let mut again = bound(crate::test_support::accept(&listener).0);
         let mut got = [0_u8; 14];
 
         again.read_exact(&mut got).unwrap();

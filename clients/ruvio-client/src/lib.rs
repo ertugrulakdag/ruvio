@@ -15,6 +15,8 @@ mod helpers;
 mod json_value;
 mod models;
 mod scan;
+#[cfg(test)]
+mod test_support;
 mod value;
 
 pub use client::{Client, ClientOptions, ConnectionNotice, SetMode};

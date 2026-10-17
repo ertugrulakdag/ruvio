@@ -1850,7 +1850,7 @@ mod tests {
         let fresh_port = fresh.local_addr().unwrap().port();
         let seed_port = seed.local_addr().unwrap().port();
         let seed_thread = thread::spawn(move || {
-            let (mut socket, _) = seed.accept().unwrap();
+            let (mut socket, _) = crate::test_support::accept(&seed);
             let mut buffer = [0; 512];
             for port in [stale_port, fresh_port] {
                 let _request_len = socket.read(&mut buffer).unwrap();
@@ -1863,7 +1863,7 @@ mod tests {
             }
         });
         let fresh_thread = thread::spawn(move || {
-            let (mut socket, _) = fresh.accept().unwrap();
+            let (mut socket, _) = crate::test_support::accept(&fresh);
             let mut buffer = [0; 512];
             let _request_len = socket.read(&mut buffer).unwrap();
             socket.write_all(b"$5\r\nvalue\r\n").unwrap();
@@ -2036,6 +2036,7 @@ mod more_tests {
     use crate::value::RespValue;
     use std::io::Read;
     use std::net::TcpListener;
+    use std::sync::mpsc;
     use std::thread::{self, JoinHandle};
 
     fn strs(items: &[&str]) -> Vec<String> {
@@ -2590,8 +2591,8 @@ mod more_tests {
         Reply(Vec<u8>),
         /// Write these bytes without waiting for a request.
         Push(Vec<u8>),
-        /// Wait before the next step.
-        Sleep(u64),
+        /// Wait until the test sends on (or drops) the paired sender, 10 s at most.
+        Wait(mpsc::Receiver<()>),
         /// Read one request and close the socket.
         Close,
     }
@@ -2609,7 +2610,7 @@ mod more_tests {
             let requests = Arc::new(Mutex::new(Vec::new()));
             let seen = Arc::clone(&requests);
             let handle = thread::spawn(move || {
-                let (mut socket, _) = listener.accept().unwrap();
+                let (mut socket, _) = crate::test_support::accept(&listener);
                 let mut buffer = [0_u8; 4096];
 
                 socket
@@ -2625,7 +2626,9 @@ mod more_tests {
                             socket.write_all(&bytes).unwrap();
                         }
                         Step::Push(bytes) => socket.write_all(&bytes).unwrap(),
-                        Step::Sleep(millis) => thread::sleep(Duration::from_millis(millis)),
+                        Step::Wait(gate) => {
+                            let _ = gate.recv_timeout(Duration::from_secs(10));
+                        }
                         Step::Close => {
                             let read = socket.read(&mut buffer).unwrap();
 
@@ -2872,9 +2875,10 @@ mod more_tests {
 
     #[test]
     fn an_idle_read_timeout_does_not_break_the_connection() {
+        let (release, gate) = mpsc::channel();
         let script = Script::start(vec![
             Step::Push(b"+one\r\n".to_vec()),
-            Step::Sleep(300),
+            Step::Wait(gate),
             Step::Push(b"+two\r\n".to_vec()),
         ]);
         let mut connection = script.connect();
@@ -2886,7 +2890,10 @@ mod more_tests {
         // Nothing arrives within the timeout: still usable.
         assert!(matches!(connection.read(), Err(Error::Io(e)) if idle_wait(&e)));
         assert!(!connection.is_broken());
-        thread::sleep(Duration::from_millis(300));
+        release.send(()).unwrap();
+        connection
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         assert_eq!(connection.read().unwrap(), RespValue::Simple("two".into()));
         drop(connection);
         script.finish();
@@ -2894,7 +2901,9 @@ mod more_tests {
 
     #[test]
     fn a_command_whose_reply_never_comes_marks_the_connection_broken() {
-        let script = Script::start(vec![Step::Sleep(400)]);
+        // The script holds the socket open, without replying, until the checks are done.
+        let (release, gate) = mpsc::channel();
+        let script = Script::start(vec![Step::Wait(gate)]);
         let mut connection = script.connect();
 
         connection
@@ -2902,6 +2911,7 @@ mod more_tests {
             .unwrap();
         assert!(matches!(connection.send(&["PING"]), Err(Error::Io(e)) if idle_wait(&e)));
         assert!(connection.is_broken());
+        drop(release);
         drop(connection);
         script.finish();
     }
@@ -2940,7 +2950,7 @@ mod more_tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
+            let (mut socket, _) = crate::test_support::accept(&listener);
             let mut buffer = [0_u8; 4096];
 
             let _ = socket.read(&mut buffer).unwrap();
@@ -3121,7 +3131,7 @@ mod more_tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
+            let (mut socket, _) = crate::test_support::accept(&listener);
             let mut buffer = [0_u8; 256];
 
             let _ = socket.read(&mut buffer).unwrap();

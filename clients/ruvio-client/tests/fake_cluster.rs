@@ -9,7 +9,7 @@ use std::io::{BufReader, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use ruvio_client::__bench::parse;
@@ -518,7 +518,17 @@ fn accept_loop(state: Arc<Mutex<State>>, node: usize, listener: TcpListener) {
         match listener.accept() {
             Ok((stream, _)) => {
                 stream.set_nonblocking(false).unwrap();
-                state.lock().unwrap().conns[node].push(stream.try_clone().unwrap());
+
+                {
+                    // Checked under the lock kill() takes, so no socket outlives a kill.
+                    let mut state = state.lock().unwrap();
+
+                    if state.dead[node] {
+                        return;
+                    }
+
+                    state.conns[node].push(stream.try_clone().unwrap());
+                }
 
                 let state = Arc::clone(&state);
 
@@ -538,6 +548,7 @@ fn accept_loop(state: Arc<Mutex<State>>, node: usize, listener: TcpListener) {
 
 struct Cluster {
     state: Arc<Mutex<State>>,
+    accepts: Mutex<Vec<Option<JoinHandle<()>>>>,
 }
 
 impl Cluster {
@@ -563,13 +574,20 @@ impl Cluster {
             conns: (0..nodes).map(|_| Vec::new()).collect(),
         }));
 
-        for (node, listener) in listeners.into_iter().enumerate() {
-            let state = Arc::clone(&state);
+        let accepts = listeners
+            .into_iter()
+            .enumerate()
+            .map(|(node, listener)| {
+                let state = Arc::clone(&state);
 
-            thread::spawn(move || accept_loop(state, node, listener));
+                Some(thread::spawn(move || accept_loop(state, node, listener)))
+            })
+            .collect();
+
+        Self {
+            state,
+            accepts: Mutex::new(accepts),
         }
-
-        Self { state }
     }
 
     fn port(&self, node: usize) -> u16 {
@@ -664,7 +682,7 @@ impl Cluster {
             .insert(name.to_owned(), times);
     }
 
-    /// Stops the node: open sockets close and new connections are refused.
+    /// Stops the node: open sockets close, and new connections are refused once this returns.
     fn kill(&self, node: usize) {
         let mut state = self.state.lock().unwrap();
 
@@ -675,7 +693,11 @@ impl Cluster {
         }
 
         drop(state);
-        thread::sleep(Duration::from_millis(30));
+
+        // The accept loop drops the listener when it returns.
+        if let Some(accept) = self.accepts.lock().unwrap()[node].take() {
+            accept.join().unwrap();
+        }
     }
 
     fn push(&self, node: usize, bytes: &[u8]) {
