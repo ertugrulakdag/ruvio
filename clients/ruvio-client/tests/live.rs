@@ -8,7 +8,8 @@ use std::net::SocketAddr;
 use std::time::{Duration, SystemTime};
 
 use ruvio_client::{
-    Client, FieldExpireCondition, FillOutcome, SetMode, SortedSetAddOptions, SortedSetEntry,
+    BitFieldOffset, BitFieldOp, BitFieldOverflow, BitFieldType, Client, FieldExpireCondition,
+    FillOutcome, GeoUnit, InsertPosition, ListSide, SetMode, SortedSetAddOptions, SortedSetEntry,
     StreamClaimOptions, StreamPendingFilter, StreamReadOptions,
 };
 
@@ -69,7 +70,7 @@ fn strings_keys_and_expiry() {
     assert!(db.pexpire("t", Duration::from_secs(30)).unwrap());
     assert_eq!(db.dbsize().unwrap(), 3);
 
-    let page = db.scan(0, Some("*"), Some(100)).unwrap();
+    let page = db.scan(0, Some("*"), Some(100), None).unwrap();
 
     assert_eq!(page.cursor, 0);
     assert_eq!(page.keys.len(), 3);
@@ -149,31 +150,31 @@ fn geo_commands_round_trip_the_sicily_members() {
         Some("sqc8b49rny0")
     );
     assert!(
-        db.geo_dist("Sicily", "Palermo", "Catania", Some("m"))
+        db.geo_dist("Sicily", "Palermo", "Catania", Some(GeoUnit::Meters))
             .unwrap()
             .unwrap()
             > 100_000.0
     );
     assert!(db.geo_pos("Sicily", &["missing"]).unwrap()[0].is_none());
     assert_eq!(
-        db.geo_search("Sicily", 15.0, 37.0, 200.0, "km")
+        db.geo_search("Sicily", 15.0, 37.0, 200.0, GeoUnit::Kilometers)
             .unwrap()
             .len(),
         2
     );
     assert_eq!(
-        db.geo_search_store("near", "Sicily", "Palermo", 100.0, "km")
+        db.geo_search_store("near", "Sicily", "Palermo", 100.0, GeoUnit::Kilometers)
             .unwrap(),
         1
     );
     assert_eq!(
-        db.geo_radius("Sicily", 15.0, 37.0, 200.0, "km")
+        db.geo_radius("Sicily", 15.0, 37.0, 200.0, GeoUnit::Kilometers)
             .unwrap()
             .len(),
         2
     );
     assert_eq!(
-        db.geo_radius_by_member("Sicily", "Palermo", 100.0, "km")
+        db.geo_radius_by_member("Sicily", "Palermo", 100.0, GeoUnit::Kilometers)
             .unwrap(),
         vec!["Palermo".to_owned()]
     );
@@ -581,43 +582,95 @@ fn compatibility_commands_and_fill() {
     assert_eq!(db.slowlog_len().unwrap(), 0);
 
     assert_eq!(db.rpush("l", &["a", "b", "c"]).unwrap(), 3);
-    assert_eq!(db.linsert("l", true, "b", "x").unwrap(), 4);
+    assert_eq!(
+        db.linsert("l", InsertPosition::Before, "b", "x").unwrap(),
+        4
+    );
     db.lset("l", 0, "A").unwrap();
     assert_eq!(db.lrem("l", 0, "x").unwrap(), 1);
     assert_eq!(db.lpos("l", "c").unwrap(), Some(2));
     assert_eq!(db.lpushx("nolist", &["a"]).unwrap(), 0);
     assert_eq!(db.rpushx("l", &["d"]).unwrap(), 4);
     assert_eq!(
-        db.lmove("l", "l2", true, false).unwrap().as_deref(),
+        db.lmove("l", "l2", ListSide::Left, ListSide::Right)
+            .unwrap()
+            .as_deref(),
         Some("A")
     );
     assert_eq!(db.rpoplpush("l", "l2").unwrap().as_deref(), Some("d"));
     assert_eq!(
-        db.blmove("l", "l2", true, true, Duration::from_secs(1))
-            .unwrap()
-            .as_deref(),
+        db.blmove(
+            "l",
+            "l2",
+            ListSide::Left,
+            ListSide::Left,
+            Duration::from_secs(1)
+        )
+        .unwrap()
+        .as_deref(),
         Some("b")
     );
-    let popped = db.lmpop(&["none", "l"], true, 5).unwrap().unwrap();
+    let popped = db
+        .lmpop(&["none", "l"], ListSide::Left, 5)
+        .unwrap()
+        .unwrap();
     assert_eq!(popped, ("l".to_owned(), vec!["c".to_owned()]));
     assert_eq!(
-        db.blmove("none", "l2", true, true, Duration::from_millis(100))
-            .unwrap(),
+        db.blmove(
+            "none",
+            "l2",
+            ListSide::Left,
+            ListSide::Left,
+            Duration::from_millis(100)
+        )
+        .unwrap(),
         None
     );
 
+    let u8_type = BitFieldType::unsigned(8).unwrap();
+
     assert_eq!(
-        db.bitfield("bf", &["SET", "u8", "0", "200", "GET", "u8", "0"])
-            .unwrap(),
+        db.bitfield(
+            "bf",
+            &[
+                BitFieldOp::Set {
+                    ty: u8_type,
+                    offset: BitFieldOffset::Bit(0),
+                    value: 200,
+                },
+                BitFieldOp::Get {
+                    ty: u8_type,
+                    offset: BitFieldOffset::Bit(0),
+                },
+            ],
+        )
+        .unwrap(),
         vec![Some(0), Some(200)]
     );
     assert_eq!(
-        db.bitfield("bf", &["OVERFLOW", "FAIL", "INCRBY", "u8", "0", "100"])
-            .unwrap(),
+        db.bitfield(
+            "bf",
+            &[
+                BitFieldOp::Overflow(BitFieldOverflow::Fail),
+                BitFieldOp::IncrBy {
+                    ty: u8_type,
+                    offset: BitFieldOffset::Bit(0),
+                    delta: 100,
+                },
+            ],
+        )
+        .unwrap(),
         vec![None]
     );
     assert_eq!(
-        db.bitfield_ro("bf", &["GET", "i8", "0"]).unwrap(),
+        db.bitfield_ro(
+            "bf",
+            &[BitFieldOp::Get {
+                ty: BitFieldType::signed(8).unwrap(),
+                offset: BitFieldOffset::Bit(0)
+            }]
+        )
+        .unwrap(),
         vec![Some(-56)]
     );
 

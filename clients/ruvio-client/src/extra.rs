@@ -10,13 +10,13 @@ use std::time::Duration;
 
 use crate::args::Num;
 use crate::client::{Client, duration_millis, duration_secs, unexpected};
-use crate::commands::{parse_fill, parse_score, pop_many, side};
+use crate::commands::{parse_fill, parse_score, pop_many};
 use crate::error::Error;
 use crate::models::{
     Aggregate, BitOperation, BitUnit, BloomInfo, BloomInsertOptions, BloomReserveOptions,
     FillOutcome, GeoFrom, GeoMatch, GeoSearch, GeoShape, IdemState, JsonIndexType,
-    JsonSetCondition, ListPositionOptions, RangeBy, RangeOptions, RestoreOptions, SetScanPage,
-    SortedSetAddOptions, SortedSetCombine, SortedSetEntry, SortedSetScanPage,
+    JsonSetCondition, ListPositionOptions, ListSide, RangeBy, RangeOptions, RestoreOptions,
+    SetScanPage, SortedSetAddOptions, SortedSetCombine, SortedSetEntry, SortedSetScanPage,
 };
 use crate::value::RespValue;
 
@@ -350,7 +350,7 @@ impl Client {
         &mut self,
         timeout: Duration,
         keys: &[&str],
-        from_left: bool,
+        side: ListSide,
         count: u64,
     ) -> Result<Option<(String, Vec<String>)>, Error> {
         let timeout = Num::uint(duration_secs(timeout));
@@ -358,7 +358,7 @@ impl Client {
         let count = Num::uint(count);
         let mut arguments = prefixed(&["BLMPOP", timeout.as_str(), numkeys.as_str()], keys);
 
-        arguments.extend([side(from_left), "COUNT", count.as_str()]);
+        arguments.extend([side.as_str(), "COUNT", count.as_str()]);
         pop_many("BLMPOP", self.run(arguments)?)
     }
 
@@ -802,12 +802,7 @@ impl Client {
         destination: &str,
         keys: &[&str],
     ) -> Result<i64, Error> {
-        let operation = match operation {
-            BitOperation::And => "AND",
-            BitOperation::Or => "OR",
-            BitOperation::Xor => "XOR",
-            BitOperation::Not => "NOT",
-        };
+        let operation = operation.as_str();
 
         self.integer(prefixed(&["BITOP", operation, destination], keys))
     }
@@ -1298,16 +1293,17 @@ impl Client {
         }
 
         match &height {
-            None => arguments.extend(["BYRADIUS", width.as_str(), search.unit]),
-            Some(height) => {
-                arguments.extend(["BYBOX", width.as_str(), height.as_str(), search.unit])
-            }
+            None => arguments.extend(["BYRADIUS", width.as_str(), search.unit.as_str()]),
+            Some(height) => arguments.extend([
+                "BYBOX",
+                width.as_str(),
+                height.as_str(),
+                search.unit.as_str(),
+            ]),
         }
 
-        match search.descending {
-            Some(false) => arguments.push("ASC"),
-            Some(true) => arguments.push("DESC"),
-            None => {}
+        if let Some(order) = search.order {
+            arguments.push(order.as_str());
         }
 
         if let Some(count) = &count {
@@ -1515,11 +1511,7 @@ fn push_combine<'a>(
 
     if let Some(aggregate) = aggregate {
         arguments.push("AGGREGATE");
-        arguments.push(match aggregate {
-            Aggregate::Sum => "SUM",
-            Aggregate::Min => "MIN",
-            Aggregate::Max => "MAX",
-        });
+        arguments.push(aggregate.as_str());
     }
 }
 
@@ -1585,10 +1577,7 @@ fn push_range_options<'a>(
 }
 
 fn unit_word(unit: BitUnit) -> &'static str {
-    match unit {
-        BitUnit::Byte => "BYTE",
-        BitUnit::Bit => "BIT",
-    }
+    unit.as_str()
 }
 
 fn flags(command: &str, reply: RespValue) -> Result<Vec<bool>, Error> {

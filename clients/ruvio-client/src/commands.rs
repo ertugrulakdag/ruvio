@@ -9,7 +9,8 @@ use crate::client::{Client, duration_millis, duration_secs, join, unexpected, un
 
 use crate::error::Error;
 use crate::models::{
-    FieldExpireCondition, FillOutcome, HashScanPage, PubSubMessage, ScanPage, SortedSetAddOptions,
+    BitFieldOffset, BitFieldOp, BitFieldText, FieldExpireCondition, FillOutcome, GeoOrder, GeoUnit,
+    HashScanPage, InsertPosition, KeyType, ListSide, PubSubMessage, ScanPage, SortedSetAddOptions,
     SortedSetEntry, StreamClaimOptions, StreamEntry, StreamPendingEntry, StreamPendingFilter,
     StreamReadOptions, StreamReadResult,
 };
@@ -640,16 +641,32 @@ impl Client {
         self.ok(["RENAME", key, new_key])
     }
 
-    /// Sends `SCAN` with an optional `MATCH` pattern and `COUNT` hint.
+    /// Sends `SCAN` with an optional `MATCH` pattern, `COUNT` hint and `TYPE` filter.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let page = client.scan(0, Some("user:*"), Some(100), Some(KeyType::Hash))?;
+    /// # let _ = page;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn scan(
         &mut self,
         cursor: u64,
         pattern: Option<&str>,
         count: Option<u64>,
+        key_type: Option<KeyType>,
     ) -> Result<ScanPage, Error> {
         let mut arguments = args!["SCAN", cursor];
 
         push_scan_options(&mut arguments, pattern, count);
+
+        if let Some(key_type) = key_type {
+            arguments.extend(args!["TYPE", key_type.as_str()]);
+        }
 
         let (cursor, keys) = parse_scan("SCAN", self.run(arguments)?)?;
 
@@ -1517,21 +1534,35 @@ impl Client {
         self.integer(arguments)
     }
 
-    /// Sends `GEODIST`. `unit` is `m`, `km`, `ft`, or `mi`. `None` asks for meters.
+    /// Sends `GEODIST`. `None` for `unit` asks for meters.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let km = client.geo_dist("Sicily", "Palermo", "Catania", Some(GeoUnit::Kilometers))?;
+    /// # let _ = km;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn geo_dist(
         &mut self,
         key: &str,
         from: &str,
         to: &str,
-        unit: Option<&str>,
+        unit: Option<GeoUnit>,
     ) -> Result<Option<f64>, Error> {
-        let mut arguments = args!["GEODIST", key, from, to];
+        let mut arguments = ["GEODIST", key, from, to, ""];
+        let used = match unit {
+            Some(unit) => {
+                arguments[4] = unit.as_str();
+                5
+            }
+            None => 4,
+        };
 
-        if let Some(unit) = unit {
-            arguments.push(unit.to_owned());
-        }
-
-        self.bulk_or_null(arguments)?
+        self.bulk_or_null(&arguments[..used])?
             .map(|text| parse_score(&text))
             .transpose()
     }
@@ -1589,24 +1620,39 @@ impl Client {
     }
 
     /// Sends `GEOSEARCH ... FROMLONLAT ... BYRADIUS ... ASC`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let near = client.geo_search("Sicily", 15.0, 37.0, 200.0, GeoUnit::Kilometers)?;
+    /// # let _ = near;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn geo_search(
         &mut self,
         key: &str,
         longitude: f64,
         latitude: f64,
         radius: f64,
-        unit: &str,
+        unit: GeoUnit,
     ) -> Result<Vec<String>, Error> {
-        self.strings(args![
+        let longitude = Num::float(longitude);
+        let latitude = Num::float(latitude);
+        let radius = Num::float(radius);
+
+        self.strings([
             "GEOSEARCH",
             key,
             "FROMLONLAT",
-            longitude,
-            latitude,
+            longitude.as_str(),
+            latitude.as_str(),
             "BYRADIUS",
-            radius,
-            unit,
-            "ASC"
+            radius.as_str(),
+            unit.as_str(),
+            GeoOrder::Asc.as_str(),
         ])
     }
 
@@ -1617,17 +1663,19 @@ impl Client {
         source: &str,
         member: &str,
         radius: f64,
-        unit: &str,
+        unit: GeoUnit,
     ) -> Result<i64, Error> {
-        self.integer(args![
+        let radius = Num::float(radius);
+
+        self.integer([
             "GEOSEARCHSTORE",
             destination,
             source,
             "FROMMEMBER",
             member,
             "BYRADIUS",
-            radius,
-            unit
+            radius.as_str(),
+            unit.as_str(),
         ])
     }
 
@@ -1637,9 +1685,18 @@ impl Client {
         key: &str,
         member: &str,
         radius: f64,
-        unit: &str,
+        unit: GeoUnit,
     ) -> Result<Vec<String>, Error> {
-        self.strings(args!["GEORADIUSBYMEMBER", key, member, radius, unit, "ASC"])
+        let radius = Num::float(radius);
+
+        self.strings([
+            "GEORADIUSBYMEMBER",
+            key,
+            member,
+            radius.as_str(),
+            unit.as_str(),
+            GeoOrder::Asc.as_str(),
+        ])
     }
 
     /// Sends `GEORADIUS ... ASC`.
@@ -1649,16 +1706,20 @@ impl Client {
         longitude: f64,
         latitude: f64,
         radius: f64,
-        unit: &str,
+        unit: GeoUnit,
     ) -> Result<Vec<String>, Error> {
-        self.strings(args![
+        let longitude = Num::float(longitude);
+        let latitude = Num::float(latitude);
+        let radius = Num::float(radius);
+
+        self.strings([
             "GEORADIUS",
             key,
-            longitude,
-            latitude,
-            radius,
-            unit,
-            "ASC"
+            longitude.as_str(),
+            latitude.as_str(),
+            radius.as_str(),
+            unit.as_str(),
+            GeoOrder::Asc.as_str(),
         ])
     }
 
@@ -2910,16 +2971,24 @@ impl Client {
     }
 
     /// Sends `LINSERT`. Returns the new length, -1 when the pivot is missing, 0 for a missing list.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.linsert("queue", InsertPosition::Before, "b", "x")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn linsert(
         &mut self,
         key: &str,
-        before: bool,
+        position: InsertPosition,
         pivot: &str,
         value: &str,
     ) -> Result<i64, Error> {
-        let side = if before { "BEFORE" } else { "AFTER" };
-
-        self.integer(["LINSERT", key, side, pivot, value])
+        self.integer(["LINSERT", key, position.as_str(), pivot, value])
     }
 
     /// Sends `LSET`: overwrites the element at `index` (negative counts from the tail).
@@ -2959,14 +3028,25 @@ impl Client {
     }
 
     /// Sends `LMOVE`. `None` when the source is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let moved = client.lmove("src", "dst", ListSide::Left, ListSide::Right)?;
+    /// # let _ = moved;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn lmove(
         &mut self,
         source: &str,
         destination: &str,
-        from_left: bool,
-        to_left: bool,
+        from: ListSide,
+        to: ListSide,
     ) -> Result<Option<String>, Error> {
-        self.bulk_or_null(["LMOVE", source, destination, side(from_left), side(to_left)])
+        self.bulk_or_null(["LMOVE", source, destination, from.as_str(), to.as_str()])
     }
 
     /// Sends `RPOPLPUSH`: pops the tail of `source` and pushes it on the head of `destination`;
@@ -2980,17 +3060,19 @@ impl Client {
         &mut self,
         source: &str,
         destination: &str,
-        from_left: bool,
-        to_left: bool,
+        from: ListSide,
+        to: ListSide,
         timeout: Duration,
     ) -> Result<Option<String>, Error> {
-        self.bulk_or_null(args![
+        let seconds = Num::uint(duration_secs(timeout));
+
+        self.bulk_or_null([
             "BLMOVE",
             source,
             destination,
-            side(from_left),
-            side(to_left),
-            duration_secs(timeout)
+            from.as_str(),
+            to.as_str(),
+            seconds.as_str(),
         ])
     }
 
@@ -2999,29 +3081,32 @@ impl Client {
     pub fn lmpop(
         &mut self,
         keys: &[&str],
-        from_left: bool,
+        side: ListSide,
         count: u64,
     ) -> Result<Option<(String, Vec<String>)>, Error> {
         let mut arguments = args!["LMPOP", keys.len()];
 
         arguments.extend(keys.iter().map(|key| (*key).to_owned()));
-        arguments.extend(args![side(from_left), "COUNT", count]);
+        arguments.extend(args![side.as_str(), "COUNT", count]);
 
         pop_many("LMPOP", self.run(arguments)?)
     }
 
-    /// Sends `BITFIELD key operation...`. `operations` are the subcommand words, for example
-    /// `["OVERFLOW", "SAT", "INCRBY", "u8", "0", "10", "GET", "u8", "0"]`. Each reply is a number,
-    /// or `None` when `OVERFLOW FAIL` refused the write.
-    pub fn bitfield(&mut self, key: &str, operations: &[&str]) -> Result<Vec<Option<i64>>, Error> {
+    /// Sends `BITFIELD key operation...`. Each reply is a number, or `None` when
+    /// `OVERFLOW FAIL` refused the write. See [`BitFieldOp`] for an example.
+    pub fn bitfield(
+        &mut self,
+        key: &str,
+        operations: &[BitFieldOp],
+    ) -> Result<Vec<Option<i64>>, Error> {
         self.bitfield_command("BITFIELD", key, operations)
     }
 
-    /// Sends `BITFIELD_RO key GET type offset ...`.
+    /// Sends `BITFIELD_RO key GET type offset ...`. Only `BitFieldOp::Get` is accepted.
     pub fn bitfield_ro(
         &mut self,
         key: &str,
-        operations: &[&str],
+        operations: &[BitFieldOp],
     ) -> Result<Vec<Option<i64>>, Error> {
         self.bitfield_command("BITFIELD_RO", key, operations)
     }
@@ -3030,11 +3115,71 @@ impl Client {
         &mut self,
         name: &str,
         key: &str,
-        operations: &[&str],
+        operations: &[BitFieldOp],
     ) -> Result<Vec<Option<i64>>, Error> {
-        let mut arguments = args![name, key];
+        // Each operation fills at most three number/type slots; the keywords are static.
+        let mut texts: Vec<Num> = Vec::with_capacity(operations.len() * 2);
+        let mut types: Vec<BitFieldText> = Vec::with_capacity(operations.len());
 
-        arguments.extend(operations.iter().map(|word| (*word).to_owned()));
+        for operation in operations {
+            match *operation {
+                BitFieldOp::Get { ty, offset } => {
+                    types.push(ty.text());
+                    texts.push(bitfield_offset(offset));
+                }
+                BitFieldOp::Set {
+                    ty, offset, value, ..
+                } => {
+                    types.push(ty.text());
+                    texts.push(bitfield_offset(offset));
+                    texts.push(Num::int(value));
+                }
+                BitFieldOp::IncrBy {
+                    ty, offset, delta, ..
+                } => {
+                    types.push(ty.text());
+                    texts.push(bitfield_offset(offset));
+                    texts.push(Num::int(delta));
+                }
+                BitFieldOp::Overflow(_) => {}
+            }
+        }
+
+        let mut arguments: Vec<&str> = Vec::with_capacity(2 + operations.len() * 4);
+        let (mut next_type, mut next_text) = (0, 0);
+
+        arguments.extend([name, key]);
+
+        for operation in operations {
+            match *operation {
+                BitFieldOp::Get { .. } => {
+                    arguments.extend(["GET", types[next_type].as_str(), texts[next_text].as_str()]);
+                    next_type += 1;
+                    next_text += 1;
+                }
+                BitFieldOp::Set { .. } => {
+                    arguments.extend([
+                        "SET",
+                        types[next_type].as_str(),
+                        texts[next_text].as_str(),
+                        texts[next_text + 1].as_str(),
+                    ]);
+                    next_type += 1;
+                    next_text += 2;
+                }
+                BitFieldOp::IncrBy { .. } => {
+                    arguments.extend([
+                        "INCRBY",
+                        types[next_type].as_str(),
+                        texts[next_text].as_str(),
+                        texts[next_text + 1].as_str(),
+                    ]);
+                    next_type += 1;
+                    next_text += 2;
+                }
+                BitFieldOp::Overflow(mode) => arguments.extend(["OVERFLOW", mode.as_str()]),
+            }
+        }
 
         match self.run(arguments)? {
             RespValue::Array(items) => items
@@ -3096,8 +3241,12 @@ impl Client {
     }
 }
 
-pub(crate) fn side(left: bool) -> &'static str {
-    if left { "LEFT" } else { "RIGHT" }
+/// A `BITFIELD` offset: `100` for a bit offset, `#3` for the third field of the type's width.
+fn bitfield_offset(offset: BitFieldOffset) -> Num {
+    match offset {
+        BitFieldOffset::Bit(bit) => Num::uint(bit),
+        BitFieldOffset::Field(index) => Num::hash_uint(index),
+    }
 }
 
 pub(crate) fn pop_many(

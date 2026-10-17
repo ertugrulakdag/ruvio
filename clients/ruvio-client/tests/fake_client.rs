@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use ruvio_client::__bench::parse;
 use ruvio_client::{
-    Aggregate, Client, ClientOptions, ConnectionNotice, Error, GeoFrom, GeoSearch, RespValue,
-    SortedSetCombine,
+    Aggregate, Client, ClientOptions, ConnectionNotice, Error, GeoFrom, GeoSearch, GeoUnit,
+    ListSide, RespValue, SortedSetCombine,
 };
 
 enum Reply {
@@ -726,18 +726,22 @@ fn byte_and_string_list_replies_are_checked() {
 #[test]
 fn pop_many_and_scan_replies_are_checked() {
     let (reply, request) = probe("*2\r\n$1\r\nk\r\n*2\r\n$1\r\na\r\n$1\r\nb\r\n", |c| {
-        c.lmpop(&["k"], true, 2)
+        c.lmpop(&["k"], ListSide::Left, 2)
     });
     assert_eq!(
         reply.unwrap(),
         Some(("k".to_owned(), vec!["a".to_owned(), "b".to_owned()]))
     );
     assert_eq!(request, words(&["LMPOP", "1", "k", "LEFT", "COUNT", "2"]));
-    let (reply, _) = probe("*-1\r\n", |c| c.lmpop(&["k"], false, 1));
+    let (reply, _) = probe("*-1\r\n", |c| c.lmpop(&["k"], ListSide::Right, 1));
     assert_eq!(reply.unwrap(), None);
-    let (reply, _) = probe("*2\r\n$1\r\nk\r\n:5\r\n", |c| c.lmpop(&["k"], true, 1));
+    let (reply, _) = probe("*2\r\n$1\r\nk\r\n:5\r\n", |c| {
+        c.lmpop(&["k"], ListSide::Left, 1)
+    });
     assert!(protocol(reply).starts_with("LMPOP returned"));
-    let (reply, _) = probe("*3\r\n:1\r\n:2\r\n:3\r\n", |c| c.lmpop(&["k"], true, 1));
+    let (reply, _) = probe("*3\r\n:1\r\n:2\r\n:3\r\n", |c| {
+        c.lmpop(&["k"], ListSide::Left, 1)
+    });
     assert!(protocol(reply).starts_with("LMPOP returned"));
 
     let (reply, _) = probe("*3\r\n$1\r\n0\r\n*0\r\n*0\r\n", |c| {
@@ -798,7 +802,7 @@ fn sorted_set_combine_options_are_sent() {
 
 #[test]
 fn geo_search_from_coordinates_with_a_hash() {
-    let mut search = GeoSearch::radius(GeoFrom::LonLat(1.5, 2.5), 3.0, "m");
+    let mut search = GeoSearch::radius(GeoFrom::LonLat(1.5, 2.5), 3.0, GeoUnit::Meters);
     search.with_hash = true;
     let (reply, request) = probe("*1\r\n*2\r\n$1\r\na\r\n:7\r\n", |c| {
         c.geo_search_with("g", &search)

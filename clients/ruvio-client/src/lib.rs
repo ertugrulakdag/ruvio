@@ -102,10 +102,11 @@ pub use cluster::{hash_slot, hash_slot_bytes};
 pub use error::Error;
 pub use helpers::{CacheOptions, IdemOutcome, LeaseGuard, LockGuard, SemaphorePermit, new_token};
 pub use models::{
-    Aggregate, BitOperation, BitUnit, BloomInfo, BloomInsertOptions, BloomReserveOptions,
-    FieldExpireCondition, FillOutcome, GeoFrom, GeoMatch, GeoSearch, GeoShape, HashScanPage,
-    IdemState, JsonIndexType, JsonSetCondition, ListPositionOptions, PubSubMessage, RangeBy,
-    RangeOptions, RateLimit, RestoreOptions, ScanPage, SetScanPage, SortedSetAddOptions,
+    Aggregate, BitFieldOffset, BitFieldOp, BitFieldOverflow, BitFieldType, BitOperation, BitUnit,
+    BloomInfo, BloomInsertOptions, BloomReserveOptions, FieldExpireCondition, FillOutcome, GeoFrom,
+    GeoMatch, GeoOrder, GeoSearch, GeoShape, GeoUnit, HashScanPage, IdemState, InsertPosition,
+    JsonIndexType, JsonSetCondition, KeyType, ListPositionOptions, ListSide, PubSubMessage,
+    RangeBy, RangeOptions, RateLimit, RestoreOptions, ScanPage, SetScanPage, SortedSetAddOptions,
     SortedSetCombine, SortedSetEntry, SortedSetScanPage, StreamClaimOptions, StreamEntry,
     StreamPendingEntry, StreamPendingFilter, StreamReadOptions, StreamReadResult,
 };

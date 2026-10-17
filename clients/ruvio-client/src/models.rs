@@ -266,6 +266,23 @@ pub enum BitOperation {
     Not,
 }
 
+impl BitOperation {
+    /// The wire keyword (`AND`, `OR`, `XOR`, `NOT`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::And => "AND",
+            Self::Or => "OR",
+            Self::Xor => "XOR",
+            Self::Not => "NOT",
+        }
+    }
+
+    /// The wire keyword as constant bytes.
+    pub const fn as_bytes(self) -> &'static [u8] {
+        self.as_str().as_bytes()
+    }
+}
+
 /// The unit of a `BITCOUNT` / `BITPOS` range.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum BitUnit {
@@ -274,6 +291,21 @@ pub enum BitUnit {
     Byte,
     /// Bit offsets (`BIT`).
     Bit,
+}
+
+impl BitUnit {
+    /// The wire keyword (`BYTE` or `BIT`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Byte => "BYTE",
+            Self::Bit => "BIT",
+        }
+    }
+
+    /// The wire keyword as constant bytes.
+    pub const fn as_bytes(self) -> &'static [u8] {
+        self.as_str().as_bytes()
+    }
 }
 
 /// How `ZUNION`, `ZINTER` and their `STORE` forms combine scores.
@@ -286,6 +318,22 @@ pub enum Aggregate {
     Min,
     /// Keep the highest score.
     Max,
+}
+
+impl Aggregate {
+    /// The wire keyword (`SUM`, `MIN`, `MAX`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sum => "SUM",
+            Self::Min => "MIN",
+            Self::Max => "MAX",
+        }
+    }
+
+    /// The wire keyword as constant bytes.
+    pub const fn as_bytes(self) -> &'static [u8] {
+        self.as_str().as_bytes()
+    }
 }
 
 /// `WEIGHTS` and `AGGREGATE` for `ZUNION` / `ZINTER` / `ZUNIONSTORE` / `ZINTERSTORE`.
@@ -342,6 +390,387 @@ pub struct RestoreOptions {
     pub absolute_ttl: bool,
 }
 
+/// A distance unit for the geo commands.
+///
+/// # Examples
+///
+/// ```
+/// use ruvio_client::GeoUnit;
+///
+/// assert_eq!(GeoUnit::Kilometers.as_str(), "km");
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GeoUnit {
+    /// Meters (`m`), the default of `GEODIST`.
+    #[default]
+    Meters,
+    /// Kilometers (`km`).
+    Kilometers,
+    /// Feet (`ft`).
+    Feet,
+    /// Miles (`mi`).
+    Miles,
+}
+
+impl GeoUnit {
+    /// The wire keyword: `m`, `km`, `ft`, or `mi`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Meters => "m",
+            Self::Kilometers => "km",
+            Self::Feet => "ft",
+            Self::Miles => "mi",
+        }
+    }
+
+    /// The wire keyword as constant bytes.
+    pub const fn as_bytes(self) -> &'static [u8] {
+        self.as_str().as_bytes()
+    }
+}
+
+/// The result order of the geo search commands.
+///
+/// # Examples
+///
+/// ```
+/// use ruvio_client::GeoOrder;
+///
+/// assert_eq!(GeoOrder::Desc.as_str(), "DESC");
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GeoOrder {
+    /// Nearest first (`ASC`).
+    #[default]
+    Asc,
+    /// Farthest first (`DESC`).
+    Desc,
+}
+
+impl GeoOrder {
+    /// The wire keyword: `ASC` or `DESC`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Asc => "ASC",
+            Self::Desc => "DESC",
+        }
+    }
+
+    /// The wire keyword as constant bytes.
+    pub const fn as_bytes(self) -> &'static [u8] {
+        self.as_str().as_bytes()
+    }
+}
+
+/// Where `LINSERT` places the new element relative to the pivot.
+///
+/// # Examples
+///
+/// ```
+/// use ruvio_client::InsertPosition;
+///
+/// assert_eq!(InsertPosition::Before.as_str(), "BEFORE");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertPosition {
+    /// In front of the pivot (`BEFORE`).
+    Before,
+    /// Behind the pivot (`AFTER`).
+    After,
+}
+
+impl InsertPosition {
+    /// The wire keyword: `BEFORE` or `AFTER`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Before => "BEFORE",
+            Self::After => "AFTER",
+        }
+    }
+
+    /// The wire keyword as constant bytes.
+    pub const fn as_bytes(self) -> &'static [u8] {
+        self.as_str().as_bytes()
+    }
+}
+
+/// An end of a list, for `LMOVE`, `BLMOVE`, `LMPOP` and `BLMPOP`.
+///
+/// # Examples
+///
+/// ```
+/// use ruvio_client::ListSide;
+///
+/// assert_eq!(ListSide::Left.as_str(), "LEFT");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListSide {
+    /// The head (`LEFT`).
+    Left,
+    /// The tail (`RIGHT`).
+    Right,
+}
+
+impl ListSide {
+    /// The wire keyword: `LEFT` or `RIGHT`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "LEFT",
+            Self::Right => "RIGHT",
+        }
+    }
+
+    /// The wire keyword as constant bytes.
+    pub const fn as_bytes(self) -> &'static [u8] {
+        self.as_str().as_bytes()
+    }
+}
+
+/// A value kind for the `TYPE` option of [`crate::Client::scan`].
+///
+/// # Examples
+///
+/// ```
+/// use ruvio_client::KeyType;
+///
+/// assert_eq!(KeyType::SortedSet.as_str(), "zset");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyType {
+    /// `string`.
+    String,
+    /// `json`.
+    Json,
+    /// `list`.
+    List,
+    /// `set`.
+    Set,
+    /// `hash`.
+    Hash,
+    /// `zset`.
+    SortedSet,
+    /// `bloomfilter`.
+    BloomFilter,
+    /// `stream`.
+    Stream,
+    /// `lease`.
+    Lease,
+    /// `limit`.
+    Limit,
+    /// `semaphore`.
+    Semaphore,
+    /// `once`.
+    Once,
+}
+
+impl KeyType {
+    /// The wire name, as the server reports it in `TYPE`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::String => "string",
+            Self::Json => "json",
+            Self::List => "list",
+            Self::Set => "set",
+            Self::Hash => "hash",
+            Self::SortedSet => "zset",
+            Self::BloomFilter => "bloomfilter",
+            Self::Stream => "stream",
+            Self::Lease => "lease",
+            Self::Limit => "limit",
+            Self::Semaphore => "semaphore",
+            Self::Once => "once",
+        }
+    }
+
+    /// The wire name as constant bytes.
+    pub const fn as_bytes(self) -> &'static [u8] {
+        self.as_str().as_bytes()
+    }
+}
+
+/// The `OVERFLOW` mode of `BITFIELD` writes.
+///
+/// # Examples
+///
+/// ```
+/// use ruvio_client::BitFieldOverflow;
+///
+/// assert_eq!(BitFieldOverflow::Sat.as_str(), "SAT");
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BitFieldOverflow {
+    /// Wrap around (`WRAP`, the default).
+    #[default]
+    Wrap,
+    /// Clamp to the limits (`SAT`).
+    Sat,
+    /// Refuse the write and reply nil (`FAIL`).
+    Fail,
+}
+
+impl BitFieldOverflow {
+    /// The wire keyword: `WRAP`, `SAT`, or `FAIL`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Wrap => "WRAP",
+            Self::Sat => "SAT",
+            Self::Fail => "FAIL",
+        }
+    }
+
+    /// The wire keyword as constant bytes.
+    pub const fn as_bytes(self) -> &'static [u8] {
+        self.as_str().as_bytes()
+    }
+}
+
+/// The integer type of a `BITFIELD` field: `i1` to `i64` (signed) or `u1` to `u63` (unsigned).
+///
+/// # Examples
+///
+/// ```
+/// use ruvio_client::BitFieldType;
+///
+/// assert_eq!(BitFieldType::unsigned(8).unwrap().as_string(), "u8");
+/// assert!(BitFieldType::unsigned(64).is_none());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BitFieldType {
+    signed: bool,
+    bits: u8,
+}
+
+impl BitFieldType {
+    /// A signed type of `bits` bits (`i<bits>`). `None` unless `bits` is 1 to 64.
+    pub const fn signed(bits: u8) -> Option<Self> {
+        if bits == 0 || bits > 64 {
+            return None;
+        }
+
+        Some(Self { signed: true, bits })
+    }
+
+    /// An unsigned type of `bits` bits (`u<bits>`). `None` unless `bits` is 1 to 63.
+    pub const fn unsigned(bits: u8) -> Option<Self> {
+        if bits == 0 || bits > 63 {
+            return None;
+        }
+
+        Some(Self {
+            signed: false,
+            bits,
+        })
+    }
+
+    /// The width in bits.
+    pub const fn bits(self) -> u8 {
+        self.bits
+    }
+
+    /// True for `i<n>`.
+    pub const fn is_signed(self) -> bool {
+        self.signed
+    }
+
+    /// The type written into a stack buffer, such as `i16`.
+    pub(crate) fn text(self) -> BitFieldText {
+        let mut text = BitFieldText {
+            buffer: [0; 3],
+            length: 0,
+        };
+
+        text.buffer[0] = if self.signed { b'i' } else { b'u' };
+
+        if self.bits >= 10 {
+            text.buffer[1] = b'0' + self.bits / 10;
+            text.buffer[2] = b'0' + self.bits % 10;
+            text.length = 3;
+        } else {
+            text.buffer[1] = b'0' + self.bits;
+            text.length = 2;
+        }
+
+        text
+    }
+
+    /// The wire text, such as `u8` or `i16`.
+    pub fn as_string(self) -> String {
+        self.text().as_str().to_owned()
+    }
+}
+
+/// A `BITFIELD` type name held in a stack buffer.
+pub(crate) struct BitFieldText {
+    buffer: [u8; 3],
+    length: usize,
+}
+
+impl BitFieldText {
+    pub(crate) fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.buffer[..self.length]).unwrap_or("u8")
+    }
+}
+
+/// Where a `BITFIELD` field starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BitFieldOffset {
+    /// A bit offset (`100`).
+    Bit(u64),
+    /// The n-th field of the type's width (`#3`).
+    Field(u64),
+}
+
+/// One `BITFIELD` subcommand.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use ruvio_client::*;
+/// # fn run(client: &mut Client) -> Result<(), Error> {
+/// let u8_type = BitFieldType::unsigned(8).unwrap();
+/// let replies = client.bitfield(
+///     "counters",
+///     &[
+///         BitFieldOp::Overflow(BitFieldOverflow::Sat),
+///         BitFieldOp::IncrBy { ty: u8_type, offset: BitFieldOffset::Bit(0), delta: 10 },
+///         BitFieldOp::Get { ty: u8_type, offset: BitFieldOffset::Bit(0) },
+///     ],
+/// )?;
+/// # let _ = replies;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BitFieldOp {
+    /// `GET type offset`.
+    Get {
+        /// The field type.
+        ty: BitFieldType,
+        /// The field position.
+        offset: BitFieldOffset,
+    },
+    /// `SET type offset value`.
+    Set {
+        /// The field type.
+        ty: BitFieldType,
+        /// The field position.
+        offset: BitFieldOffset,
+        /// The value to store.
+        value: i64,
+    },
+    /// `INCRBY type offset delta`.
+    IncrBy {
+        /// The field type.
+        ty: BitFieldType,
+        /// The field position.
+        offset: BitFieldOffset,
+        /// The amount to add.
+        delta: i64,
+    },
+    /// `OVERFLOW mode`, which applies to the writes after it.
+    Overflow(BitFieldOverflow),
+}
+
 /// Where a `GEOSEARCH` starts.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GeoFrom<'a> {
@@ -367,10 +796,11 @@ pub struct GeoSearch<'a> {
     pub from: GeoFrom<'a>,
     /// Area.
     pub shape: GeoShape,
-    /// `m`, `km`, `ft`, or `mi`.
-    pub unit: &'a str,
-    /// `Some(false)` sends `ASC`, `Some(true)` sends `DESC`.
-    pub descending: Option<bool>,
+    /// The distance unit of the radius or box.
+    pub unit: GeoUnit,
+    /// `Some(GeoOrder::Asc)` sends `ASC`, `Some(GeoOrder::Desc)` sends `DESC`, `None` sends
+    /// neither.
+    pub order: Option<GeoOrder>,
     /// `COUNT n`.
     pub count: Option<u64>,
     /// `ANY` (with `count`): stop at the first `count` matches.
@@ -385,12 +815,12 @@ pub struct GeoSearch<'a> {
 
 impl<'a> GeoSearch<'a> {
     /// A radius search around a point, nearest first, without extra fields.
-    pub fn radius(from: GeoFrom<'a>, radius: f64, unit: &'a str) -> Self {
+    pub fn radius(from: GeoFrom<'a>, radius: f64, unit: GeoUnit) -> Self {
         Self {
             from,
             shape: GeoShape::Radius(radius),
             unit,
-            descending: Some(false),
+            order: Some(GeoOrder::Asc),
             count: None,
             any: false,
             with_distance: false,
@@ -429,4 +859,72 @@ pub struct RateLimit {
     pub allowed: bool,
     /// Calls left in the window after this one (0 when refused).
     pub remaining: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keyword_tables_match_the_server_values() {
+        let units = [
+            (GeoUnit::Meters, "m"),
+            (GeoUnit::Kilometers, "km"),
+            (GeoUnit::Feet, "ft"),
+            (GeoUnit::Miles, "mi"),
+        ];
+
+        for (unit, text) in units {
+            assert_eq!(unit.as_str(), text);
+            assert_eq!(unit.as_bytes(), text.as_bytes());
+        }
+
+        assert_eq!(GeoOrder::Asc.as_bytes(), b"ASC");
+        assert_eq!(GeoOrder::Desc.as_bytes(), b"DESC");
+        assert_eq!(InsertPosition::Before.as_bytes(), b"BEFORE");
+        assert_eq!(InsertPosition::After.as_bytes(), b"AFTER");
+        assert_eq!(ListSide::Left.as_bytes(), b"LEFT");
+        assert_eq!(ListSide::Right.as_bytes(), b"RIGHT");
+        assert_eq!(BitFieldOverflow::Wrap.as_str(), "WRAP");
+        assert_eq!(BitFieldOverflow::Sat.as_str(), "SAT");
+        assert_eq!(BitFieldOverflow::Fail.as_str(), "FAIL");
+        assert_eq!(BitOperation::Not.as_str(), "NOT");
+        assert_eq!(BitUnit::Bit.as_str(), "BIT");
+        assert_eq!(Aggregate::Max.as_str(), "MAX");
+    }
+
+    #[test]
+    fn key_types_cover_every_scan_type() {
+        let all = [
+            (KeyType::String, "string"),
+            (KeyType::Json, "json"),
+            (KeyType::List, "list"),
+            (KeyType::Set, "set"),
+            (KeyType::Hash, "hash"),
+            (KeyType::SortedSet, "zset"),
+            (KeyType::BloomFilter, "bloomfilter"),
+            (KeyType::Stream, "stream"),
+            (KeyType::Lease, "lease"),
+            (KeyType::Limit, "limit"),
+            (KeyType::Semaphore, "semaphore"),
+            (KeyType::Once, "once"),
+        ];
+
+        for (kind, text) in all {
+            assert_eq!(kind.as_str(), text);
+            assert_eq!(kind.as_bytes(), text.as_bytes());
+        }
+    }
+
+    #[test]
+    fn bitfield_types_render_and_validate() {
+        assert_eq!(BitFieldType::signed(1).unwrap().as_string(), "i1");
+        assert_eq!(BitFieldType::signed(64).unwrap().as_string(), "i64");
+        assert_eq!(BitFieldType::unsigned(8).unwrap().as_string(), "u8");
+        assert_eq!(BitFieldType::unsigned(63).unwrap().as_string(), "u63");
+        assert!(BitFieldType::signed(0).is_none());
+        assert!(BitFieldType::signed(65).is_none());
+        assert!(BitFieldType::unsigned(0).is_none());
+        assert!(BitFieldType::unsigned(64).is_none());
+    }
 }
