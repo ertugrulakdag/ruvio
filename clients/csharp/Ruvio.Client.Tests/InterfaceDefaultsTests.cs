@@ -61,6 +61,11 @@ public class InterfaceDefaultsTests
             return BitFieldStep.Get("u8", 0);
         }
 
+        if (type == typeof(StreamTrim))
+        {
+            return StreamTrim.MaxLen(5);
+        }
+
         if (type.IsEnum)
         {
             return Enum.GetValues(type).GetValue(0);

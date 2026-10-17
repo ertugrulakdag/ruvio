@@ -122,6 +122,13 @@ public sealed partial class RuvioClient
     }
 
     /// <inheritdoc />
+    public async ValueTask<string> GetClientListAsync(ClientType type, CancellationToken cancellationToken = default)
+    {
+        return (await ExecuteCommandAsync(new RespCommand("CLIENT", "LIST", "TYPE", Keywords.Arg(type)), cancellationToken).ConfigureAwait(false)).AsString()
+            ?? throw new RuvioException("CLIENT LIST returned a null reply");
+    }
+
+    /// <inheritdoc />
     public ValueTask<long> KillClientAsync(long id, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("CLIENT", "KILL", "ID", id), cancellationToken);

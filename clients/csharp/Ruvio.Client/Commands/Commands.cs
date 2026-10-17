@@ -1306,6 +1306,23 @@ public sealed partial class RuvioClient
     }
 
     /// <inheritdoc />
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    public async ValueTask<string> AddStreamEntryAsync(
+        string key,
+        string id,
+        StreamTrim trim,
+        params (string Field, string Value)[] fields)
+    {
+        var arguments = new List<string> { "XADD", key, Keywords.Word(trim.Strategy), Keywords.Word(trim.Mode) };
+
+        arguments.Add(trim.Strategy == StreamTrimStrategy.MinId ? trim.Id ?? throw new ArgumentException("A MINID trim needs an id.", nameof(trim)) : Number(trim.Length));
+        arguments.AddRange(FlattenPairs(id, fields));
+        string? result = await BulkOrNull(arguments);
+
+        return result ?? throw new RuvioException("XADD returned a null reply");
+    }
+
+    /// <inheritdoc />
     public ValueTask<long> GetStreamLengthAsync(string key, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("XLEN", key), cancellationToken);
@@ -1398,6 +1415,12 @@ public sealed partial class RuvioClient
     public ValueTask<long> TrimStreamAsync(string key, long maxLength, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("XTRIM", key, "MAXLEN", maxLength), cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public ValueTask<long> TrimStreamAsync(string key, StreamTrim trim, CancellationToken cancellationToken = default)
+    {
+        return Integer(new RespCommand("XTRIM", key, Keywords.Arg(trim.Strategy), Keywords.Arg(trim.Mode), Keywords.Threshold(trim)), cancellationToken);
     }
 
     /// <inheritdoc />
@@ -1719,6 +1742,14 @@ public sealed partial class RuvioClient
     public async ValueTask<string> GetInfoAsync(string section, CancellationToken cancellationToken = default)
     {
         return await BulkOrNull(new RespCommand("INFO", section), cancellationToken)
+            ?? throw new RuvioException("INFO returned a null reply");
+    }
+
+    /// <inheritdoc />
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    public async ValueTask<string> GetInfoAsync(InfoSection section, CancellationToken cancellationToken = default)
+    {
+        return await BulkOrNull(new RespCommand("INFO", Keywords.Arg(section)), cancellationToken)
             ?? throw new RuvioException("INFO returned a null reply");
     }
 

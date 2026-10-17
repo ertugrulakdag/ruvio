@@ -2419,6 +2419,36 @@ public partial interface IRuvioClient
     /// </example>
     ValueTask<string> AddStreamEntryAsync(string key, string id, long maxLength, params (string Field, string Value)[] fields);
 
+    /// <summary>
+    /// Sends <c>XADD key MAXLEN|MINID [=|~] threshold id ...</c> with a typed <see cref="StreamTrim"/>: appends an entry and trims the stream in the same command.
+    /// </summary>
+    /// <param name="key">The key.</param>
+    /// <param name="id">Entry id: <c>*</c> (see <see cref="StreamIds.New"/>), <c>ms-*</c> or explicit <c>ms-seq</c>.</param>
+    /// <param name="trim">The trim rule: <see cref="StreamTrim.MaxLen"/> or <see cref="StreamTrim.MinId"/>, exact or approximate.</param>
+    /// <param name="fields">The field/value pairs of the entry; at least one.</param>
+    /// <returns>The id of the new entry.</returns>
+    /// <exception cref="RuvioException">An explicit id is not greater than the last id; wrongtype.</exception>
+    /// <example>
+    /// <code>
+    /// await db.AddStreamEntryAsync("events", StreamIds.New, StreamTrim.MaxLen(10_000, StreamTrimMode.Approximate), ("type", "login"));
+    /// </code>
+    /// </example>
+    ValueTask<string> AddStreamEntryAsync(string key, string id, StreamTrim trim, params (string Field, string Value)[] fields)
+    {
+        var arguments = new List<string>(fields.Length * 2 + 6) { "XADD", key, Keywords.Word(trim.Strategy), Keywords.Word(trim.Mode) };
+
+        arguments.Add(trim.Strategy == StreamTrimStrategy.MinId ? trim.Id ?? throw new ArgumentException("A MINID trim needs an id.", nameof(trim)) : RespRead.Number(trim.Length));
+        arguments.Add(id);
+
+        foreach ((string field, string value) in fields)
+        {
+            arguments.Add(field);
+            arguments.Add(value);
+        }
+
+        return RespRead.RequiredText(ExecuteAsync(arguments, CancellationToken.None), "XADD");
+    }
+
     /// <summary>Sends <c>XLEN</c>.</summary>
     /// <param name="key">The key.</param>
     /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
@@ -2564,6 +2594,20 @@ public partial interface IRuvioClient
     /// </code>
     /// </example>
     ValueTask<long> TrimStreamAsync(string key, long maxLength, CancellationToken cancellationToken = default);
+
+    /// <summary>Sends <c>XTRIM key MAXLEN|MINID [=|~] threshold</c> with a typed <see cref="StreamTrim"/>.</summary>
+    /// <param name="key">The key.</param>
+    /// <param name="trim">The trim rule: <see cref="StreamTrim.MaxLen"/> or <see cref="StreamTrim.MinId"/>, exact or approximate.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>How many entries were removed.</returns>
+    /// <exception cref="RuvioException">The key holds a value of another type (<c>WRONGTYPE</c>), or the server refuses the command.</exception>
+    /// <example>
+    /// <code>
+    /// long n = await db.TrimStreamAsync("events", StreamTrim.MaxLen(10_000, StreamTrimMode.Approximate));
+    /// </code>
+    /// </example>
+    ValueTask<long> TrimStreamAsync(string key, StreamTrim trim, CancellationToken cancellationToken = default)
+        => RespRead.Integer(ExecuteAsync(new string[] { "XTRIM", key, Keywords.Word(trim.Strategy), Keywords.Word(trim.Mode), trim.Strategy == StreamTrimStrategy.MinId ? trim.Id ?? throw new ArgumentException("A MINID trim needs an id.", nameof(trim)) : RespRead.Number(trim.Length) }, cancellationToken), "XTRIM");
 
     /// <summary>
     /// Sends <c>XREAD STREAMS</c>: reads entries newer than a given id from one or more streams, without waiting.
@@ -2830,6 +2874,19 @@ public partial interface IRuvioClient
     /// </code>
     /// </example>
     ValueTask<string> GetInfoAsync(string section, CancellationToken cancellationToken = default);
+
+    /// <summary>Sends <c>INFO section</c> with a typed <see cref="InfoSection"/>.</summary>
+    /// <param name="section">The section to return; <see cref="InfoSection.Prometheus"/> returns the metrics in Prometheus text format.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>The text of that section.</returns>
+    /// <remarks>On a multi-shard server the answer comes from the one shard the client sent it to.</remarks>
+    /// <example>
+    /// <code>
+    /// string keyspace = await db.GetInfoAsync(InfoSection.Keyspace);
+    /// </code>
+    /// </example>
+    ValueTask<string> GetInfoAsync(InfoSection section, CancellationToken cancellationToken = default)
+        => RespRead.RequiredText(ExecuteAsync(new string[] { "INFO", Keywords.Word(section) }, cancellationToken), "INFO");
 
     /// <summary>Sends <c>SAVE</c>: writes a checkpoint in the server process and returns when it is done.</summary>
     /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
@@ -3769,6 +3826,18 @@ public partial interface IRuvioClient
     /// </code>
     /// </example>
     ValueTask<string> GetClientListAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Sends <c>CLIENT LIST TYPE type</c>: the connections of one kind.</summary>
+    /// <param name="type">The kind of connection: normal, master, replica or pubsub.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>One line per matching connection, in the format of <see cref="GetClientListAsync(CancellationToken)"/>.</returns>
+    /// <example>
+    /// <code>
+    /// string normal = await db.GetClientListAsync(ClientType.Normal);
+    /// </code>
+    /// </example>
+    ValueTask<string> GetClientListAsync(ClientType type, CancellationToken cancellationToken = default)
+        => RespRead.RequiredText(ExecuteAsync(new string[] { "CLIENT", "LIST", "TYPE", Keywords.Word(type) }, cancellationToken), "CLIENT LIST");
 
     /// <summary>Sends <c>CLIENT KILL ID id</c>.</summary>
     /// <param name="id">The connection id from <see cref="GetClientIdAsync"/> or <see cref="GetClientListAsync"/>.</param>

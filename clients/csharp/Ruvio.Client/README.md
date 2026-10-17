@@ -164,6 +164,13 @@ IReadOnlyList<long?> bits = await db.BitFieldAsync("counters",
     BitFieldStep.Overflow(BitFieldOverflow.Saturate),
     BitFieldStep.IncrBy(BitFieldType.Unsigned(8), 0, 10));
 
+// Stream trim rule for XADD and XTRIM (MAXLEN or MINID, "=" or "~"), INFO sections and CLIENT LIST types.
+await db.AddStreamEntryAsync("events", StreamIds.New, StreamTrim.MaxLen(10_000, StreamTrimMode.Approximate), ("type", "login"));
+long removed = await db.TrimStreamAsync("events", StreamTrim.MinId("1760000000000-0"));
+string keyspace = await db.GetInfoAsync(InfoSection.Keyspace);
+string pubsubClients = await db.GetClientListAsync(ClientType.PubSub);
+var above = await db.GetSortedSetRangeByScoreAsync("board", ScoreBound.Exclusive(10), ScoreBound.PositiveInfinity);
+
 // "Recent items" capped list (LPUSHCAP) and Bloom "seen before" (BF.MADD / BF.MEXISTS).
 await db.PushRecentAsync("recent:ada", "item-42", cap: 50);
 IReadOnlyList<string> newest = await db.GetRecentAsync("recent:ada", 10);

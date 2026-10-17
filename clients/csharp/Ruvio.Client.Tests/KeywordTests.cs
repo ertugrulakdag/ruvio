@@ -88,6 +88,75 @@ public class KeywordTests
             words);
     }
 
+    [Theory]
+    [InlineData(StreamTrimStrategy.MaxLen, "MAXLEN")]
+    [InlineData(StreamTrimStrategy.MinId, "MINID")]
+    public void StreamTrimStrategyTableMatchesTheServerWords(StreamTrimStrategy strategy, string word)
+    {
+        Assert.Equal(word, Keywords.Word(strategy));
+        Assert.Equal(Encode(new RespCommand("XTRIM", "k", word, "=", "1")), Encode(new RespCommand("XTRIM", "k", Keywords.Arg(strategy), "=", "1")));
+    }
+
+    [Theory]
+    [InlineData(StreamTrimMode.Exact, "=")]
+    [InlineData(StreamTrimMode.Approximate, "~")]
+    public void StreamTrimModeTableMatchesTheServerWords(StreamTrimMode mode, string word)
+    {
+        Assert.Equal(word, Keywords.Word(mode));
+        Assert.Equal(Encode(new RespCommand("XTRIM", "k", "MAXLEN", word, "1")), Encode(new RespCommand("XTRIM", "k", "MAXLEN", Keywords.Arg(mode), "1")));
+    }
+
+    [Theory]
+    [InlineData(InfoSection.Server, "server")]
+    [InlineData(InfoSection.Stats, "stats")]
+    [InlineData(InfoSection.Buffers, "buffers")]
+    [InlineData(InfoSection.Memory, "memory")]
+    [InlineData(InfoSection.MemoryBreakdown, "memorybreakdown")]
+    [InlineData(InfoSection.Keyspace, "keyspace")]
+    [InlineData(InfoSection.Snapshot, "snapshot")]
+    [InlineData(InfoSection.Cluster, "cluster")]
+    [InlineData(InfoSection.Replication, "replication")]
+    [InlineData(InfoSection.CommandCounters, "commandcounters")]
+    [InlineData(InfoSection.LatencyStats, "latencystats")]
+    [InlineData(InfoSection.Logs, "logs")]
+    [InlineData(InfoSection.Slabs, "slabs")]
+    [InlineData(InfoSection.All, "all")]
+    [InlineData(InfoSection.Default, "default")]
+    [InlineData(InfoSection.Prometheus, "prometheus")]
+    public void InfoSectionTableMatchesTheServerWords(InfoSection section, string word)
+    {
+        Assert.Equal(word, Keywords.Word(section));
+        Assert.Equal(Encode(new RespCommand("INFO", word)), Encode(new RespCommand("INFO", Keywords.Arg(section))));
+    }
+
+    [Theory]
+    [InlineData(ClientType.Normal, "normal")]
+    [InlineData(ClientType.Master, "master")]
+    [InlineData(ClientType.Replica, "replica")]
+    [InlineData(ClientType.PubSub, "pubsub")]
+    public void ClientTypeTableMatchesTheServerWords(ClientType type, string word)
+    {
+        Assert.Equal(word, Keywords.Word(type));
+        Assert.Equal(Encode(new RespCommand("CLIENT", "LIST", "TYPE", word)), Encode(new RespCommand("CLIENT", "LIST", "TYPE", Keywords.Arg(type))));
+    }
+
+    [Fact]
+    public void TrimRulesRejectBadInput()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => StreamTrim.MaxLen(-1));
+        Assert.Throws<ArgumentNullException>(() => StreamTrim.MinId(null!));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Keywords.Arg(default(StreamTrimStrategy)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Keywords.Arg((InfoSection)99));
+    }
+
+    [Fact]
+    public void BoundHelpersBuildTheServerText()
+    {
+        Assert.Equal(["*", "$", ">", "-", "+"], [StreamIds.New, StreamIds.LastDelivered, StreamIds.NewMessages, StreamIds.Min, StreamIds.Max]);
+        Assert.Equal(["-inf", "+inf", "1.5", "(2"], [ScoreBound.NegativeInfinity, ScoreBound.PositiveInfinity, ScoreBound.Inclusive(1.5), ScoreBound.Exclusive(2)]);
+        Assert.Equal(["-", "+", "[a", "(b"], [LexBound.Min, LexBound.Max, LexBound.Inclusive("a"), LexBound.Exclusive("b")]);
+    }
+
     private static string Encode(RespCommand command)
     {
         using PooledFrame frame = command.EncodePooled();
@@ -141,5 +210,35 @@ public class KeywordWireTests
         await session.Expect("BITFIELD", "bf", "OVERFLOW", "SAT", "INCRBY", "u8", "0", "10");
         await session.Reply("*1\r\n:10\r\n");
         Assert.Equal(new long?[] { 10 }, await fields);
+
+        ValueTask<long> trimmed = db.TrimStreamAsync("s", StreamTrim.MaxLen(10, StreamTrimMode.Approximate));
+        await session.Expect("XTRIM", "s", "MAXLEN", "~", "10");
+        await session.Reply(":1\r\n");
+        Assert.Equal(1, await trimmed);
+
+        trimmed = db.TrimStreamAsync("s", StreamTrim.MinId("2-0"));
+        await session.Expect("XTRIM", "s", "MINID", "=", "2-0");
+        await session.Reply(":0\r\n");
+        Assert.Equal(0, await trimmed);
+
+        ValueTask<string> added = db.AddStreamEntryAsync("s", "*", StreamTrim.MinId("5-0", StreamTrimMode.Approximate), ("f", "v"));
+        await session.Expect("XADD", "s", "MINID", "~", "5-0", "*", "f", "v");
+        await session.Reply("$3\r\n6-0\r\n");
+        Assert.Equal("6-0", await added);
+
+        added = db.AddStreamEntryAsync("s", "*", StreamTrim.MaxLen(3), ("f", "v"));
+        await session.Expect("XADD", "s", "MAXLEN", "=", "3", "*", "f", "v");
+        await session.Reply("$3\r\n7-0\r\n");
+        Assert.Equal("7-0", await added);
+
+        ValueTask<string> info = db.GetInfoAsync(InfoSection.MemoryBreakdown);
+        await session.Expect("INFO", "memorybreakdown");
+        await session.Reply("$1\r\nx\r\n");
+        Assert.Equal("x", await info);
+
+        ValueTask<string> clients = db.GetClientListAsync(ClientType.PubSub);
+        await session.Expect("CLIENT", "LIST", "TYPE", "pubsub");
+        await session.Reply("$1\r\ny\r\n");
+        Assert.Equal("y", await clients);
     }
 }

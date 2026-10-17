@@ -14,6 +14,16 @@ internal static class Keywords
     private static readonly byte[][] GeoOrders = Encode("ASC", "DESC");
     private static readonly byte[][] Positions = Encode("BEFORE", "AFTER");
     private static readonly byte[][] Sides = Encode("LEFT", "RIGHT");
+    private static readonly byte[] MaxLenToken = Encoding.ASCII.GetBytes("MAXLEN");
+    private static readonly byte[] MinIdToken = Encoding.ASCII.GetBytes("MINID");
+    private static readonly byte[][] TrimModes = Encode("=", "~");
+    private static readonly string[] InfoWords =
+    [
+        "server", "stats", "buffers", "memory", "memorybreakdown", "keyspace", "snapshot", "cluster",
+        "replication", "commandcounters", "latencystats", "logs", "slabs", "all", "default", "prometheus",
+    ];
+    private static readonly byte[][] InfoTokens = Encode(InfoWords);
+    private static readonly byte[][] ClientTypes = Encode("normal", "master", "replica", "pubsub");
 
     internal static string Number(long value) => value.ToString(CultureInfo.InvariantCulture);
 
@@ -87,6 +97,50 @@ internal static class Keywords
     internal static RespArg Arg(InsertPosition position) => RespArg.Token(Lookup(Positions, (int)position, nameof(position)));
 
     internal static RespArg Arg(ListSide side) => RespArg.Token(Lookup(Sides, (int)side, nameof(side)));
+
+    internal static string Word(StreamTrimStrategy strategy) => strategy switch
+    {
+        StreamTrimStrategy.MaxLen => "MAXLEN",
+        StreamTrimStrategy.MinId => "MINID",
+        _ => throw new ArgumentOutOfRangeException(nameof(strategy)),
+    };
+
+    internal static string Word(StreamTrimMode mode) => mode switch
+    {
+        StreamTrimMode.Exact => "=",
+        StreamTrimMode.Approximate => "~",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode)),
+    };
+
+    internal static string Word(InfoSection section) => (uint)section < (uint)InfoWords.Length
+        ? InfoWords[(int)section]
+        : throw new ArgumentOutOfRangeException(nameof(section));
+
+    internal static string Word(ClientType type) => type switch
+    {
+        ClientType.Normal => "normal",
+        ClientType.Master => "master",
+        ClientType.Replica => "replica",
+        ClientType.PubSub => "pubsub",
+        _ => throw new ArgumentOutOfRangeException(nameof(type)),
+    };
+
+    internal static RespArg Arg(StreamTrimStrategy strategy) => RespArg.Token(strategy switch
+    {
+        StreamTrimStrategy.MaxLen => MaxLenToken,
+        StreamTrimStrategy.MinId => MinIdToken,
+        _ => throw new ArgumentOutOfRangeException(nameof(strategy)),
+    });
+
+    internal static RespArg Arg(StreamTrimMode mode) => RespArg.Token(Lookup(TrimModes, (int)mode, nameof(mode)));
+
+    internal static RespArg Arg(InfoSection section) => RespArg.Token(Lookup(InfoTokens, (int)section, nameof(section)));
+
+    internal static RespArg Arg(ClientType type) => RespArg.Token(Lookup(ClientTypes, (int)type, nameof(type)));
+
+    internal static RespArg Threshold(StreamTrim trim) => trim.Strategy == StreamTrimStrategy.MinId
+        ? trim.Id ?? throw new ArgumentException("A MINID trim needs an id.", nameof(trim))
+        : trim.Length;
 
     private static byte[] Lookup(byte[][] table, int index, string parameter)
     {

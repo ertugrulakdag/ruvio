@@ -4,6 +4,7 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 
 ## Unreleased
 
+- Wave 2 of typed keywords: `StreamTrim` (`MaxLen` or `MinId`, `StreamTrimMode.Exact` `=` or `Approximate` `~`) for `XADD` and `XTRIM` (`AddStreamEntryAsync` and `TrimStreamAsync` overloads; the server does not accept `LIMIT`); `InfoSection` for `GetInfoAsync`; `ClientType` for `GetClientListAsync`; `StreamIds`, `ScoreBound` and `LexBound` constants and builders for the stream and sorted-set range arguments. `XTRIM`, `INFO` and `CLIENT LIST` write the keyword from a shared pre-encoded token. The client has no `CHANGES SUBSCRIBE` wrapper, so no change-type set was added.
 - Typed keyword overloads: `GeoUnit` and `GeoOrder` for `GEODIST`, `GEOSEARCH`, `GEOSEARCHSTORE`, `GEORADIUS` and `GEORADIUSBYMEMBER` (the order was always `ASC` before); `InsertPosition` for `LINSERT`; `ListSide` for `LMOVE`, `BLMOVE`, `LMPOP` and `BLMPOP`; `KeyType` for `SCAN ... TYPE`; `BitFieldStep`, `BitFieldType` and `BitFieldOverflow` for `BITFIELD` and `BITFIELD_RO`. The string and bool overloads are unchanged. The commands built inline (`GEODIST`, `GEORADIUSBYMEMBER`, `LINSERT`, `LMOVE`, `BLMOVE`) write the keyword from a shared pre-encoded token, with no string encoding per call.
 
 ## 0.3.3 - 2026-10-17

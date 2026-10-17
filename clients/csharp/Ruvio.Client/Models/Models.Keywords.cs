@@ -274,3 +274,252 @@ public readonly struct BitFieldStep
         }
     }
 }
+
+/// <summary>What a <see cref="StreamTrim"/> measures: the number of entries or the lowest id to keep.</summary>
+public enum StreamTrimStrategy
+{
+    /// <summary>Keep at most a number of the newest entries (<c>MAXLEN</c>).</summary>
+    MaxLen = 1,
+
+    /// <summary>Remove entries with an id below a threshold (<c>MINID</c>).</summary>
+    MinId = 2,
+}
+
+/// <summary>How exactly a <see cref="StreamTrim"/> must hit its threshold.</summary>
+public enum StreamTrimMode
+{
+    /// <summary>Trim to exactly the threshold (<c>=</c>, the default).</summary>
+    Exact,
+
+    /// <summary>Trim at least to the threshold, which is allowed to keep a few more entries (<c>~</c>). Ruvio trims exactly in both modes.</summary>
+    Approximate,
+}
+
+/// <summary>
+/// One trim rule for <c>XADD</c> and <c>XTRIM</c>: a <see cref="StreamTrimStrategy"/> (<c>MAXLEN</c> or <c>MINID</c>), a
+/// <see cref="StreamTrimMode"/> (<c>=</c> or <c>~</c>) and a threshold. The server does not accept <c>LIMIT</c>.
+/// </summary>
+/// <example>
+/// <code>
+/// await client.AddStreamEntryAsync("events", "*", StreamTrim.MaxLen(10_000, StreamTrimMode.Approximate), ("type", "login"));
+/// long removed = await client.TrimStreamAsync("events", StreamTrim.MinId("1760000000000-0"));
+/// </code>
+/// </example>
+public readonly struct StreamTrim
+{
+    private StreamTrim(StreamTrimStrategy strategy, StreamTrimMode mode, long length, string? id)
+    {
+        Strategy = strategy;
+        Mode = mode;
+        Length = length;
+        Id = id;
+    }
+
+    /// <summary>Whether the rule counts entries or compares ids. A default-constructed value has neither and is refused when sent.</summary>
+    public StreamTrimStrategy Strategy { get; }
+
+    /// <summary>Whether the threshold is applied exactly or approximately.</summary>
+    public StreamTrimMode Mode { get; }
+
+    /// <summary>The most entries to keep; used when <see cref="Strategy"/> is <see cref="StreamTrimStrategy.MaxLen"/>.</summary>
+    public long Length { get; }
+
+    /// <summary>The lowest id to keep; used when <see cref="Strategy"/> is <see cref="StreamTrimStrategy.MinId"/>.</summary>
+    public string? Id { get; }
+
+    /// <summary>Keeps at most <paramref name="maxLength"/> of the newest entries (<c>MAXLEN [=|~] n</c>).</summary>
+    /// <param name="maxLength">The most entries to keep. Must not be negative.</param>
+    /// <param name="mode"><see cref="StreamTrimMode.Exact"/> (default) or <see cref="StreamTrimMode.Approximate"/>.</param>
+    /// <returns>The trim rule.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxLength"/> is negative.</exception>
+    /// <example>
+    /// <code>
+    /// StreamTrim trim = StreamTrim.MaxLen(1000, StreamTrimMode.Approximate);   // MAXLEN ~ 1000
+    /// </code>
+    /// </example>
+    public static StreamTrim MaxLen(long maxLength, StreamTrimMode mode = StreamTrimMode.Exact)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxLength);
+
+        return new StreamTrim(StreamTrimStrategy.MaxLen, mode, maxLength, null);
+    }
+
+    /// <summary>Removes entries with an id below <paramref name="id"/> (<c>MINID [=|~] id</c>).</summary>
+    /// <param name="id">The lowest id to keep, as <c>ms-seq</c> or <c>ms</c>.</param>
+    /// <param name="mode"><see cref="StreamTrimMode.Exact"/> (default) or <see cref="StreamTrimMode.Approximate"/>.</param>
+    /// <returns>The trim rule.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="id"/> is <see langword="null"/>.</exception>
+    /// <example>
+    /// <code>
+    /// StreamTrim trim = StreamTrim.MinId("1760000000000-0");   // MINID = 1760000000000-0
+    /// </code>
+    /// </example>
+    public static StreamTrim MinId(string id, StreamTrimMode mode = StreamTrimMode.Exact)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+
+        return new StreamTrim(StreamTrimStrategy.MinId, mode, 0, id);
+    }
+}
+
+/// <summary>
+/// The sections <c>INFO</c> can return. Unknown names make the server answer with an empty text, so the enum avoids typos.
+/// </summary>
+/// <example>
+/// <code>
+/// string keyspace = await client.GetInfoAsync(InfoSection.Keyspace);
+/// string metrics = await client.GetInfoAsync(InfoSection.Prometheus);
+/// </code>
+/// </example>
+public enum InfoSection
+{
+    /// <summary>Version, backend, health and persistence state (<c>server</c>).</summary>
+    Server,
+
+    /// <summary>Connection and network counters (<c>stats</c>).</summary>
+    Stats,
+
+    /// <summary>Input, output and Pub/Sub buffer peaks (<c>buffers</c>).</summary>
+    Buffers,
+
+    /// <summary>Charged memory (<c>memory</c>).</summary>
+    Memory,
+
+    /// <summary>Memory per kind: keys, values, collections, index (<c>memorybreakdown</c>).</summary>
+    MemoryBreakdown,
+
+    /// <summary>Key and expiry counts (<c>keyspace</c>).</summary>
+    Keyspace,
+
+    /// <summary>Snapshot state (<c>snapshot</c>).</summary>
+    Snapshot,
+
+    /// <summary>Whether cluster mode is on (<c>cluster</c>).</summary>
+    Cluster,
+
+    /// <summary>Replication role and sequences (<c>replication</c>).</summary>
+    Replication,
+
+    /// <summary>Command counters (<c>commandcounters</c>).</summary>
+    CommandCounters,
+
+    /// <summary>Command latency statistics (<c>latencystats</c>).</summary>
+    LatencyStats,
+
+    /// <summary>Log storage counters (<c>logs</c>).</summary>
+    Logs,
+
+    /// <summary>Slab allocator counters (<c>slabs</c>).</summary>
+    Slabs,
+
+    /// <summary>Every section (<c>all</c>).</summary>
+    All,
+
+    /// <summary>The default sections, the same as <c>INFO</c> without an argument (<c>default</c>).</summary>
+    Default,
+
+    /// <summary>The metrics in Prometheus text format instead of <c>INFO</c> lines (<c>prometheus</c>).</summary>
+    Prometheus,
+}
+
+/// <summary>The connection kind a <c>CLIENT LIST TYPE</c> filter accepts.</summary>
+/// <example>
+/// <code>
+/// string pubsubClients = await client.GetClientListAsync(ClientType.PubSub);
+/// </code>
+/// </example>
+public enum ClientType
+{
+    /// <summary>Ordinary client connections (<c>normal</c>).</summary>
+    Normal,
+
+    /// <summary>Connections to a master (<c>master</c>).</summary>
+    Master,
+
+    /// <summary>Replica connections (<c>replica</c>).</summary>
+    Replica,
+
+    /// <summary>Connections subscribed to channels (<c>pubsub</c>).</summary>
+    PubSub,
+}
+
+/// <summary>
+/// Stream ids with a special meaning, as the exact strings the stream methods accept.
+/// </summary>
+/// <example>
+/// <code>
+/// var all = await client.GetStreamRangeAsync("events", StreamIds.Min, StreamIds.Max);
+/// string id = await client.AddStreamEntryAsync("events", StreamIds.New, ("type", "login"));
+/// </code>
+/// </example>
+public static class StreamIds
+{
+    /// <summary>Let the server pick the id of a new entry (<c>*</c>), for <c>XADD</c>.</summary>
+    public const string New = "*";
+
+    /// <summary>Only entries added after the group was created or last delivered (<c>$</c>), for <c>XGROUP CREATE</c> and <c>XREAD</c>.</summary>
+    public const string LastDelivered = "$";
+
+    /// <summary>Only entries never delivered to another consumer (<c>&gt;</c>), for <c>XREADGROUP</c>.</summary>
+    public const string NewMessages = ">";
+
+    /// <summary>The smallest possible id (<c>-</c>), for range methods.</summary>
+    public const string Min = "-";
+
+    /// <summary>The largest possible id (<c>+</c>), for range methods.</summary>
+    public const string Max = "+";
+}
+
+/// <summary>
+/// Score bounds for the sorted-set range methods (<c>min</c> and <c>max</c> strings), as the exact text the server parses.
+/// </summary>
+/// <example>
+/// <code>
+/// var top = await client.GetSortedSetRangeByScoreAsync("board", ScoreBound.Exclusive(10), ScoreBound.PositiveInfinity);
+/// </code>
+/// </example>
+public static class ScoreBound
+{
+    /// <summary>Below every score (<c>-inf</c>).</summary>
+    public const string NegativeInfinity = "-inf";
+
+    /// <summary>Above every score (<c>+inf</c>).</summary>
+    public const string PositiveInfinity = "+inf";
+
+    /// <summary>Includes <paramref name="score"/> itself (plain number).</summary>
+    /// <param name="score">The score.</param>
+    /// <returns>The bound text, for example <c>1.5</c>.</returns>
+    public static string Inclusive(double score) => RespRead.Number(score);
+
+    /// <summary>Excludes <paramref name="score"/> itself (<c>(score</c>).</summary>
+    /// <param name="score">The score.</param>
+    /// <returns>The bound text, for example <c>(1.5</c>.</returns>
+    public static string Exclusive(double score) => string.Concat("(", RespRead.Number(score));
+}
+
+/// <summary>
+/// Lexicographic bounds for the sorted-set <c>BYLEX</c> methods (<c>min</c> and <c>max</c> strings).
+/// </summary>
+/// <example>
+/// <code>
+/// var names = await client.GetSortedSetRangeByLexAsync("names", LexBound.Inclusive("a"), LexBound.Exclusive("n"));
+/// </code>
+/// </example>
+public static class LexBound
+{
+    /// <summary>Before every member (<c>-</c>).</summary>
+    public const string Min = "-";
+
+    /// <summary>After every member (<c>+</c>).</summary>
+    public const string Max = "+";
+
+    /// <summary>Includes <paramref name="member"/> (<c>[member</c>).</summary>
+    /// <param name="member">The member.</param>
+    /// <returns>The bound text, for example <c>[apple</c>.</returns>
+    public static string Inclusive(string member) => string.Concat("[", member);
+
+    /// <summary>Excludes <paramref name="member"/> (<c>(member</c>).</summary>
+    /// <param name="member">The member.</param>
+    /// <returns>The bound text, for example <c>(apple</c>.</returns>
+    public static string Exclusive(string member) => string.Concat("(", member);
+}
