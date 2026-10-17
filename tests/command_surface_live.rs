@@ -18,7 +18,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     io::{BufRead, BufReader, Read, Write},
     net::TcpStream,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use common::Server;
@@ -72,6 +72,57 @@ impl Reply {
                 )
             }
         }
+    }
+}
+
+/// The steps a long test has taken, with their times, and the one it is in. A watchdog
+/// prints them once the test runs far past its usual few seconds, so a test that slows down
+/// on one platform names the step instead of only being killed at the time limit.
+struct Progress {
+    steps: std::sync::Mutex<Steps>,
+}
+
+/// The current step, when it started, and every finished step with its time.
+type Steps = (String, Instant, Vec<(String, Duration)>);
+
+impl Progress {
+    fn watched(after: Duration) -> std::sync::Arc<Self> {
+        let progress = std::sync::Arc::new(Self {
+            steps: std::sync::Mutex::new(("start".to_owned(), Instant::now(), Vec::new())),
+        });
+        let watched = std::sync::Arc::downgrade(&progress);
+
+        std::thread::spawn(move || {
+            std::thread::sleep(after);
+            while let Some(progress) = watched.upgrade() {
+                progress.report();
+                drop(progress);
+                std::thread::sleep(Duration::from_secs(15));
+            }
+        });
+        progress
+    }
+
+    fn step(&self, name: String) {
+        let mut steps = self.steps.lock().unwrap_or_else(|error| error.into_inner());
+        let (current, started, done) = &mut *steps;
+
+        done.push((std::mem::replace(current, name), started.elapsed()));
+        *started = Instant::now();
+    }
+
+    fn report(&self) {
+        let steps = self.steps.lock().unwrap_or_else(|error| error.into_inner());
+        let (current, started, done) = &*steps;
+        let mut slowest = done.clone();
+
+        slowest.sort_by_key(|(_, took)| std::cmp::Reverse(*took));
+        slowest.truncate(15);
+        eprintln!(
+            "still running: {current} for {:?} after {} steps; slowest steps: {slowest:?}",
+            started.elapsed(),
+            done.len()
+        );
     }
 }
 
@@ -917,8 +968,10 @@ fn template_head<'a>(template: &str, heads: &'a [String]) -> Option<&'a String> 
 
 #[test]
 fn every_command_survives_extreme_numbers_and_keeps_the_connection() {
+    let progress = Progress::watched(Duration::from_secs(45));
     let server = Server::start_with(&[("RUVIO_MAXMEMORY", "268435456")]);
     let address = server.address.clone();
+    progress.step("COMMAND INFO".to_owned());
     let infos = command_info(&mut Conn::open(&address, Duration::from_secs(10)));
     let tag = "a";
     let heads = command_heads();
@@ -951,6 +1004,7 @@ fn every_command_survives_extreme_numbers_and_keeps_the_connection() {
             })
             .collect();
 
+        progress.step(format!("{head}: ordinary numbers"));
         vectors.extend(succeeding(&address, tag, random).into_iter().take(12));
 
         let mut batch = Vec::new();
@@ -972,9 +1026,11 @@ fn every_command_survives_extreme_numbers_and_keeps_the_connection() {
         heads_with_numbers += 1;
         total += batch.len() + blocking.len();
 
+        progress.step(format!("{head}: {} extreme frames", batch.len()));
         for chunk in batch.chunks(800) {
             run_batch(&address, tag, head, chunk);
         }
+        progress.step(format!("{head}: {} blocking frames", blocking.len()));
         run_blocking(&address, tag, head, &blocking);
     }
 
