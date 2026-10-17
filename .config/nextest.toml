@@ -1,0 +1,31 @@
+# cargo-nextest settings. CI runs the Rust tests with `cargo nextest run --profile ci`:
+# every test in its own process, and a test that runs past its limit is killed and fails
+# with its name instead of hanging the job. A plain `cargo test` keeps working locally.
+#
+# Limits: a unit test (`--lib`) may take 15 s and is killed at 30 s; an integration test is
+# killed at 2 minutes. A passing test is far below them; one near them needs work, not a
+# higher limit (docs/TESTING.md).
+
+[profile.default]
+slow-timeout = { period = "15s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = "not kind(lib)"
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+[profile.ci]
+fail-fast = false
+retries = 0
+slow-timeout = { period = "15s", terminate-after = 2 }
+failure-output = "immediate-final"
+
+[[profile.ci.overrides]]
+filter = "not kind(lib)"
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+# AddressSanitizer runs everything about three times slower.
+[profile.asan]
+fail-fast = false
+retries = 0
+slow-timeout = { period = "45s", terminate-after = 2 }
+failure-output = "immediate-final"

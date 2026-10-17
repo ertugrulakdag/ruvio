@@ -38,6 +38,9 @@ jobs:
         with:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
       # Lints do not depend on the OS, and Windows and macOS minutes cost more.
       - run: cargo fmt --check
         if: runner.os == 'Linux'
@@ -45,7 +48,11 @@ jobs:
         if: runner.os == 'Linux'
       - run: cargo clippy --all-targets --all-features -- -D warnings
         if: runner.os == 'Linux'
-      - run: cargo test --locked --lib --bins --tests
+      # Each test in its own process with a time limit (.config/nextest.toml), so a hang
+      # fails with the test's name, and every failing test is listed, not only the first binary's.
+      - name: Tests
+        run: cargo nextest run --locked --profile ci --lib --bins --tests
+        timeout-minutes: 25
       - run: cargo run --example 04_store_smoke
 
   supply-chain:
@@ -314,8 +321,13 @@ jobs:
         with:
           components: rust-src
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      # One process per test, so a leak report names the test that leaked.
       - name: AddressSanitizer library tests
-        run: cargo test --no-default-features --lib --target x86_64-unknown-linux-gnu
+        run: cargo nextest run --profile asan --no-default-features --lib --target x86_64-unknown-linux-gnu
+        timeout-minutes: 30
 
   # Measures the hot-path instruction counts on a GitHub runner and prints them as
   # a new benchmark/baselines/instructions.json. The PR gate compares against that
@@ -342,14 +354,15 @@ jobs:
           echo "::notice title=Instruction baseline (${cpu})::$(tr -d ' \n' < benchmark/baselines/instructions.json)"
           { echo "CPU: ${cpu}"; echo '```json'; cat benchmark/baselines/instructions.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
-  # Miri interprets every instruction, so even small model tests take minutes.
-  # It only adds value where unsafe code lives (the hash-table fork and the
-  # tables built on it), so it covers those units and the parsers, and the
-  # safe-code model tests are left to the normal test job. One job builds once.
+  # Miri interprets every instruction, so it only runs where it adds what the other jobs
+  # cannot: the unsafe code of the hash-table fork, through its own tests and those of the
+  # slot tables built on it, with the sizes cut down under `cfg(miri)`. Safe code gains
+  # nothing here (the test job runs it), and Miri cannot run the FFI code (Lua, mimalloc,
+  # sockets); the ASan job covers that.
   miri:
     if: inputs.jobs == 'all' || contains(format(',{0},', inputs.jobs), ',miri,')
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
     env:
       CARGO_INCREMENTAL: "0"
       RUSTUP_TOOLCHAIN: nightly
@@ -368,15 +381,11 @@ jobs:
           path: ~/.cache/miri
           key: miri-sysroot-${{ steps.nightly.outputs.version }}
       - run: cargo miri setup
-      - name: Miri on the table and parser units
-        # Filters match substrings, so "time::" would also pick up "runtime::";
-        # the runtime and persistence tests touch fsync and sockets, which Miri
-        # cannot run, so they are skipped explicitly.
+      - name: Miri on the hash-table fork and the slot tables
+        timeout-minutes: 10
         run: >-
           cargo miri test --no-default-features --lib --
-          store::arena_table:: store::intset:: store::smallbuf::
-          protocol:: routing:: transaction:: list_waiters::
-          time:: memory:: metrics:: config:: output:: admission:: security::
-          --skip runtime:: --skip persistence::
+          hashbrown:: slots::
+          -Zunstable-options --report-time
 
 # Started by hand from the Actions tab only.

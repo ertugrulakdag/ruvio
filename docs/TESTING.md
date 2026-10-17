@@ -52,17 +52,38 @@ re-run of the principal Rust suite is:
 cargo test --lib --bins --tests
 ```
 
-## Known flaky tests
+## Test rules
 
-These fail now and then under load and pass on a re-run. A failure in one of
-them is re-run once before it is investigated; a second failure is a real
-failure. Remove a line when its test is fixed.
+A test that fails or hangs once in a thousand runs is a broken test. There is no list of
+known flaky tests and no re-run: a red run is investigated, the cause is fixed, and the fixed
+test is run in a loop to show it. Every test, in Rust and in the six clients, follows these
+rules.
 
-| Test | Where |
-| --- | --- |
-| `evented_hot_keys_save_publishes_after_hot_partition` | `src/runtime/evented/tests/cluster.rs` |
-| `data_directory_lock_excludes_a_second_owner` | `src/persistence/mod.rs` |
-| `CancelledCallersNeverObserveAnotherCallersReplyUnderSaturation` | `clients/csharp/Ruvio.Client.Tests/PooledRequestTests.cs` |
+**Time.** A unit test finishes in well under a second; a few build large tables and take a
+few seconds. An integration test file takes seconds, and all of them together a few minutes.
+CI runs the Rust tests with [cargo-nextest](https://nexte.st) (`.config/nextest.toml`): each
+test in its own process, a unit test killed at 30 s and an integration test at 2 minutes, so a
+hang fails with the test's name instead of stopping the job.
+
+**Ports.** A test that starts a server hands it a listener it already bound to
+`127.0.0.1:0`. When the server must bind by itself (a subprocess, ports per shard, a
+replication listener, a restart on the same address) the test takes a block from
+`test_ports::reserve()` and holds it for the server's whole life. A port picked by binding and
+closing a socket, a fixed port, or a port in the OS's ephemeral range (Linux 32768-60999,
+macOS and Windows 49152-65535) can be taken by a parallel test before the server binds it.
+
+**Waiting.** No sleep followed by an assertion. A test waits for the condition itself (a
+reply, an `INFO` field, a file) by polling it against a deadline of 15-30 s, which a passing
+test never reaches. No upper bound on elapsed time unless the bound is far from both the
+normal and the failing run; a counter is better. Every blocking read, accept, join or wait has
+a deadline, so a bug fails the test instead of hanging it.
+
+**Isolation.** Tests that run in parallel never share keys, databases, files, process-wide
+flags or environment variables. Random input is seeded and the seed is printed on failure.
+
+**Miri and sanitizers.** Miri runs only where unsafe code lives (the hash-table fork and the
+slot tables on it), with sizes cut down under `cfg(miri)`; AddressSanitizer runs the library
+tests and fails on any leak.
 
 ## Risk areas and their test groups
 

@@ -420,6 +420,12 @@ mod tests {
     use proptest::prelude::*;
     use std::collections::BTreeSet;
 
+    /// Miri interprets every instruction, so it runs these on tables a fortieth the size. They
+    /// still cross the incremental-resize threshold, which is 32 buckets in tests.
+    const fn scaled(count: u32) -> u32 {
+        if cfg!(miri) { count / 40 } else { count }
+    }
+
     fn hash(address: &Addr) -> u64 {
         // Any bijective mix will do; the table only needs spread.
         let mut x = u64::from(address.0).wrapping_add(0x9e37_79b9_7f4a_7c15);
@@ -444,12 +450,12 @@ mod tests {
     fn ops() -> impl Strategy<Value = Vec<Op>> {
         prop::collection::vec(
             prop_oneof![
-                6 => (0u32..3_000).prop_map(Op::Insert),
-                3 => (0u32..3_000).prop_map(Op::Remove),
+                6 => (0u32..scaled(3_000)).prop_map(Op::Insert),
+                3 => (0u32..scaled(3_000)).prop_map(Op::Remove),
                 1 => (1u8..40).prop_map(Op::Migrate),
                 1 => Just(Op::Shrink),
             ],
-            1..1_500,
+            1..scaled(1_500) as usize,
         )
     }
 
@@ -490,7 +496,7 @@ mod tests {
             seen.sort_unstable();
             prop_assert_eq!(seen, model.iter().copied().collect::<Vec<_>>());
 
-            for id in 0..3_000 {
+            for id in 0..scaled(3_000) {
                 prop_assert_eq!(find(&slots, id), model.contains(&id), "id {}", id);
             }
 
@@ -505,8 +511,9 @@ mod tests {
     fn growth_is_incremental_and_every_key_stays_reachable() {
         let mut slots = Slots::with_capacity(0);
         let mut migrating_steps = 0usize;
+        let count = scaled(50_000);
 
-        for id in 0..50_000u32 {
+        for id in 0..count {
             slots.insert_unique(hash(&Addr(id)), Addr(id), hash);
 
             if slots.is_migrating() {
@@ -519,8 +526,8 @@ mod tests {
 
         assert!(migrating_steps > 0, "growth never became incremental");
         while !slots.migrate(1_000, &hash) {}
-        assert_eq!(slots.len(), 50_000);
-        assert!((0..50_000).all(|id| find(&slots, id)));
+        assert_eq!(slots.len(), count as usize);
+        assert!((0..count).all(|id| find(&slots, id)));
     }
 
     #[test]
@@ -563,6 +570,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "needs tables too large for Miri; the other slot tests run these paths"
+    )]
     fn a_scan_ends_and_meets_every_stable_element_while_the_tables_change() {
         for seed in 1..=24u64 {
             let mut rng = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
@@ -648,14 +659,19 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "needs tables too large for Miri; the other slot tests run these paths"
+    )]
     fn shrink_is_incremental_and_every_key_stays_reachable() {
         let mut slots = Slots::with_capacity(0);
+        let (count, removed) = (40_000, 36_000);
 
-        for id in 0..40_000u32 {
+        for id in 0..count {
             slots.insert_unique(hash(&Addr(id)), Addr(id), hash);
         }
         while !slots.migrate(usize::MAX, &hash) {}
-        for id in 0..36_000u32 {
+        for id in 0..removed {
             slots.remove(hash(&Addr(id)), |a| a.0 == id).unwrap();
         }
 
@@ -664,7 +680,7 @@ mod tests {
         assert!(slots.is_migrating(), "a large table shrank in one step");
         assert!(slots.table.allocated_buckets() < before);
 
-        let mut live: BTreeSet<u32> = (36_000..40_000).collect();
+        let mut live: BTreeSet<u32> = (removed..count).collect();
         let mut next = 100_000u32;
         let mut steps = 0;
 
@@ -705,12 +721,13 @@ mod tests {
     #[test]
     fn a_scan_meets_every_element_while_a_shrink_runs() {
         let mut slots = Slots::with_capacity(0);
+        let (count, kept) = (scaled(20_000), scaled(2_000));
 
-        for id in 0..20_000u32 {
+        for id in 0..count {
             slots.insert_unique(hash(&Addr(id)), Addr(id), hash);
         }
         while !slots.migrate(usize::MAX, &hash) {}
-        for id in 2_000..20_000u32 {
+        for id in kept..count {
             slots.remove(hash(&Addr(id)), |a| a.0 == id).unwrap();
         }
         slots.begin_shrink(slots.len() * 2, hash);
@@ -731,7 +748,7 @@ mod tests {
         }
 
         let unique: BTreeSet<u32> = seen.iter().copied().collect();
-        assert_eq!(unique, (0..2_000).collect::<BTreeSet<_>>());
+        assert_eq!(unique, (0..kept).collect::<BTreeSet<_>>());
     }
 
     #[test]
@@ -739,7 +756,7 @@ mod tests {
         let mut slots = Slots::with_capacity(0);
         let mut epochs = BTreeSet::new();
 
-        for id in 0..4_000u32 {
+        for id in 0..scaled(4_000) {
             slots.insert_unique(hash(&Addr(id)), Addr(id), hash);
             epochs.insert(slots.epoch());
         }

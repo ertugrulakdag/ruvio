@@ -3289,7 +3289,8 @@ mod ruvio_tests {
     #[test]
     fn ruvio_reclaim_tombstones_keeps_the_allocation_and_every_element() {
         // Fill to the last free slot, so removals leave tombstones rather than empty slots.
-        let mut table = HashTable::with_capacity(10_000);
+        // Miri interprets every instruction, so it fills a smaller table.
+        let mut table = HashTable::with_capacity(if cfg!(miri) { 500 } else { 10_000 });
         let mut count = 0u64;
 
         while table.growth_left() > 0 {
@@ -3347,7 +3348,7 @@ mod ruvio_tests {
 
     #[test]
     fn ruvio_scan_visits_every_element_once_when_nothing_changes() {
-        for count in [1, 100, 5_000] {
+        for count in [1, 100, if cfg!(miri) { 500 } else { 5_000 }] {
             let table = filled(count);
             let mut seen = scan(&table, || {});
 
@@ -3358,10 +3359,12 @@ mod ruvio_tests {
 
     #[test]
     fn ruvio_scan_finds_every_element_present_across_a_grow() {
-        let table = core::cell::RefCell::new(filled(2_000));
+        // Miri interprets every instruction, so it walks a smaller table.
+        let (count, per_page) = if cfg!(miri) { (200, 40) } else { (2_000, 400) };
+        let table = core::cell::RefCell::new(filled(count));
         let mut seen = Vec::new();
         let mut cursor = 0;
-        let mut next = 2_000u64;
+        let mut next = count;
 
         loop {
             cursor = table
@@ -3370,7 +3373,7 @@ mod ruvio_tests {
                     seen.push(*value)
                 });
             // Grow the table several times while the walk is open.
-            for _ in 0..400 {
+            for _ in 0..per_page {
                 table.borrow_mut().insert_unique(hash(&next), next, hash);
                 next += 1;
             }
@@ -3381,7 +3384,7 @@ mod ruvio_tests {
 
         seen.sort_unstable();
         seen.dedup();
-        for value in 0..2_000 {
+        for value in 0..count {
             assert!(
                 seen.binary_search(&value).is_ok(),
                 "{value} was not returned"
