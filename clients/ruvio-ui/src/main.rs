@@ -961,6 +961,8 @@ fn defaults(stream: &mut TcpStream) -> std::io::Result<()> {
     let host = env::var("RUVIO_UI_TARGET_HOST").unwrap_or_else(|_| "127.0.0.1".into());
     let port = env::var("RUVIO_UI_TARGET_PORT").unwrap_or_else(|_| "6379".into());
     let password = env::var("RUVIO_UI_TARGET_PASSWORD").unwrap_or_default();
+    let pinned = env::var_os("RUVIO_UI_TARGET_HOST").is_some()
+        || env::var_os("RUVIO_UI_TARGET_PORT").is_some();
 
     write_json(
         stream,
@@ -970,6 +972,7 @@ fn defaults(stream: &mut TcpStream) -> std::io::Result<()> {
             "host": host,
             "port": port.parse::<u16>().unwrap_or(6379),
             "password": password,
+            "pinned": pinned,
         }),
     )
 }
