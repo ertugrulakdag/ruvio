@@ -229,10 +229,21 @@ jobs:
           git push origin HEAD
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+  # Each architecture builds on its own runner (no emulation) and pushes by digest;
+  # docker-manifest then puts both under the version tags.
   docker:
     needs: versions
     if: inputs.target == 'all' || inputs.target == 'docker'
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux/amd64
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
@@ -246,21 +257,70 @@ jobs:
       - name: Stamp the preview version
         if: needs.versions.outputs.preview == 'true'
         run: python3 scripts/release_version.py server --stamp "${{ needs.versions.outputs.server }}"
-      - uses: docker/build-push-action@v7
+      - id: build
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.linux
-          platforms: linux/amd64
-          push: true
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=salihcantekin/ruvio,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=ruvio-server-${{ matrix.arch }}
+          cache-to: type=gha,scope=ruvio-server-${{ matrix.arch }},mode=max
+      - name: Keep the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p digests
+          touch "digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: docker-digest-${{ matrix.arch }}
+          path: digests/*
+          retention-days: 1
+
+  docker-manifest:
+    needs: [versions, docker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.versions.outputs.sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: docker-digest-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: salihcantekin
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Tag both architectures
+        env:
+          SERVER: ${{ needs.versions.outputs.server }}
+          PREVIEW: ${{ needs.versions.outputs.preview }}
+        run: |
+          set -euo pipefail
           # A preview moves only the `preview` tag; `linux` and `latest` stay on the last release.
-          tags: |
-            salihcantekin/ruvio:${{ needs.versions.outputs.server }}
-            ${{ needs.versions.outputs.preview == 'true' && 'salihcantekin/ruvio:preview' || 'salihcantekin/ruvio:linux' }}
-            ${{ needs.versions.outputs.preview != 'true' && 'salihcantekin/ruvio:latest' || '' }}
-          cache-from: type=gha,scope=ruvio-server
-          cache-to: type=gha,scope=ruvio-server,mode=max
+          tags=(-t "salihcantekin/ruvio:$SERVER")
+          if [ "$PREVIEW" = "true" ]; then
+            tags+=(-t salihcantekin/ruvio:preview)
+          else
+            tags+=(-t salihcantekin/ruvio:linux -t salihcantekin/ruvio:latest)
+          fi
+          sources=()
+          for d in digests/*; do
+            sources+=("salihcantekin/ruvio@sha256:$(basename "$d")")
+          done
+          [ "${#sources[@]}" -eq 2 ] || { echo "::error::expected 2 digests, got ${#sources[@]}"; exit 1; }
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+          docker buildx imagetools inspect --raw "salihcantekin/ruvio:$SERVER" | python3 -c 'import json,sys; p={m["platform"]["architecture"] for m in json.load(sys.stdin)["manifests"]}; print(sorted(p)); assert {"amd64","arm64"} <= p, p'
+      # The image is already out when this runs, so a token without description rights warns instead of failing the release.
       - name: Docker Hub description
         if: needs.versions.outputs.preview != 'true'
+        continue-on-error: true
         uses: peter-evans/dockerhub-description@v5
         with:
           username: salihcantekin
@@ -305,6 +365,7 @@ jobs:
           cache-to: type=gha,scope=ruvio-ui,mode=max
       - name: Docker Hub description
         if: needs.versions.outputs.preview != 'true'
+        continue-on-error: true
         uses: peter-evans/dockerhub-description@v5
         with:
           username: salihcantekin
@@ -648,12 +709,13 @@ jobs:
             dist/*.zip
 
   github-release:
-    needs: [versions, docker, docker-ui, rust-client, nuget, server-binaries, ui-host, npm, pypi, maven]
+    needs: [versions, docker, docker-manifest, docker-ui, rust-client, nuget, server-binaries, ui-host, npm, pypi, maven]
     if: >-
       !cancelled() &&
       inputs.create_github_release &&
       needs.versions.result == 'success' &&
       (needs.docker.result == 'success' || needs.docker.result == 'skipped') &&
+      (needs.docker-manifest.result == 'success' || needs.docker-manifest.result == 'skipped') &&
       (needs.docker-ui.result == 'success' || needs.docker-ui.result == 'skipped') &&
       (needs.rust-client.result == 'success' || needs.rust-client.result == 'skipped') &&
       (needs.nuget.result == 'success' || needs.nuget.result == 'skipped') &&

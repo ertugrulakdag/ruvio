@@ -69,7 +69,7 @@ docker run --rm -p 6379:6379 \
 redis-cli -h 127.0.0.1 -p 6379 -a change-me PING
 ```
 
-`linux` and `latest` are the same Linux image, as is each version tag, built for linux/amd64. On an arm64 host such as Apple Silicon, Docker runs it under emulation; use a prebuilt binary below for a native arm64 server. The image default durability is `memory`. A persistent deploy sets `RUVIO_DURABILITY` and keeps the volume.
+`linux` and `latest` are the same Linux image, as is each version tag, built for linux/amd64 and linux/arm64 (Apple Silicon and other arm64 hosts run it natively). The image default durability is `memory`. A persistent deploy sets `RUVIO_DURABILITY` and keeps the volume.
 
 <details>
 <summary><b>Prebuilt binary</b> (Linux x64/arm64, macOS arm64, Windows x64)</summary>
@@ -191,7 +191,7 @@ Releases are cut from `main` by hand ([release workflow](.github/workflows/relea
 | [io.github.salihcantekin:ruvio-client](https://central.sonatype.com/artifact/io.github.salihcantekin/ruvio-client) | Java SDK | ![v](https://img.shields.io/maven-central/v/io.github.salihcantekin/ruvio-client?label=) | |
 | [github.com/salihcantekin/ruvio/clients/go](https://pkg.go.dev/github.com/salihcantekin/ruvio/clients/go) | Go SDK | `clients/go/v0.1.0` | |
 | [Server binaries](https://github.com/salihcantekin/ruvio/releases/latest) | `ruvio` and `ruvio-ctl` for Linux, macOS, Windows | ![v](https://img.shields.io/github/v/release/salihcantekin/ruvio?label=) | ![dl](https://img.shields.io/github/downloads/salihcantekin/ruvio/total?label=) |
-| [salihcantekin/ruvio](https://hub.docker.com/r/salihcantekin/ruvio) | Server image (linux/amd64) | ![v](https://img.shields.io/docker/v/salihcantekin/ruvio?sort=semver&label=) | ![dl](https://img.shields.io/docker/pulls/salihcantekin/ruvio?label=) |
+| [salihcantekin/ruvio](https://hub.docker.com/r/salihcantekin/ruvio) | Server image (amd64, arm64) | ![v](https://img.shields.io/docker/v/salihcantekin/ruvio?sort=semver&label=) | ![dl](https://img.shields.io/docker/pulls/salihcantekin/ruvio?label=) |
 | [salihcantekin/ruvio-ui](https://hub.docker.com/r/salihcantekin/ruvio-ui) | Operator UI image | ![v](https://img.shields.io/docker/v/salihcantekin/ruvio-ui?sort=semver&label=) | ![dl](https://img.shields.io/docker/pulls/salihcantekin/ruvio-ui?label=) |
 
 Live install lines and download counts: [Packages](https://ruviodb.com/get-started/).

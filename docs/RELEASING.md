@@ -14,7 +14,7 @@ No release runs on its own. Every workflow in `.github/workflows/` is started by
 
 | Target | Result | Needs |
 | --- | --- | --- |
-| `docker` | `salihcantekin/ruvio` image (linux/amd64) | `DOCKERHUB_TOKEN` |
+| `docker` | `salihcantekin/ruvio` image (amd64, arm64) | `DOCKERHUB_TOKEN` |
 | `docker-ui` | `salihcantekin/ruvio-ui` image (amd64, arm64) | `DOCKERHUB_TOKEN` |
 | `rust-client` | crate `ruvio-client` | `CARGO_REGISTRY_TOKEN` |
 | `nuget` | `Ruvio.Client`, `Ruvio.Client.AspNetCore` | NuGet trusted publishing |

@@ -23,7 +23,7 @@ The default durability is `memory`. For a persistent deployment set `RUVIO_DURAB
 
 ## Tags
 
-`linux` and `latest` are the same image (linux/amd64). A version tag such as `0.3.0` is the same image for that release.
+`linux` and `latest` are the same image (linux/amd64 and linux/arm64). A version tag such as `0.3.0` is the same image for that release.
 
 ## Not claimed
 

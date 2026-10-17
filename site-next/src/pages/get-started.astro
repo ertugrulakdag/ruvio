@@ -65,8 +65,7 @@ const next = [
           <div>
             <p>
               Docker Hub has one Linux image. <code>linux</code> and <code>latest</code> are the same image, as is each
-              version tag, built for linux/amd64. On an arm64 host such as Apple Silicon, Docker runs it under emulation;
-              use a prebuilt binary for a native arm64 server.
+              version tag, built for linux/amd64 and linux/arm64 (Apple Silicon and other arm64 hosts run it natively).
             </p>
             <CodeBlock lang="shell" code={`docker run --rm -p 6379:6379 \\
   -e RUVIO_REQUIREPASS=change-me \\
