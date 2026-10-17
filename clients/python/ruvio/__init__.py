@@ -11,6 +11,9 @@ Two clients share the same typed command methods:
 ``Ruvio(..., cluster=True)`` builds one. Reading help for a command: ``help(ruvio.Ruvio.set)`` or hover
 in your IDE; each method lists its arguments, return value, errors and an example.
 
+Keyword arguments such as the GEO unit, list side or ``BITOP`` operation have typed constants
+(:class:`GeoUnit`, :class:`ListSide`, :class:`BitOperation` ...); plain strings are accepted too.
+
 Also exported: :func:`key_slot` (hash slot of a key), :func:`parse_url`, :func:`parse_info`, the result
 tuples (:class:`FillResult`, :class:`IdemResult`, :class:`GeoResult`, :class:`StreamEntry`,
 :class:`PendingSummary`, :class:`PendingEntry`, :class:`AutoClaimResult`, :class:`Message`) and the

@@ -2181,7 +2181,7 @@ class Commands:
             src: Source list.
             dst: Destination list (may equal ``src`` to rotate).
             wherefrom: End of ``src`` to pop from, ``"LEFT"`` (head) or ``"RIGHT"`` (tail); a :class:`ListSide` or the string.
-            whereto: End of ``dst`` to push to, ``"LEFT"`` or ``"RIGHT"``.
+            whereto: End of ``dst`` to push to, ``"LEFT"`` or ``"RIGHT"`` (:class:`ListSide` or the string).
 
         Returns:
             The moved element, or ``None`` when ``src`` is empty or missing.
@@ -2223,7 +2223,7 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
             dst: Destination list.
             timeout: Seconds to wait (float); ``0`` waits until an element arrives.
             wherefrom: ``"LEFT"`` or ``"RIGHT"`` end of ``src`` (:class:`ListSide` or the string).
-            whereto: ``"LEFT"`` or ``"RIGHT"`` end of ``dst``.
+            whereto: ``"LEFT"`` or ``"RIGHT"`` end of ``dst`` (:class:`ListSide` or the string).
 
         Returns:
             The moved element, or ``None`` when the timeout elapsed.
@@ -2291,7 +2291,7 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
         Args:
             timeout: Seconds to wait (float); ``0`` waits until data arrives.
             keys: One key or a list of keys, checked in order.
-            direction: ``"LEFT"`` or ``"RIGHT"``.
+            direction: ``"LEFT"`` or ``"RIGHT"`` (:class:`ListSide` or the string).
             count: Maximum number of elements to pop.
 
         Returns:
@@ -3365,7 +3365,7 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
             dst: Destination key (overwritten).
             keys: Source keys (same slot on a cluster).
             weights: One multiplier per source key.
-            aggregate: How to combine equal members: ``"SUM"`` (default), ``"MIN"`` or ``"MAX"``.
+            aggregate: How to combine equal members: ``"SUM"`` (default), ``"MIN"`` or ``"MAX"`` (:class:`Aggregate` or the string).
 
         Returns:
             The number of members stored in ``dst``.
@@ -3386,7 +3386,7 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
             dst: Destination key (overwritten).
             keys: Source keys (same slot on a cluster).
             weights: One multiplier per source key.
-            aggregate: ``"SUM"`` (default), ``"MIN"`` or ``"MAX"``.
+            aggregate: ``"SUM"`` (default), ``"MIN"`` or ``"MAX"`` (:class:`Aggregate` or the string).
 
         Returns:
             The number of members stored.
@@ -3420,7 +3420,7 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
         Args:
             keys: Source keys (same slot on a cluster).
             weights: One multiplier per source key.
-            aggregate: ``"SUM"`` (default), ``"MIN"`` or ``"MAX"``.
+            aggregate: ``"SUM"`` (default), ``"MIN"`` or ``"MAX"`` (:class:`Aggregate` or the string).
             withscores: Return ``(member, score)`` tuples.
 
         Returns:
@@ -3440,7 +3440,7 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
         Args:
             keys: Source keys (same slot on a cluster).
             weights: One multiplier per source key.
-            aggregate: ``"SUM"`` (default), ``"MIN"`` or ``"MAX"``.
+            aggregate: ``"SUM"`` (default), ``"MIN"`` or ``"MAX"`` (:class:`Aggregate` or the string).
             withscores: Return ``(member, score)`` tuples.
 
         Returns:
@@ -3646,8 +3646,8 @@ Sends ``GEOSEARCH key FROMMEMBER m|FROMLONLAT lon lat BYRADIUS r unit|BYBOX w h 
             radius: Circle radius, in ``unit`` (non-negative).
             width: Box width, in ``unit`` (non-negative); use with ``height``.
             height: Box height, in ``unit``.
-            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"``; also the unit of returned distances.
-            sort: ``"ASC"`` (nearest first) or ``"DESC"``. Unsorted when omitted and no ``count``.
+            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"`` (:class:`GeoUnit` or the string); also the unit of returned distances.
+            sort: ``"ASC"`` (nearest first) or ``"DESC"`` (:class:`GeoOrder` or the string). Unsorted when omitted and no ``count``.
             count: Return at most this many (positive). Without ``any`` the nearest are returned.
             any: Stop at the first ``count`` matches (faster, not the nearest). Needs ``count``.
             withcoord: Include coordinates.
@@ -3708,8 +3708,8 @@ Sends ``GEOSEARCHSTORE dst src FROM... BY... [ASC|DESC] [COUNT n [ANY]] [STOREDI
             radius: Circle radius in ``unit``.
             width: Box width in ``unit``; use with ``height``.
             height: Box height in ``unit``.
-            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"``.
-            sort: ``"ASC"`` or ``"DESC"``.
+            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"`` (:class:`GeoUnit` or the string).
+            sort: ``"ASC"`` or ``"DESC"`` (:class:`GeoOrder` or the string).
             count: Keep at most this many.
             any: Stop at the first ``count`` matches. Needs ``count``.
             storedist: Store the distance (in ``unit``) as the score instead of the geohash.
@@ -3780,13 +3780,13 @@ Sends ``GEORADIUS key lon lat radius unit [WITH...] [COUNT n [ANY]] [ASC|DESC] [
             longitude: Center longitude (-180..180).
             latitude: Center latitude (-85.05112878..85.05112878).
             radius: Radius in ``unit`` (non-negative).
-            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"``.
+            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"`` (:class:`GeoUnit` or the string).
             withcoord: Include coordinates.
             withdist: Include distance from the center.
             withhash: Include the geohash integer.
             count: Return at most this many.
             any: Stop at the first ``count`` matches (needs ``count``).
-            sort: ``"ASC"`` or ``"DESC"``.
+            sort: ``"ASC"`` or ``"DESC"`` (:class:`GeoOrder` or the string).
             store: Store matching members (geohash scores) in this key instead of returning them.
             storedist: Store matching members with their distance as score in this key.
 
@@ -3822,13 +3822,13 @@ Sends ``GEORADIUS key lon lat radius unit [WITH...] [COUNT n [ANY]] [ASC|DESC] [
             key: The geo key.
             member: Existing member to center on.
             radius: Radius in ``unit`` (non-negative).
-            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"``.
+            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"`` (:class:`GeoUnit` or the string).
             withcoord: Include coordinates.
             withdist: Include distance from the member.
             withhash: Include the geohash integer.
             count: Return at most this many.
             any: Stop at the first ``count`` matches (needs ``count``).
-            sort: ``"ASC"`` or ``"DESC"``.
+            sort: ``"ASC"`` or ``"DESC"`` (:class:`GeoOrder` or the string).
             store: Store matches in this key instead of returning them.
             storedist: Store matches with distance as score in this key.
 
