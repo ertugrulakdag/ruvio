@@ -4,6 +4,8 @@ Notable changes to `ruvio-ui`, the web console (Docker image and host binaries).
 
 ## Unreleased
 
+## 0.1.9 - 2026-10-17
+
 - New Dusk Rust theme, matching the project site. Every color and font is in `web/src/tokens.css`.
 - New **Console** screen: run server commands with formatted, size-capped replies, copy and download of the full result, confirmation before destructive commands, history, and full screen.
 - Command arguments are always sent as text. Setting an expiry no longer fails with "invalid type: integer".

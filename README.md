@@ -80,7 +80,7 @@ Download a binary from [GitHub Releases](https://github.com/salihcantekin/ruvio/
 
 ```bash
 # Linux x64; swap the platform for linux-arm64 or macos-arm64
-v=0.3.3
+v=0.3.4
 curl -LO https://github.com/salihcantekin/ruvio/releases/download/ruvio-$v/ruvio-$v-linux-x64.tar.gz
 tar xzf ruvio-$v-linux-x64.tar.gz
 cd ruvio-$v-linux-x64
@@ -189,7 +189,7 @@ Releases are cut from `main` by hand ([release workflow](.github/workflows/relea
 | [ruvio-client (npm)](https://www.npmjs.com/package/ruvio-client) | Node.js SDK | ![v](https://img.shields.io/npm/v/ruvio-client?label=) | ![dl](https://img.shields.io/npm/dm/ruvio-client?label=) |
 | [ruvio-client (PyPI)](https://pypi.org/project/ruvio-client/) | Python SDK | ![v](https://img.shields.io/pypi/v/ruvio-client?label=) | ![dl](https://img.shields.io/pypi/dm/ruvio-client?label=) |
 | [io.github.salihcantekin:ruvio-client](https://central.sonatype.com/artifact/io.github.salihcantekin/ruvio-client) | Java SDK | ![v](https://img.shields.io/maven-central/v/io.github.salihcantekin/ruvio-client?label=) | |
-| [github.com/salihcantekin/ruvio/clients/go](https://pkg.go.dev/github.com/salihcantekin/ruvio/clients/go) | Go SDK | `clients/go/v0.1.1` | |
+| [github.com/salihcantekin/ruvio/clients/go](https://pkg.go.dev/github.com/salihcantekin/ruvio/clients/go) | Go SDK | `clients/go/v0.2.0` | |
 | [Server binaries](https://github.com/salihcantekin/ruvio/releases/latest) | `ruvio` and `ruvio-ctl` for Linux, macOS, Windows | ![v](https://img.shields.io/github/v/release/salihcantekin/ruvio?label=) | ![dl](https://img.shields.io/github/downloads/salihcantekin/ruvio/total?label=) |
 | [salihcantekin/ruvio](https://hub.docker.com/r/salihcantekin/ruvio) | Server image (amd64, arm64) | ![v](https://img.shields.io/docker/v/salihcantekin/ruvio?sort=semver&label=) | ![dl](https://img.shields.io/docker/pulls/salihcantekin/ruvio?label=) |
 | [salihcantekin/ruvio-ui](https://hub.docker.com/r/salihcantekin/ruvio-ui) | Operator UI image | ![v](https://img.shields.io/docker/v/salihcantekin/ruvio-ui?sort=semver&label=) | ![dl](https://img.shields.io/docker/pulls/salihcantekin/ruvio-ui?label=) |

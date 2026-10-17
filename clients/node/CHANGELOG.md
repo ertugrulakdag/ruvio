@@ -4,6 +4,8 @@ Notable changes to the Node.js client `ruvio-client` on npm. New entries go unde
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-17
+
 - Named keyword constants next to the string unions (`GeoUnit.Km`, `GeoOrder`, `ListSide`, `InsertPosition`, `BitOp`, `BitUnit`, `Aggregate`, `ScanType`, `ExpireCondition`), sent from pre-encoded buffers. `ScanOptions.type` is typed by `ScanType`; `BitfieldType` is now `` `i${number}` | `u${number}` ``; `BitfieldOp` builds `BITFIELD` sub-operations. String literals keep working.
 - `StreamTrim` (`MAXLEN` / `MINID`, exact `=` or approximate `~`) is accepted by `xtrim` and as `XAddOptions.trim`; `InfoSection` types `info()`, `ClientType` types `clientList()`; both send pre-encoded buffers. New helpers `StreamId` (`*`, `$`, `>`, `-`, `+`), `ScoreBound` and `LexBound` return the strings the range methods accept. The client has no `CHANGES SUBSCRIBE` API, so no change-type set was added.
 
