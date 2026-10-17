@@ -4,6 +4,8 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+## 0.3.3 - 2026-10-17
+
 - **Behaviour change:** `port_mode = "per-shard"` is now the default. A multi-shard server also listens on port+1 .. port+N-1, one port per shard; `single` is deprecated. A key sent to the wrong shard's port is forwarded to its owner instead of answered with `MOVED` (`SSUBSCRIBE` and `SPUBLISH` still answer `MOVED`).
 - **Behaviour change:** in per-shard mode `FLUSHDB` empties only the shard it is sent to, like Redis Cluster; a plain client on one port sees only that shard for `KEYS`, `DBSIZE`, `SCAN` and `FLUSHALL`.
 - `PUBLISH` reaches subscribers on every shard without waiting for them. Each shard's fan-out is bounded (16384 messages or 64 MiB); messages over the bound are dropped and counted in `INFO` as `pubsub_cluster_dropped`. The reply counts the local subscribers. `PUBLISH` inside `MULTI` is refused on a multi-shard server.
