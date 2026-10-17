@@ -1042,7 +1042,27 @@ mod tests {
 
         assert!(DataDirectoryLock::acquire(&config).is_err());
         drop(first);
-        assert!(DataDirectoryLock::acquire(&config).unwrap().is_some());
+
+        // The lock belongs to the open file, not to this descriptor. A parallel test that
+        // spawns a process (the crash tests start this binary again) forks a child holding a
+        // copy of every descriptor until its `exec` closes them, the lock file's included, so
+        // for that moment the released lock is still held. The child lets go on its own,
+        // so the test waits for that instead of expecting the lock back at once.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+
+        loop {
+            match DataDirectoryLock::acquire(&config) {
+                Ok(lock) => {
+                    assert!(lock.is_some());
+                    break;
+                }
+                Err(error) => assert!(
+                    std::time::Instant::now() < deadline,
+                    "the lock was not released: {error}"
+                ),
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
 
     /// A replica applies the primary's frames with `apply_mutation` while its own background
