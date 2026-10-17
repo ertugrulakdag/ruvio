@@ -1,7 +1,10 @@
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Options;
+using Ruvio.Client;
 using Xunit;
 
 namespace Ruvio.Extensions.Caching.Tests;
@@ -82,15 +85,56 @@ public class HelperTests
 
         Assert.Equal(1, calls);
     }
+}
+
+public class DirectStringJsonTests
+{
+    private static (RuvioDistributedCache Cache, CacheEdgeTests.Script Script) Make()
+    {
+        var client = DispatchProxy.Create<IRuvioClient, CacheEdgeTests.Script>();
+        var cache = new RuvioDistributedCache(client, Options.Create(new RuvioCacheOptions { InstanceName = "t" }));
+
+        return (cache, (CacheEdgeTests.Script)(object)client);
+    }
+
+    private static string Sent(CacheEdgeTests.Script script, int index) => script.Commands[0][index];
 
     [Fact]
-    public void SyncJsonHelpersRoundTrip()
+    public async Task SetStringWritesTheUtf8RecordInOneCommand()
     {
-        var cache = new MapCache();
+        var (cache, script) = Make();
 
-        cache.SetJson("o", new Order(3, "Di"));
+        script.Replies.Enqueue(Resp.Simple("OK"));
+        await cache.SetStringAsync("k", "héllo", new());
 
-        Assert.Equal(new Order(3, "Di"), cache.GetJson<Order>("o"));
-        Assert.Null(cache.GetJson<Order>("none"));
+        Assert.Equal(["SET", Sent(script, 1), "RDC1\n0\n0\nhéllo"], script.Commands[0].Select((a, i) => i == 2 ? Encoding.UTF8.GetString(Encoding.Latin1.GetBytes(a)) : a));
+        Assert.Single(script.Commands);
+    }
+
+    [Fact]
+    public async Task SetJsonWritesCamelCaseWhenAskedAndHonoursTheSizeLimit()
+    {
+        var (cache, script) = Make();
+        var web = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        script.Replies.Enqueue(Resp.Simple("OK"));
+        await cache.SetJsonAsync("k", new HelperTests.Order(1, "Ada"), new(), web);
+
+        Assert.Equal("RDC1\n0\n0\n{\"id\":1,\"customerName\":\"Ada\"}", script.Commands[0][2]);
+    }
+
+    [Fact]
+    public async Task GetStringAndGetJsonReadThePayloadDirectly()
+    {
+        var (cache, script) = Make();
+
+        script.Replies.Enqueue(Resp.Bulk("RDC1\n0\n0\nmerhaba"));
+        Assert.Equal("merhaba", await cache.GetStringAsync("k"));
+
+        script.Replies.Enqueue(Resp.Bulk("RDC1\n0\n0\n{\"Id\":4,\"CustomerName\":\"Eve\"}"));
+        Assert.Equal(new HelperTests.Order(4, "Eve"), await cache.GetJsonAsync("k", OrderContext.Default.Order));
+
+        script.Replies.Enqueue(Resp.Null());
+        Assert.Null(await cache.GetStringAsync("k"));
     }
 }

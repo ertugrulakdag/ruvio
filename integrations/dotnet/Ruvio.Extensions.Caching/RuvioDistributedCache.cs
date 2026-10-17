@@ -1,5 +1,10 @@
-using System.Diagnostics;
+using System.Buffers;
 using System.Buffers.Text;
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using System.Globalization;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
@@ -33,6 +38,8 @@ public sealed class RuvioDistributedCache : IDistributedCache
     private static readonly ReadOnlyMemory<byte> FillGetCommand = "FILLGET"u8.ToArray();
     private static readonly ReadOnlyMemory<byte> FillSetCommand = "FILLSET"u8.ToArray();
     private static readonly ReadOnlyMemory<byte> PersistCommand = "PERSIST"u8.ToArray();
+    // Lenient like Microsoft's SetString/GetString helpers: a value that is not valid UTF-8 decodes with replacement characters.
+    private static readonly UTF8Encoding Text = new(false);
     private readonly IRuvioClient _client;
     private readonly byte[] _prefix;
     private readonly int _maxValueBytes;
@@ -61,6 +68,35 @@ public sealed class RuvioDistributedCache : IDistributedCache
 
     /// <inheritdoc />
     public async Task<byte[]?> GetAsync(string key, CancellationToken token = default)
+        => await ReadAsync(key, static (stored, offset) => stored.AsSpan(offset).ToArray(), token).ConfigureAwait(false);
+
+    /// <summary>
+    /// Reads the entry as a string, decoding the UTF-8 payload straight from the reply (no intermediate
+    /// <c>byte[]</c>). Returns null on a miss. Same expiry handling as <see cref="GetAsync"/>.
+    /// </summary>
+    public async Task<string?> GetStringAsync(string key, CancellationToken token = default)
+        => await ReadAsync(key, static (stored, offset) => Text.GetString(stored, offset, stored.Length - offset), token)
+            .ConfigureAwait(false);
+
+    /// <summary>Reads and deserializes a JSON entry straight from the reply payload. Returns <c>default</c> on a miss.</summary>
+    [RequiresUnreferencedCode("Serializes with reflection; pass a JsonTypeInfo<T> for trimming or AOT.")]
+    [RequiresDynamicCode("Serializes with reflection; pass a JsonTypeInfo<T> for trimming or AOT.")]
+    public async Task<T?> GetJsonAsync<T>(string key, JsonSerializerOptions? serializerOptions = null,
+        CancellationToken token = default)
+        => await ReadAsync(key, (stored, offset) => JsonSerializer.Deserialize<T>(stored.AsSpan(offset), serializerOptions), token)
+            .ConfigureAwait(false);
+
+    /// <summary>Reads and deserializes a JSON entry with a source-generated <paramref name="typeInfo"/>.</summary>
+    public async Task<T?> GetJsonAsync<T>(string key, JsonTypeInfo<T> typeInfo, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(typeInfo);
+
+        return await ReadAsync(key, (stored, offset) => JsonSerializer.Deserialize(stored.AsSpan(offset), typeInfo), token)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>One read plus expiry bookkeeping; <paramref name="convert"/> maps the stored bytes and payload offset to the result.</summary>
+    private async Task<T?> ReadAsync<T>(string key, Func<byte[], int, T> convert, CancellationToken token)
     {
         ReadOnlyMemory<byte> encoded = Key(key);
 
@@ -71,34 +107,19 @@ public sealed class RuvioDistributedCache : IDistributedCache
         CheckReply(reply);
 
         if (reply.Kind == RespKind.Null)
-            return null;
+            return default;
 
         if (reply.Kind != RespKind.Bulk)
             throw UnexpectedReply();
 
         byte[] stored = reply.Bytes!;
-        (long absolute, long sliding, int payload) = Parse(stored);
-        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        int offset = await Decode(encoded, stored, token).ConfigureAwait(false);
 
-        if (absolute > 0 && absolute <= now)
-        {
-            await Touch(encoded, stored, 0, token).ConfigureAwait(false);
-
-            return null;
-        }
-
-        if (sliding > 0)
-        {
-            long deadline = absolute > 0 ? Math.Min(absolute, now + sliding) : now + sliding;
-
-            await Touch(encoded, stored, deadline <= now ? 0 : deadline, token).ConfigureAwait(false);
-        }
-
-        return stored.AsSpan(payload).ToArray();
+        return offset < 0 ? default : convert(stored, offset);
     }
 
-    /// <summary>Applies the envelope's absolute and sliding expiry to bytes just read, and returns the payload.</summary>
-    private async Task<byte[]?> Decode(ReadOnlyMemory<byte> encoded, byte[] stored, CancellationToken token)
+    /// <summary>Applies the envelope's absolute and sliding expiry to bytes just read, and returns the payload offset (-1 when expired).</summary>
+    private async Task<int> Decode(ReadOnlyMemory<byte> encoded, byte[] stored, CancellationToken token)
     {
         (long absolute, long sliding, int payload) = Parse(stored);
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -107,7 +128,7 @@ public sealed class RuvioDistributedCache : IDistributedCache
         {
             await Touch(encoded, stored, 0, token).ConfigureAwait(false);
 
-            return null;
+            return -1;
         }
 
         if (sliding > 0)
@@ -117,7 +138,7 @@ public sealed class RuvioDistributedCache : IDistributedCache
             await Touch(encoded, stored, deadline <= now ? 0 : deadline, token).ConfigureAwait(false);
         }
 
-        return stored.AsSpan(payload).ToArray();
+        return payload;
     }
 
     /// <inheritdoc />
@@ -128,15 +149,57 @@ public sealed class RuvioDistributedCache : IDistributedCache
     public async Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options,
         CancellationToken token = default)
     {
+        ArgumentNullException.ThrowIfNull(value);
+        CheckSize(value.Length);
+
+        await WriteAsync(key, options, (absolute, sliding) => Envelope(absolute, sliding, value), token).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Stores a string as UTF-8, encoding it straight into the stored record (no intermediate <c>byte[]</c>).
+    /// Readable with <see cref="GetStringAsync"/> and with <see cref="GetAsync"/> (the UTF-8 bytes).
+    /// </summary>
+    public async Task SetStringAsync(string key, string value, DistributedCacheEntryOptions options,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        CheckSize(Text.GetByteCount(value));
+
+        await WriteAsync(key, options, (absolute, sliding) => EnvelopeString(absolute, sliding, value), token)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>Serializes <paramref name="value"/> to JSON directly into the stored record and writes it.</summary>
+    [RequiresUnreferencedCode("Serializes with reflection; pass a JsonTypeInfo<T> for trimming or AOT.")]
+    [RequiresDynamicCode("Serializes with reflection; pass a JsonTypeInfo<T> for trimming or AOT.")]
+    public async Task SetJsonAsync<T>(string key, T value, DistributedCacheEntryOptions options,
+        JsonSerializerOptions? serializerOptions = null, CancellationToken token = default)
+        => await WriteAsync(key, options,
+            (absolute, sliding) => EnvelopeJson(absolute, sliding, w => JsonSerializer.Serialize(w, value, serializerOptions),
+                serializerOptions), token).ConfigureAwait(false);
+
+    /// <summary>Same as the options overload, with a source-generated <paramref name="typeInfo"/>.</summary>
+    public async Task SetJsonAsync<T>(string key, T value, JsonTypeInfo<T> typeInfo, DistributedCacheEntryOptions options,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(typeInfo);
+
+        await WriteAsync(key, options,
+            (absolute, sliding) => EnvelopeJson(absolute, sliding, w => JsonSerializer.Serialize(w, value, typeInfo),
+                typeInfo.Options), token).ConfigureAwait(false);
+    }
+
+    private async Task WriteAsync(string key, DistributedCacheEntryOptions options,
+        Func<long, long, ReadOnlyMemory<byte>> envelope, CancellationToken token)
+    {
         ReadOnlyMemory<byte> encoded = Key(key);
-        var prepared = Prepare(value, options);
-        byte[] record = prepared.Record;
+        var prepared = Prepare(options, envelope);
 
         token.ThrowIfCancellationRequested();
         ReadOnlyMemory<byte>[] command = prepared.Expiry switch
         {
-            (string kind, long when) => [SetCommand, encoded, record, kind == "PX" ? Px : Pxat, Number(when)],
-            null => [SetCommand, encoded, record],
+            (string kind, long when) => [SetCommand, encoded, prepared.Record, kind == "PX" ? Px : Pxat, Number(when)],
+            null => [SetCommand, encoded, prepared.Record],
         };
 
         RespValue reply = await _client.ExecuteBinaryAsync(command, token).ConfigureAwait(false);
@@ -157,9 +220,69 @@ public sealed class RuvioDistributedCache : IDistributedCache
     public async Task<byte[]> GetOrCreateAsync(string key, Func<CancellationToken, Task<byte[]>> factory,
         DistributedCacheEntryOptions options, CancellationToken token = default)
     {
+        ArgumentNullException.ThrowIfNull(factory);
+
+        return await GetOrCreateCore(key, factory, options,
+            static (stored, offset) => stored.AsSpan(offset).ToArray(),
+            (value, absolute, sliding) =>
+            {
+                CheckSize(value.Length);
+
+                return Envelope(absolute, sliding, value);
+            }, token).ConfigureAwait(false);
+    }
+
+    /// <summary>String flavour of <see cref="GetOrCreateAsync"/>: no <c>byte[]</c> conversion on either side.</summary>
+    public async Task<string> GetOrCreateStringAsync(string key, Func<CancellationToken, Task<string>> factory,
+        DistributedCacheEntryOptions options, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+
+        return await GetOrCreateCore(key, factory, options,
+            static (stored, offset) => Text.GetString(stored, offset, stored.Length - offset),
+            (value, absolute, sliding) =>
+            {
+                ArgumentNullException.ThrowIfNull(value);
+                CheckSize(Text.GetByteCount(value));
+
+                return EnvelopeString(absolute, sliding, value);
+            }, token).ConfigureAwait(false);
+    }
+
+    /// <summary>JSON flavour of <see cref="GetOrCreateAsync"/>: serializes into and deserializes out of the stored record directly.</summary>
+    [RequiresUnreferencedCode("Serializes with reflection; pass a JsonTypeInfo<T> for trimming or AOT.")]
+    [RequiresDynamicCode("Serializes with reflection; pass a JsonTypeInfo<T> for trimming or AOT.")]
+    public async Task<T> GetOrCreateJsonAsync<T>(string key, Func<CancellationToken, Task<T>> factory,
+        DistributedCacheEntryOptions options, JsonSerializerOptions? serializerOptions = null,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+
+        return await GetOrCreateCore(key, factory, options,
+            (stored, offset) => JsonSerializer.Deserialize<T>(stored.AsSpan(offset), serializerOptions)!,
+            (value, absolute, sliding) => EnvelopeJson(absolute, sliding, w => JsonSerializer.Serialize(w, value, serializerOptions),
+                serializerOptions), token).ConfigureAwait(false);
+    }
+
+    /// <summary>Same as the options overload, with a source-generated <paramref name="typeInfo"/>.</summary>
+    public async Task<T> GetOrCreateJsonAsync<T>(string key, Func<CancellationToken, Task<T>> factory,
+        JsonTypeInfo<T> typeInfo, DistributedCacheEntryOptions options, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+        ArgumentNullException.ThrowIfNull(typeInfo);
+
+        return await GetOrCreateCore(key, factory, options,
+            (stored, offset) => JsonSerializer.Deserialize(stored.AsSpan(offset), typeInfo)!,
+            (value, absolute, sliding) => EnvelopeJson(absolute, sliding, w => JsonSerializer.Serialize(w, value, typeInfo),
+                typeInfo.Options), token).ConfigureAwait(false);
+    }
+
+    private async Task<T> GetOrCreateCore<T>(string key, Func<CancellationToken, Task<T>> factory,
+        DistributedCacheEntryOptions options, Func<byte[], int, T> read,
+        Func<T, long, long, ReadOnlyMemory<byte>> envelope, CancellationToken token)
+    {
         ReadOnlyMemory<byte> encoded = Key(key);
 
-        ArgumentNullException.ThrowIfNull(factory);
         ArgumentNullException.ThrowIfNull(options);
         token.ThrowIfCancellationRequested();
 
@@ -186,17 +309,17 @@ public sealed class RuvioDistributedCache : IDistributedCache
 
         if (fill.State is FillState.Hit or FillState.Stale)
         {
-            byte[]? payload = await Decode(encoded, fill.Value!, token).ConfigureAwait(false);
+            int offset = await Decode(encoded, fill.Value!, token).ConfigureAwait(false);
 
-            if (payload is not null)
-                return payload;
+            if (offset >= 0)
+                return read(fill.Value!, offset);
         }
 
-        byte[] value = await factory(token).ConfigureAwait(false);
+        T value = await factory(token).ConfigureAwait(false);
 
         if (fill.State == FillState.Fill)
         {
-            var prepared = Prepare(value, options);
+            var prepared = Prepare(options, (absolute, sliding) => envelope(value, absolute, sliding));
             // FILLSET needs a positive TTL; an entry without expiry is stored with one and then persisted.
             long ttl = prepared.Expiry switch
             {
@@ -219,20 +342,16 @@ public sealed class RuvioDistributedCache : IDistributedCache
             return value;
         }
 
-        await SetAsync(key, value, options, token).ConfigureAwait(false);
+        await WriteAsync(key, options, (absolute, sliding) => envelope(value, absolute, sliding), token).ConfigureAwait(false);
 
         return value;
     }
 
-    /// <summary>Validates a write and builds its envelope and expiry. Returns the current time used.</summary>
-    private (byte[] Record, (string Kind, long When)? Expiry, long Now) Prepare(
-        byte[] value, DistributedCacheEntryOptions options)
+    /// <summary>Validates the expiry options, then builds the stored record with <paramref name="envelope"/>. Returns the current time used.</summary>
+    private static (ReadOnlyMemory<byte> Record, (string Kind, long When)? Expiry, long Now) Prepare(
+        DistributedCacheEntryOptions options, Func<long, long, ReadOnlyMemory<byte>> envelope)
     {
-        ArgumentNullException.ThrowIfNull(value);
         ArgumentNullException.ThrowIfNull(options);
-
-        if (value.Length > _maxValueBytes)
-            throw new ArgumentException("Cache value exceeds MaxValueBytes.", nameof(value));
 
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         long absolute = options.AbsoluteExpiration?.ToUnixTimeMilliseconds() ?? 0;
@@ -249,7 +368,7 @@ public sealed class RuvioDistributedCache : IDistributedCache
         if (relative > 0)
             absolute = absolute == 0 ? now + relative : Math.Min(absolute, now + relative);
 
-        return (Envelope(absolute, sliding, value), Expiry(now, absolute, sliding), now);
+        return (envelope(absolute, sliding), Expiry(now, absolute, sliding), now);
     }
 
     /// <inheritdoc />
@@ -322,10 +441,11 @@ public sealed class RuvioDistributedCache : IDistributedCache
         return (absolute, sliding, magic.Length + first + 1 + second + 1);
     }
 
-    /// <summary><c>RDC1\n{absolute}\n{sliding}\n</c> followed by the payload, in one allocation.</summary>
-    private static byte[] Envelope(long absolute, long sliding, byte[] value)
+    private const int MaxHeaderBytes = 5 + 20 + 1 + 20 + 1;
+
+    /// <summary>Writes <c>RDC1\n{absolute}\n{sliding}\n</c> and returns its length.</summary>
+    private static int WriteHeader(Span<byte> header, long absolute, long sliding)
     {
-        Span<byte> header = stackalloc byte[5 + 20 + 1 + 20 + 1];
         ReadOnlySpan<byte> magic = "RDC1\n"u8;
 
         magic.CopyTo(header);
@@ -338,12 +458,63 @@ public sealed class RuvioDistributedCache : IDistributedCache
         written += digits;
         header[written++] = (byte)'\n';
 
+        return written;
+    }
+
+    /// <summary>The header followed by the payload, in one allocation.</summary>
+    private static byte[] Envelope(long absolute, long sliding, byte[] value)
+    {
+        Span<byte> header = stackalloc byte[MaxHeaderBytes];
+        int written = WriteHeader(header, absolute, sliding);
         byte[] record = new byte[written + value.Length];
 
         header[..written].CopyTo(record);
         value.CopyTo(record, written);
 
         return record;
+    }
+
+    /// <summary>The header followed by the string encoded as UTF-8 directly into the record, in one allocation.</summary>
+    private static byte[] EnvelopeString(long absolute, long sliding, string value)
+    {
+        Span<byte> header = stackalloc byte[MaxHeaderBytes];
+        int written = WriteHeader(header, absolute, sliding);
+        byte[] record = new byte[written + Text.GetByteCount(value)];
+
+        header[..written].CopyTo(record);
+        Text.GetBytes(value, record.AsSpan(written));
+
+        return record;
+    }
+
+    /// <summary>The header followed by JSON written straight into one growing buffer; no separate payload array.</summary>
+    private ReadOnlyMemory<byte> EnvelopeJson(long absolute, long sliding, Action<Utf8JsonWriter> write,
+        JsonSerializerOptions? serializerOptions)
+    {
+        var buffer = new ArrayBufferWriter<byte>(256);
+        Span<byte> header = buffer.GetSpan(MaxHeaderBytes);
+
+        buffer.Advance(WriteHeader(header, absolute, sliding));
+        int headerBytes = buffer.WrittenCount;
+
+        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions
+        {
+            Encoder = serializerOptions?.Encoder,
+            Indented = serializerOptions?.WriteIndented ?? false,
+        }))
+        {
+            write(writer);
+        }
+
+        CheckSize(buffer.WrittenCount - headerBytes);
+
+        return buffer.WrittenMemory;
+    }
+
+    private void CheckSize(int payloadBytes)
+    {
+        if (payloadBytes > _maxValueBytes)
+            throw new ArgumentException("Cache value exceeds MaxValueBytes.", "value");
     }
 
     /// <summary>PX when the sliding window is sooner, otherwise PXAT for an absolute deadline.</summary>

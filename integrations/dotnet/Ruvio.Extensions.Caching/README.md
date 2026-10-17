@@ -59,7 +59,9 @@ registration and construction and then snapshotted; no hot reload is performed.
 ## Strings and models, not just `byte[]`
 
 `IDistributedCache` only speaks `byte[]`, so the package adds extension methods on it (they work on any
-`IDistributedCache`):
+`IDistributedCache`). On `RuvioDistributedCache` (what `AddRuvioDistributedCache` registers) strings and JSON are encoded
+into the stored record and decoded from the reply directly, with no extra `byte[]` copy; `RuvioDistributedCache` also has
+`GetStringAsync`/`SetStringAsync`/`GetJsonAsync`/`SetJsonAsync` as instance methods if you inject the class itself:
 
 ```csharp
 // plain string (Microsoft's SetStringAsync/GetStringAsync also work); this one adds cross-process single build

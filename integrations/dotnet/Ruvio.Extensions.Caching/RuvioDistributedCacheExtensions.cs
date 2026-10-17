@@ -43,7 +43,11 @@ public static class RuvioDistributedCacheExtensions
 
     private static DistributedCacheEntryOptions Default(DistributedCacheEntryOptions? options) => options ?? new();
 
-    /// <summary>Returns the cached string, or builds and stores it (see <see cref="GetOrCreateAsync(IDistributedCache, string, Func{CancellationToken, Task{byte[]}}, DistributedCacheEntryOptions, CancellationToken)"/>). Stored as UTF-8.</summary>
+    /// <summary>
+    /// Returns the cached string, or builds and stores it as UTF-8. On <see cref="RuvioDistributedCache"/> the string is
+    /// encoded and decoded straight from the stored record with one process building it; on any other cache it goes through
+    /// <c>byte[]</c> like Microsoft's <c>SetStringAsync</c>.
+    /// </summary>
     public static async Task<string> GetOrCreateStringAsync(
         this IDistributedCache cache,
         string key,
@@ -51,7 +55,11 @@ public static class RuvioDistributedCacheExtensions
         DistributedCacheEntryOptions? options = null,
         CancellationToken token = default)
     {
+        ArgumentNullException.ThrowIfNull(cache);
         ArgumentNullException.ThrowIfNull(factory);
+
+        if (cache is RuvioDistributedCache ruvio)
+            return await ruvio.GetOrCreateStringAsync(key, factory, Default(options), token).ConfigureAwait(false);
 
         byte[] bytes = await cache.GetOrCreateAsync(
             key,
@@ -62,9 +70,9 @@ public static class RuvioDistributedCacheExtensions
         return Utf8.GetString(bytes);
     }
 
-    /// <summary>Stores <paramref name="value"/> serialized to UTF-8 JSON with <paramref name="serializerOptions"/> (web defaults when null).</summary>
-    [RequiresUnreferencedCode("Reflection-based JSON; pass a JsonTypeInfo for trimming.")]
-    [RequiresDynamicCode("Reflection-based JSON; pass a JsonTypeInfo for AOT.")]
+    /// <summary>Stores <paramref name="value"/> as UTF-8 JSON using <paramref name="serializerOptions"/> (defaults when null).</summary>
+    [RequiresUnreferencedCode("Serializes with reflection; pass a JsonTypeInfo<T> for trimming or AOT.")]
+    [RequiresDynamicCode("Serializes with reflection; pass a JsonTypeInfo<T> for trimming or AOT.")]
     public static Task SetJsonAsync<T>(
         this IDistributedCache cache,
         string key,
@@ -75,10 +83,13 @@ public static class RuvioDistributedCacheExtensions
     {
         ArgumentNullException.ThrowIfNull(cache);
 
+        if (cache is RuvioDistributedCache ruvio)
+            return ruvio.SetJsonAsync(key, value, Default(options), serializerOptions, token);
+
         return cache.SetAsync(key, JsonSerializer.SerializeToUtf8Bytes(value, serializerOptions), Default(options), token);
     }
 
-    /// <summary>Stores <paramref name="value"/> serialized with a source-generated <paramref name="typeInfo"/> (trim and AOT safe).</summary>
+    /// <summary>Stores <paramref name="value"/> with a source-generated <paramref name="typeInfo"/> (trim and AOT safe).</summary>
     public static Task SetJsonAsync<T>(
         this IDistributedCache cache,
         string key,
@@ -90,12 +101,15 @@ public static class RuvioDistributedCacheExtensions
         ArgumentNullException.ThrowIfNull(cache);
         ArgumentNullException.ThrowIfNull(typeInfo);
 
+        if (cache is RuvioDistributedCache ruvio)
+            return ruvio.SetJsonAsync(key, value, typeInfo, Default(options), token);
+
         return cache.SetAsync(key, JsonSerializer.SerializeToUtf8Bytes(value, typeInfo), Default(options), token);
     }
 
     /// <summary>Reads the entry and deserializes it from JSON. Returns <c>default</c> on a miss.</summary>
-    [RequiresUnreferencedCode("Reflection-based JSON; pass a JsonTypeInfo for trimming.")]
-    [RequiresDynamicCode("Reflection-based JSON; pass a JsonTypeInfo for AOT.")]
+    [RequiresUnreferencedCode("Serializes with reflection; pass a JsonTypeInfo<T> for trimming or AOT.")]
+    [RequiresDynamicCode("Serializes with reflection; pass a JsonTypeInfo<T> for trimming or AOT.")]
     public static async Task<T?> GetJsonAsync<T>(
         this IDistributedCache cache,
         string key,
@@ -103,6 +117,9 @@ public static class RuvioDistributedCacheExtensions
         CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(cache);
+
+        if (cache is RuvioDistributedCache ruvio)
+            return await ruvio.GetJsonAsync<T>(key, serializerOptions, token).ConfigureAwait(false);
 
         byte[]? bytes = await cache.GetAsync(key, token).ConfigureAwait(false);
 
@@ -119,14 +136,17 @@ public static class RuvioDistributedCacheExtensions
         ArgumentNullException.ThrowIfNull(cache);
         ArgumentNullException.ThrowIfNull(typeInfo);
 
+        if (cache is RuvioDistributedCache ruvio)
+            return await ruvio.GetJsonAsync(key, typeInfo, token).ConfigureAwait(false);
+
         byte[]? bytes = await cache.GetAsync(key, token).ConfigureAwait(false);
 
         return bytes is null ? default : JsonSerializer.Deserialize(bytes, typeInfo);
     }
 
     /// <summary>Returns the cached model, or builds it with <paramref name="factory"/> and stores it as JSON.</summary>
-    [RequiresUnreferencedCode("Reflection-based JSON; pass a JsonTypeInfo for trimming.")]
-    [RequiresDynamicCode("Reflection-based JSON; pass a JsonTypeInfo for AOT.")]
+    [RequiresUnreferencedCode("Serializes with reflection; pass a JsonTypeInfo<T> for trimming or AOT.")]
+    [RequiresDynamicCode("Serializes with reflection; pass a JsonTypeInfo<T> for trimming or AOT.")]
     public static async Task<T> GetOrCreateJsonAsync<T>(
         this IDistributedCache cache,
         string key,
@@ -135,7 +155,11 @@ public static class RuvioDistributedCacheExtensions
         JsonSerializerOptions? serializerOptions = null,
         CancellationToken token = default)
     {
+        ArgumentNullException.ThrowIfNull(cache);
         ArgumentNullException.ThrowIfNull(factory);
+
+        if (cache is RuvioDistributedCache ruvio)
+            return await ruvio.GetOrCreateJsonAsync(key, factory, Default(options), serializerOptions, token).ConfigureAwait(false);
 
         byte[] bytes = await cache.GetOrCreateAsync(
             key,
@@ -155,8 +179,12 @@ public static class RuvioDistributedCacheExtensions
         DistributedCacheEntryOptions? options = null,
         CancellationToken token = default)
     {
+        ArgumentNullException.ThrowIfNull(cache);
         ArgumentNullException.ThrowIfNull(factory);
         ArgumentNullException.ThrowIfNull(typeInfo);
+
+        if (cache is RuvioDistributedCache ruvio)
+            return await ruvio.GetOrCreateJsonAsync(key, factory, typeInfo, Default(options), token).ConfigureAwait(false);
 
         byte[] bytes = await cache.GetOrCreateAsync(
             key,
@@ -165,31 +193,5 @@ public static class RuvioDistributedCacheExtensions
             token).ConfigureAwait(false);
 
         return JsonSerializer.Deserialize(bytes, typeInfo)!;
-    }
-
-    /// <summary>Synchronous <see cref="SetJsonAsync{T}(IDistributedCache, string, T, DistributedCacheEntryOptions?, JsonSerializerOptions?, CancellationToken)"/>.</summary>
-    [RequiresUnreferencedCode("Reflection-based JSON; pass a JsonTypeInfo for trimming.")]
-    [RequiresDynamicCode("Reflection-based JSON; pass a JsonTypeInfo for AOT.")]
-    public static void SetJson<T>(
-        this IDistributedCache cache,
-        string key,
-        T value,
-        DistributedCacheEntryOptions? options = null,
-        JsonSerializerOptions? serializerOptions = null)
-    {
-        ArgumentNullException.ThrowIfNull(cache);
-        cache.Set(key, JsonSerializer.SerializeToUtf8Bytes(value, serializerOptions), Default(options));
-    }
-
-    /// <summary>Synchronous <see cref="GetJsonAsync{T}(IDistributedCache, string, JsonSerializerOptions?, CancellationToken)"/>.</summary>
-    [RequiresUnreferencedCode("Reflection-based JSON; pass a JsonTypeInfo for trimming.")]
-    [RequiresDynamicCode("Reflection-based JSON; pass a JsonTypeInfo for AOT.")]
-    public static T? GetJson<T>(this IDistributedCache cache, string key, JsonSerializerOptions? serializerOptions = null)
-    {
-        ArgumentNullException.ThrowIfNull(cache);
-
-        byte[]? bytes = cache.Get(key);
-
-        return bytes is null ? default : JsonSerializer.Deserialize<T>(bytes, serializerOptions);
     }
 }
