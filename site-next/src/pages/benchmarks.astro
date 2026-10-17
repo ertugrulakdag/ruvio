@@ -14,6 +14,10 @@ import { clamp } from "../lib/geom";
 const [mac, linux] = platforms;
 const blob = (f: string) => `${site.github}/blob/main/${f}`;
 const popular = ["GET", "SET", "DEL (missing key)", "SETEX", "HSET (existing field)", "HGET", "LPUSH", "ZADD (existing member, same score)", "EXPIRE (key with TTL)", "PUBLISH (no subscribers)"];
+const peakNames = ["GET", "SET", "DEL (missing key)", "SETEX", "HGET", "HSET (existing field)", "LPUSH"];
+const peakGet = scaleDeep.row("GET"), peakSet = scaleDeep.row("SET"), peakDel = scaleDeep.row("DEL (missing key)");
+const peakHeadline = Math.round(Math.min(peakGet.ruvio, peakSet.ruvio) / 1e6);
+const mil = (v: number) => (v / 1e6).toFixed(1);
 const grids = [
   { name: `In-memory, pipeline ${scale.pipeline}`, s: scale },
   { name: `In-memory, pipeline ${scaleDeep.pipeline}`, s: scaleDeep },
@@ -92,6 +96,31 @@ const one = at(1);
       </div>
       <LoadArrows />
       <p class="source">Source: <a href={blob(loadRun.file)}>{loadRun.file}</a> · {loadRun.machine} · {loadRun.date}, commit {loadRun.commit} · server and load generator share the VM, so compare the two servers with each other, not with other hosts. Un-pipelined rows are limited by the load generator.</p>
+    </div>
+  </section>
+
+  <section class="section band" id="peak">
+    <div class="wrap">
+      <div class="head-row">
+        <div>
+          <p class="kicker">Peak throughput</p>
+          <h2 class="title">{peakHeadline}M requests per second on one machine</h2>
+          <p class="lede">With {scaleDeep.shards} shards on {scaleDeep.shards} cores and a client that keeps them busy (pipeline {scaleDeep.pipeline}), the simplest commands reach about {peakHeadline} million requests per second: <code>GET</code> {mil(peakGet.ruvio)}M, <code>SET</code> {mil(peakSet.ruvio)}M, <code>DEL</code> {mil(peakDel.ruvio)}M.</p>
+        </div>
+      </div>
+      <div class="kpis">
+        <div><span class="plat">GET</span><b>{mil(peakGet.ruvio)}M</b><span>requests per second on {scaleDeep.shards} shards; one Redis process on one core serves {mil(peakGet.redis1)}M, a {scaleDeep.shards}-node Redis Cluster {mil(peakGet.cluster)}M</span></div>
+        <div><span class="plat">SET</span><b>{mil(peakSet.ruvio)}M</b><span>requests per second; the cluster reaches {mil(peakSet.cluster)}M ({fmtX(peakSet.vsCluster)} for Ruvio)</span></div>
+        <div><span class="plat">Per shard</span><b>{mil(peakGet.ruvio / scaleDeep.shards)}M</b><span>GET requests per second for each shard, one core each; {scaleDeep.shards} shards give {mil(peakGet.ruvio)}M because they never wait for one another</span></div>
+        <div><span class="plat">Why it is fast</span><b>0<em> locks</em></b><span>each shard owns its keys on its own core; a command never waits for another shard, so shards add up</span></div>
+      </div>
+      <div class="scale-chart"><ScaleBars scale={scaleDeep} names={peakNames} /></div>
+      <div class="peak-notes">
+        <div><h3>What the number is</h3><p>The sum over {scaleDeep.shards} shards, each driven by its own <code>redis-benchmark</code> ({scaleDeep.clients} clients, pipeline {scaleDeep.pipeline}, in-memory). It shows what the hot path can do when the network and the client are not the limit.</p></div>
+        <div><h3>What it is not</h3><p>Not every command: heavier ones such as <code>SETEX</code>, <code>HSET</code> or <code>LPUSH</code> run at {mil(Math.min(...peakNames.slice(3).map((n) => scaleDeep.row(n).ruvio)))}M to {mil(Math.max(...peakNames.slice(3).map((n) => scaleDeep.row(n).ruvio)))}M, and large replies are limited by the network. Without pipelining, a request waits for its reply and the load generator becomes the limit.</p></div>
+        <div><h3>Conditions</h3><p>One Azure F16as_v6 VM (AMD EPYC 9V74, 16 cores, no SMT): servers on cpus 8-15, load generators on cpus 0-7, loopback, {scaleDeep.date}. Server and load generator share the VM, so compare the systems with each other, not with other hosts.</p></div>
+      </div>
+      <p class="source">Source: <a href={blob(scaleDeep.file)}>{scaleDeep.file}</a> · the same run as the pipeline {scaleDeep.pipeline} grid below.</p>
     </div>
   </section>
 
@@ -238,6 +267,11 @@ const one = at(1);
 
 <style>
   .kpis.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 36px; }
+  .peak-notes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin-top: 28px; }
+  .peak-notes > div { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; }
+  .peak-notes h3 { margin: 0 0 8px; font-size: 16px; }
+  .peak-notes p { margin: 0; color: var(--mute); font-size: 15px; line-height: 1.6; }
+  @media (max-width: 900px) { .peak-notes { grid-template-columns: minmax(0, 1fr); } }
   .plat { font-weight: 600; color: var(--ink) !important; }
   .scale-chart { margin-top: 32px; }
   .scale-table { margin-top: 28px; }

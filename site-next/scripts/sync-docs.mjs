@@ -171,7 +171,11 @@ function firstParagraph(body) {
       continue;
     }
     if (fence) continue;
-    if (/^#{1,6} /.test(line)) break; // only the introduction, before the first section
+    // Only the introduction, before the first section; a page that opens with a heading uses the text under it.
+    if (/^#{1,6} /.test(line)) {
+      if (paras.length || cur.length) break;
+      continue;
+    }
     if (!line.trim()) {
       if (cur.length) paras.push(cur), (cur = []);
       continue;
