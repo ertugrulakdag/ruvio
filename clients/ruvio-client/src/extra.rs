@@ -23,7 +23,11 @@ use crate::value::RespValue;
 impl Client {
     // ---- connection and server ------------------------------------------------------------
 
-    /// Sends `RUVIO` or `RUVIO word` (`OWNER`, `HOTKEYS`, `BIGKEYS`) and returns the raw reply.
+    /// Sends `RUVIO` or `RUVIO word` and returns the raw reply.
+    ///
+    /// # Arguments
+    /// * `word` - `None` replies `PONG is taken`; `Some("OWNER")` names the shard rule;
+    ///   `Some("HOTKEYS")` and `Some("BIGKEYS")` return key statistics.
     pub fn ruvio(&mut self, word: Option<&str>) -> Result<RespValue, Error> {
         match word {
             Some(word) => self.execute(&["RUVIO", word]),
@@ -31,19 +35,36 @@ impl Client {
         }
     }
 
-    /// Sends `AUTH password` on the current connection. Prefer [`crate::ClientOptions::password`],
-    /// which is also replayed after a reconnect.
+    /// Sends `AUTH password` on the current connection.
+    ///
+    /// Prefer [`ClientOptions::password`](crate::ClientOptions::password): that is also replayed
+    /// after a reconnect, while a manual `AUTH` is not. On a routed client only the connection
+    /// that carried the command is authenticated.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGPASS` for a bad password.
     pub fn auth(&mut self, password: &str) -> Result<(), Error> {
         self.ok(["AUTH", password])
     }
 
-    /// Sends `AUTH username password` on the current connection.
+    /// Sends `AUTH username password` (ACL login) on the current connection. See [`Client::auth`]
+    /// for the reconnect caveat; prefer [`ClientOptions::username`](crate::ClientOptions::username).
     pub fn auth_user(&mut self, username: &str, password: &str) -> Result<(), Error> {
         self.ok(["AUTH", username, password])
     }
 
-    /// Sends `WAIT replicas timeout_ms`: how many replicas synced this shard's WAL position.
-    /// `Duration::ZERO` waits until shutdown. Blocks this connection.
+    /// Sends `WAIT replicas timeout_ms`: blocks until replicas have synced this shard's WAL
+    /// position.
+    ///
+    /// # Arguments
+    /// * `replicas` - how many replicas must have caught up.
+    /// * `timeout` - maximum wait in milliseconds (rounded up); `Duration::ZERO` waits until
+    ///   shutdown.
+    ///
+    /// # Returns
+    /// How many replicas reached the position. With `port_mode = "per-shard"` this covers the
+    /// connection's shard plus shards its writes were forwarded to. Blocks this connection, so
+    /// set a longer read timeout or none.
     pub fn wait(&mut self, replicas: u64, timeout: Duration) -> Result<i64, Error> {
         let replicas = Num::uint(replicas);
         let timeout = Num::wide(duration_millis(timeout));
@@ -51,17 +72,17 @@ impl Client {
         self.integer(["WAIT", replicas.as_str(), timeout.as_str()])
     }
 
-    /// Sends `COMMAND`: the whole command table as the raw reply.
+    /// Sends `COMMAND`: the whole command table as a raw reply.
     pub fn command_list(&mut self) -> Result<RespValue, Error> {
         self.execute(&["COMMAND"])
     }
 
-    /// Sends `COMMAND COUNT`.
+    /// Sends `COMMAND COUNT`: number of commands the server knows.
     pub fn command_count(&mut self) -> Result<i64, Error> {
         self.integer(["COMMAND", "COUNT"])
     }
 
-    /// Sends `COMMAND INFO name...` (Redis 7 shape, one entry or nil per name).
+    /// Sends `COMMAND INFO name...`: Redis 7 shaped entry per name (nil for unknown ones).
     pub fn command_info(&mut self, names: &[&str]) -> Result<RespValue, Error> {
         self.execute(&prefixed(&["COMMAND", "INFO"], names))
     }
@@ -76,7 +97,15 @@ impl Client {
         self.execute(&["LATENCY", "LATEST"])
     }
 
-    /// Sends `CLIENT KILL ADDR ip:port [SKIPME yes|no]` and returns how many connections closed.
+    /// Sends `CLIENT KILL ADDR ip:port [SKIPME yes|no]`.
+    ///
+    /// # Arguments
+    /// * `address` - `ip:port` of the client to close, as in `CLIENT LIST`.
+    /// * `skip_me` - `Some(true)` never kills the calling connection; `None` uses the server
+    ///   default (skip).
+    ///
+    /// # Returns
+    /// How many connections were closed.
     pub fn client_kill_addr(&mut self, address: &str, skip_me: Option<bool>) -> Result<i64, Error> {
         match skip_me {
             Some(skip) => self.integer([
@@ -91,21 +120,47 @@ impl Client {
         }
     }
 
-    /// Sends `MEMORY USAGE key SAMPLES n`. `None` for a missing key.
+    /// Sends `MEMORY USAGE key SAMPLES n`: bytes used by the key, sampling `n` nested elements.
+    /// `None` for a missing key.
     pub fn memory_usage_samples(&mut self, key: &str, samples: u64) -> Result<Option<i64>, Error> {
         let samples = Num::uint(samples);
 
         self.optional_integer(["MEMORY", "USAGE", key, "SAMPLES", samples.as_str()])
     }
 
-    /// Sends `DUMP` and returns Ruvio's binary payload (`RVD1...`), or `None` for a missing key.
-    /// Only Ruvio's [`Self::restore`] reads it; the TTL is not part of it.
+    /// Sends `DUMP`: serialises a key to Ruvio's own binary payload (starts with `RVD1`).
+    ///
+    /// # Returns
+    /// The payload bytes, or `None` for a missing key. Only [`Client::restore`] on a Ruvio server
+    /// reads it (not Redis); it does not contain the TTL. Also works for JSON documents.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// if let Some(payload) = client.dump("user:1")? {
+    ///     client.restore("user:1:copy", 0, &payload, RestoreOptions::default())?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn dump(&mut self, key: &str) -> Result<Option<Vec<u8>>, Error> {
         self.bytes_or_null(["DUMP", key])
     }
 
-    /// Sends `RESTORE key ttl payload [REPLACE] [ABSTTL]` with a binary payload from [`Self::dump`].
-    /// `ttl_ms` 0 means no TTL; with `absolute_ttl` it is a Unix-millisecond deadline.
+    /// Sends `RESTORE key ttl payload [REPLACE] [ABSTTL]` with a payload from [`Client::dump`].
+    ///
+    /// # Arguments
+    /// * `ttl_ms` - `0` for no expiry, else milliseconds from now (or a Unix-millisecond deadline
+    ///   when `options.absolute_ttl`).
+    /// * `payload` - bytes from `dump`.
+    /// * `options` - [`RestoreOptions`]: `replace` overwrites an existing key.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `BUSYKEY` if the key exists and `replace` is false; error for an invalid
+    /// payload.
     pub fn restore(
         &mut self,
         key: &str,
@@ -141,37 +196,58 @@ impl Client {
 
     // ---- strings ---------------------------------------------------------------------------
 
-    /// Sends `DELEX key IFEQ expected` (Ruvio extension): deletes the string only when it equals
-    /// `expected`. True when it was deleted. This is the safe lock release.
+    /// Sends `DELEX key IFEQ expected` (Ruvio): deletes the string only when it equals
+    /// `expected`. `true` if deleted, `false` if the key is missing or differs. This is the safe
+    /// way to release a lock you hold.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.set_with("lock:a", "token-1", Some(Duration::from_secs(10)), SetMode::IfNotExists)?;
+    /// let released = client.delex("lock:a", "token-1")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn delex(&mut self, key: &str, expected: &str) -> Result<bool, Error> {
         self.flag(["DELEX", key, "IFEQ", expected])
     }
 
-    /// Sends `SETEX key seconds value`.
+    /// Sends `SETEX key seconds value`: sets the value with a TTL in whole seconds (must be >
+    /// 0). Same as [`Client::set_ex`] but returns `()`.
     pub fn setex(&mut self, key: &str, seconds: u64, value: &str) -> Result<(), Error> {
         let seconds = Num::uint(seconds);
 
         self.ok(["SETEX", key, seconds.as_str(), value])
     }
 
-    /// Sends `PSETEX key milliseconds value`.
+    /// Sends `PSETEX key ms value`: sets the value with a TTL in milliseconds (rounded up; must
+    /// be > 0).
     pub fn psetex(&mut self, key: &str, ttl: Duration, value: &str) -> Result<(), Error> {
         let millis = Num::wide(duration_millis(ttl));
 
         self.ok(["PSETEX", key, millis.as_str(), value])
     }
 
-    /// Sends `SETNX`. True when the key was written.
+    /// Sends `SETNX`: writes only if the key does not exist. `true` when written. For a TTL use
+    /// [`Client::set_with`] with [`SetMode::IfNotExists`](crate::SetMode::IfNotExists).
     pub fn setnx(&mut self, key: &str, value: &str) -> Result<bool, Error> {
         self.flag(["SETNX", key, value])
     }
 
-    /// Sends `GETDEL`: the string, removed. `None` for a missing key.
+    /// Sends `GETDEL`: returns the string and deletes the key; `None` if missing. `WRONGTYPE` for
+    /// a non-string.
     pub fn getdel(&mut self, key: &str) -> Result<Option<String>, Error> {
         self.bulk_or_null(["GETDEL", key])
     }
 
-    /// Sends `MSETNX`: writes every pair only when none of the keys exist. Keys share a slot.
+    /// Sends `MSETNX`: writes all pairs only if **none** of the keys exist.
+    ///
+    /// # Returns
+    /// `true` when every pair was written, `false` when nothing was. All keys must share a slot
+    /// on a sharded server (`CROSSSLOT` otherwise).
     pub fn msetnx(&mut self, pairs: &[(&str, &str)]) -> Result<bool, Error> {
         let mut arguments = Vec::with_capacity(1 + pairs.len() * 2);
 
@@ -185,37 +261,49 @@ impl Client {
         self.flag(arguments)
     }
 
-    /// Sends `INCRBYFLOAT` and returns the new value (printed with 15 significant digits).
+    /// Sends `INCRBYFLOAT`: adds a decimal to the value (missing counts as 0) and returns the new
+    /// value. Ruvio computes in double precision and prints 15 significant digits.
+    ///
+    /// # Errors
+    /// [`Error::Server`] if the value is not a number or the result is NaN/infinite.
     pub fn incr_by_float(&mut self, key: &str, delta: f64) -> Result<f64, Error> {
         let delta = Num::float(delta);
 
         parse_score(&self.text(["INCRBYFLOAT", key, delta.as_str()])?)
     }
 
-    /// Sends `GETRANGE key start end` (inclusive, negative from the end).
+    /// Sends `GETRANGE`: substring from `start` to `end`, both **inclusive**; negative offsets
+    /// count from the end. Missing key or empty range gives `""`.
     pub fn getrange(&mut self, key: &str, start: i64, end: i64) -> Result<String, Error> {
         let (start, end) = (Num::int(start), Num::int(end));
 
         self.text(["GETRANGE", key, start.as_str(), end.as_str()])
     }
 
-    /// Sends `SUBSTR`, the old name of `GETRANGE`.
+    /// Sends `SUBSTR`, the old name of [`Client::getrange`] (same behaviour).
     pub fn substr(&mut self, key: &str, start: i64, end: i64) -> Result<String, Error> {
         let (start, end) = (Num::int(start), Num::int(end));
 
         self.text(["SUBSTR", key, start.as_str(), end.as_str()])
     }
 
-    /// Sends `SETRANGE` and returns the new length.
+    /// Sends `SETRANGE`: overwrites part of a string starting at byte `offset`, zero-padding if
+    /// the string is shorter. Returns the new length. Strings are capped at 16 MiB.
     pub fn setrange(&mut self, key: &str, offset: u64, value: &str) -> Result<i64, Error> {
         let offset = Num::uint(offset);
 
         self.integer(["SETRANGE", key, offset.as_str(), value])
     }
 
-    /// Sends `FILLGET key fill_ms WAIT wait_ms`: a caller that would get `Busy` waits up to
-    /// `wait` for the filler. The wait parks this connection, so prefer
-    /// [`Self::get_or_create`] (short client-side polling) on a shared connection.
+    /// Sends `FILLGET key fill_ms WAIT wait_ms`: like [`Client::fill_get`], but a caller that
+    /// would get `Busy` is held server-side for up to `wait` until the filler writes (or the
+    /// marker lapses and the waiter becomes the filler).
+    ///
+    /// # Arguments
+    /// * `fill` - marker lifetime. `wait` - maximum wait.
+    ///
+    /// The wait occupies this connection, so on a shared connection prefer
+    /// [`Client::get_or_create`], which polls from the client.
     pub fn fill_get_wait(
         &mut self,
         key: &str,
@@ -230,15 +318,27 @@ impl Client {
 
     // ---- lists -----------------------------------------------------------------------------
 
-    /// Sends `LPUSHCAP key cap value...` (Ruvio extension): `LPUSH`, then trims the tail so at
-    /// most `cap` items remain. Returns the new length.
+    /// Sends `LPUSHCAP key cap value...` (Ruvio): `LPUSH`, then trims the tail so at most `cap`
+    /// items remain. Returns the new length. Good for "latest N" lists.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.lpushcap("recent:views", 50, &["page-9"])?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn lpushcap(&mut self, key: &str, cap: u64, values: &[&str]) -> Result<i64, Error> {
         let cap = Num::uint(cap);
 
         self.integer(prefixed(&["LPUSHCAP", key, cap.as_str()], values))
     }
 
-    /// Sends `RPUSHCAP key cap value...`: `RPUSH`, then trims the head to `cap` items.
+    /// Sends `RPUSHCAP key cap value...` (Ruvio): `RPUSH`, then trims the head so at most `cap`
+    /// items remain. Returns the new length.
     pub fn rpushcap(&mut self, key: &str, cap: u64, values: &[&str]) -> Result<i64, Error> {
         let cap = Num::uint(cap);
 
@@ -262,7 +362,11 @@ impl Client {
         pop_many("BLMPOP", self.run(arguments)?)
     }
 
-    /// Sends `LPOS key value [RANK r] [MAXLEN n]`. `None` when there is no match.
+    /// Sends `LPOS key value [RANK r] [MAXLEN n]`.
+    ///
+    /// `options.rank` picks which match to return (1 = first, 2 = second, negative searches from
+    /// the tail); `options.max_len` limits how many elements are compared. `None` when there is
+    /// no match.
     pub fn lpos_with(
         &mut self,
         key: &str,
@@ -277,7 +381,10 @@ impl Client {
         self.optional_integer(&arguments[..count])
     }
 
-    /// Sends `LPOS key value COUNT n [RANK r] [MAXLEN m]`. `count` 0 returns every match.
+    /// Sends `LPOS key value COUNT n [RANK r] [MAXLEN m]`: positions of matches.
+    ///
+    /// `count` is how many matches to return; `0` returns all. `options` as in
+    /// [`Client::lpos_with`]. Empty vector when none.
     pub fn lpos_count(
         &mut self,
         key: &str,
@@ -296,7 +403,9 @@ impl Client {
 
     // ---- sets ------------------------------------------------------------------------------
 
-    /// Sends `SSCAN key cursor [MATCH pattern] [COUNT n]`. See [`Self::sscan_iter`].
+    /// Sends `SSCAN`: one page of a set walk. `cursor` is `0` to start; stop when the returned
+    /// cursor is `0`. `pattern` and `count` as for [`Client::scan`]. Prefer
+    /// [`Client::sscan_iter`].
     pub fn sscan(
         &mut self,
         key: &str,
@@ -309,7 +418,8 @@ impl Client {
         Ok(SetScanPage { cursor, members })
     }
 
-    /// Sends `SMISMEMBER`: one flag per member.
+    /// Sends `SMISMEMBER`: one flag per member (`true` if in the set; all `false` for a missing
+    /// key).
     pub fn smismember(&mut self, key: &str, members: &[&str]) -> Result<Vec<bool>, Error> {
         Ok(self
             .integers(prefixed(&["SMISMEMBER", key], members))?
@@ -318,7 +428,11 @@ impl Client {
             .collect())
     }
 
-    /// Sends `SINTERCARD numkeys key... [LIMIT n]`: the size of the intersection.
+    /// Sends `SINTERCARD numkeys key... [LIMIT n]`: size of the intersection without building it.
+    ///
+    /// # Arguments
+    /// * `keys` - sets (one slot). `limit` - stop counting at this number; `None` or `Some(0)`
+    ///   means no limit.
     pub fn sintercard(&mut self, keys: &[&str], limit: Option<u64>) -> Result<i64, Error> {
         let numkeys = Num::uint(keys.len() as u64);
         let limit = limit.map(Num::uint);
@@ -333,7 +447,12 @@ impl Client {
 
     // ---- sorted sets -----------------------------------------------------------------------
 
-    /// Sends `ZRANGEBYLEX key min max [LIMIT offset count]`. Bounds: `-`, `+`, `[m`, `(m`.
+    /// Sends `ZRANGEBYLEX key min max [LIMIT offset count]`.
+    ///
+    /// # Arguments
+    /// * `min`, `max` - `-`, `+`, `[member` (inclusive), `(member` (exclusive).
+    /// * `limit` - `Some((offset, count))`; a negative count returns the rest; offset must be 0
+    ///   or more.
     pub fn zrangebylex(
         &mut self,
         key: &str,
@@ -344,7 +463,8 @@ impl Client {
         self.ranged("ZRANGEBYLEX", key, min, max, limit)
     }
 
-    /// Sends `ZREVRANGEBYLEX key max min [LIMIT offset count]`: the high bound comes first.
+    /// Sends `ZREVRANGEBYLEX key max min [LIMIT offset count]`: highest first. Note the order of
+    /// bounds: `max` comes first. Other arguments as [`Client::zrangebylex`].
     pub fn zrevrangebylex(
         &mut self,
         key: &str,
@@ -356,6 +476,9 @@ impl Client {
     }
 
     /// Sends `ZRANGEBYSCORE key min max [LIMIT offset count]` without scores.
+    ///
+    /// `min`/`max` are score text (`"10"`, `"-inf"`, `"+inf"`, `"(10"` for exclusive). `limit` as
+    /// for [`Client::zrangebylex`]. See [`Client::zrange_by_score_with_scores`] for scores.
     pub fn zrange_by_score(
         &mut self,
         key: &str,
@@ -366,8 +489,23 @@ impl Client {
         self.ranged("ZRANGEBYSCORE", key, min, max, limit)
     }
 
-    /// Sends `ZRANGE key start stop [BYSCORE|BYLEX] [REV] [LIMIT offset count]`.
-    /// `start` and `stop` are sent as given.
+    /// Sends the unified `ZRANGE key start stop [BYSCORE|BYLEX] [REV] [LIMIT offset count]`.
+    ///
+    /// `start` and `stop` are sent exactly as given, and what they mean depends on
+    /// `options.by` ([`RangeBy`]): ranks, scores or lex bounds. With `rev` the bounds must be
+    /// given high first, as Redis does. `limit` is allowed only with `Score` or `Lex`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let options = RangeOptions { by: RangeBy::Score, limit: Some((0, 10)), ..Default::default() };
+    /// let members = client.zrange_query("board", "(50", "+inf", options)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn zrange_query(
         &mut self,
         key: &str,
@@ -384,7 +522,7 @@ impl Client {
         self.strings(&arguments[..count])
     }
 
-    /// [`Self::zrange_query`] with `WITHSCORES`.
+    /// [`Client::zrange_query`] with `WITHSCORES`: returns members with their scores.
     pub fn zrange_query_with_scores(
         &mut self,
         key: &str,
@@ -401,7 +539,8 @@ impl Client {
         scored(self.run(&arguments[..count])?)
     }
 
-    /// Sends `ZSCAN key cursor [MATCH pattern] [COUNT n]`. See [`Self::zscan_iter`].
+    /// Sends `ZSCAN`: one page of a sorted-set walk (members and scores). See
+    /// [`Client::scan`] for arguments and [`Client::zscan_iter`] for the loop.
     pub fn zscan(
         &mut self,
         key: &str,
@@ -417,17 +556,18 @@ impl Client {
         })
     }
 
-    /// Sends `ZCOUNT key min max`. Bounds accept `-inf`, `+inf` and `(` for exclusive.
+    /// Sends `ZCOUNT`: members with a score between `min` and `max` (score text; `-inf`, `+inf`,
+    /// `(` for exclusive).
     pub fn zcount(&mut self, key: &str, min: &str, max: &str) -> Result<i64, Error> {
         self.integer(["ZCOUNT", key, min, max])
     }
 
-    /// Sends `ZLEXCOUNT key min max`.
+    /// Sends `ZLEXCOUNT`: members in a lex range (`-`, `+`, `[m`, `(m`).
     pub fn zlexcount(&mut self, key: &str, min: &str, max: &str) -> Result<i64, Error> {
         self.integer(["ZLEXCOUNT", key, min, max])
     }
 
-    /// Sends `ZMSCORE`: one score per member, `None` when missing.
+    /// Sends `ZMSCORE`: one score per member, `None` when the member is missing.
     pub fn zmscore(&mut self, key: &str, members: &[&str]) -> Result<Vec<Option<f64>>, Error> {
         self.optional_strings(prefixed(&["ZMSCORE", key], members))?
             .into_iter()
@@ -435,7 +575,10 @@ impl Client {
             .collect()
     }
 
-    /// Sends `ZUNIONSTORE destination numkeys key... [WEIGHTS ...] [AGGREGATE ...]`.
+    /// Sends `ZUNIONSTORE`: stores the union of sorted sets in `destination` and returns its size.
+    ///
+    /// `combine` ([`SortedSetCombine`]) sets per-input `weights` and the `aggregate` rule (sum,
+    /// min, max). All keys in one slot.
     pub fn zunionstore(
         &mut self,
         destination: &str,
@@ -445,7 +588,8 @@ impl Client {
         self.combine_store("ZUNIONSTORE", destination, keys, combine)
     }
 
-    /// Sends `ZINTERSTORE destination numkeys key... [WEIGHTS ...] [AGGREGATE ...]`.
+    /// Sends `ZINTERSTORE`: stores the intersection (members in every input) and returns its
+    /// size. `combine` as for [`Client::zunionstore`].
     pub fn zinterstore(
         &mut self,
         destination: &str,
@@ -455,12 +599,14 @@ impl Client {
         self.combine_store("ZINTERSTORE", destination, keys, combine)
     }
 
-    /// Sends `ZDIFFSTORE destination numkeys key...`.
+    /// Sends `ZDIFFSTORE`: stores the members of the first set that are in none of the others;
+    /// returns the size.
     pub fn zdiffstore(&mut self, destination: &str, keys: &[&str]) -> Result<i64, Error> {
         self.combine_store("ZDIFFSTORE", destination, keys, SortedSetCombine::default())
     }
 
-    /// Sends `ZUNION numkeys key... [WEIGHTS ...] [AGGREGATE ...]` and returns the members.
+    /// Sends `ZUNION`: members of the union without storing. `combine` as for
+    /// [`Client::zunionstore`]; use [`Client::zunion_with_scores`] to read scores.
     pub fn zunion(
         &mut self,
         keys: &[&str],
@@ -470,7 +616,7 @@ impl Client {
             .and_then(members_only)
     }
 
-    /// [`Self::zunion`] with `WITHSCORES`.
+    /// [`Client::zunion`] with `WITHSCORES`.
     pub fn zunion_with_scores(
         &mut self,
         keys: &[&str],
@@ -479,7 +625,7 @@ impl Client {
         scored(self.combine_read("ZUNION", keys, combine, true)?)
     }
 
-    /// Sends `ZINTER numkeys key... [WEIGHTS ...] [AGGREGATE ...]` and returns the members.
+    /// Sends `ZINTER`: members present in every set. `combine` as for [`Client::zunionstore`].
     pub fn zinter(
         &mut self,
         keys: &[&str],
@@ -489,7 +635,7 @@ impl Client {
             .and_then(members_only)
     }
 
-    /// [`Self::zinter`] with `WITHSCORES`.
+    /// [`Client::zinter`] with `WITHSCORES`.
     pub fn zinter_with_scores(
         &mut self,
         keys: &[&str],
@@ -498,30 +644,32 @@ impl Client {
         scored(self.combine_read("ZINTER", keys, combine, true)?)
     }
 
-    /// Sends `ZDIFF numkeys key...`: members of the first set missing from the rest.
+    /// Sends `ZDIFF`: members of the first set missing from the rest.
     pub fn zdiff(&mut self, keys: &[&str]) -> Result<Vec<String>, Error> {
         self.combine_read("ZDIFF", keys, SortedSetCombine::default(), false)
             .and_then(members_only)
     }
 
-    /// [`Self::zdiff`] with `WITHSCORES`.
+    /// [`Client::zdiff`] with `WITHSCORES`.
     pub fn zdiff_with_scores(&mut self, keys: &[&str]) -> Result<Vec<SortedSetEntry>, Error> {
         scored(self.combine_read("ZDIFF", keys, SortedSetCombine::default(), true)?)
     }
 
-    /// Sends `ZRANDMEMBER key`: one random member, `None` for a missing key.
+    /// Sends `ZRANDMEMBER`: one random member, `None` for a missing key.
     pub fn zrandmember(&mut self, key: &str) -> Result<Option<String>, Error> {
         self.bulk_or_null(["ZRANDMEMBER", key])
     }
 
-    /// Sends `ZRANDMEMBER key count`. A negative count may repeat members.
+    /// Sends `ZRANDMEMBER key count`. Positive `count`: up to `count` distinct members. Negative:
+    /// exactly `|count|` members, may repeat (limit 1,048,576).
     pub fn zrandmember_count(&mut self, key: &str, count: i64) -> Result<Vec<String>, Error> {
         let count = Num::int(count);
 
         self.strings(["ZRANDMEMBER", key, count.as_str()])
     }
 
-    /// Sends `ZRANDMEMBER key count WITHSCORES`.
+    /// Sends `ZRANDMEMBER key count WITHSCORES`. Count semantics as
+    /// [`Client::zrandmember_count`].
     pub fn zrandmember_with_scores(
         &mut self,
         key: &str,
@@ -534,19 +682,21 @@ impl Client {
 
     // ---- hashes ----------------------------------------------------------------------------
 
-    /// Sends `HRANDFIELD key`: one random field, `None` for a missing key.
+    /// Sends `HRANDFIELD`: one random field, `None` for a missing key.
     pub fn hrandfield(&mut self, key: &str) -> Result<Option<String>, Error> {
         self.bulk_or_null(["HRANDFIELD", key])
     }
 
-    /// Sends `HRANDFIELD key count`. A negative count may repeat fields.
+    /// Sends `HRANDFIELD key count`. Positive: distinct fields; negative: `|count|` fields,
+    /// repeats allowed.
     pub fn hrandfield_count(&mut self, key: &str, count: i64) -> Result<Vec<String>, Error> {
         let count = Num::int(count);
 
         self.strings(["HRANDFIELD", key, count.as_str()])
     }
 
-    /// Sends `HRANDFIELD key count WITHVALUES`.
+    /// Sends `HRANDFIELD key count WITHVALUES`: random `(field, value)` pairs; count as
+    /// [`Client::hrandfield_count`].
     pub fn hrandfield_with_values(
         &mut self,
         key: &str,
@@ -558,7 +708,8 @@ impl Client {
         Ok(pair_up(flat))
     }
 
-    /// Sends `HINCRBYFLOAT` and returns the new value.
+    /// Sends `HINCRBYFLOAT`: adds a decimal to a field (missing counts as 0) and returns the new
+    /// value.
     pub fn hincr_by_float(&mut self, key: &str, field: &str, delta: f64) -> Result<f64, Error> {
         let delta = Num::float(delta);
 
@@ -567,7 +718,11 @@ impl Client {
 
     // ---- bitmaps ---------------------------------------------------------------------------
 
-    /// Sends `SETBIT` and returns the previous bit.
+    /// Sends `SETBIT`: sets one bit and returns its **previous** value.
+    ///
+    /// # Arguments
+    /// * `offset` - bit index from the start; must be below 134,217,728 (strings are capped at
+    ///   16 MiB). The string grows with zero bytes as needed; a TTL is kept.
     pub fn setbit(&mut self, key: &str, offset: u64, value: bool) -> Result<bool, Error> {
         let offset = Num::uint(offset);
 
@@ -579,14 +734,14 @@ impl Client {
         ])
     }
 
-    /// Sends `GETBIT`.
+    /// Sends `GETBIT`: the bit at `offset`; `false` beyond the end or for a missing key.
     pub fn getbit(&mut self, key: &str, offset: u64) -> Result<bool, Error> {
         let offset = Num::uint(offset);
 
         self.flag(["GETBIT", key, offset.as_str()])
     }
 
-    /// Sends `BITCOUNT key`: set bits in the whole string.
+    /// Sends `BITCOUNT key`: number of set bits in the whole string (0 for a missing key).
     pub fn bitcount(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["BITCOUNT", key])
     }
@@ -610,7 +765,7 @@ impl Client {
         ])
     }
 
-    /// Sends `BITPOS key bit`: the first bit set to `bit`, or -1.
+    /// Sends `BITPOS key bit`: index of the first bit equal to `bit`, or `-1` if none.
     pub fn bitpos(&mut self, key: &str, bit: bool) -> Result<i64, Error> {
         self.integer(["BITPOS", key, if bit { "1" } else { "0" }])
     }
@@ -659,17 +814,18 @@ impl Client {
 
     // ---- HyperLogLog -----------------------------------------------------------------------
 
-    /// Sends `PFADD`. True when the estimate changed.
+    /// Sends `PFADD`: adds elements to a HyperLogLog. `true` when the estimate changed.
     pub fn pfadd(&mut self, key: &str, elements: &[&str]) -> Result<bool, Error> {
         self.flag(prefixed(&["PFADD", key], elements))
     }
 
-    /// Sends `PFCOUNT`: the estimate, or the union estimate of several keys (same slot).
+    /// Sends `PFCOUNT`: the estimated number of distinct elements; with several keys, the
+    /// estimate of their union (keys in one slot). Standard error is about 0.8%.
     pub fn pfcount(&mut self, keys: &[&str]) -> Result<i64, Error> {
         self.integer(prefixed(&["PFCOUNT"], keys))
     }
 
-    /// Sends `PFMERGE destination source...`.
+    /// Sends `PFMERGE`: merges source HyperLogLogs into `destination`. Same slot.
     pub fn pfmerge(&mut self, destination: &str, sources: &[&str]) -> Result<(), Error> {
         self.ok(prefixed(&["PFMERGE", destination], sources))
     }
@@ -677,6 +833,10 @@ impl Client {
     // ---- Bloom filters ---------------------------------------------------------------------
 
     /// Sends `BF.RESERVE key error capacity [EXPANSION n] [NONSCALING]`.
+    ///
+    /// `options.expansion` sets the growth factor of each new layer (default 2). With
+    /// `non_scaling` the filter keeps one layer and returns an error once it is full. Other
+    /// arguments as [`Client::bf_reserve`].
     pub fn bf_reserve_with(
         &mut self,
         key: &str,
@@ -712,12 +872,17 @@ impl Client {
         self.ok(&arguments[..count])
     }
 
-    /// Sends `BF.MADD key item...`: per item, true when it was added (false: maybe present).
+    /// Sends `BF.MADD`: adds several items; per item `true` when added, `false` when it may
+    /// already have been present.
     pub fn bf_madd(&mut self, key: &str, items: &[&str]) -> Result<Vec<bool>, Error> {
         flags("BF.MADD", self.run(prefixed(&["BF.MADD", key], items))?)
     }
 
-    /// Sends `BF.INSERT key [CAPACITY c] [ERROR e] [EXPANSION x] [NOCREATE] [NONSCALING] ITEMS item...`.
+    /// Sends `BF.INSERT`: adds items, optionally creating the filter.
+    ///
+    /// The creation options in [`BloomInsertOptions`] (`capacity`, `error_rate`, `expansion`,
+    /// `non_scaling`) apply only when the key is new; with `no_create` a missing key is an error.
+    /// Returns one flag per item as [`Client::bf_madd`].
     pub fn bf_insert(
         &mut self,
         key: &str,
@@ -757,7 +922,8 @@ impl Client {
         flags("BF.INSERT", self.run(arguments)?)
     }
 
-    /// Sends `BF.INFO key` and reads every field.
+    /// Sends `BF.INFO` and returns all fields as [`BloomInfo`] (capacity, size in bytes, layers,
+    /// items, expansion). Error when the key does not exist.
     pub fn bf_info(&mut self, key: &str) -> Result<BloomInfo, Error> {
         let reply = self.execute(&["BF.INFO", key])?;
         let Some(items) = reply.as_array() else {
@@ -781,7 +947,11 @@ impl Client {
         Ok(info)
     }
 
-    /// Sends `BF.INFO key field` (`CAPACITY`, `SIZE`, `FILTERS`, `ITEMS`, `EXPANSION`).
+    /// Sends `BF.INFO key field` for one field.
+    ///
+    /// # Arguments
+    /// * `field` - `CAPACITY`, `SIZE`, `FILTERS`, `ITEMS` or `EXPANSION`.
+    ///
     /// `None` for the expansion of a non-scaling filter.
     pub fn bf_info_field(&mut self, key: &str, field: &str) -> Result<Option<i64>, Error> {
         self.run_with(["BF.INFO", key, field], |command, reply| match reply {
@@ -795,12 +965,12 @@ impl Client {
         })
     }
 
-    /// Sends `BF.CARD`: items added so far; 0 for a missing key.
+    /// Sends `BF.CARD`: items added so far; `0` for a missing key.
     pub fn bf_card(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["BF.CARD", key])
     }
 
-    /// Sends `BF.MEXISTS key item...`: per item, true for "maybe added".
+    /// Sends `BF.MEXISTS`: per item, `true` for "probably added", `false` for "never added".
     pub fn bf_mexists(&mut self, key: &str, items: &[&str]) -> Result<Vec<bool>, Error> {
         flags(
             "BF.MEXISTS",
@@ -810,7 +980,11 @@ impl Client {
 
     // ---- JSON ------------------------------------------------------------------------------
 
-    /// Sends `JSON.SET key path json [NX|XX]`. False when the condition or path stopped the write.
+    /// Sends `JSON.SET key path json [NX|XX]`.
+    ///
+    /// `condition` ([`JsonSetCondition`]): `IfMissing` writes only when the path does not exist,
+    /// `IfExists` only when it does. Returns `false` when the condition or an unreachable path
+    /// stopped the write. Other arguments as [`Client::json_set`].
     pub fn json_set_with(
         &mut self,
         key: &str,
@@ -827,13 +1001,15 @@ impl Client {
         Ok(!reply.is_null())
     }
 
-    /// Sends `JSON.OBJLEN`. `None` when the key or path is missing.
+    /// Sends `JSON.OBJLEN`: number of members of the object at `path`; `None` when absent.
     pub fn json_objlen(&mut self, key: &str, path: &str) -> Result<Option<i64>, Error> {
         self.optional_integer(["JSON.OBJLEN", key, path])
     }
 
-    /// Sends `JSON.STRAPPEND key path json-string` (pass the quoted JSON string, e.g. `"\"ab\""`).
-    /// Returns the new byte length.
+    /// Sends `JSON.STRAPPEND`: appends to the JSON string at `path`.
+    ///
+    /// `json_string` must be a quoted JSON string, e.g. `"\"ab\""`. Returns the new length, or
+    /// `None` when absent.
     pub fn json_strappend(
         &mut self,
         key: &str,
@@ -843,7 +1019,8 @@ impl Client {
         self.optional_integer(["JSON.STRAPPEND", key, path, json_string])
     }
 
-    /// Sends `JSON.NUMMULTBY` and returns the new number as JSON text.
+    /// Sends `JSON.NUMMULTBY`: multiplies the number at `path` and returns the new number as JSON
+    /// text; `None` when absent.
     pub fn json_nummultby(
         &mut self,
         key: &str,
@@ -855,7 +1032,8 @@ impl Client {
         self.bulk_or_null(["JSON.NUMMULTBY", key, path, by.as_str()])
     }
 
-    /// Sends `JSON.ARRAPPEND key path json...` with several values; returns the new length.
+    /// Sends `JSON.ARRAPPEND` with several JSON values (each valid JSON text); returns the new
+    /// array length, `None` when absent.
     pub fn json_arrappend_many(
         &mut self,
         key: &str,
@@ -865,7 +1043,8 @@ impl Client {
         self.optional_integer(prefixed(&["JSON.ARRAPPEND", key, path], values))
     }
 
-    /// Sends `JSON.ARRINSERT key path index json...`; returns the new length.
+    /// Sends `JSON.ARRINSERT`: inserts JSON values before `index` (negative counts from the end).
+    /// Returns the new length, `None` when absent.
     pub fn json_arrinsert(
         &mut self,
         key: &str,
@@ -881,8 +1060,9 @@ impl Client {
         ))
     }
 
-    /// Sends `JSON.ARRPOP key path [index]` and returns the popped value as JSON text.
-    /// `None` for an empty array or a missing key. `index` defaults to -1 (the last element).
+    /// Sends `JSON.ARRPOP`: removes and returns an element as JSON text.
+    ///
+    /// `index` defaults to -1 (the last element). `None` for an empty array or a missing key.
     pub fn json_arrpop(
         &mut self,
         key: &str,
@@ -895,7 +1075,8 @@ impl Client {
         }
     }
 
-    /// Sends `JSON.ARRTRIM key path start stop` (inclusive) and returns the new length.
+    /// Sends `JSON.ARRTRIM`: keeps only elements `start..=stop` (inclusive) and returns the new
+    /// length; `None` when absent.
     pub fn json_arrtrim(
         &mut self,
         key: &str,
@@ -908,8 +1089,10 @@ impl Client {
         self.optional_integer(["JSON.ARRTRIM", key, path, start.as_str(), stop.as_str()])
     }
 
-    /// Sends `JSON.ARRINDEX key path scalar [start [stop]]`. `scalar` is JSON text (`"\"a\""`, `1`).
-    /// Returns the index or -1.
+    /// Sends `JSON.ARRINDEX`: index of the first array element equal to `scalar`.
+    ///
+    /// `scalar` is JSON text (`"\"a\""`, `1`, `true`). `start`/`stop` optionally limit the search.
+    /// Returns the index or `-1` when not found; `None` when the key or path is absent.
     pub fn json_arrindex(
         &mut self,
         key: &str,
@@ -937,18 +1120,39 @@ impl Client {
         }
     }
 
-    /// Sends `JSON.FORGET`, the alias of `JSON.DEL`.
+    /// Sends `JSON.FORGET`, the alias of [`Client::json_del`].
     pub fn json_forget(&mut self, key: &str, path: &str) -> Result<i64, Error> {
         self.integer(["JSON.FORGET", key, path])
     }
 
-    /// Sends `JMERGE`, the alias of `JSON.MERGE`.
+    /// Sends `JMERGE`, the alias of [`Client::json_merge`].
     pub fn jmerge(&mut self, key: &str, path: &str, patch: &str) -> Result<bool, Error> {
         Ok(!self.execute(&["JMERGE", key, path, patch])?.is_null())
     }
 
-    /// Sends `JSON.INDEX CREATE name PREFIX prefix PATH path [TYPE string|number|bool]`
-    /// (Ruvio extension): an exact-equality index on one field, database 0 only.
+    /// Sends `JSON.INDEX CREATE` (Ruvio): an exact-equality index on one scalar field of JSON
+    /// keys.
+    ///
+    /// # Arguments
+    /// * `name` - index name (used by `json_find`).
+    /// * `prefix` - only keys starting with this prefix are indexed.
+    /// * `path` - the field, e.g. `$.status`.
+    /// * `kind` - `None` or a [`JsonIndexType`] (`string`, `number`, `bool`).
+    ///
+    /// The index is built in the background (`index is building` until done), follows writes,
+    /// lives in memory (rebuilt at startup) and exists for database 0 only.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.json_index_create("by_status", "order:", "$.status", Some(JsonIndexType::String))?;
+    /// let keys = client.json_find("by_status", "paid", Some(100), None)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn json_index_create(
         &mut self,
         name: &str,
@@ -976,20 +1180,26 @@ impl Client {
         }
     }
 
-    /// Sends `JSON.INDEX DROP name`. True when the index existed.
+    /// Sends `JSON.INDEX DROP`: `true` if the index existed.
     pub fn json_index_drop(&mut self, name: &str) -> Result<bool, Error> {
         self.flag(["JSON.INDEX", "DROP", name])
     }
 
-    /// Sends `JSON.INDEX LIST`: one description line per index
-    /// (`name prefix=... path=... type=... state=... keys=... memory=...`).
+    /// Sends `JSON.INDEX LIST`: one description line per index (name, prefix, path, type, state,
+    /// keys, memory). On a sharded server, one line per shard.
     pub fn json_index_list(&mut self) -> Result<Vec<String>, Error> {
         self.strings(["JSON.INDEX", "LIST"])
     }
 
-    /// Sends `JSON.FIND name VALUE value [COUNT n] [AFTER key]`: matching keys in ascending
-    /// order. Page with `after` = the last key of the previous page. Errors with
-    /// `index is building` until the first build finishes.
+    /// Sends `JSON.FIND name VALUE value [COUNT n] [AFTER key]`: keys whose indexed field equals
+    /// `value`.
+    ///
+    /// # Arguments
+    /// * `value` - the field value as plain text: a string without quotes (`paid`), a number as
+///   digits (`7`), a bool as `true`/`false`.
+    /// * `count` - page size. `after` - the last key of the previous page, for paging.
+    ///
+    /// Keys come back in ascending order. Error `index is building` until the first build ends.
     pub fn json_find(
         &mut self,
         name: &str,
@@ -1018,8 +1228,12 @@ impl Client {
 
     // ---- geo -------------------------------------------------------------------------------
 
-    /// Sends `GEOADD key [NX|XX] [CH] lon lat member...`. Only `if_not_exists`, `if_exists`
-    /// and `changed` of `options` apply.
+    /// Sends `GEOADD key [NX|XX] [CH] lon lat member...`.
+    ///
+    /// Only `if_not_exists` (`NX`), `if_exists` (`XX`) and `changed` (`CH`) of
+    /// [`SortedSetAddOptions`] apply; the other flags are ignored. Places as [`Client::geo_add`]
+    /// (longitude first; longitude -180..180, latitude -85.05112878..85.05112878). Without `CH`
+    /// the result counts new members only; with `CH` also moved ones.
     pub fn geo_add_with(
         &mut self,
         key: &str,
@@ -1123,8 +1337,12 @@ impl Client {
 
     // ---- Ruvio jobs ------------------------------------------------------------------------
 
-    /// Sends `IDEM key BEGIN fingerprint owner ttl_ms` and decodes the state.
-    /// See [`Self::idempotent`] for the full run-once flow.
+    /// Sends `IDEM key BEGIN fingerprint owner ttl_ms` and decodes the answer into an
+    /// [`IdemState`]. See [`Client::idempotent`] for the complete run-once flow, or
+    /// [`Client::idempotency_begin`] for the raw reply and argument limits.
+    ///
+    /// # Arguments
+    /// * `ttl` - retention, 1 ms to 7 days.
     pub fn idem_begin(
         &mut self,
         key: &str,
@@ -1138,8 +1356,11 @@ impl Client {
         idem_state(reply)
     }
 
-    /// Sends `IDEM key COMPLETE fingerprint owner result`. True when the result was published
-    /// (or an identical result was already stored).
+    /// Sends `IDEM key COMPLETE fingerprint owner result`.
+    ///
+    /// `result` is binary-safe, at most 4 MiB. Returns `true` when published (or an identical
+    /// result was already stored), `false` when the record is gone, owned by someone else, or
+    /// already completed with a different result.
     pub fn idem_complete(
         &mut self,
         key: &str,
