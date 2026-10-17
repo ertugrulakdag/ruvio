@@ -9,33 +9,60 @@ import (
 
 // ---- strings ---------------------------------------------------------------
 
-// Get returns the string at key; ok is false when the key is missing.
+// Get returns the string stored at key (GET).
+//
+// ok is false, with an empty string and a nil error, when the key does not exist or has
+// expired. A key that holds another type (list, hash, JSON ...) returns a *Error with
+// prefix WRONGTYPE. A cancelled or expired ctx returns ctx.Err().
+//
+//	v, ok, err := c.Get(ctx, "greeting")
+//	if err != nil {
+//	    return err
+//	}
+//	if !ok {
+//	    // key is missing
+//	}
 func (c *cmds) Get(ctx context.Context, key string) (string, bool, error) {
 	return c.strNil(ctx, newCmd(2, cGET).s(key))
 }
 
-// GetBytes is the binary form of Get.
+// GetBytes is Get for binary values: the returned slice is a copy owned by the caller.
+// It sends GET and reports a missing key as ok == false, like Get.
 func (c *cmds) GetBytes(ctx context.Context, key string) ([]byte, bool, error) {
 	return c.bytesNil(ctx, newCmd(2, cGET).s(key))
 }
 
-// Set writes value with no options.
+// Set stores value at key (SET key value), replacing any value of any type and clearing
+// an existing TTL. It returns nil on success. Use SetArgs to add an expiry or a NX/XX
+// condition. Keys and values over the server limits (1 MiB and 16 MiB by default) are
+// refused with a server error.
 func (c *cmds) Set(ctx context.Context, key, value string) error {
 	return c.ok(ctx, newCmd(3, cSET).s(key).s(value))
 }
 
-// SetBytes is the binary form of Set.
+// SetBytes is Set for binary values (SET key value with value sent as raw bytes).
 func (c *cmds) SetBytes(ctx context.Context, key string, value []byte) error {
 	return c.ok(ctx, newCmd(3, cSET).s(key).b(value))
 }
 
-// SetOptions are the SET modifiers. TTL is sent as PX, ExpireAt as PXAT.
+// SetOptions are the modifiers of SET. The zero value sends a plain SET.
+//
+// Expiry fields are mutually exclusive and are checked in this order: TTL, then
+// ExpireAt, then KeepTTL; the first one that is set wins and the others are ignored.
 type SetOptions struct {
-	TTL      time.Duration
+	// TTL is a relative expiry, sent as PX in milliseconds (rounded up to at least
+	// 1 ms). Zero or negative means no TTL option.
+	TTL time.Duration
+	// ExpireAt is an absolute expiry, sent as PXAT in Unix milliseconds. The zero
+	// time means none. Ignored when TTL is set.
 	ExpireAt time.Time
-	KeepTTL  bool
-	NX       bool
-	XX       bool
+	// KeepTTL keeps the key's current TTL instead of clearing it (KEEPTTL).
+	// Ignored when TTL or ExpireAt is set.
+	KeepTTL bool
+	// NX writes only if the key does not exist. It wins over XX.
+	NX bool
+	// XX writes only if the key already exists.
+	XX bool
 }
 
 func (o *SetOptions) count() int {
@@ -67,7 +94,20 @@ func (o *SetOptions) append(r *request) {
 	}
 }
 
-// SetArgs runs SET with options. It returns false when NX/XX prevented the write.
+// SetArgs runs SET key value with the given options and reports whether the value was
+// written.
+//
+// TTL > 0 sends PX with the duration in milliseconds (a sub-millisecond TTL is rounded
+// up to 1 ms). A non-zero ExpireAt sends PXAT with the absolute time in Unix
+// milliseconds. KeepTTL sends KEEPTTL so an existing TTL survives the overwrite. NX
+// writes only when the key does not exist and XX only when it does; if both are set, NX
+// wins. With no expiry option the write clears an existing TTL.
+//
+// It returns false, with a nil error, when NX or XX prevented the write. A TTL of zero
+// or less is ignored (no expiry option is sent). An expiry the server rejects returns a
+// *Error such as "ERR invalid expire time in 'set' command".
+//
+//	ok, err := c.SetArgs(ctx, "session:42", token, ruvio.SetOptions{TTL: 30 * time.Minute, NX: true})
 func (c *cmds) SetArgs(ctx context.Context, key, value string, o SetOptions) (bool, error) {
 	v, err := c.value(ctx, o.build(cSET, key, value, false))
 	return err == nil && v.Kind != KindNil, err
@@ -86,13 +126,25 @@ func (o *SetOptions) build(name []byte, key, value string, get bool) *request {
 	return r
 }
 
-// SetGet runs SET ... GET and returns the previous value.
+// SetGet runs SET key value ... GET and returns the previous value. old is "" and ok is
+// false when the key did not exist. The options are those of SetArgs. The new value is
+// written unless NX or XX prevented it, in which case the current value is still
+// returned. A previous value of a non-string type returns WRONGTYPE and nothing is
+// written.
 func (c *cmds) SetGet(ctx context.Context, key, value string, o SetOptions) (string, bool, error) {
 	return c.strNil(ctx, o.build(cSET, key, value, true))
 }
 
-// SetIfEq writes value only when the current string equals expected (Ruvio
-// `SET key value IFEQ expected`). TTL, ExpireAt and KeepTTL apply; NX/XX are ignored.
+// SetIfEq is a compare-and-set (Ruvio extension, SET key value IFEQ expected): it writes
+// value only when the string at key currently equals expected, and reports whether it
+// wrote.
+//
+// The result is false, with a nil error, when the key is missing or holds a different
+// string. TTL, ExpireAt and KeepTTL in o apply to the write; NX and XX are ignored
+// because IFEQ cannot be combined with them. A key that holds a non-string returns
+// WRONGTYPE. Lock.Refresh uses this command.
+//
+//	swapped, err := c.SetIfEq(ctx, "config:version", "v2", "v1", ruvio.SetOptions{})
 func (c *cmds) SetIfEq(ctx context.Context, key, value, expected string, o SetOptions) (bool, error) {
 	o.NX, o.XX = false, false
 	r := newCmd(5+o.count(), cSET).s(key).s(value).t(tIFEQ).s(expected)
@@ -101,111 +153,184 @@ func (c *cmds) SetIfEq(ctx context.Context, key, value, expected string, o SetOp
 	return err == nil && v.Kind != KindNil, err
 }
 
-// SetEX is SETEX key seconds value.
+// SetEX stores value with a TTL given in whole seconds (SETEX key seconds value). The
+// duration is truncated to seconds, so a ttl below one second becomes 0 and the server
+// returns "ERR invalid expire time in 'setex' command". Use PSetEX or SetArgs for
+// sub-second TTLs.
 func (c *cmds) SetEX(ctx context.Context, key, value string, ttl time.Duration) error {
 	return c.ok(ctx, newCmd(4, cSETEX).s(key).i(int64(ttl/time.Second)).s(value))
 }
 
-// PSetEX is PSETEX key milliseconds value.
+// PSetEX stores value with a TTL in milliseconds (PSETEX key ms value). A
+// sub-millisecond ttl is rounded up to 1 ms; zero or negative values are rejected by the
+// server with "invalid expire time".
 func (c *cmds) PSetEX(ctx context.Context, key, value string, ttl time.Duration) error {
 	return c.ok(ctx, newCmd(4, cPSETEX).s(key).i(ms(ttl)).s(value))
 }
 
-// SetNX returns true when it wrote.
+// SetNX writes value only when key does not exist (SETNX). It returns true when it wrote
+// and false when the key already existed (of any type).
 func (c *cmds) SetNX(ctx context.Context, key, value string) (bool, error) {
 	return c.boolR(ctx, newCmd(3, cSETNX).s(key).s(value))
 }
 
-// MGet returns one nullable value per key.
+// MGet returns the values of keys (MGET), in order. The result has one NullString per
+// key; Valid is false for a missing key and also for a key that holds a non-string (MGET
+// never returns WRONGTYPE).
+//
+// In cluster mode keys in different slots are fetched with one command per slot and
+// merged in key order; this is not atomic. A hash tag such as "{user:1}:name" keeps keys
+// on one shard.
+//
+//	vals, err := c.MGet(ctx, "a", "b")
+//	if err == nil && vals[0].Valid {
+//	    fmt.Println(vals[0].Val)
+//	}
 func (c *cmds) MGet(ctx context.Context, keys ...string) ([]NullString, error) {
 	return c.nullStrs(ctx, newCmd(1+len(keys), cMGET).ss(keys))
 }
 
-// MSet writes key, value, key, value...
+// MSet writes pairs (MSET): keyValues is key1, value1, key2, value2 ... An odd number of
+// arguments is a server error. Existing TTLs are cleared. In cluster mode pairs are sent
+// per slot and the call is not atomic: a failure can leave some pairs written.
+//
+//	err := c.MSet(ctx, "a", "1", "b", "2")
 func (c *cmds) MSet(ctx context.Context, keyValues ...string) error {
 	return c.ok(ctx, newCmd(1+len(keyValues), cMSET).ss(keyValues))
 }
 
-// MSetNX writes every pair only when none of the keys exist.
+// MSetNX writes all pairs only when none of the keys exist (MSETNX): keyValues is key1,
+// value1, key2, value2 ... It returns true when every pair was written and false
+// (nothing written) when at least one key already existed. The keys must share a hash
+// slot in cluster mode, otherwise the call fails with ErrCrossSlot (MSETNX is not split
+// across slots).
 func (c *cmds) MSetNX(ctx context.Context, keyValues ...string) (bool, error) {
 	return c.boolR(ctx, newCmd(1+len(keyValues), cMSETNX).ss(keyValues))
 }
 
-// GetSet sets and returns the old value.
+// GetSet sets key to value and returns the old value (GETSET). ok is false when the key
+// did not exist. The TTL is cleared. A non-string key returns WRONGTYPE.
 func (c *cmds) GetSet(ctx context.Context, key, value string) (string, bool, error) {
 	return c.strNil(ctx, newCmd(3, cGETSET).s(key).s(value))
 }
 
-// GetDel returns and removes the value.
+// GetDel returns the value at key and deletes the key (GETDEL). ok is false when the key
+// did not exist. A non-string key returns WRONGTYPE.
 func (c *cmds) GetDel(ctx context.Context, key string) (string, bool, error) {
 	return c.strNil(ctx, newCmd(2, cGETDEL).s(key))
 }
 
-// GetEx returns the string and sets its deadline to now + ttl (Ruvio: milliseconds).
+// GetEx returns the string at key and sets its expiry to now + ttl (Ruvio GETEX key ms).
+// ok is false, and nothing changes, when the key does not exist.
+//
+// Unlike Redis, Ruvio's GETEX takes one TTL in milliseconds and always sets it; there is
+// no PERSIST form. ttl must be at least 1 ms (a sub-millisecond value is rounded up);
+// zero or negative values return "GETEX TTL must be a positive integer". A non-string
+// key returns WRONGTYPE. A plain Get does not touch the TTL.
 func (c *cmds) GetEx(ctx context.Context, key string, ttl time.Duration) (string, bool, error) {
 	return c.strNil(ctx, newCmd(3, cGETEX).s(key).i(ms(ttl)))
 }
 
-// Append returns the new length.
+// Append appends value to the string at key and returns the new length (APPEND). A
+// missing key is created, as with Set. An existing TTL is kept. A non-string key returns
+// WRONGTYPE.
 func (c *cmds) Append(ctx context.Context, key, value string) (int64, error) {
 	return c.intR(ctx, newCmd(3, cAPPEND).s(key).s(value))
 }
 
-// StrLen returns the string length.
+// StrLen returns the byte length of the string at key (STRLEN), or 0 when the key does
+// not exist. A non-string key returns WRONGTYPE.
 func (c *cmds) StrLen(ctx context.Context, key string) (int64, error) {
 	return c.intR(ctx, newCmd(2, cSTRLEN).s(key))
 }
 
-// Incr increments by one.
+// Incr increments the integer stored at key by one (INCR) and returns the new value. A
+// missing key counts as 0, so the first call returns 1. An existing TTL is kept. The
+// value must be a signed 64-bit decimal integer; otherwise the server returns "ERR value
+// is not an integer or out of range" (also on overflow) and the value is unchanged. A
+// non-string key returns WRONGTYPE.
 func (c *cmds) Incr(ctx context.Context, key string) (int64, error) {
 	return c.intR(ctx, newCmd(2, cINCR).s(key))
 }
 
-// Decr decrements by one.
+// Decr decrements the integer stored at key by one (DECR) and returns the new value.
+// Missing key, TTL and error behaviour are those of Incr.
 func (c *cmds) Decr(ctx context.Context, key string) (int64, error) {
 	return c.intR(ctx, newCmd(2, cDECR).s(key))
 }
 
-// IncrBy adds delta.
+// IncrBy adds delta (any signed 64-bit value) to the integer stored at key (INCRBY) and
+// returns the new value. Missing key, TTL and error behaviour are those of Incr; an
+// overflowing result is an error and leaves the value unchanged.
 func (c *cmds) IncrBy(ctx context.Context, key string, delta int64) (int64, error) {
 	return c.intR(ctx, newCmd(3, cINCRBY).s(key).i(delta))
 }
 
-// IncrByMax adds delta unless the result would pass limit (Ruvio `INCRBY key n MAX
-// limit`); ok is false and nothing is written in that case.
+// IncrByMax adds delta to the integer at key unless the result would pass limit (Ruvio
+// INCRBY key delta MAX limit). It is a counter with a ceiling in one atomic step.
+//
+// It returns the new value and ok == true when the add was applied. When the result
+// would be greater than limit, nothing is written and ok is false (new is 0). Missing
+// key, TTL and error behaviour are those of Incr.
+//
+//	n, ok, err := c.IncrByMax(ctx, "seats:left", 1, 100)
 func (c *cmds) IncrByMax(ctx context.Context, key string, delta, limit int64) (int64, bool, error) {
 	return c.intNil(ctx, newCmd(5, cINCRBY).s(key).i(delta).t(tMAX).i(limit))
 }
 
-// DecrBy subtracts delta.
+// DecrBy subtracts delta from the integer stored at key (DECRBY) and returns the new
+// value. Missing key, TTL and error behaviour are those of Incr.
 func (c *cmds) DecrBy(ctx context.Context, key string, delta int64) (int64, error) {
 	return c.intR(ctx, newCmd(3, cDECRBY).s(key).i(delta))
 }
 
-// IncrByFloat adds a float.
+// IncrByFloat adds a floating point delta to the number stored at key (INCRBYFLOAT) and
+// returns the new value. A missing key counts as 0. The sum is computed in float64 and
+// stored with 15 significant digits (Redis uses long double, so the last digits can
+// differ). The value must be a valid number, otherwise the server returns "ERR value is
+// not a valid float"; NaN is rejected and an infinite result is an error. An existing
+// TTL is kept.
 func (c *cmds) IncrByFloat(ctx context.Context, key string, delta float64) (float64, error) {
 	return c.floatR(ctx, newCmd(3, cINCRBYFLOAT).s(key).f(delta))
 }
 
-// GetRange returns a substring (inclusive ends).
+// GetRange returns the substring of the string at key between the byte offsets start and
+// end, both inclusive (GETRANGE). Negative offsets count from the end (-1 is the last
+// byte). Offsets beyond the string are clamped. A missing key, or a range that lies
+// wholly before the start of the string, returns "" with a nil error. A non-string key
+// returns WRONGTYPE.
 func (c *cmds) GetRange(ctx context.Context, key string, start, end int64) (string, error) {
 	return c.strR(ctx, newCmd(4, cGETRANGE).s(key).i(start).i(end))
 }
 
-// Substr is the GETRANGE alias.
+// Substr is the older name of GetRange (SUBSTR) and behaves identically.
 func (c *cmds) Substr(ctx context.Context, key string, start, end int64) (string, error) {
 	return c.strR(ctx, newCmd(4, cSUBSTR).s(key).i(start).i(end))
 }
 
-// SetRange overwrites at offset and returns the new length.
+// SetRange overwrites part of the string at key, starting at the byte offset, and
+// returns the new length (SETRANGE). A missing key is created; a gap between the current
+// end and offset is padded with zero bytes. offset must be >= 0 (otherwise "offset is
+// out of range") and the resulting string at most 16 MiB (a larger one is refused with a
+// server error). An existing TTL is kept. A non-string key returns WRONGTYPE.
 func (c *cmds) SetRange(ctx context.Context, key string, offset int64, value string) (int64, error) {
 	return c.intR(ctx, newCmd(4, cSETRANGE).s(key).i(offset).s(value))
 }
 
 // ---- Ruvio string extensions ----------------------------------------------
 
-// SetV writes a versioned string. version 0 creates version 1; otherwise pass the
-// current version. Returns the new version; a mismatch is a server error.
+// SetV writes a versioned string (Ruvio SETV): an optimistic-concurrency write where the
+// stored version must match what the caller last saw. It returns the new version.
+//
+// Pass version 0 (or less) to write without a version check: the call creates the key or
+// converts a plain string, and the new version is 1. Pass the current version to update
+// a versioned string; the new version is version + 1. If the key is missing, is not
+// versioned or holds a different version, the server returns "ERR version mismatch" (a
+// *Error) and nothing is written. A key of another type returns WRONGTYPE. A versioned
+// string cannot be used with Incr and friends.
+//
+//	ver, err := c.SetV(ctx, "doc:1", "first", 0)  // ver == 1
+//	ver, err = c.SetV(ctx, "doc:1", "second", ver) // ver == 2
 func (c *cmds) SetV(ctx context.Context, key, value string, version int64) (int64, error) {
 	if version <= 0 {
 		return c.intR(ctx, newCmd(3, cSETV).s(key).s(value))
@@ -213,60 +338,110 @@ func (c *cmds) SetV(ctx context.Context, key, value string, version int64) (int6
 	return c.intR(ctx, newCmd(4, cSETV).s(key).s(value).i(version))
 }
 
-// Take subtracts count when the key holds at least that many. ok is false (nothing
-// changed) on a missing key or a shortfall.
+// Take subtracts count from the integer at key only if the key holds at least that much
+// (Ruvio TAKE key count); use it for tokens, stock or quotas where the value must never
+// go negative.
+//
+// It returns the value left after the subtraction and ok == true on success. When the
+// key is missing or holds fewer than count, nothing changes and ok is false (remaining
+// is 0). count must be > 0 ("TAKE count must be a positive integer" otherwise). A value
+// that is not an integer returns "ERR value is not an integer or out of range".
 func (c *cmds) Take(ctx context.Context, key string, count int64) (remaining int64, ok bool, err error) {
 	return c.intNil(ctx, newCmd(3, cTAKE).s(key).i(count))
 }
 
-// DelIfEq deletes the string only when it equals expected (`DELEX key IFEQ value`).
+// DelIfEq deletes key only when its string equals expected (Ruvio DELEX key IFEQ
+// expected) and reports whether it deleted. It returns false when the key is missing or
+// holds a different value. It is the safe way to release a lock you hold. A non-string
+// key returns WRONGTYPE.
 func (c *cmds) DelIfEq(ctx context.Context, key, expected string) (bool, error) {
 	return c.boolR(ctx, newCmd(4, cDELEX).s(key).t(tIFEQ).s(expected))
 }
 
-// Limit is a fixed-window counter: allowed is false when the window is full;
-// remaining is the allowance left after this call.
+// Limit counts one call against a fixed-window rate limit (Ruvio LIMIT key max
+// window_ms).
+//
+// The first call starts a window of the given length (rounded up to whole milliseconds);
+// each call inside the window uses one of max slots. It returns allowed == true with
+// remaining = the allowance left after this call (0 on the last permitted call). When
+// the window is full, allowed is false, remaining is 0 and the counter is not increased;
+// it resets when the window ends. max and window must be positive, otherwise the server
+// returns "LIMIT maximum and window must be positive integers". The key must not hold
+// another type (WRONGTYPE). Use RateLimit for the allowed-first return order.
 func (c *cmds) Limit(ctx context.Context, key string, max int64, window time.Duration) (remaining int64, allowed bool, err error) {
 	return c.intNil(ctx, newCmd(4, cLIMIT).s(key).i(max).i(ms(window)))
 }
 
-// Once returns true for the first call until ttl passes.
+// Once returns true for the first caller and false for every other call until ttl has
+// passed (Ruvio ONCE key ttl_ms). It is a deduplication marker: the key is created for
+// ttl (at least 1 ms) and then disappears. ttl <= 0 returns a server error. The key must
+// not hold another type (WRONGTYPE).
 func (c *cmds) Once(ctx context.Context, key string, ttl time.Duration) (bool, error) {
 	return c.boolR(ctx, newCmd(3, cONCE).s(key).i(ms(ttl)))
 }
 
-// Lease acquires a fenced lease. ok is false while another holder has it.
+// Lease acquires a fenced lease on key for ttl (Ruvio LEASE key ttl_ms).
+//
+// When the lease is free it returns a token and ok == true. Tokens only increase (they
+// start from the server clock when the key is created), so a stale holder's token can be
+// rejected by the resource it protects. While another holder has the lease it returns ok
+// == false. The lease expires by itself after ttl (at least 1 ms; zero is a server
+// error). Free it early with Release. Prefer AcquireLease, which wraps the token in a
+// handle. The key must not hold another type (WRONGTYPE).
 func (c *cmds) Lease(ctx context.Context, key string, ttl time.Duration) (token int64, ok bool, err error) {
 	return c.intNil(ctx, newCmd(3, cLEASE).s(key).i(ms(ttl)))
 }
 
-// Semaphore takes one of max slots. ok is false when full.
+// Semaphore takes one of max slots on key for ttl (Ruvio SEMAPHORE key max ttl_ms) and
+// returns the holder's token. ok is false when all max slots are held. Each holder has
+// its own TTL, so a crashed holder frees its slot when ttl passes; Release frees one
+// early. max must be 1..4294967295 and ttl at least 1 ms, otherwise the server returns
+// an error. The key must not hold another type (WRONGTYPE). See AcquirePermit.
 func (c *cmds) Semaphore(ctx context.Context, key string, max int64, ttl time.Duration) (token int64, ok bool, err error) {
 	return c.intNil(ctx, newCmd(4, cSEMAPHORE).s(key).i(max).i(ms(ttl)))
 }
 
-// Release frees a lease or semaphore slot held with token.
+// Release frees a lease or a semaphore slot (Ruvio RELEASE key token). It returns true
+// when token was a live holder and false when the token is unknown, already released or
+// expired. It never releases someone else's hold.
 func (c *cmds) Release(ctx context.Context, key string, token int64) (bool, error) {
 	return c.boolR(ctx, newCmd(3, cRELEASE).s(key).i(token))
 }
 
-// IdemState is the IDEM BEGIN outcome.
+// IdemState is the outcome of IdemBegin.
 type IdemState string
 
 const (
-	IdemAcquired  IdemState = "acquired"
-	IdemPending   IdemState = "pending"
-	IdemConflict  IdemState = "conflict"
+	// IdemAcquired means this attempt now owns a new pending record: run the
+	// operation, then call IdemComplete.
+	IdemAcquired IdemState = "acquired"
+	// IdemPending means the same fingerprint was begun and has not completed yet;
+	// do not run the operation again.
+	IdemPending IdemState = "pending"
+	// IdemConflict means the key is in use with a different fingerprint.
+	IdemConflict IdemState = "conflict"
+	// IdemCompleted means the operation already finished; IdemResult.Result holds
+	// the saved result.
 	IdemCompleted IdemState = "completed"
 )
 
-// IdemResult is the IDEM BEGIN reply; Result is set when State is IdemCompleted.
+// IdemResult is the reply of IdemBegin. Result is only set when State is IdemCompleted
+// (it may be empty).
 type IdemResult struct {
 	State  IdemState
-	Result []byte
+	Result []byte // saved result when State is IdemCompleted
 }
 
-// IdemBegin reserves key for (fingerprint, owner) for ttl.
+// IdemBegin starts or looks up an idempotent operation (Ruvio IDEM key BEGIN fingerprint
+// owner ttl_ms).
+//
+// fingerprint identifies the request (use a digest of everything that defines it) and
+// owner is a unique token for this attempt; both must be 1 to 128 bytes. ttl is how long
+// the record is kept, from 1 ms to 7 days (604800000 ms); it is fixed at the first BEGIN
+// and later calls do not extend it. The returned State says what to do: IdemAcquired
+// (run it), IdemPending (another attempt is running), IdemConflict (key reused with
+// another fingerprint) or IdemCompleted (reuse Result). Only IdemAcquired writes
+// anything. Idempotent wraps the whole flow.
 func (c *cmds) IdemBegin(ctx context.Context, key, fingerprint, owner string, ttl time.Duration) (IdemResult, error) {
 	v, err := c.value(ctx, newCmd(6, cIDEM).s(key).t(tBEGIN).s(fingerprint).s(owner).i(ms(ttl)))
 	if err != nil {
@@ -282,23 +457,34 @@ func (c *cmds) IdemBegin(ctx context.Context, key, fingerprint, owner string, tt
 	return res, nil
 }
 
-// IdemComplete publishes result for the live owner. Returns the server's integer.
+// IdemComplete stores result for the pending record that this fingerprint and owner
+// began (Ruvio IDEM key COMPLETE fingerprint owner result). It returns 1 when the result
+// was stored (a byte-identical repeat also returns 1) and 0 when the record is missing
+// or expired, the owner or fingerprint differs, or a different result is already stored.
+// result is binary-safe, at most 4 MiB. Completing never extends the record's lifetime.
 func (c *cmds) IdemComplete(ctx context.Context, key, fingerprint, owner string, result []byte) (int64, error) {
 	return c.intR(ctx, newCmd(6, cIDEM).s(key).t(tCOMPLETE).s(fingerprint).s(owner).b(result))
 }
 
-// ChangesStart arms the change feed and returns the cursor.
+// ChangesStart arms the in-memory change feed of the shard that answers and returns the
+// cursor to pass to Changes (Ruvio CHANGES START). Notes are only collected after the
+// first call. The feed is kept in memory per shard and is lost on restart.
 func (c *cmds) ChangesStart(ctx context.Context) (int64, error) {
 	return c.intR(ctx, newCmd(2, cCHANGES).t(tSTART))
 }
 
-// Change is one change-feed note.
+// Change is one entry of the change feed: Seq is its sequence number and Note a short
+// text such as "SET key", "DEL key" or "SETV key 3".
 type Change struct {
-	Seq  int64
-	Note string
+	Seq  int64  // sequence number; pass the last one seen to Changes
+	Note string // short text such as "SET key"
 }
 
-// Changes reads notes after cursor (at most 1024).
+// Changes returns the notes recorded after cursor, oldest first (Ruvio CHANGES cursor).
+// Pass the value from ChangesStart the first time and the Seq of the last note you
+// processed afterwards. The shard keeps only the newest 1024 notes, so poll often enough
+// not to miss any. It returns an empty slice when nothing is new, including when
+// ChangesStart was never called.
 func (c *cmds) Changes(ctx context.Context, cursor int64) ([]Change, error) {
 	v, err := c.value(ctx, newCmd(2, cCHANGES).i(cursor))
 	if err != nil {
@@ -317,22 +503,28 @@ func (c *cmds) Changes(ctx context.Context, cursor int64) ([]Change, error) {
 	return out, nil
 }
 
-// FillState is the FILLGET outcome.
+// FillState is the outcome of FillGet.
 type FillState string
 
 const (
-	FillHit   FillState = "HIT"
-	FillFill  FillState = "FILL"
-	FillBusy  FillState = "BUSY"
+	// FillHit means the cached value is fresh; FillResult.Value holds it.
+	FillHit FillState = "HIT"
+	// FillFill means the key is missing and this caller was chosen to compute it;
+	// pass FillResult.Token to FillSet.
+	FillFill FillState = "FILL"
+	// FillBusy means the key is missing and another caller is computing it.
+	FillBusy FillState = "BUSY"
+	// FillStale means the value is past its TTL but inside the stale window; Value
+	// holds it. If Token is set this caller should refresh it.
 	FillStale FillState = "STALE"
 )
 
-// FillResult is the FILLGET reply. Value is set for HIT and STALE; Token is set for
-// FILL and for STALE when this caller should refresh.
+// FillResult is the reply of FillGet. Value is set for FillHit and FillStale. Token is
+// set for FillFill, and for FillStale when this caller was chosen to refresh.
 type FillResult struct {
 	State FillState
-	Value string
-	Token string
+	Value string // cached value (FillHit, FillStale)
+	Token string // fill token for FillSet (FillFill, FillStale)
 }
 
 func toFill(v Value) (FillResult, error) {
@@ -354,7 +546,16 @@ func toFill(v Value) (FillResult, error) {
 	return r, nil
 }
 
-// FillGet reads a single-flight cache key; fill is how long a FILL marker lives.
+// FillGet reads a cache-aside key with stampede protection (Ruvio FILLGET key fill_ms).
+// The State tells what to do: FillHit use Value; FillFill compute the value and store it
+// with FillSet and Token; FillBusy wait and ask again; FillStale use Value and, if Token
+// is set, refresh it.
+//
+// fill is how long the "someone is filling" marker lives (at least 1 ms); if the filler
+// dies, the marker lapses after that time and another caller is chosen. The marker is
+// kept in memory only. More pending fills than the server allows returns "ERR too many
+// pending fills". A key holding a non-string returns WRONGTYPE. GetOrCreate implements
+// the full loop.
 func (c *cmds) FillGet(ctx context.Context, key string, fill time.Duration) (FillResult, error) {
 	v, err := c.value(ctx, newCmd(3, cFILLGET).s(key).i(ms(fill)))
 	if err != nil {
@@ -363,8 +564,12 @@ func (c *cmds) FillGet(ctx context.Context, key string, fill time.Duration) (Fil
 	return toFill(v)
 }
 
-// FillGetWait is FILLGET ... WAIT: it parks until the filler writes, so it runs on a
-// dedicated connection (never stalls the shared one).
+// FillGetWait is FillGet with WAIT (FILLGET key fill_ms WAIT wait_ms): instead of
+// answering FillBusy at once, the server holds the call until the filler stores the
+// value (FillHit), the marker lapses (this caller becomes FillFill) or wait ends
+// (FillBusy). Both durations must be at least 1 ms. Because it can park for up to wait,
+// it runs on a dedicated connection and never stalls the shared one; it is refused
+// inside MULTI and scripts.
 func (c *cmds) FillGetWait(ctx context.Context, key string, fill, wait time.Duration) (FillResult, error) {
 	v, err := c.ex.execBlocking(ctx, newCmd(5, cFILLGET).s(key).i(ms(fill)).t(tWAIT).i(ms(wait)))
 	if err != nil {
@@ -373,7 +578,14 @@ func (c *cmds) FillGetWait(ctx context.Context, key string, fill, wait time.Dura
 	return toFill(v)
 }
 
-// FillSet writes the value for a FILL token. stale > 0 adds SWR (stale-while-revalidate).
+// FillSet stores the computed value for a FillGet token (Ruvio FILLSET key value ttl_ms
+// token [SWR stale_ms]) and returns true when it was stored.
+//
+// ttl (at least 1 ms) is how long the value is fresh. When stale > 0 the value stays
+// readable for that much longer after ttl as FillStale. It returns false, and writes
+// nothing, when the token is no longer the live filler (for example the marker lapsed
+// and another caller took over), so a slow filler cannot overwrite a newer value. token
+// must be the string from FillResult.Token.
 func (c *cmds) FillSet(ctx context.Context, key, value string, ttl time.Duration, token string, stale time.Duration) (bool, error) {
 	if stale > 0 {
 		return c.boolR(ctx, newCmd(7, cFILLSET).s(key).s(value).i(ms(ttl)).s(token).t(tSWR).i(ms(stale)))
@@ -381,34 +593,44 @@ func (c *cmds) FillSet(ctx context.Context, key, value string, ttl time.Duration
 	return c.boolR(ctx, newCmd(5, cFILLSET).s(key).s(value).i(ms(ttl)).s(token))
 }
 
-// Ruvio sends RUVIO (no arguments).
+// Ruvio sends RUVIO with no argument. The server answers with a fixed text ("PONG is
+// taken"); it is mostly useful to check that the server is Ruvio.
 func (c *cmds) Ruvio(ctx context.Context) (string, error) {
 	return c.strR(ctx, newCmd(1, cRUVIO))
 }
 
-// RuvioOwner sends RUVIO OWNER.
+// RuvioOwner sends RUVIO OWNER and returns the server's text describing which shard owns
+// keys (the shard rule).
 func (c *cmds) RuvioOwner(ctx context.Context) (string, error) {
 	return c.strR(ctx, newCmd(2, cRUVIO).t(tOWNER))
 }
 
 // ---- bitmaps & HyperLogLog ---------------------------------------------------
 
-// SetBit returns the previous bit.
+// SetBit sets or clears the bit at offset and returns the previous value (SETBIT). bit
+// must be 0 or 1 (anything else is a server error). Bit 0 is the most significant bit of
+// the first byte. The string grows with zero bytes as needed, up to 16 MiB (offset below
+// 134217728). A missing key is created; an existing TTL is kept. A non-string key
+// returns WRONGTYPE.
 func (c *cmds) SetBit(ctx context.Context, key string, offset int64, bit int) (int64, error) {
 	return c.intR(ctx, newCmd(4, cSETBIT).s(key).i(offset).i(int64(bit)))
 }
 
-// GetBit returns the bit at offset.
+// GetBit returns the bit at offset (GETBIT): 0 for a missing key or an offset beyond the
+// end. Bit 0 is the most significant bit of the first byte. WRONGTYPE for a non-string.
 func (c *cmds) GetBit(ctx context.Context, key string, offset int64) (int64, error) {
 	return c.intR(ctx, newCmd(3, cGETBIT).s(key).i(offset))
 }
 
-// BitCount counts set bits in the whole string.
+// BitCount counts the bits set to 1 in the whole string (BITCOUNT). A missing key
+// returns 0.
 func (c *cmds) BitCount(ctx context.Context, key string) (int64, error) {
 	return c.intR(ctx, newCmd(2, cBITCOUNT).s(key))
 }
 
-// BitCountRange counts set bits in [start, end] bytes, or bits when bitUnits.
+// BitCountRange counts set bits between start and end, inclusive (BITCOUNT key start end
+// [BIT]). The positions are byte offsets, or bit offsets when bitUnits is true; negative
+// values count from the end. An empty or inverted range returns 0.
 func (c *cmds) BitCountRange(ctx context.Context, key string, start, end int64, bitUnits bool) (int64, error) {
 	if bitUnits {
 		return c.intR(ctx, newCmd(5, cBITCOUNT).s(key).i(start).i(end).t(tBIT))
@@ -416,7 +638,14 @@ func (c *cmds) BitCountRange(ctx context.Context, key string, start, end int64, 
 	return c.intR(ctx, newCmd(4, cBITCOUNT).s(key).i(start).i(end))
 }
 
-// BitPos finds the first bit set to bit, optionally within start [end] bytes.
+// BitPos returns the position of the first bit equal to bit (0 or 1) (BITPOS). The
+// optional startEnd are byte offsets: one value is the start, two values are start and
+// end (inclusive; negative counts from the end); more are a syntax error. The bit-unit
+// form is not offered here, use Do.
+//
+// If nothing matches it returns -1. A missing key returns 0 when looking for 0 and -1
+// when looking for 1. Searching for 0 in an all-ones string with no explicit end returns
+// the position just past the string (it is treated as padded with zeros).
 func (c *cmds) BitPos(ctx context.Context, key string, bit int, startEnd ...int64) (int64, error) {
 	r := newCmd(3+len(startEnd), cBITPOS).s(key).i(int64(bit))
 	for _, x := range startEnd {
@@ -425,19 +654,28 @@ func (c *cmds) BitPos(ctx context.Context, key string, bit int, startEnd ...int6
 	return c.intR(ctx, r)
 }
 
-// BitOp runs AND, OR, XOR or NOT into dest and returns the result length.
+// BitOp combines source strings bitwise into dest and returns the length of the result
+// in bytes (BITOP). op is "AND", "OR", "XOR" or "NOT" (NOT takes exactly one key).
+// Shorter sources are padded with zero bytes; missing keys count as empty. An empty
+// result deletes dest. The result is limited to 16 MiB. All keys must share a hash slot
+// in cluster mode (otherwise ErrCrossSlot).
 func (c *cmds) BitOp(ctx context.Context, op, dest string, keys ...string) (int64, error) {
 	return c.intR(ctx, newCmd(3+len(keys), cBITOP).s(op).s(dest).ss(keys))
 }
 
-// BitFieldOp is one BITFIELD operation: Op is GET, SET, INCRBY or OVERFLOW.
-// Type is i1..i64/u1..u63, Offset a number or #n; for OVERFLOW, Type holds
-// WRAP, SAT or FAIL.
+// BitFieldOp is one sub-command of BITFIELD.
+//
+// Op is "GET", "SET", "INCRBY" or "OVERFLOW" (case-insensitive). Type is the field type:
+// i1 to i64 (signed) or u1 to u63 (unsigned), for example "u8". Offset is a bit offset
+// such as "0" or "100", or "#n" to mean n times the field width. Value is the operand of
+// SET and INCRBY and is ignored for GET. For OVERFLOW only Type is used and holds the
+// policy: "WRAP", "SAT" or "FAIL"; it applies to the INCRBY and SET operations that
+// follow it.
 type BitFieldOp struct {
-	Op     string
-	Type   string
-	Offset string
-	Value  int64
+	Op     string // GET, SET, INCRBY or OVERFLOW
+	Type   string // i1..i64 or u1..u63; the policy for OVERFLOW
+	Offset string // bit offset, or "#n" for n times the field width
+	Value  int64  // operand of SET and INCRBY
 }
 
 func bitfieldReq(name []byte, key string, ops []BitFieldOp) *request {
@@ -466,7 +704,17 @@ func bitfieldReq(name []byte, key string, ops []BitFieldOp) *request {
 	return r
 }
 
-// BitField runs BITFIELD; a nil element (OVERFLOW FAIL) is reported as not Valid.
+// BitField runs several bitfield operations in one call (BITFIELD) and returns one entry
+// per GET, SET and INCRBY (OVERFLOW produces none). GET returns the field, SET the
+// field's previous value and INCRBY its new value. An entry is not Valid when OVERFLOW
+// FAIL refused the operation. Writing extends the string to cover the field and keeps
+// the TTL; fields must end below 16 MiB.
+//
+//	r, err := c.BitField(ctx, "counters",
+//	    ruvio.BitFieldOp{Op: "OVERFLOW", Type: "SAT"},
+//	    ruvio.BitFieldOp{Op: "INCRBY", Type: "u8", Offset: "0", Value: 10},
+//	    ruvio.BitFieldOp{Op: "GET", Type: "u8", Offset: "0"},
+//	)
 func (c *cmds) BitField(ctx context.Context, key string, ops ...BitFieldOp) ([]NullInt, error) {
 	v, err := c.value(ctx, bitfieldReq(cBITFIELD, key, ops))
 	if err != nil {
@@ -475,7 +723,9 @@ func (c *cmds) BitField(ctx context.Context, key string, ops ...BitFieldOp) ([]N
 	return toNullInts(v)
 }
 
-// BitFieldRO runs BITFIELD_RO with GET operations only.
+// BitFieldRO runs read-only BITFIELD_RO with GET operations only; it is safe to send to
+// read paths. SET and INCRBY return the server error "BITFIELD_RO only supports the GET
+// subcommand".
 func (c *cmds) BitFieldRO(ctx context.Context, key string, ops ...BitFieldOp) ([]NullInt, error) {
 	v, err := c.value(ctx, bitfieldReq(cBITFIELD_RO, key, ops))
 	if err != nil {
@@ -484,10 +734,10 @@ func (c *cmds) BitFieldRO(ctx context.Context, key string, ops ...BitFieldOp) ([
 	return toNullInts(v)
 }
 
-// NullInt is a nullable integer element.
+// NullInt is an integer that may be absent: Valid is false for a null reply.
 type NullInt struct {
 	Val   int64
-	Valid bool
+	Valid bool // false for a null reply
 }
 
 func toNullInts(v Value) ([]NullInt, error) {
@@ -507,17 +757,24 @@ func toNullInts(v Value) ([]NullInt, error) {
 	return out, nil
 }
 
-// PFAdd adds elements; true when the estimate changed.
+// PFAdd adds elements to the HyperLogLog at key (PFADD) and returns true when the
+// estimate changed (also when the key was created). A missing key is created. The key
+// must hold a HyperLogLog (a string with the HYLL header, dense form only), otherwise
+// the server returns an error such as WRONGTYPE.
 func (c *cmds) PFAdd(ctx context.Context, key string, elements ...string) (bool, error) {
 	return c.boolR(ctx, newCmd(2+len(elements), cPFADD).s(key).ss(elements))
 }
 
-// PFCount estimates the cardinality (union for several keys).
+// PFCount returns the estimated number of distinct elements added to the HyperLogLog at
+// key (PFCOUNT). With several keys it returns the estimate of their union without
+// storing it. A missing key counts as empty. Keys must share a hash slot in cluster
+// mode.
 func (c *cmds) PFCount(ctx context.Context, keys ...string) (int64, error) {
 	return c.intR(ctx, newCmd(1+len(keys), cPFCOUNT).ss(keys))
 }
 
-// PFMerge merges sources into dest.
+// PFMerge merges the HyperLogLogs in sources (and dest itself, if it exists) into dest
+// (PFMERGE). dest is created when missing. Keys must share a hash slot in cluster mode.
 func (c *cmds) PFMerge(ctx context.Context, dest string, sources ...string) error {
 	return c.ok(ctx, newCmd(2+len(sources), cPFMERGE).s(dest).ss(sources))
 }
