@@ -4,6 +4,8 @@ Notable changes to the Rust client crate `ruvio-client`. New entries go under "U
 
 ## Unreleased
 
+## 0.4.0 - 2026-10-17
+
 - New typed trim, `INFO`, `CLIENT LIST` and change-feed keywords (all constant strings, nothing formatted per call).
   - `StreamTrim` (`max_len` / `min_id` with `TrimMode::Exact` `=` or `Approximate` `~`, `TrimStrategy`) drives the new `xadd_trim` and `xtrim`; `xadd_maxlen`, `xtrim_maxlen` and `xtrim_minid` stay. The server does not accept `LIMIT`.
   - `InfoSection` and `info_section` (`memorybreakdown`, `commandcounters`, `prometheus`, ...); `info(Option<&str>)` stays.
