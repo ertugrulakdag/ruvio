@@ -511,8 +511,8 @@ func (c *cmds) HVals(ctx context.Context, key string) ([]string, error) {
 }
 
 // HIncrBy adds delta to the integer in field and returns the new value (HINCRBY). A
-// missing key or field counts as 0. A non-integer value returns "ERR hash value is not
-// an integer" style errors from the server. The field TTL is kept.
+// missing key or field counts as 0. A value that is not an integer is a server error.
+// The field TTL is kept.
 func (c *cmds) HIncrBy(ctx context.Context, key, field string, delta int64) (int64, error) {
 	return c.intR(ctx, newCmd(4, cHINCRBY).s(key).s(field).i(delta))
 }
