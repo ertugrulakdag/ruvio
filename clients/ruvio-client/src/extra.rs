@@ -346,8 +346,9 @@ impl Client {
     }
 
     /// Sends `BLMPOP`: like [`Client::lmpop`] but waits up to `timeout` (rounded up to whole
-    /// seconds; `Duration::ZERO` waits forever). Returns `None` when the timeout passes. Ruvio
-    /// polls every 5 ms and refuses it inside `MULTI` and scripts.
+    /// seconds; `Duration::ZERO` waits forever). `side` is the [`ListSide`] to pop from. Returns
+    /// `None` when the timeout passes. Ruvio polls every 5 ms and refuses it inside `MULTI` and
+    /// scripts.
     pub fn blmpop(
         &mut self,
         timeout: Duration,
@@ -1281,15 +1282,15 @@ impl Client {
     }
 
     /// Sends a full `GEOSEARCH` described by a [`GeoSearch`]: centre (`FROMMEMBER` /
-    /// `FROMLONLAT`), area (`BYRADIUS` / `BYBOX`), unit, order (`ASC` / `DESC`), `COUNT [ANY]` and
-    /// the `WITHDIST`, `WITHHASH`, `WITHCOORD` extras.
+    /// `FROMLONLAT`), area (`BYRADIUS` / `BYBOX`), [`GeoUnit`](crate::GeoUnit), order ([`GeoOrder`](crate::GeoOrder)),
+    /// `COUNT [ANY]` and the `WITHDIST`, `WITHHASH`, `WITHCOORD` extras.
     ///
     /// # Returns
     /// One [`GeoMatch`] per member; the optional fields are filled only for the `with_*` flags
     /// you set. `distance` is in the search unit. Empty when nothing matches.
     ///
     /// # Errors
-    /// [`Error::Server`] for a missing `FROMMEMBER` member, an invalid unit or `WRONGTYPE`.
+    /// [`Error::Server`] for a missing `FROMMEMBER` member or `WRONGTYPE`.
     ///
     /// # Examples
     ///
@@ -1297,7 +1298,7 @@ impl Client {
     /// # use ruvio_client::*;
     /// # use std::time::Duration;
     /// # fn run(client: &mut Client) -> Result<(), Error> {
-    /// let mut search = GeoSearch::radius(GeoFrom::LonLat(15.0, 37.0), 200.0, "km");
+    /// let mut search = GeoSearch::radius(GeoFrom::LonLat(15.0, 37.0), 200.0, GeoUnit::Kilometers);
     /// search.count = Some(5);
     /// search.with_distance = true;
     /// for place in client.geo_search_with("shops", &search)? {

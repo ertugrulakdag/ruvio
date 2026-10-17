@@ -641,15 +641,39 @@ impl Client {
         self.ok(["RENAME", key, new_key])
     }
 
-    /// Sends `SCAN` with an optional `MATCH` pattern, `COUNT` hint and `TYPE` filter.
+    /// Sends `SCAN`: one page of a key walk.
+    ///
+    /// # Arguments
+    /// * `cursor` - `0` to start, then the cursor of the previous page. Cursors are opaque; on a
+    ///   sharded server the client folds the shard number into them, so keep using the returned
+    ///   value.
+    /// * `pattern` - optional glob (`MATCH`) applied to key names after the page is read.
+    /// * `count` - page-size hint (`COUNT`, default 10); it is the number of index slots to
+    ///   examine, not a result limit, so a page may be empty or larger.
+    /// * `key_type` - optional [`KeyType`] filter (`TYPE`): only keys holding that type.
+    ///
+    /// # Returns
+    /// A [`ScanPage`]. The scan is complete when `cursor` is `0`. A key present for the whole
+    /// walk is returned at least once; a key may repeat if the table was rebuilt in between.
+    /// Prefer [`Client::scan_iter`], which loops for you.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// # use ruvio_client::*;
+    /// # use std::time::Duration;
     /// # fn run(client: &mut Client) -> Result<(), Error> {
-    /// let page = client.scan(0, Some("user:*"), Some(100), Some(KeyType::Hash))?;
-    /// # let _ = page;
+    /// let mut cursor = 0;
+    /// loop {
+    ///     let page = client.scan(cursor, Some("user:*"), Some(100), Some(KeyType::Hash))?;
+    ///     for key in &page.keys {
+    ///         println!("{key}");
+    ///     }
+    ///     cursor = page.cursor;
+    ///     if cursor == 0 {
+    ///         break;
+    ///     }
+    /// }
     /// # Ok(())
     /// # }
     /// ```
@@ -1534,15 +1558,23 @@ impl Client {
         self.integer(arguments)
     }
 
-    /// Sends `GEODIST`. `None` for `unit` asks for meters.
+    /// Sends `GEODIST`: distance between two members of a geo index.
+    ///
+    /// # Arguments
+    /// * `key` - geo index. `from`, `to` - member names.
+    /// * `unit` - a [`GeoUnit`] (meters, kilometers, feet, miles); `None` means meters.
+    ///
+    /// # Returns
+    /// The distance in `unit` (great-circle, sphere radius 6,372,797.56 m); `None` when the key
+    /// or either member is missing.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// # use ruvio_client::*;
+    /// # use std::time::Duration;
     /// # fn run(client: &mut Client) -> Result<(), Error> {
-    /// let km = client.geo_dist("Sicily", "Palermo", "Catania", Some(GeoUnit::Kilometers))?;
-    /// # let _ = km;
+    /// let km = client.geo_dist("shops", "palermo", "catania", Some(GeoUnit::Kilometers))?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1619,15 +1651,26 @@ impl Client {
         Ok(points)
     }
 
-    /// Sends `GEOSEARCH ... FROMLONLAT ... BYRADIUS ... ASC`.
+    /// Sends `GEOSEARCH key FROMLONLAT lon lat BYRADIUS radius unit ASC`: members within a circle,
+    /// nearest first.
+    ///
+    /// # Arguments
+    /// * `longitude`, `latitude` - centre in degrees (longitude -180..180 first, latitude
+    ///   -85.05112878..85.05112878).
+    /// * `radius` - positive radius in `unit`.
+    /// * `unit` - a [`GeoUnit`].
+    ///
+    /// # Returns
+    /// Member names, nearest first; empty when none or the key is missing. For distances,
+    /// coordinates, boxes, descending order or a count limit use [`Client::geo_search_with`].
     ///
     /// # Examples
     ///
     /// ```no_run
     /// # use ruvio_client::*;
+    /// # use std::time::Duration;
     /// # fn run(client: &mut Client) -> Result<(), Error> {
-    /// let near = client.geo_search("Sicily", 15.0, 37.0, 200.0, GeoUnit::Kilometers)?;
-    /// # let _ = near;
+    /// let near = client.geo_search("shops", 15.0, 37.0, 200.0, GeoUnit::Kilometers)?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1662,7 +1705,8 @@ impl Client {
     /// # Arguments
     /// * `destination` - key to write (replaced); `source` - geo index to search. Same slot on a
     ///   sharded server.
-    /// * `member` - centre member in `source`. `radius`, `unit` as [`Client::geo_search`].
+    /// * `member` - centre member in `source`. `radius` - positive radius in `unit`
+    ///   ([`GeoUnit`]).
     ///
     /// # Returns
     /// How many members were stored (an empty result deletes `destination`).
@@ -1688,9 +1732,9 @@ impl Client {
         ])
     }
 
-    /// Sends `GEORADIUSBYMEMBER key member radius unit ASC`: members within `radius` of an
-    /// existing member, nearest first (the member itself is included). `unit` is `"m"`, `"km"`,
-    /// `"ft"` or `"mi"`. Error if `member` is missing.
+    /// Sends `GEORADIUSBYMEMBER key member radius unit ASC`: members within `radius` (in
+    /// [`GeoUnit`]) of an existing member, nearest first. The member itself is included. Error if
+    /// `member` is missing.
     pub fn geo_radius_by_member(
         &mut self,
         key: &str,
@@ -2987,12 +3031,20 @@ impl Client {
         self.integer(args!["CLIENT", "KILL", "ID", id])
     }
 
-    /// Sends `LINSERT`. Returns the new length, -1 when the pivot is missing, 0 for a missing list.
+    /// Sends `LINSERT`: inserts `value` next to the first occurrence of `pivot`.
+    ///
+    /// # Arguments
+    /// * `position` - [`InsertPosition::Before`] or [`InsertPosition::After`] the pivot.
+    ///
+    /// # Returns
+    /// The new list length; `-1` when the pivot is not in the list; `0` when the list does not
+    /// exist (nothing written). The list is rewritten, so this is O(n).
     ///
     /// # Examples
     ///
     /// ```no_run
     /// # use ruvio_client::*;
+    /// # use std::time::Duration;
     /// # fn run(client: &mut Client) -> Result<(), Error> {
     /// client.linsert("queue", InsertPosition::Before, "b", "x")?;
     /// # Ok(())
@@ -3044,15 +3096,22 @@ impl Client {
         self.integer(with(args!["RPUSHX", key], values))
     }
 
-    /// Sends `LMOVE`. `None` when the source is empty.
+    /// Sends `LMOVE`: pops one element from `source` and pushes it onto `destination` atomically.
+    ///
+    /// # Arguments
+    /// * `from` - [`ListSide`] to pop from (`Left` is the head, `Right` the tail).
+    /// * `to` - [`ListSide`] to push to. Same slot as `source` on a sharded server.
+    ///
+    /// # Returns
+    /// The moved element, or `None` when `source` is empty or missing.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// # use ruvio_client::*;
+    /// # use std::time::Duration;
     /// # fn run(client: &mut Client) -> Result<(), Error> {
     /// let moved = client.lmove("src", "dst", ListSide::Left, ListSide::Right)?;
-    /// # let _ = moved;
     /// # Ok(())
     /// # }
     /// ```
@@ -3100,7 +3159,7 @@ impl Client {
     /// Sends `LMPOP`: pops up to `count` elements from the first non-empty list.
     ///
     /// # Arguments
-    /// * `keys` - lists checked in order (one slot). `from_left` - pop from the head or tail.
+    /// * `keys` - lists checked in order (one slot). `side` - [`ListSide`] to pop from.
     /// * `count` - maximum elements, at least 1.
     ///
     /// # Returns
@@ -3119,8 +3178,18 @@ impl Client {
         pop_many("LMPOP", self.run(arguments)?)
     }
 
-    /// Sends `BITFIELD key operation...`. Each reply is a number, or `None` when
-    /// `OVERFLOW FAIL` refused the write. See [`BitFieldOp`] for an example.
+    /// Sends `BITFIELD key operation...`: reads and writes integer fields inside a string.
+    ///
+    /// # Arguments
+    /// * `operations` - [`BitFieldOp`] items run in order: `Get`, `Set`, `IncrBy`, and
+    ///   `Overflow(mode)` which sets `WRAP` / `SAT` / `FAIL` for the writes after it. A field has a
+    ///   [`BitFieldType`](crate::BitFieldType) (`i1`..`i64`, `u1`..`u63`) and a [`BitFieldOffset`] (a bit index, or the
+    ///   n-th field of that width).
+    ///
+    /// # Returns
+    /// One result per `Get`/`Set`/`IncrBy` (`Set` returns the old value); `None` when
+    /// `OVERFLOW FAIL` refused the write. `Overflow` itself produces no result. A write extends the
+    /// string and keeps its TTL.
     pub fn bitfield(
         &mut self,
         key: &str,
@@ -3129,7 +3198,8 @@ impl Client {
         self.bitfield_command("BITFIELD", key, operations)
     }
 
-    /// Sends `BITFIELD_RO key GET type offset ...`. Only `BitFieldOp::Get` is accepted.
+    /// Sends `BITFIELD_RO`: read-only form of [`Client::bitfield`]; only [`BitFieldOp::Get`] is
+    /// accepted.
     pub fn bitfield_ro(
         &mut self,
         key: &str,
