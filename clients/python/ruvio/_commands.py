@@ -4968,111 +4968,426 @@ class Commands:
 
     # ======================================================= server / introspection
     def info(self, section: Optional[str] = None) -> Any:
-        """Raw ``INFO`` text (``info("prometheus")`` for Prometheus text). See :func:`parse_info`."""
+        """``INFO [section]`` - server statistics as text.
+
+        Args:
+            section: A section name such as ``"server"``, ``"memory"``, ``"keyspace"``, or ``"prometheus"`` for
+                Prometheus text format. ``None`` returns the default sections.
+
+        Returns:
+            The report as text (``# Section`` headers and ``field:value`` lines). Turn it into a dict
+            with :func:`ruvio.parse_info`.
+
+        Note:
+            Keyless admin commands go to one node: ``ClusterRuvio`` asks its seed node only.
+
+        Example:
+            stats = ruvio.parse_info(client.info("memory"))
+        """
         return self._c(_info, "INFO") if section is None else self._c(_info, "INFO", section)
 
     def wait(self, numreplicas: int, timeout_ms: int) -> Any:
+        """``WAIT numreplicas timeout_ms`` - waits until replicas have synced this shard's writes.
+
+        Blocks only this client. The write is never rolled back on timeout. With replication off, or on a
+        replica, it returns ``0``. In per-shard mode it covers this connection's shard plus the shards its
+        writes were forwarded to.
+
+        Args:
+            numreplicas: Replicas to wait for.
+            timeout_ms: Milliseconds to wait; ``0`` waits until shutdown.
+
+        Returns:
+            How many replicas reached the sequence.
+        """
         return self._c(None, "WAIT", numreplicas, timeout_ms)
 
     def config_get(self, pattern: str = "*") -> Any:
+        """``CONFIG GET pattern`` - server settings that match a glob.
+
+        ``CONFIG SET`` is not supported; change settings in the config file or environment.
+        ``requirepass`` is redacted.
+
+        Args:
+            pattern: Glob over setting names (default ``"*"``).
+
+        Returns:
+            A dict of setting name to value (text).
+        """
         return self._c(_pairs_text_keys, "CONFIG GET", pattern)
 
     def save(self) -> Any:
+        """``SAVE`` - writes an in-process checkpoint now (blocks the shard).
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: The server runs without persistence.
+        """
         return self._c(_ok, "SAVE")
 
     def bgsave(self) -> Any:
+        """``BGSAVE`` - starts a checkpoint; in-process (no fork).
+
+        Returns:
+            The server's status text.
+        """
         return self._c(None, "BGSAVE")
 
     # ======================================================= transactions (raw)
     def multi(self) -> Any:
-        """Raw ``MULTI``. Prefer ``pipeline(transaction=True)``; on the shared asyncio
-        connection raw MULTI/WATCH interleave with other callers - use ``dedicated()``."""
+        """``MULTI`` - raw transaction start. Prefer ``pipeline(transaction=True)`` or :meth:`transaction`.
+
+        Queued commands must hash to one slot, even on one shard (use a ``{hash tag}``). On the shared
+        asyncio connection raw ``MULTI``/``WATCH`` interleave with other callers; use :meth:`dedicated`.
+        At most 1,024 queued commands.
+
+        Returns:
+            ``True``.
+        """
         return self._c(_ok, "MULTI")
 
     def exec(self) -> Any:
+        """``EXEC`` - runs the queued commands of a raw ``MULTI``.
+
+        Returns:
+            A list with one reply per queued command (raw, not converted), an empty list for an empty
+            queue, or ``None`` when a watched key changed.
+
+        Raises:
+            ExecAbortError: A command was refused while queueing; the queue is discarded.
+        """
         return self._c(None, "EXEC")
 
     def discard(self) -> Any:
+        """``DISCARD`` - drops the queued commands of a raw ``MULTI``. Watches stay.
+
+        Returns:
+            ``True``.
+        """
         return self._c(_ok, "DISCARD")
 
     def watch(self, *keys: KeyT) -> Any:
+        """``WATCH key [key ...]`` - makes the next ``EXEC`` fail if any of the keys changes (optimistic locking).
+
+        Any write by any connection, including this one, counts. At most 128 watched keys, all in one slot.
+        :meth:`transaction` wraps this loop.
+
+        Args:
+            *keys: Keys to watch.
+
+        Returns:
+            ``True``.
+        """
         return self._c(_ok, "WATCH", *keys)
 
     def unwatch(self) -> Any:
+        """``UNWATCH`` - forgets all watched keys.
+
+        Returns:
+            ``True``.
+        """
         return self._c(_ok, "UNWATCH")
 
     # ======================================================= scripts / functions
     def eval(self, script: str, keys: Sequence[KeyT] = (), args: Sequence[Arg] = ()) -> Any:
+        """``EVAL script numkeys key... arg...`` - runs a Lua 5.1 script.
+
+        Declared keys must share a slot; a script without keys runs on the connection's shard. The script
+        calls commands with ``ruvio.call(...)``, can only touch its declared keys, obeys the caller's ACL, and its writes are one atomic batch.
+        ``math.random`` is removed. The script cache is per shard and lost on restart.
+
+        Args:
+            script: Lua source.
+            keys: Keys the script uses (``KEYS`` in Lua).
+            args: Extra arguments (``ARGV`` in Lua).
+
+        Returns:
+            The script result as converted by the server (raw reply: ``int``, text, list, ``None``).
+
+        Raises:
+            ResponseError: Lua error or refused command (``NOPERM``).
+            CrossSlotError: Cluster client - the keys are in different slots.
+
+        Example:
+            client.eval("return ruvio.call('GET', KEYS[1])", keys=["k"])
+        """
         return self._c(None, "EVAL", script, len(keys), *keys, *args)
 
     def evalsha(self, sha: str, keys: Sequence[KeyT] = (), args: Sequence[Arg] = ()) -> Any:
+        """``EVALSHA sha numkeys key... arg...`` - runs a cached script by its SHA1.
+
+        Args:
+            sha: SHA1 returned by :meth:`script_load` or computed from the script.
+            keys: Keys (``KEYS``).
+            args: Extra arguments (``ARGV``).
+
+        Returns:
+            The raw script result.
+
+        Raises:
+            NoScriptError: The script is not cached (always true after a restart); call :meth:`script_load` or :meth:`eval`.
+        """
         return self._c(None, "EVALSHA", sha, len(keys), *keys, *args)
 
     def script_load(self, script: str) -> Any:
+        """``SCRIPT LOAD script`` - caches a script on the shard (not durable).
+
+        Args:
+            script: Lua source.
+
+        Returns:
+            Its SHA1 as text. The cluster client sends this to every node.
+        """
         return self._c(_text, "SCRIPT LOAD", script)
 
     def script_exists(self, *shas: str) -> Any:
+        """``SCRIPT EXISTS sha [sha ...]`` - checks whether scripts are cached.
+
+        Args:
+            *shas: SHA1 digests.
+
+        Returns:
+            A list of booleans.
+        """
         return self._c(_bools, "SCRIPT EXISTS", *shas)
 
     def script_flush(self) -> Any:
+        """``SCRIPT FLUSH`` - empties the script cache.
+
+        Returns:
+            ``True``.
+        """
         return self._c(_ok, "SCRIPT FLUSH")
 
     def script_kill(self) -> Any:
+        """``SCRIPT KILL`` - stops the running script.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: ``NOTBUSY`` - no script is running.
+        """
         return self._c(_ok, "SCRIPT KILL")
 
     def fcall(self, function: str, keys: Sequence[KeyT] = (), args: Sequence[Arg] = ()) -> Any:
+        """``FCALL function numkeys key... arg...`` - calls a function stored with :meth:`function_load`.
+
+        Same key and atomicity rules as :meth:`eval`.
+
+        Args:
+            function: Function name.
+            keys: Keys.
+            args: Extra arguments.
+
+        Returns:
+            The raw result.
+        """
         return self._c(None, "FCALL", function, len(keys), *keys, *args)
 
     def function_load(self, name: str, body: str) -> Any:
-        """``FUNCTION LOAD name body`` (Ruvio: one named Lua body, memory only)."""
+        """``FUNCTION LOAD name body`` - stores one named Lua body on the shard (memory only, lost on restart).
+
+        This is not the Redis library format; the body is a plain script.
+
+        Args:
+            name: Function name.
+            body: Lua source.
+
+        Returns:
+            The function name as text. The cluster client sends this to every node.
+        """
         return self._c(_text, "FUNCTION LOAD", name, body)
 
     def function_list(self) -> Any:
+        """``FUNCTION LIST`` - names of loaded functions, in byte order.
+
+        Returns:
+            A list of names.
+        """
         return self._c(None, "FUNCTION LIST")
 
     def function_delete(self, name: str) -> Any:
+        """``FUNCTION DELETE name`` - removes a function.
+
+        Args:
+            name: Function name.
+
+        Returns:
+            ``True`` when removed, ``False`` if it did not exist.
+        """
         return self._c(_bool, "FUNCTION DELETE", name)
 
     # ======================================================= cluster
     def cluster_slots(self) -> Any:
+        """``CLUSTER SLOTS`` - the slot ranges and their shards.
+
+        The topology is static: shards of one process, with hosts and ports from the server's
+        ``advertised_host``/``advertised_port``.
+
+        Returns:
+            The raw list of ``[start, end, [host, port, id]]`` ranges.
+
+        Raises:
+            ResponseError: ``cluster mode is disabled`` on a single-shard server.
+        """
         return self._c(None, "CLUSTER SLOTS")
 
     def cluster_nodes(self) -> Any:
+        """``CLUSTER NODES`` - the shards as text lines.
+
+        Returns:
+            The text of the reply.
+
+        Raises:
+            ResponseError: ``cluster mode is disabled`` on a single-shard server.
+        """
         return self._c(_info, "CLUSTER NODES")
 
     def cluster_shards(self) -> Any:
+        """``CLUSTER SHARDS`` - the shards (all primaries, no replicas).
+
+        Returns:
+            The raw reply.
+
+        Raises:
+            ResponseError: ``cluster mode is disabled`` on a single-shard server.
+        """
         return self._c(None, "CLUSTER SHARDS")
 
     def cluster_info(self) -> Any:
+        """``CLUSTER INFO`` - cluster state text (``cluster_state`` is always ``ok``).
+
+        Returns:
+            The text of the reply.
+
+        Raises:
+            ResponseError: ``cluster mode is disabled`` on a single-shard server.
+        """
         return self._c(_info, "CLUSTER INFO")
 
     def cluster_myid(self) -> Any:
+        """``CLUSTER MYID`` - the id of the shard that answered.
+
+        Returns:
+            The id as text.
+
+        Raises:
+            ResponseError: ``cluster mode is disabled`` on a single-shard server.
+        """
         return self._c(_text, "CLUSTER MYID")
 
     def cluster_keyslot(self, key: KeyT) -> Any:
+        """``CLUSTER KEYSLOT key`` - the hash slot (0-16383) of a key. Works on single-shard servers too.
+
+        For a local calculation without a round trip use :func:`ruvio.key_slot`.
+
+        Args:
+            key: The key. A ``{hash tag}`` selects what is hashed.
+
+        Returns:
+            The slot number.
+        """
         return self._c(None, "CLUSTER KEYSLOT", key)
 
     def readonly(self) -> Any:
+        """``READONLY`` - accepted for compatibility; there are no replicas to read from.
+
+        Returns:
+            ``True``.
+        """
         return self._c(_ok, "READONLY")
 
     def readwrite(self) -> Any:
+        """``READWRITE`` - accepted for compatibility.
+
+        Returns:
+            ``True``.
+        """
         return self._c(_ok, "READWRITE")
 
     # ======================================================= pub/sub (publishers)
     def publish(self, channel: Arg, message: Arg) -> Any:
+        """``PUBLISH channel message`` - sends a message to classic Pub/Sub subscribers.
+
+        Reaches subscribers (exact and pattern) on every shard of the process. Not stored, not durable;
+        a subscriber that cannot keep up is disconnected. With several shards, delivery to other shards
+        is best effort. ``ClusterRuvio`` sends it to the owner of slot 0.
+
+        Args:
+            channel: Channel name.
+            message: Text or bytes payload.
+
+        Returns:
+            The number of receivers on the shard that took the command.
+
+        Example:
+            client.publish("news", "hello")
+        """
         return self._c(None, "PUBLISH", channel, message)
 
     def spublish(self, channel: Arg, message: Arg) -> Any:
+        """``SPUBLISH channel message`` - sends a message to sharded Pub/Sub subscribers.
+
+        Delivered only to subscribers of that channel on the shard that owns its slot; not stored.
+        Use :meth:`ruvio.PubSub.ssubscribe` to receive.
+
+        Args:
+            channel: Channel name (routed by its slot).
+            message: Text or bytes payload.
+
+        Returns:
+            The number of subscribers that received it.
+        """
         return self._c(None, "SPUBLISH", channel, message)
 
     # ======================================================= bitmaps / hyperloglog
     def setbit(self, key: KeyT, offset: int, value: int) -> Any:
+        """``SETBIT key offset value`` - sets one bit of a string (bitmap).
+
+        The string grows with zero bytes as needed and is limited to 16 MiB (offset below 134,217,728).
+        Each call rewrites the value; an existing TTL is kept.
+
+        Args:
+            key: The key.
+            offset: Bit offset, ``>= 0``.
+            value: ``0`` or ``1``.
+
+        Returns:
+            The previous bit value (``0`` or ``1``).
+
+        Raises:
+            ResponseError: Offset too large or value not 0/1.
+            WrongTypeError: The key holds a non-string type.
+        """
         return self._c(None, "SETBIT", key, offset, value)
 
     def getbit(self, key: KeyT, offset: int) -> Any:
+        """``GETBIT key offset`` - reads one bit.
+
+        Args:
+            key: The key.
+            offset: Bit offset.
+
+        Returns:
+            ``0`` or ``1``; ``0`` past the end or when the key is missing.
+        """
         return self._c(None, "GETBIT", key, offset)
 
     def bitcount(self, key: KeyT, start: Optional[int] = None, end: Optional[int] = None, mode: Optional[str] = None) -> Any:
+        """``BITCOUNT key [start end [BYTE|BIT]]`` - counts set bits.
+
+        Args:
+            key: The key.
+            start: First position of the range (needs ``end``). Omit both for the whole string.
+            end: Last position, inclusive; negative counts from the end.
+            mode: ``"BYTE"`` (default) or ``"BIT"`` - unit of ``start``/``end``.
+
+        Returns:
+            The number of bits set to 1 (``0`` when missing).
+        """
         if start is None:
             return self._c(None, "BITCOUNT", key)
         if mode is None:
@@ -5080,6 +5395,17 @@ class Commands:
         return self._c(None, "BITCOUNT", key, start, end, mode)
 
     def bitpos(self, key: KeyT, bit: int, start: Optional[int] = None, end: Optional[int] = None) -> Any:
+        """``BITPOS key bit [start [end]]`` - position of the first 0 or 1 bit.
+
+        Args:
+            key: The key.
+            bit: ``0`` or ``1``.
+            start: First byte to search.
+            end: Last byte (needs ``start``).
+
+        Returns:
+            The bit position, or ``-1`` when not found.
+        """
         args: List[Any] = [key, bit]
         if start is not None:
             args.append(start)
@@ -5088,26 +5414,87 @@ class Commands:
         return self._c(None, "BITPOS", *args)
 
     def bitop(self, operation: str, dst: KeyT, *keys: KeyT) -> Any:
+        """``BITOP operation dst key [key ...]`` - bitwise operation between strings.
+
+        Args:
+            operation: ``"AND"``, ``"OR"``, ``"XOR"`` or ``"NOT"`` (``NOT`` takes one key).
+            dst: Destination key (an empty result deletes it).
+            *keys: Source keys (same slot on a cluster).
+
+        Returns:
+            The size of the stored string in bytes (limit 16 MiB).
+        """
         return self._c(None, "BITOP", operation, dst, *keys)
 
     def bitfield(self, key: KeyT, *ops: Arg) -> Any:
-        """Raw operation words, e.g. ``bitfield(k, "OVERFLOW", "SAT", "INCRBY", "u8", 0, 10)``."""
+        """``BITFIELD key operation...`` - reads/writes integer fields packed in a string.
+
+        Operations are passed as raw words: ``GET type offset``, ``SET type offset value``,
+        ``INCRBY type offset increment`` and ``OVERFLOW WRAP|SAT|FAIL``. Types are ``i1``..``i64`` and ``u1``..``u63``;
+        offset is a bit number or ``#n`` (n times the width). A write rewrites the value.
+
+        Args:
+            key: The key.
+            *ops: The operation words.
+
+        Returns:
+            A list with one entry per GET/SET/INCRBY (``None`` for an overflow refused by ``FAIL``).
+
+        Example:
+            client.bitfield("k", "OVERFLOW", "SAT", "INCRBY", "u8", 0, 10)   # -> [10]
+        """
         return self._c(None, "BITFIELD", key, *ops)
 
     def bitfield_ro(self, key: KeyT, *gets: Tuple[str, Arg]) -> Any:
-        """``gets`` is ``[(type, offset)]`` e.g. ``("u8", 0)``."""
+        """``BITFIELD_RO key GET type offset [...]`` - read-only :meth:`bitfield`.
+
+        Args:
+            key: The key.
+            *gets: ``(type, offset)`` tuples such as ``("u8", 0)``.
+
+        Returns:
+            A list of integers.
+        """
         args: List[Any] = [key]
         for typ, off in gets:
             args += ["GET", typ, off]
         return self._c(None, "BITFIELD_RO", *args)
 
     def pfadd(self, key: KeyT, *elements: Arg) -> Any:
+        """``PFADD key element [element ...]`` - adds to a HyperLogLog (approximate distinct counter).
+
+        The value is a 12,304-byte dense string; every call rewrites it.
+
+        Args:
+            key: The key (created when missing).
+            *elements: Elements to count.
+
+        Returns:
+            ``True`` if the estimate changed, ``False`` otherwise.
+        """
         return self._c(_bool, "PFADD", key, *elements)
 
     def pfcount(self, *keys: KeyT) -> Any:
+        """``PFCOUNT key [key ...]`` - estimated number of distinct elements.
+
+        Args:
+            *keys: One key, or several for the union estimate (not stored; same slot on a cluster).
+
+        Returns:
+            The estimate (``0`` for a missing key).
+        """
         return self._c(None, "PFCOUNT", *keys)
 
     def pfmerge(self, dst: KeyT, *keys: KeyT) -> Any:
+        """``PFMERGE dst key [key ...]`` - merges HyperLogLogs into ``dst`` (``dst`` takes part in the union).
+
+        Args:
+            dst: Destination key.
+            *keys: Source keys (same slot on a cluster).
+
+        Returns:
+            ``True``.
+        """
         return self._c(_ok, "PFMERGE", dst, *keys)
 
 
