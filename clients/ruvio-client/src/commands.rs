@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime};
 use crate::client::{Client, duration_millis, duration_secs, join, unexpected, unix_millis};
 
 use crate::error::Error;
+use crate::keywords::{ClientType, InfoSection, StreamTrim};
 use crate::models::{
     BitFieldOffset, BitFieldOp, BitFieldText, FieldExpireCondition, FillOutcome, GeoOrder, GeoUnit,
     HashScanPage, InsertPosition, KeyType, ListSide, PubSubMessage, ScanPage, SortedSetAddOptions,
@@ -2038,6 +2039,37 @@ impl Client {
         ))
     }
 
+    /// Sends `XADD key MAXLEN|MINID [=|~] threshold id ...`: appends an entry and trims the stream
+    /// with a typed [`StreamTrim`]. Returns the new id.
+    ///
+    /// # Arguments
+    /// * `trim` - strategy, mode and threshold; the server does not accept `LIMIT`.
+    /// * `id` - as for [`Client::xadd`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let trim = StreamTrim::max_len(1000).mode(TrimMode::Approximate);
+    /// let id = client.xadd_trim("events", &trim, stream_id::NEW, &[("type", "login")])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn xadd_trim(
+        &mut self,
+        key: &str,
+        trim: &StreamTrim<'_>,
+        id: &str,
+        fields: &[(&str, &str)],
+    ) -> Result<String, Error> {
+        let arguments = trim.with_words(|strategy, mode, threshold| {
+            args!["XADD", key, strategy, mode, threshold, id]
+        });
+
+        self.text(with_pairs(arguments, fields))
+    }
+
     /// Sends `XLEN`: number of entries, `0` for a missing key.
     pub fn xlen(&mut self, key: &str) -> Result<i64, Error> {
         self.integer(["XLEN", key])
@@ -2158,6 +2190,25 @@ impl Client {
     /// many were removed.
     pub fn xtrim_maxlen(&mut self, key: &str, max_len: u64) -> Result<i64, Error> {
         self.integer(args!["XTRIM", key, "MAXLEN", max_len])
+    }
+
+    /// Sends `XTRIM MAXLEN|MINID [=|~] threshold` with a typed [`StreamTrim`]; returns how many
+    /// entries were removed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let removed = client.xtrim("events", &StreamTrim::min_id("1700000000000-0"))?;
+    /// let kept = client.xtrim("events", &StreamTrim::max_len(100).mode(TrimMode::Approximate))?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn xtrim(&mut self, key: &str, trim: &StreamTrim<'_>) -> Result<i64, Error> {
+        trim.with_words(|strategy, mode, threshold| {
+            self.integer(["XTRIM", key, strategy, mode, threshold])
+        })
     }
 
     /// Sends `XREAD`: reads entries newer than the given ids.
@@ -2423,6 +2474,22 @@ impl Client {
             Some(section) => self.text(["INFO", section]),
             None => self.text(["INFO"]),
         }
+    }
+
+    /// Sends `INFO section` with a typed [`InfoSection`]; an unknown section name would make the
+    /// server answer with an empty text, which the enum rules out.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let memory = client.info_section(InfoSection::MemoryBreakdown)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn info_section(&mut self, section: InfoSection) -> Result<String, Error> {
+        self.text(["INFO", section.as_str()])
     }
 
     /// Sends `CONFIG GET`: returns `(parameter, value)` pairs matching a name or glob. Ruvio
@@ -3024,6 +3091,22 @@ impl Client {
     /// Sends `CLIENT LIST`: one text line per connection on the answering shard.
     pub fn client_list(&mut self) -> Result<String, Error> {
         self.text(["CLIENT", "LIST"])
+    }
+
+    /// Sends `CLIENT LIST TYPE type` with a typed [`ClientType`]. Ruvio checks the name but lists
+    /// every connection on the answering shard.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let lines = client.client_list_type(ClientType::PubSub)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn client_list_type(&mut self, kind: ClientType) -> Result<String, Error> {
+        self.text(["CLIENT", "LIST", "TYPE", kind.as_str()])
     }
 
     /// Sends `CLIENT KILL ID`: closes the connection with that id; returns how many were closed.

@@ -14,9 +14,10 @@ mod common;
 use ruvio_client::__bench::parse;
 use ruvio_client::{
     BitFieldOffset, BitFieldOp, BitFieldOverflow, BitFieldType, BitOperation, BloomInsertOptions,
-    Client, ClientOptions, Error, FieldExpireCondition, FillOutcome, GeoFrom, GeoOrder, GeoSearch,
-    GeoUnit, IdemState, JsonIndexType, JsonSetCondition, RespValue, RestoreOptions, SetMode,
-    SortedSetAddOptions, StreamClaimOptions, StreamPendingFilter, StreamReadOptions,
+    Client, ClientOptions, ClientType, Error, FieldExpireCondition, FillOutcome, GeoFrom, GeoOrder,
+    GeoSearch, GeoUnit, IdemState, InfoSection, JsonIndexType, JsonSetCondition, RespValue,
+    RestoreOptions, SetMode, SortedSetAddOptions, StreamClaimOptions, StreamPendingFilter,
+    StreamReadOptions, StreamTrim, TrimMode,
 };
 
 type Requests = Arc<Mutex<Vec<Vec<String>>>>;
@@ -732,6 +733,37 @@ fn stream_adds_and_info() {
     let (reply, request) = probe(":2\r\n", |c| c.xtrim_minid("s", "5-0"));
     assert_eq!(reply.unwrap(), 2);
     assert_eq!(request, words(&["XTRIM", "s", "MINID", "5-0"]));
+    let (reply, request) = probe(":2\r\n", |c| c.xtrim("s", &StreamTrim::min_id("5-0")));
+    assert_eq!(reply.unwrap(), 2);
+    assert_eq!(request, words(&["XTRIM", "s", "MINID", "=", "5-0"]));
+    let trim = StreamTrim::max_len(7).mode(TrimMode::Approximate);
+    let (reply, request) = probe(":0\r\n", |c| c.xtrim("s", &trim));
+    assert_eq!(reply.unwrap(), 0);
+    assert_eq!(request, words(&["XTRIM", "s", "MAXLEN", "~", "7"]));
+    let (reply, request) = probe("$3\r\n1-1\r\n", |c| {
+        c.xadd_trim("s", &trim, "*", &[("f", "v")])
+    });
+    assert_eq!(reply.unwrap(), "1-1");
+    assert_eq!(
+        request,
+        words(&["XADD", "s", "MAXLEN", "~", "7", "*", "f", "v"])
+    );
+    let (reply, request) = probe("$3\r\n1-1\r\n", |c| {
+        c.xadd_trim("s", &StreamTrim::min_id("3-0"), "*", &[("f", "v")])
+    });
+    reply.unwrap();
+    assert_eq!(
+        request,
+        words(&["XADD", "s", "MINID", "=", "3-0", "*", "f", "v"])
+    );
+    let (reply, request) = probe("$0\r\n\r\n", |c| {
+        c.info_section(InfoSection::CommandCounters)
+    });
+    reply.unwrap();
+    assert_eq!(request, words(&["INFO", "commandcounters"]));
+    let (reply, request) = probe("$0\r\n\r\n", |c| c.client_list_type(ClientType::Replica));
+    reply.unwrap();
+    assert_eq!(request, words(&["CLIENT", "LIST", "TYPE", "replica"]));
     let (reply, request) = probe(":1\r\n", |c| c.xgroup_create_consumer("s", "g", "c"));
     assert_eq!(reply.unwrap(), 1);
     assert_eq!(request, words(&["XGROUP", "CREATECONSUMER", "s", "g", "c"]));

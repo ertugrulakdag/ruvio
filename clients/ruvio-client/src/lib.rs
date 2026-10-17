@@ -89,6 +89,7 @@ mod extra;
 mod helpers;
 #[cfg(feature = "serde")]
 mod json_value;
+mod keywords;
 mod models;
 mod scan;
 #[cfg(test)]
@@ -101,6 +102,10 @@ pub use cluster::{hash_slot, hash_slot_bytes};
 
 pub use error::Error;
 pub use helpers::{CacheOptions, IdemOutcome, LeaseGuard, LockGuard, SemaphorePermit, new_token};
+pub use keywords::{
+    ChangeType, ChangeTypes, ClientType, InfoSection, StreamTrim, TrimMode, TrimStrategy, bound,
+    stream_id,
+};
 pub use models::{
     Aggregate, BitFieldOffset, BitFieldOp, BitFieldOverflow, BitFieldType, BitOperation, BitUnit,
     BloomInfo, BloomInsertOptions, BloomReserveOptions, FieldExpireCondition, FillOutcome, GeoFrom,

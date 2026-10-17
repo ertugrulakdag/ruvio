@@ -4,6 +4,13 @@ Notable changes to the Rust client crate `ruvio-client`. New entries go under "U
 
 ## Unreleased
 
+- New typed trim, `INFO`, `CLIENT LIST` and change-feed keywords (all constant strings, nothing formatted per call).
+  - `StreamTrim` (`max_len` / `min_id` with `TrimMode::Exact` `=` or `Approximate` `~`, `TrimStrategy`) drives the new `xadd_trim` and `xtrim`; `xadd_maxlen`, `xtrim_maxlen` and `xtrim_minid` stay. The server does not accept `LIMIT`.
+  - `InfoSection` and `info_section` (`memorybreakdown`, `commandcounters`, `prometheus`, ...); `info(Option<&str>)` stays.
+  - `ClientType` and `client_list_type` for `CLIENT LIST TYPE`.
+  - `ChangeType` and the `ChangeTypes` set (`to_wire()` gives the `TYPES` argument of `CHANGES SUBSCRIBE`).
+  - Constants `stream_id::{NEW, LAST_DELIVERED, NEW_MESSAGES, MIN, MAX}` and `bound::{NEG_INF, POS_INF, LEX_MIN, LEX_MAX, score_exclusive, lex_inclusive, lex_exclusive}` for the range commands.
+
 - **Breaking:** keyword arguments are typed enums that map to constant strings, so no keyword is formatted or allocated per call.
   - `geo_dist`, `geo_search`, `geo_search_store`, `geo_radius` and `geo_radius_by_member` take a `GeoUnit` (`Meters`, `Kilometers`, `Feet`, `Miles`) instead of `&str`; `GeoSearch.unit` is a `GeoUnit` and `GeoSearch::radius` takes one.
   - `GeoSearch.descending: Option<bool>` is now `order: Option<GeoOrder>` (`Asc`, `Desc`).
