@@ -274,35 +274,103 @@ export abstract class Commands {
   }
 
   /**
-   * Sends any command. `args[0]` is the command name (may contain no spaces; pass subcommands
-   * as separate arguments). Replies come back raw (strings, numbers, arrays, null).
+   * Sends any command by name and returns the raw reply. Use it for commands that have no typed method.
+   * Replies are not converted: simple strings, bulk strings (as strings), integers (numbers, or `bigint` beyond 2^53), arrays and `null` come back as the parser produced them.
+   *
+   * @param command Command name, e.g. `'GET'`. Case does not matter. Subcommands go in the first argument position: `call('CLIENT', 'ID')`.
+   * @param args Command arguments: strings are sent as UTF-8, Buffers as raw bytes, numbers as ASCII.
+   * @returns The raw reply.
+   * @throws {@link RuvioError} when the server answers with an error (`ERR`, `WRONGTYPE`, `NOPERM`, ...).
+   * @throws {@link ConnectionError} when the connection fails before the reply arrives.
+   *
+   * @example
+   * ```ts
+   * const n = await client.call('DBSIZE');
+   * await client.call('CLIENT', 'ID');
+   * ```
    */
   call(command: string, ...args: Arg[]): R<unknown> {
     return this._v(null, cmd(command), args);
   }
 
-  /** Like {@link call}, but bulk strings come back as Buffers. */
+  /**
+   * Like {@link call}, but bulk strings in the reply come back as `Buffer` instead of `string`, so binary values are not corrupted by UTF-8 decoding.
+   *
+   * @param command Command name.
+   * @param args Command arguments.
+   * @returns The raw reply with bulk strings as Buffers.
+   *
+   * @example
+   * ```ts
+   * const raw = await client.callBuffer('GET', 'image:1') as Buffer | null;
+   * ```
+   */
   callBuffer(command: string, ...args: Arg[]): R<unknown> {
     return this._bin(() => this._v(null, cmd(command), args));
   }
 
-  /** Sends a command with a pre-encoded name (see {@link Cmds}); the fastest generic path. */
+  /**
+   * Sends a command whose name was pre-encoded with {@link cmd} or taken from {@link Cmds}. This skips the per-call name encoding and is the fastest generic path.
+   *
+   * @param c Pre-encoded command name.
+   * @param args Command arguments.
+   * @returns The raw reply.
+   *
+   * @example
+   * ```ts
+   * await client.callCmd(Cmds.GET, 'user:1');
+   * ```
+   */
   callCmd(c: Cmd, ...args: Arg[]): R<unknown> {
     return this._v(null, c, args);
   }
 
   // ---- connection ------------------------------------------------------------------------
 
-  /** `RUVIO` (reply "PONG is taken") or `RUVIO OWNER` (names the shard rule). */
+  /**
+   * Sends the Ruvio-specific `RUVIO` command, which identifies the server.
+   * Without `owner` the reply is the text `PONG is taken`. With `owner` the reply names the shard rule that decides which shard owns a key.
+   *
+   * @param owner When true, sends `RUVIO OWNER`.
+   * @returns The reply text.
+   *
+   * @example
+   * ```ts
+   * await client.ruvio();       // 'PONG is taken'
+   * await client.ruvio(true);   // describes the shard ownership rule
+   * ```
+   */
   ruvio(owner?: boolean): R<string> {
     return owner ? this._1(null, C.RUVIO, W.OWNER) : this._0(null, C.RUVIO);
   }
+  /**
+   * Checks that the server answers (`PING`).
+   *
+   * @param message Optional text to echo back.
+   * @returns `'PONG'`, or `message` when one was given.
+   *
+   * @example
+   * ```ts
+   * await client.ping();        // 'PONG'
+   * await client.ping('hi');    // 'hi'
+   * ```
+   */
   ping(message?: Value): R<string> {
     return message === undefined ? this._0(null, C.PING) : this._1(null, C.PING, message);
   }
   /**
-   * `HELLO [2|3] [AUTH user pass] [SETNAME name]`. Switching to 3 on a shared client changes reply
-   * shapes for every caller; prefer the `protocol: 3` connection option.
+   * Sends `HELLO [2|3] [AUTH user pass] [SETNAME name]` and returns the server's properties.
+   * Switching to RESP3 on a shared client changes reply shapes for every caller; prefer the `protocol: 3` connection option, which does this during the handshake.
+   *
+   * @param protocol Protocol version, `2` or `3`. Omit to only read the server properties. An unknown version is a `NOPROTO` error and changes nothing.
+   * @param opts `auth` carries `username` and `password` (the server authenticates the connection); `setName` sets the connection name. Both are sent only when `protocol` is given.
+   * @returns A map of server properties (server, version, proto, mode, ...).
+   * @throws {@link RuvioError} `NOPROTO` for an unsupported version; `WRONGPASS` for bad credentials.
+   *
+   * @example
+   * ```ts
+   * const info = await client.hello(3, { auth: { username: 'app', password: 's3cret' } });
+   * ```
    */
   hello(protocol?: 2 | 3, opts?: { auth?: { username: string; password: string }; setName?: string }): R<Record<string, unknown>> {
     const a: Arg[] = [];
@@ -313,51 +381,208 @@ export abstract class Commands {
     }
     return this._v(T.map, C.HELLO, a);
   }
-  /** `AUTH password` or `AUTH username password`. */
+  /**
+   * Authenticates the connection (`AUTH`). The client already does this on every (re)connect when you pass `username`/`password` options, so call it only to switch users.
+   *
+   * @param passwordOrUser The password (one argument), or the user name when `password` is also given.
+   * @param password The password for the named user.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `WRONGPASS` when the credentials are wrong.
+   *
+   * @example
+   * ```ts
+   * await client.auth('app', 's3cret');
+   * ```
+   */
   auth(passwordOrUser: string, password?: string): R<'OK'> {
     return password === undefined ? this._1(null, C.AUTH, passwordOrUser) : this._2(null, C.AUTH, passwordOrUser, password);
   }
-  /** `SELECT db`. On the shared client this changes the database for every caller (and is kept across reconnects). */
+  /**
+   * Switches the logical database (`SELECT db`).
+   * On the shared client this changes the database for every caller, and the client re-selects it after a reconnect. Use `duplicate({ db })` for an independent connection.
+   *
+   * @param db Database index: `0` up to `databases - 1` (16 by default, at most 256). A cluster-mode server allows only `0`.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} when `db` is out of range.
+   *
+   * @example
+   * ```ts
+   * await client.select(2);
+   * ```
+   */
   select(db: number): R<'OK'> {
     return this._1(null, C.SELECT, db);
   }
+  /**
+   * Returns the message unchanged (`ECHO`).
+   *
+   * @param message Text to echo.
+   * @returns The same text.
+   *
+   * @example
+   * ```ts
+   * await client.echo('hello'); // 'hello'
+   * ```
+   */
   echo(message: Value): R<string> {
     return this._1(null, C.ECHO, message);
   }
-  /** `COMMAND`: the full command table. */
+  /**
+   * Returns the whole command table (`COMMAND`).
+   *
+   * @returns One entry per command, in the Redis 7 shape with empty tips, key specs and subcommands.
+   *
+   * @example
+   * ```ts
+   * const table = await client.command();
+   * ```
+   */
   command(): R<unknown[]> {
     return this._0(null, C.COMMAND);
   }
+  /**
+   * Returns how many commands the server knows (`COMMAND COUNT`).
+   *
+   * @returns The command count.
+   *
+   * @example
+   * ```ts
+   * const n = await client.commandCount();
+   * ```
+   */
   commandCount(): R<number> {
     return this._0(null, C.COMMAND_COUNT);
   }
+  /**
+   * Returns table entries for the named commands (`COMMAND INFO name...`).
+   *
+   * @param names Command names.
+   * @returns One entry per name.
+   *
+   * @example
+   * ```ts
+   * const [get] = await client.commandInfo('get');
+   * ```
+   */
   commandInfo(...names: string[]): R<unknown[]> {
     return this._v(null, C.COMMAND_INFO, names);
   }
+  /**
+   * Returns documentation entries for the named commands (`COMMAND DOCS [name...]`).
+   * Ruvio returns empty maps; the call exists for client compatibility.
+   *
+   * @param names Command names; none asks for all.
+   * @returns The raw reply.
+   *
+   * @example
+   * ```ts
+   * await client.commandDocs('get');
+   * ```
+   */
   commandDocs(...names: string[]): R<unknown> {
     return this._v(null, C.COMMAND_DOCS, names);
   }
+  /**
+   * Reads this connection's name (`CLIENT GETNAME`).
+   *
+   * @returns The name, or `null` when the connection has none.
+   *
+   * @example
+   * ```ts
+   * await client.clientGetname(); // null
+   * ```
+   */
   clientGetname(): R<string | null> {
     return this._0(null, C.CLIENT_GETNAME);
   }
+  /**
+   * Names this connection (`CLIENT SETNAME`). The name is not durable; set the `name` connection option to have it re-applied after every reconnect.
+   *
+   * @param name New name; an empty string clears it.
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.clientSetname('worker-1');
+   * ```
+   */
   clientSetname(name: string): R<'OK'> {
     return this._1(null, C.CLIENT_SETNAME, name);
   }
-  /** `CLIENT TRACKING ON|OFF` (ON needs RESP3; invalidations arrive as `push` events). */
+  /**
+   * Turns client-side-cache invalidation on or off (`CLIENT TRACKING ON|OFF`).
+   * Turning it on needs RESP3 (`protocol: 3`). The server then records `GET` and `MGET` reads on this shard and sends an `invalidate` push when a tracked key is written. Listen with `client.on('push', ...)`. There is no REDIRECT, BCAST, PREFIX, OPTIN, OPTOUT or NOLOOP, and tracking does not cross shards.
+   *
+   * @param on `true` for `ON`, `false` for `OFF`.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} when enabling without RESP3.
+   *
+   * @example
+   * ```ts
+   * const c = createClient({ protocol: 3 });
+   * c.on('push', (data) => console.log('invalidate', data));
+   * await c.clientTracking(true);
+   * await c.get('user:1');
+   * ```
+   */
   clientTracking(on: boolean): R<'OK'> {
     return this._1(null, C.CLIENT_TRACKING, on ? W.ON : W.OFF);
   }
+  /**
+   * Returns this connection's id (`CLIENT ID`). Ids are per shard, so on a multi-shard server two connections can share an id.
+   *
+   * @returns The connection id.
+   *
+   * @example
+   * ```ts
+   * const id = await client.clientId();
+   * ```
+   */
   clientId(): R<number> {
     return this._0(null, C.CLIENT_ID);
   }
-  /** `CLIENT LIST [TYPE type]`. */
+  /**
+   * Lists connections (`CLIENT LIST [TYPE type]`).
+   * Each shard knows only its own connections, so on a multi-shard server the list covers the shard that got the command and ids can repeat across shards. `type` is validated but not used as a filter.
+   *
+   * @param type Connection type word, e.g. `'normal'`.
+   * @returns One line of `key=value` fields per connection.
+   *
+   * @example
+   * ```ts
+   * const text = await client.clientList();
+   * ```
+   */
   clientList(type?: string): R<string> {
     return type === undefined ? this._0(T.lines, C.CLIENT_LIST) : this._2(T.lines, C.CLIENT_LIST, W.TYPE, type);
   }
+  /**
+   * Returns the calling connection's `CLIENT LIST` line (`CLIENT INFO`).
+   *
+   * @returns One line of `key=value` fields.
+   *
+   * @example
+   * ```ts
+   * const line = await client.clientInfo();
+   * ```
+   */
   clientInfo(): R<string> {
     return this._0(T.lines, C.CLIENT_INFO);
   }
-  /** `CLIENT KILL addr` (legacy, replies OK) or `CLIENT KILL [ID id] [ADDR addr] [SKIPME yes|no]` (count). */
+  /**
+   * Closes connections (`CLIENT KILL`).
+   * Each shard knows only its own connections, so on a multi-shard server only the shard that got the command is searched. `USER`, `LADDR` and `TYPE` filters are not supported.
+   *
+   * @param target Legacy form: an `ip:port` string. Otherwise a {@link ClientKillOptions} object with `id`, `addr` and/or `skipMe`.
+   * @returns `'OK'` for the legacy string form; the number of closed connections for the filter form.
+   * @throws {@link RuvioError} for the legacy form when no such connection exists.
+   *
+   * @example
+   * ```ts
+   * await client.clientKill({ id: 42 });          // 1
+   * await client.clientKill({ addr: '10.0.0.5:51234', skipMe: true });
+   * ```
+   */
   clientKill(target: string | ClientKillOptions): R<number | 'OK'> {
     if (typeof target === 'string') return this._1(null, C.CLIENT_KILL, target);
     const a: Arg[] = [];
@@ -366,60 +591,227 @@ export abstract class Commands {
     if (target.skipMe !== undefined) a.push(W.SKIPME, target.skipMe ? W.YES : W.NO);
     return this._v(null, C.CLIENT_KILL, a);
   }
+  /**
+   * Reads the slow log (`SLOWLOG GET [count]`).
+   * Only commands that take the generic dispatcher are timed (not the GET/SET/INCR/PING fast path), and blocking commands are skipped. Each entry holds the command name and its first key, not every argument. The log is per shard; configure it with `slowlog_threshold_micros` and `slowlog_max_len` in the server config.
+   *
+   * @param count Maximum entries, newest first. Omit for the server default.
+   * @returns Raw slow log entries.
+   *
+   * @example
+   * ```ts
+   * const entries = await client.slowlogGet(10);
+   * ```
+   */
   slowlogGet(count?: number): R<unknown[]> {
     return count === undefined ? this._0(null, C.SLOWLOG_GET) : this._1(null, C.SLOWLOG_GET, count);
   }
+  /**
+   * Returns the number of entries in the slow log (`SLOWLOG LEN`).
+   *
+   * @returns The entry count.
+   *
+   * @example
+   * ```ts
+   * await client.slowlogLen();
+   * ```
+   */
   slowlogLen(): R<number> {
     return this._0(null, C.SLOWLOG_LEN);
   }
+  /**
+   * Empties the slow log (`SLOWLOG RESET`).
+   *
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.slowlogReset();
+   * ```
+   */
   slowlogReset(): R<'OK'> {
     return this._0(null, C.SLOWLOG_RESET);
   }
-  /** `LATENCY LATEST` (always empty on Ruvio). */
+  /**
+   * Sends `LATENCY LATEST`. Ruvio records no latency-spike events, so this is always empty; use `INFO latencystats` instead.
+   *
+   * @returns An empty array.
+   *
+   * @example
+   * ```ts
+   * await client.latencyLatest(); // []
+   * ```
+   */
   latencyLatest(): R<unknown[]> {
     return this._0(null, C.LATENCY_LATEST);
   }
 
   // ---- acl -------------------------------------------------------------------------------
 
+  /**
+   * Returns the user name this connection is authenticated as (`ACL WHOAMI`).
+   *
+   * @returns The user name, e.g. `'default'`.
+   *
+   * @example
+   * ```ts
+   * await client.aclWhoami();
+   * ```
+   */
   aclWhoami(): R<string> {
     return this._0(null, C.ACL_WHOAMI);
   }
+  /**
+   * Lists user names (`ACL USERS`), including users added with {@link aclSetuser} until restart.
+   *
+   * @returns User names.
+   *
+   * @example
+   * ```ts
+   * await client.aclUsers(); // ['default', 'app']
+   * ```
+   */
   aclUsers(): R<string[]> {
     return this._0(null, C.ACL_USERS);
   }
+  /**
+   * Lists users as ACL rule lines (`ACL LIST`). Passwords are redacted.
+   *
+   * @returns One rule line per user.
+   *
+   * @example
+   * ```ts
+   * await client.aclList();
+   * ```
+   */
   aclList(): R<string[]> {
     return this._0(null, C.ACL_LIST);
   }
+  /**
+   * Describes one user (`ACL GETUSER`). Passwords are counted, not echoed.
+   *
+   * @param user User name.
+   * @returns A map of the user's flags, commands and key patterns, or `null` when the user does not exist.
+   *
+   * @example
+   * ```ts
+   * const u = await client.aclGetuser('app');
+   * ```
+   */
   aclGetuser(user: string): R<Record<string, unknown> | null> {
     return this._1((v) => (v === null ? null : T.map(v)), C.ACL_GETUSER, user);
   }
+  /**
+   * Lists ACL command categories (`ACL CAT [category]`). Only Ruvio's own categories exist.
+   *
+   * @param category When given, lists the commands in that category instead.
+   * @returns Category or command names.
+   *
+   * @example
+   * ```ts
+   * await client.aclCat();
+   * ```
+   */
   aclCat(category?: string): R<string[]> {
     return category === undefined ? this._0(null, C.ACL_CAT) : this._1(null, C.ACL_CAT, category);
   }
-  /** `ACL SETUSER user rule...` e.g. `aclSetuser('app', 'on', '>secret', '+get', '~app:*')`. */
+  /**
+   * Creates or changes a user with incremental rules (`ACL SETUSER user rule...`).
+   * A new user starts with no password, commands or keys. If any rule fails nothing changes. Open connections keep the rules from their last AUTH. Rules must be UTF-8. Changes live in memory until {@link aclSave} writes them to `security.acl_file`.
+   *
+   * @param user User name.
+   * @param rules ACL rules, e.g. `'on'`, `'>secret'`, `'+get'`, `'~app:*'`.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} when a rule is invalid.
+   *
+   * @example
+   * ```ts
+   * await client.aclSetuser('app', 'on', '>secret', '+get', '+set', '~app:*');
+   * ```
+   */
   aclSetuser(user: string, ...rules: string[]): R<'OK'> {
     return this._kv(null, C.ACL_SETUSER, user, rules);
   }
+  /**
+   * Replaces the live user list from `security.acl_file` (`ACL LOAD`). A missing path or a bad line changes nothing. Open connections keep the rules from their last AUTH.
+   *
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} when the file is missing or invalid.
+   *
+   * @example
+   * ```ts
+   * await client.aclLoad();
+   * ```
+   */
   aclLoad(): R<'OK'> {
     return this._0(null, C.ACL_LOAD);
   }
+  /**
+   * Writes the live user list to `security.acl_file` (`ACL SAVE`), including passwords. A missing path changes nothing.
+   *
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} when `security.acl_file` is not set.
+   *
+   * @example
+   * ```ts
+   * await client.aclSave();
+   * ```
+   */
   aclSave(): R<'OK'> {
     return this._0(null, C.ACL_SAVE);
   }
 
   // ---- strings ---------------------------------------------------------------------------
 
+  /**
+   * Reads a string value (`GET`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The value, or `null` when the key does not exist. Use {@link getBuffer} for binary data.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.set('user:1', 'Ada');
+   * await client.get('user:1'); // 'Ada'
+   * await client.get('nope');   // null
+   * ```
+   */
   get(key: Key): R<string | null> {
     return this._1(null, C.GET, key);
   }
-  /** `GET` returning raw bytes. */
+  /**
+   * Like {@link get}, but returns the raw bytes.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The value as a Buffer, or `null` when the key does not exist.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const png = await client.getBuffer('image:1');
+   * ```
+   */
   getBuffer(key: Key): R<Buffer | null> {
     return this._bin(() => this._1(null, C.GET, key));
   }
   /**
-   * `SET key value [EX|PX|EXAT|PXAT|KEEPTTL] [NX|XX] [GET]` or Ruvio's `SET key value IFEQ expected [...]`.
-   * Resolves `'OK'`, `null` when NX/XX/IFEQ did not write, or the previous value with `get`.
+   * Stores a string (`SET key value [EX|PX|EXAT|PXAT|KEEPTTL] [NX|XX] [GET]`), or Ruvio's compare-and-set form `SET key value IFEQ expected [...]`.
+   * Only one expiry option is sent, in the order `ex`, `px`, `exat`, `pxat`, `keepTtl`; `nx` wins over `xx`. A plain `set` removes any existing TTL. `ifEq` cannot be combined with `nx`, `xx` or `get`.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param value Value to store: string, Buffer or number (numbers are sent as ASCII text).
+   * @param opts See {@link SetOptions}: `ex`/`px`/`exat`/`pxat`/`keepTtl` for expiry, `nx`/`xx` for conditions, `get` to return the old value, `ifEq` for compare-and-set.
+   * @returns `'OK'` when written. `null` when `nx`/`xx`/`ifEq` blocked the write. With `get`, the previous value instead (`null` if there was none).
+   * @throws {@link RuvioError} `WRONGTYPE` when `get` is used and the key holds a non-string; `ERR` for an invalid expiry or an invalid option mix.
+   *
+   * @example
+   * ```ts
+   * await client.set('user:1', 'Ada');
+   * await client.set('session:9', 'tok', { ex: 3600 });          // expires in an hour
+   * await client.set('lock:a', 'me', { nx: true, px: 5000 });    // null if already held
+   * await client.set('cfg', 'v2', { ifEq: 'v1' });               // null if cfg is not 'v1'
+   * ```
    */
   set(key: Key, value: Value, opts?: SetOptions): R<string | null> {
     if (opts === undefined) return this._2(null, C.SET, key, value);
@@ -435,94 +827,439 @@ export abstract class Commands {
     if (opts.get) a.push(W.GET);
     return this._v(null, C.SET, a);
   }
-  /** `SETV key value [version]`: versioned write; returns the new version. */
+  /**
+   * Writes a versioned string (`SETV key value [version]`, Ruvio extension) for optimistic concurrency.
+   * The first call without `version` creates the key at version 1. Every later call must pass the current version and receives the next one. A mismatch is an error and leaves the value unchanged. A plain {@link set} replaces the versioned string.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param value Value to store: string, Buffer or number (numbers are sent as ASCII text).
+   * @param version The version you last read. Omit only when creating the key.
+   * @returns The new version.
+   * @throws {@link RuvioError} when `version` does not match the stored version.
+   *
+   * @example
+   * ```ts
+   * const v1 = await client.setv('doc:1', 'a');        // 1
+   * const v2 = await client.setv('doc:1', 'b', v1);    // 2
+   * ```
+   */
   setv(key: Key, value: Value, version?: number): R<number> {
     return version === undefined ? this._2(null, C.SETV, key, value) : this._3(null, C.SETV, key, value, version);
   }
-  /** `TAKE key count`: the remainder, or `null` when the key holds less than `count` (nothing changes). */
+  /**
+   * Takes `count` from an integer counter only if enough is left (`TAKE key count`, Ruvio extension). Handy for stock or quota.
+   *
+   * @param key Key holding a decimal integer.
+   * @param count Positive amount to subtract.
+   * @returns The remainder after the subtraction, or `null` when the key is missing or holds less than `count`. In the `null` case nothing is created or changed.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.set('stock:42', 3);
+   * await client.take('stock:42', 2); // 1
+   * await client.take('stock:42', 2); // null, still 1
+   * ```
+   */
   take(key: Key, count: number): R<number | null> {
     return this._2(null, C.TAKE, key, count);
   }
-  /** `DELEX key IFEQ value`: deletes only when the string equals `value`. */
+  /**
+   * Deletes a string only if it equals the given value (`DELEX key IFEQ value`, Ruvio extension). The safe way to release a lock you own.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param ifEq Expected current value.
+   * @returns `true` when deleted; `false` when the key is missing or the value differs.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const deleted = await client.delex('lock:a', myToken);
+   * ```
+   */
   delex(key: Key, ifEq: Value): R<boolean> {
     return this._3(T.bool, C.DELEX, key, W.IFEQ, ifEq);
   }
-  /** `GETEX key ttlMs` (Ruvio form): returns the value and sets its TTL in milliseconds. */
+  /**
+   * Reads a string and sets its expiry in one step (`GETEX key ttlMs`, the Ruvio form: milliseconds, no EX/PX words).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param ttlMs New time to live in milliseconds from now.
+   * @returns The value, or `null` when the key is missing (nothing is stored).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.getex('session:9', 60_000); // value, now expires in a minute
+   * ```
+   */
   getex(key: Key, ttlMs: number): R<string | null> {
     return this._2(null, C.GETEX, key, ttlMs);
   }
+  /**
+   * Reads several strings (`MGET`).
+   * On a multi-shard server the keys must share a slot (use `{tag}` in the names) or the server answers `CROSSSLOT`. A {@link ClusterClient} splits the call per slot instead; that is not atomic.
+   *
+   * @param keys Keys to operate on.
+   * @returns One entry per key, in order: the value, or `null` when the key is missing or holds another type.
+   *
+   * @example
+   * ```ts
+   * const [a, b] = await client.mget('a', 'b'); // e.g. ['1', null]
+   * ```
+   */
   mget(...keys: Key[]): R<(string | null)[]> {
     return this._v(null, C.MGET, keys);
   }
-  /** `MGET` returning raw bytes. */
+  /**
+   * Like {@link mget}, but values come back as Buffers.
+   *
+   * @param keys Keys to operate on.
+   * @returns One entry per key: the raw value, or `null`.
+   *
+   * @example
+   * ```ts
+   * const [raw] = await client.mgetBuffer('blob:1', 'blob:2');
+   * ```
+   */
   mgetBuffer(...keys: Key[]): R<(Buffer | null)[]> {
     return this._bin(() => this._v(null, C.MGET, keys));
   }
+  /**
+   * Writes several strings (`MSET`). Each key's TTL is cleared.
+   * On a multi-shard server the keys must share a slot or the server answers `CROSSSLOT`. A {@link ClusterClient} splits the call per slot; that is not atomic.
+   *
+   * @param pairs An object `{ key: value }` or an array of `[key, value]` pairs (use pairs for Buffer keys).
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.mset({ a: 1, b: 2 });
+   * await client.mset([['x', 'y'], ['p', 'q']]);
+   * ```
+   */
   mset(pairs: Record<string, Value> | ReadonlyArray<readonly [Key, Value]>): R<'OK'> {
     return this._v(null, C.MSET, flatPairs([], pairs));
   }
+  /**
+   * Writes several strings only if none of the keys exists (`MSETNX`). All or nothing.
+   * Keys must share a slot on a multi-shard server.
+   *
+   * @param pairs An object `{ key: value }` or an array of `[key, value]` pairs.
+   * @returns `true` when all were written; `false` when at least one key existed (nothing written).
+   *
+   * @example
+   * ```ts
+   * await client.msetnx({ a: 1, b: 2 });
+   * ```
+   */
   msetnx(pairs: Record<string, Value> | ReadonlyArray<readonly [Key, Value]>): R<boolean> {
     return this._v(T.bool, C.MSETNX, flatPairs([], pairs));
   }
+  /**
+   * Replaces a string and returns the old one (`GETSET`). Clears the TTL. Prefer {@link set} with `get: true`.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param value Value to store: string, Buffer or number (numbers are sent as ASCII text).
+   * @returns The previous value, or `null` when the key did not exist.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const old = await client.getset('counter', 0);
+   * ```
+   */
   getset(key: Key, value: Value): R<string | null> {
     return this._2(null, C.GETSET, key, value);
   }
+  /**
+   * Appends to a string, creating it when missing (`APPEND`). An existing TTL is kept.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param value Text to append.
+   * @returns The string length in bytes after the append.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.append('log', 'line1\n'); // 6
+   * ```
+   */
   append(key: Key, value: Value): R<number> {
     return this._2(null, C.APPEND, key, value);
   }
+  /**
+   * Returns the length of a string in bytes (`STRLEN`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The length, or `0` when the key does not exist.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.strlen('user:1');
+   * ```
+   */
   strlen(key: Key): R<number> {
     return this._1(null, C.STRLEN, key);
   }
+  /**
+   * Adds 1 to an integer string, creating it as `0` first when missing (`INCR`).
+   * Values are signed 64-bit; integers beyond 2^53 arrive as `bigint` at runtime even though the type says `number`.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The new value.
+   * @throws {@link RuvioError} `ERR` when the value is not an integer or the result overflows 64 bits.
+   *
+   * @example
+   * ```ts
+   * await client.incr('hits'); // 1
+   * await client.incr('hits'); // 2
+   * ```
+   */
   incr(key: Key): R<number> {
     return this._1(null, C.INCR, key);
   }
+  /**
+   * Subtracts 1 from an integer string, creating it as `0` first when missing (`DECR`). Signed 64-bit.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The new value.
+   * @throws {@link RuvioError} `ERR` when the value is not an integer or the result overflows.
+   *
+   * @example
+   * ```ts
+   * await client.decr('stock');
+   * ```
+   */
   decr(key: Key): R<number> {
     return this._1(null, C.DECR, key);
   }
+  /**
+   * Adds an integer to an integer string, creating it as `0` first when missing (`INCRBY`). Signed 64-bit.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param delta Whole number to add (may be negative).
+   * @returns The new value.
+   * @throws {@link RuvioError} `ERR` when the value is not an integer or the result overflows.
+   *
+   * @example
+   * ```ts
+   * await client.incrby('score', 10);
+   * ```
+   */
   incrby(key: Key, delta: number): R<number> {
     return this._2(null, C.INCRBY, key, delta);
   }
-  /** `INCRBY key delta MAX limit`: `null` (and no write) when the result would pass `limit`. */
+  /**
+   * Adds to a counter but refuses to pass a ceiling (`INCRBY key delta MAX limit`, Ruvio extension).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param delta Whole number to add.
+   * @param limit Highest value the counter may reach.
+   * @returns The new value, or `null` (and nothing is written) when the result would exceed `limit`.
+   * @throws {@link RuvioError} `ERR` when the value is not an integer.
+   *
+   * @example
+   * ```ts
+   * await client.incrbyMax('seats', 1, 100); // null once 100 is reached
+   * ```
+   */
   incrbyMax(key: Key, delta: number, limit: number): R<number | null> {
     return this._4(null, C.INCRBY, key, delta, W.MAX, limit);
   }
+  /**
+   * Subtracts an integer from an integer string, creating it as `0` first when missing (`DECRBY`). Signed 64-bit.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param delta Whole number to subtract.
+   * @returns The new value.
+   * @throws {@link RuvioError} `ERR` when the value is not an integer or the result overflows.
+   *
+   * @example
+   * ```ts
+   * await client.decrby('stock', 5);
+   * ```
+   */
   decrby(key: Key, delta: number): R<number> {
     return this._2(null, C.DECRBY, key, delta);
   }
+  /**
+   * Stores a string with a TTL in seconds (`SETEX`). Same as `set(key, value, { ex: seconds })`.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param seconds Time to live in seconds; must be positive.
+   * @param value Value to store: string, Buffer or number (numbers are sent as ASCII text).
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `ERR` when `seconds` is not positive.
+   *
+   * @example
+   * ```ts
+   * await client.setex('otp:7', 300, '481516');
+   * ```
+   */
   setex(key: Key, seconds: number, value: Value): R<'OK'> {
     return this._3(null, C.SETEX, key, seconds, value);
   }
+  /**
+   * Stores a string with a TTL in milliseconds (`PSETEX`). Same as `set(key, value, { px: ms })`.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param ms Time to live in milliseconds; must be positive.
+   * @param value Value to store: string, Buffer or number (numbers are sent as ASCII text).
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `ERR` when `ms` is not positive.
+   *
+   * @example
+   * ```ts
+   * await client.psetex('otp:7', 5000, '481516');
+   * ```
+   */
   psetex(key: Key, ms: number, value: Value): R<'OK'> {
     return this._3(null, C.PSETEX, key, ms, value);
   }
+  /**
+   * Stores a string only when the key does not exist (`SETNX`). Prefer {@link set} with `nx: true`, which can also set a TTL.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param value Value to store: string, Buffer or number (numbers are sent as ASCII text).
+   * @returns `true` when written, `false` when the key already existed.
+   *
+   * @example
+   * ```ts
+   * await client.setnx('init', '1');
+   * ```
+   */
   setnx(key: Key, value: Value): R<boolean> {
     return this._2(T.bool, C.SETNX, key, value);
   }
+  /**
+   * Reads a string and deletes the key (`GETDEL`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The value, or `null` when the key did not exist.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const token = await client.getdel('once:abc');
+   * ```
+   */
   getdel(key: Key): R<string | null> {
     return this._1(null, C.GETDEL, key);
   }
+  /**
+   * Adds a decimal number to a string value (`INCRBYFLOAT`). The TTL is kept.
+   * Computed in double precision and printed with 15 significant digits; Redis uses long double, so results with more digits can differ in the last places.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param delta Number to add (may be negative).
+   * @returns The new value.
+   * @throws {@link RuvioError} `ERR` when the value is not a number or the result is not finite.
+   *
+   * @example
+   * ```ts
+   * await client.incrbyfloat('balance', 0.5);
+   * ```
+   */
   incrbyfloat(key: Key, delta: number): R<number> {
     return this._2(T.float, C.INCRBYFLOAT, key, delta);
   }
+  /**
+   * Returns part of a string (`GETRANGE`).
+   * A range wholly before the start of the string gives an empty string (Redis 7.0 returns the first byte).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param start First byte (inclusive); negative counts from the end.
+   * @param end Last byte (inclusive); negative counts from the end.
+   * @returns The substring, or `''` when the key is missing or the range is empty.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.getrange('greeting', 0, 4); // 'Hello'
+   * ```
+   */
   getrange(key: Key, start: number, end: number): R<string> {
     return this._3(null, C.GETRANGE, key, start, end);
   }
+  /**
+   * Old name for {@link getrange}; same behaviour.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param start First byte (inclusive); negative counts from the end.
+   * @param end Last byte (inclusive); negative counts from the end.
+   * @returns The substring, or `''`.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.substr('greeting', 0, 4);
+   * ```
+   */
   substr(key: Key, start: number, end: number): R<string> {
     return this._3(null, C.SUBSTR, key, start, end);
   }
+  /**
+   * Overwrites part of a string starting at a byte offset, padding with zero bytes when needed (`SETRANGE`). The TTL is kept.
+   * The string is limited to 16 MiB, and each call rewrites the whole value (cost grows with the value size).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param offset Byte position to start writing at; zero or more.
+   * @param value Bytes to write.
+   * @returns The string length after the write.
+   * @throws {@link RuvioError} `ERR` when the result would exceed 16 MiB.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.setrange('greeting', 6, 'World');
+   * ```
+   */
   setrange(key: Key, offset: number, value: Value): R<number> {
     return this._3(null, C.SETRANGE, key, offset, value);
   }
   /**
-   * `FILLGET key fillMs [WAIT waitMs]`. `WAIT` parks the whole shared connection: leave it unset on
-   * a shared client (see {@link RuvioClient.getOrCreate}).
+   * Starts or joins a cache fill (`FILLGET key fillMs [WAIT waitMs]`, Ruvio extension). Most code should use {@link getOrCreate}, which wraps the full protocol.
+   * The reply tells you what to do: `hit` (use `value`), `fill` (you build the value, then call {@link fillset} with `token`), `busy` (someone else is filling; ask again later) or `stale` (serve `value`; if `token` is set, you should refresh). Fill markers are memory-only and lapse after `fillMs`.
+   * `waitMs` parks the whole shared connection while it waits: leave it unset on a shared client.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param fillMs How long the fill marker lives, i.e. the time you have to build the value (ms).
+   * @param waitMs Optional: hold a would-be `busy` caller up to this long (the server retries every 5 ms) until the value is written or the marker lapses.
+   * @returns A {@link FillResult}.
+   * @throws {@link RuvioError} when `waitMs` is used inside MULTI or a script.
+   *
+   * @example
+   * ```ts
+   * const r = await client.fillget('page:home', 10_000);
+   * if (r.state === 'fill') {
+   *   const html = await render();
+   *   await client.fillset('page:home', html, 60_000, r.token!);
+   * }
+   * ```
    */
   fillget(key: Key, fillMs: number, waitMs?: number): R<FillResult> {
     return waitMs === undefined
       ? this._2(T.fill, C.FILLGET, key, fillMs)
       : this._4(T.fill, C.FILLGET, key, fillMs, W.WAIT, waitMs);
   }
-  /** `FILLSET key value ttlMs token [SWR staleMs]`: true when the token was live and the value was written. */
+  /**
+   * Stores the value for a fill started with {@link fillget} (`FILLSET key value ttlMs token [SWR staleMs]`, Ruvio extension).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param value Value to cache.
+   * @param ttlMs Fresh lifetime in milliseconds.
+   * @param token The token from the `fill` (or `stale`) result of {@link fillget}.
+   * @param staleMs Optional: keep the value readable as `stale` this long after `ttlMs` while one caller refreshes it. The soft expiry is not persisted.
+   * @returns `true` when the token was still live and the value was written; `false` otherwise (for example the marker lapsed).
+   * @throws {@link RuvioError} `ERR` for an invalid TTL.
+   *
+   * @example
+   * ```ts
+   * await client.fillset('page:home', html, 60_000, token, 30_000);
+   * ```
+   */
   fillset(key: Key, value: Value, ttlMs: number, token: Value, staleMs?: number): R<boolean> {
     if (staleMs === undefined) return this._4(T.bool, C.FILLSET, key, value, ttlMs, token);
     return this._v(T.bool, C.FILLSET, [key, value, ttlMs, token, W.SWR, staleMs]);
@@ -530,143 +1267,634 @@ export abstract class Commands {
 
   // ---- Ruvio coordination primitives -----------------------------------------------------
 
-  /** `LIMIT key max windowMs`: calls left in the window after this one, or `null` when full. */
+  /**
+   * Fixed-window rate limit on one key (`LIMIT key max windowMs`, Ruvio extension). Most code can use {@link rateLimit}.
+   * The first call opens a window of `windowMs`; each accepted call uses one of `max`. Rejected calls do not count. The key disappears when the window ends.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param max Calls allowed per window.
+   * @param windowMs Window length in milliseconds.
+   * @returns The calls left in the window after this one (`0` means this was the last), or `null` when the window is full and the call is refused.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const left = await client.limit('rl:user:7', 100, 60_000);
+   * if (left === null) throw new Error('slow down');
+   * ```
+   */
   limit(key: Key, max: number, windowMs: number): R<number | null> {
     return this._3(null, C.LIMIT, key, max, windowMs);
   }
-  /** `IDEM key BEGIN fingerprint owner ttlMs`. */
+  /**
+   * Starts an idempotent operation (`IDEM key BEGIN fingerprint owner ttlMs`, Ruvio extension). Most code should use {@link idempotent}.
+   * Atomically reserves a missing key, or reports what is already there. It is not exactly-once for external effects.
+   *
+   * @param key Idempotency key.
+   * @param fingerprint Hash of the request; the same key with a different fingerprint is a `conflict`. 1 to 128 bytes.
+   * @param owner Identifier of this attempt. 1 to 128 bytes.
+   * @param ttlMs Retention in milliseconds, 1 ms to 7 days. Neither retries nor completion renew it.
+   * @returns An {@link IdemBeginResult}: `acquired` (you run the work, then {@link idemComplete}), `pending` (another owner is running), `conflict` (different fingerprint) or `completed` (with the stored `result`).
+   * @throws {@link RuvioError} `ERR` for an invalid token length or TTL.
+   *
+   * @example
+   * ```ts
+   * const r = await client.idemBegin('pay:123', hash, owner, 86_400_000);
+   * if (r.state === 'acquired') { doWork(); }
+   * ```
+   */
   idemBegin(key: Key, fingerprint: Value, owner: Value, ttlMs: number): R<IdemBeginResult> {
     return this._v(T.idem, C.IDEM, [key, W.BEGIN, fingerprint, owner, ttlMs]);
   }
-  /** `IDEM key COMPLETE fingerprint owner result`: 1 when published (or identical), 0 otherwise. */
+  /**
+   * Publishes the result of an idempotent operation (`IDEM key COMPLETE fingerprint owner result`, Ruvio extension).
+   * Only the matching live owner can publish. An identical repeat is acknowledged without rewriting; a different result is refused.
+   *
+   * @param key Idempotency key.
+   * @param fingerprint Same fingerprint used in {@link idemBegin}.
+   * @param owner Same owner used in {@link idemBegin}.
+   * @param result Result to store; at most 4 MiB.
+   * @returns `1` when published (or identical to the stored result), `0` otherwise.
+   *
+   * @example
+   * ```ts
+   * await client.idemComplete('pay:123', hash, owner, JSON.stringify(receipt));
+   * ```
+   */
   idemComplete(key: Key, fingerprint: Value, owner: Value, result: Value): R<number> {
     return this._v(null, C.IDEM, [key, W.COMPLETE, fingerprint, owner, result]);
   }
-  /** `ONCE key ttlMs`: true for the first call within the TTL. */
+  /**
+   * Marks "first time only" (`ONCE key ttlMs`, Ruvio extension).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param ttlMs How long the marker lives, in milliseconds. A later call does not refresh it.
+   * @returns `true` for the first call within the TTL, `false` for later calls. After the TTL the next call is first again.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * if (await client.once('welcome-email:7', 86_400_000)) await sendEmail();
+   * ```
+   */
   once(key: Key, ttlMs: number): R<boolean> {
     return this._2(T.bool, C.ONCE, key, ttlMs);
   }
-  /** `LEASE key ttlMs`: a new fencing token, or `null` while held. */
+  /**
+   * Takes a fenced lease (`LEASE key ttlMs`, Ruvio extension). Most code should use {@link acquireLease}.
+   * Tokens increase on every grant, also after expiry or {@link release}, so downstream systems can reject writes from an old holder. `DEL` on the key restarts the sequence at 1.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param ttlMs Lease length in milliseconds.
+   * @returns A new fencing token, or `null` while another holder has the lease.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const token = await client.lease('job:nightly', 30_000);
+   * if (token !== null) { useToken(token); }
+   * ```
+   */
   lease(key: Key, ttlMs: number): R<number | null> {
     return this._2(T.intOrNull, C.LEASE, key, ttlMs);
   }
-  /** `SEMAPHORE key max ttlMs`: a holder token (as a decimal string; it can exceed 2^53), or `null` when full. */
+  /**
+   * Takes one slot of a counting semaphore (`SEMAPHORE key max ttlMs`, Ruvio extension). Most code should use {@link acquireSemaphore}.
+   * Each holder has its own TTL; the key stores 16 bytes per live holder and vanishes with the last one.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param max Maximum concurrent holders.
+   * @param ttlMs How long this holder's slot lasts, in milliseconds.
+   * @returns A holder token as a decimal string (it can exceed 2^53), or `null` when all `max` slots are taken.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const token = await client.semaphore('pool:db', 10, 30_000);
+   * if (token !== null) await client.release('pool:db', token);
+   * ```
+   */
   semaphore(key: Key, max: number, ttlMs: number): R<string | null> {
     return this._3(T.token, C.SEMAPHORE, key, max, ttlMs);
   }
-  /** `RELEASE key token` for a lease or a semaphore holder. */
+  /**
+   * Releases a lease or a semaphore slot (`RELEASE key token`, Ruvio extension).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param token The token returned by {@link lease} or {@link semaphore}.
+   * @returns `true` when released; `false` when the token does not match the current holder (nothing changes).
+   *
+   * @example
+   * ```ts
+   * await client.release('job:nightly', token);
+   * ```
+   */
   release(key: Key, token: Value | bigint): R<boolean> {
     return this._2(T.bool, C.RELEASE, key, token);
   }
-  /** `CHANGES START`: arms the change feed and returns the cursor. */
+  /**
+   * Arms the in-memory change feed on this shard (`CHANGES START`, Ruvio extension) and returns the cursor to read from.
+   * Nothing is recorded before this call. The feed is not a copy of the WAL and is empty after a restart.
+   *
+   * @returns The starting cursor for {@link changes}.
+   *
+   * @example
+   * ```ts
+   * let cursor = await client.changesStart();
+   * ```
+   */
   changesStart(): R<number> {
     return this._1(null, C.CHANGES, W.START);
   }
-  /** `CHANGES cursor`: notes after `cursor` (at most 1024). */
+  /**
+   * Reads change notes recorded after a cursor (`CHANGES cursor`, Ruvio extension).
+   *
+   * @param cursor A cursor from {@link changesStart} or the last note's `seq`.
+   * @returns Up to 1024 {@link ChangeNote}s, oldest first. Empty when nothing happened.
+   *
+   * @example
+   * ```ts
+   * for (const n of await client.changes(cursor)) cursor = n.seq;
+   * ```
+   */
   changes(cursor: number): R<ChangeNote[]> {
     return this._1(T.changes, C.CHANGES, cursor);
   }
 
   // ---- keys ------------------------------------------------------------------------------
 
+  /**
+   * Deletes keys (`DEL`).
+   * On a multi-shard server the keys must share a slot, or the server answers `CROSSSLOT`; a {@link ClusterClient} splits the call per slot (not atomic) and sums the counts.
+   *
+   * @param keys Keys to operate on.
+   * @returns The number of keys that existed and were removed.
+   *
+   * @example
+   * ```ts
+   * await client.del('a', 'b'); // 2
+   * ```
+   */
   del(...keys: Key[]): R<number> {
     return keys.length === 1 ? this._1(null, C.DEL, keys[0]!) : this._v(null, C.DEL, keys);
   }
+  /**
+   * Deletes keys (`UNLINK`). Ruvio frees synchronously, so this is identical to {@link del}.
+   *
+   * @param keys Keys to operate on.
+   * @returns The number of keys removed.
+   *
+   * @example
+   * ```ts
+   * await client.unlink('a');
+   * ```
+   */
   unlink(...keys: Key[]): R<number> {
     return this._v(null, C.UNLINK, keys);
   }
+  /**
+   * Counts how many of the keys exist (`EXISTS`). A key named twice counts twice.
+   * Keys must share a slot on a multi-shard server; a {@link ClusterClient} splits per slot.
+   *
+   * @param keys Keys to operate on.
+   * @returns The number of existing keys.
+   *
+   * @example
+   * ```ts
+   * if ((await client.exists('user:1')) === 1) { found(); }
+   * ```
+   */
   exists(...keys: Key[]): R<number> {
     return keys.length === 1 ? this._1(null, C.EXISTS, keys[0]!) : this._v(null, C.EXISTS, keys);
   }
+  /**
+   * Returns the type name of a key (`TYPE`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns `'string'`, `'list'`, `'set'`, `'zset'`, `'hash'`, `'stream'` and so on, or `'none'` when the key does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.type('user:1'); // 'hash'
+   * ```
+   */
   type(key: Key): R<string> {
     return this._1(null, C.TYPE, key);
   }
+  /**
+   * Renames a key, overwriting the target (`RENAME`).
+   * Both keys must share a slot on a multi-shard server; a {@link ClusterClient} does not emulate it and fails with `CROSSSLOT` before sending.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param newKey New key name.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `ERR` when `key` does not exist; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.rename('tmp:1', 'final:1');
+   * ```
+   */
   rename(key: Key, newKey: Key): R<'OK'> {
     return this._2(null, C.RENAME, key, newKey);
   }
+  /**
+   * Renames a key only if the new name is free (`RENAMENX`). Slot rules as for {@link rename}.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param newKey New key name.
+   * @returns `true` when renamed, `false` when `newKey` already exists.
+   * @throws {@link RuvioError} `ERR` when `key` does not exist; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.renamenx('a', 'b');
+   * ```
+   */
   renamenx(key: Key, newKey: Key): R<boolean> {
     return this._2(T.bool, C.RENAMENX, key, newKey);
   }
-  /** One `SCAN` page. See {@link RuvioClient.scanIterator} for the lazy walk. */
+  /**
+   * Reads one page of the key space (`SCAN`). See {@link scanIterator} for a lazy walk of all pages.
+   * Shard-local: on a multi-shard server one connection sees only its shard's keys, and cursors walk sorted live keys rather than Redis hash-table cursors. {@link ClusterClient.scanIterator} walks every node.
+   *
+   * @param cursor Start with `0`; pass the returned cursor for the next page.
+   * @param opts {@link ScanOptions}: `match` glob, `count` page-size hint, `type` filter.
+   * @returns A {@link ScanPage}; its `cursor` is `'0'` when the walk is finished. A page may be empty before that.
+   *
+   * @example
+   * ```ts
+   * let page = await client.scan(0, { match: 'user:*', count: 100 });
+   * while (page.cursor !== '0') page = await client.scan(page.cursor, { match: 'user:*' });
+   * ```
+   */
   scan(cursor: string | number, opts?: ScanOptions): R<ScanPage<string>> {
     return this._v(T.scan, C.SCAN, pushScan([cursor], opts));
   }
+  /**
+   * Counts keys in the selected database (`DBSIZE`).
+   * Shard-local when the server runs with `port_mode = "per-shard"` (the default): a plain client counts only the shard it is connected to. {@link ClusterClient} asks every node and sums.
+   *
+   * @returns The key count.
+   *
+   * @example
+   * ```ts
+   * await client.dbsize();
+   * ```
+   */
   dbsize(): R<number> {
     return this._0(null, C.DBSIZE);
   }
+  /**
+   * Deletes every key of the selected database (`FLUSHDB`).
+   * Careful with multi-shard servers in `port_mode = "per-shard"` (the default): a plain client clears only the shard it is connected to, while {@link ClusterClient} sends it to every node.
+   *
+   * @param async Accepted for compatibility (`ASYNC`); Ruvio always clears synchronously.
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.flushdb();
+   * ```
+   */
   flushdb(async?: boolean): R<'OK'> {
     return async ? this._1(null, C.FLUSHDB, W.ASYNC) : this._0(null, C.FLUSHDB);
   }
+  /**
+   * Deletes every key of every database (`FLUSHALL`).
+   * Same multi-shard rule as {@link flushdb}: a plain client clears only its own shard in per-shard mode; {@link ClusterClient} clears all nodes.
+   *
+   * @param async Accepted for compatibility (`ASYNC`); Ruvio always clears synchronously.
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.flushall();
+   * ```
+   */
   flushall(async?: boolean): R<'OK'> {
     return async ? this._1(null, C.FLUSHALL, W.ASYNC) : this._0(null, C.FLUSHALL);
   }
+  /**
+   * Swaps two logical databases (`SWAPDB`). O(1).
+   * Refused in cluster mode and in scripts. Clients blocked on keys that now exist are not woken.
+   *
+   * @param a First database index.
+   * @param b Second database index.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `ERR` when an index is out of range or the server is in cluster mode.
+   *
+   * @example
+   * ```ts
+   * await client.swapdb(0, 1);
+   * ```
+   */
   swapdb(a: number, b: number): R<'OK'> {
     return this._2(null, C.SWAPDB, a, b);
   }
+  /**
+   * Moves a key to another logical database (`MOVE`). Refused in cluster mode and in scripts.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param db Target database index.
+   * @returns `true` when moved; `false` when the key is missing or the target already has it.
+   * @throws {@link RuvioError} `ERR` when `db` does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.move('user:1', 2);
+   * ```
+   */
   move(key: Key, db: number): R<boolean> {
     return this._2(T.bool, C.MOVE, key, db);
   }
-  /** `EXPIRE key seconds` (Ruvio has no NX/XX/GT/LT here; zero or less is an error). */
+  /**
+   * Sets a TTL in seconds (`EXPIRE`). Ruvio takes no `NX`/`XX`/`GT`/`LT` option here.
+   * A TTL of zero or less deletes the key and still returns `true`, as Redis does.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param seconds Time to live in seconds.
+   * @returns `true` when applied; `false` when the key does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.expire('session:9', 3600);
+   * ```
+   */
   expire(key: Key, seconds: number): R<boolean> {
     return this._2(T.bool, C.EXPIRE, key, seconds);
   }
+  /**
+   * Sets a TTL in milliseconds (`PEXPIRE`). A value of zero or less deletes the key and returns `true`.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param ms Time to live in milliseconds.
+   * @returns `true` when applied; `false` when the key does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.pexpire('session:9', 1500);
+   * ```
+   */
   pexpire(key: Key, ms: number): R<boolean> {
     return this._2(T.bool, C.PEXPIRE, key, ms);
   }
-  /** A past deadline deletes the key and still answers true. */
+  /**
+   * Sets an absolute deadline in Unix seconds (`EXPIREAT`). A deadline in the past deletes the key and still returns `true`.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param unixSeconds Deadline as Unix time in seconds.
+   * @returns `true` when applied; `false` when the key does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.expireat('promo', Math.floor(Date.now() / 1000) + 86_400);
+   * ```
+   */
   expireat(key: Key, unixSeconds: number): R<boolean> {
     return this._2(T.bool, C.EXPIREAT, key, unixSeconds);
   }
+  /**
+   * Sets an absolute deadline in Unix milliseconds (`PEXPIREAT`). A deadline in the past deletes the key and still returns `true`.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param unixMs Deadline as Unix time in milliseconds.
+   * @returns `true` when applied; `false` when the key does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.pexpireat('promo', Date.now() + 5000);
+   * ```
+   */
   pexpireat(key: Key, unixMs: number): R<boolean> {
     return this._2(T.bool, C.PEXPIREAT, key, unixMs);
   }
+  /**
+   * Remaining time to live in seconds (`TTL`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns Seconds left, `-1` when the key has no expiry, `-2` when the key does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.ttl('session:9'); // 3598
+   * ```
+   */
   ttl(key: Key): R<number> {
     return this._1(null, C.TTL, key);
   }
+  /**
+   * Remaining time to live in milliseconds (`PTTL`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns Milliseconds left, `-1` when the key has no expiry, `-2` when the key does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.pttl('session:9');
+   * ```
+   */
   pttl(key: Key): R<number> {
     return this._1(null, C.PTTL, key);
   }
+  /**
+   * Removes a key's TTL (`PERSIST`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns `true` when a TTL was removed; `false` when the key is missing or had no TTL.
+   *
+   * @example
+   * ```ts
+   * await client.persist('session:9');
+   * ```
+   */
   persist(key: Key): R<boolean> {
     return this._1(T.bool, C.PERSIST, key);
   }
+  /**
+   * Lists keys matching a glob pattern (`KEYS`). Use {@link scan} or {@link scanIterator} on real data.
+   * It walks the database in one call and refuses databases above 100,000 keys per shard. Glob supports `*`, `?`, `[abc]`, `[^a-z]` and `\` escapes. A {@link ClusterClient} asks every node and joins the arrays; a plain client on a per-shard server sees only its own shard.
+   *
+   * @param pattern Glob pattern, e.g. `'user:*'`.
+   * @returns Matching key names, in no guaranteed order.
+   * @throws {@link RuvioError} `ERR` when the shard holds more than 100,000 keys.
+   *
+   * @example
+   * ```ts
+   * const ids = await client.keys('user:*');
+   * ```
+   */
   keys(pattern: string): R<string[]> {
     return this._1(null, C.KEYS, pattern);
   }
+  /**
+   * Returns a random key (`RANDOMKEY`). It starts at a pseudo-random slot of the key index, so it is not uniform.
+   *
+   * @returns A key name, or `null` when the database is empty.
+   *
+   * @example
+   * ```ts
+   * await client.randomkey();
+   * ```
+   */
   randomkey(): R<string | null> {
     return this._0(null, C.RANDOMKEY);
   }
+  /**
+   * Counts existing keys (`TOUCH`). Ruvio does not update the access time used by eviction. Keys must share a shard, like {@link exists}.
+   *
+   * @param keys Keys to operate on.
+   * @returns The number of keys that exist.
+   *
+   * @example
+   * ```ts
+   * await client.touch('a', 'b');
+   * ```
+   */
   touch(...keys: Key[]): R<number> {
     return this._v(null, C.TOUCH, keys);
   }
+  /**
+   * Absolute expiry as Unix seconds (`EXPIRETIME`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The deadline in Unix seconds, `-1` when the key has no expiry, `-2` when it does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.expiretime('promo');
+   * ```
+   */
   expiretime(key: Key): R<number> {
     return this._1(null, C.EXPIRETIME, key);
   }
+  /**
+   * Absolute expiry as Unix milliseconds (`PEXPIRETIME`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The deadline in Unix milliseconds, `-1` when the key has no expiry, `-2` when it does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.pexpiretime('promo');
+   * ```
+   */
   pexpiretime(key: Key): R<number> {
     return this._1(null, C.PEXPIRETIME, key);
   }
+  /**
+   * Copies a key (`COPY`). Works for strings, lists, sets, hashes and sorted sets, with their TTL. It copies the whole value as one atomic operation (cost grows with size).
+   * Streams, JSON, Bloom filters and hashes with field TTLs are refused, and the `DB` option is not supported. Both keys must share a slot.
+   *
+   * @param source Key to read from.
+   * @param destination Key that receives the result (any existing value is replaced).
+   * @param opts `replace: true` overwrites an existing destination.
+   * @returns `true` when copied; `false` when the source is missing or the destination exists and `replace` was not set.
+   * @throws {@link RuvioError} `ERR` for unsupported types; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.copy('cfg', 'cfg:backup', { replace: true });
+   * ```
+   */
   copy(source: Key, destination: Key, opts?: { replace?: boolean }): R<boolean> {
     return opts?.replace
       ? this._3(T.bool, C.COPY, source, destination, W.REPLACE)
       : this._2(T.bool, C.COPY, source, destination);
   }
+  /**
+   * Reports the internal encoding Redis 7.0 would use (`OBJECT ENCODING`), e.g. `int`, `embstr`, `raw`, `listpack`, `hashtable`, `skiplist`. This names the Redis encoding, not Ruvio's physical layout.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The encoding name, or `null` when the key does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.objectEncoding('user:1');
+   * ```
+   */
   objectEncoding(key: Key): R<string | null> {
     return this._1(null, C.OBJECT_ENCODING, key);
   }
+  /**
+   * Seconds since the key was last accessed (`OBJECT IDLETIME`). Needs an LRU `maxmemory-policy`.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns Idle seconds, or `null` when the key does not exist.
+   * @throws {@link RuvioError} `ERR` when the eviction policy is not an LRU policy.
+   *
+   * @example
+   * ```ts
+   * await client.objectIdletime('user:1');
+   * ```
+   */
   objectIdletime(key: Key): R<number | null> {
     return this._1(null, C.OBJECT_IDLETIME, key);
   }
+  /**
+   * Access frequency counter (`OBJECT FREQ`). Needs `maxmemory-policy allkeys-lfu`.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The counter, or `null` when the key does not exist.
+   * @throws {@link RuvioError} `ERR` when the eviction policy is not `allkeys-lfu`.
+   *
+   * @example
+   * ```ts
+   * await client.objectFreq('user:1');
+   * ```
+   */
   objectFreq(key: Key): R<number | null> {
     return this._1(null, C.OBJECT_FREQ, key);
   }
+  /**
+   * Bytes a key uses in memory (`MEMORY USAGE key [SAMPLES n]`). The size is exact for Ruvio's accounting (key, value, collection storage plus entry overhead) and is not comparable byte for byte with Redis.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param samples Accepted for compatibility.
+   * @returns Size in bytes, or `null` when the key does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.memoryUsage('user:1');
+   * ```
+   */
   memoryUsage(key: Key, samples?: number): R<number | null> {
     return samples === undefined
       ? this._1(null, C.MEMORY_USAGE, key)
       : this._3(null, C.MEMORY_USAGE, key, W.SAMPLES, samples);
   }
-  /** `DUMP key`: Ruvio's own payload (always a Buffer). */
+  /**
+   * Serialises a key (`DUMP`) into Ruvio's own payload (`RVD1` plus a checksummed record). Only Ruvio's {@link restore} reads it; it is not Redis RDB.
+   * Supports strings, lists, sets, hashes and sorted sets. Streams, JSON, Bloom filters and hashes with field TTLs are refused. The TTL is not part of the payload.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The payload, or `null` when the key does not exist.
+   * @throws {@link RuvioError} `ERR` for unsupported types.
+   *
+   * @example
+   * ```ts
+   * const blob = await client.dump('user:1');
+   * if (blob) await client.restore('user:1:copy', 0, blob);
+   * ```
+   */
   dump(key: Key): R<Buffer | null> {
     return this._bin(() => this._1(null, C.DUMP, key));
   }
+  /**
+   * Recreates a key from a {@link dump} payload (`RESTORE key ttlMs payload [REPLACE] [ABSTTL] [IDLETIME n] [FREQ n]`). One atomic operation.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param ttlMs Time to live in milliseconds; `0` for none. With `absTtl` it is an absolute Unix-ms deadline (a past deadline creates nothing).
+   * @param payload The Buffer from {@link dump}.
+   * @param opts {@link RestoreOptions}: `replace`, `absTtl`; `idleTime` and `freq` are accepted and ignored.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `BUSYKEY` when the key exists and `replace` is not set; `ERR` for a payload that is not Ruvio's.
+   *
+   * @example
+   * ```ts
+   * await client.restore('user:1', 0, blob, { replace: true });
+   * ```
+   */
   restore(key: Key, ttlMs: number, payload: Buffer, opts?: RestoreOptions): R<'OK'> {
     const a: Arg[] = [key, ttlMs, payload];
     if (opts !== undefined) {
@@ -680,74 +1908,415 @@ export abstract class Commands {
 
   // ---- lists -----------------------------------------------------------------------------
 
+  /**
+   * Pushes values onto the head of a list, creating it when missing (`LPUSH`). With several values the last one ends up first.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param values Values to push.
+   * @returns The list length after the push.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.lpush('queue', 'a', 'b'); // list is now [b, a]
+   * ```
+   */
   lpush(key: Key, ...values: Value[]): R<number> {
     return values.length === 1 ? this._2(null, C.LPUSH, key, values[0]!) : this._kv(null, C.LPUSH, key, values);
   }
+  /**
+   * Pushes values onto the tail of a list, creating it when missing (`RPUSH`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param values Values to push, in order.
+   * @returns The list length after the push.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.rpush('queue', 'a', 'b'); // 2
+   * ```
+   */
   rpush(key: Key, ...values: Value[]): R<number> {
     return values.length === 1 ? this._2(null, C.RPUSH, key, values[0]!) : this._kv(null, C.RPUSH, key, values);
   }
+  /**
+   * Like {@link lpush}, but only when the list already exists (`LPUSHX`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param values Values to push.
+   * @returns The list length after the push, or `0` when the key does not exist (nothing is created).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.lpushx('queue', 'a');
+   * ```
+   */
   lpushx(key: Key, ...values: Value[]): R<number> {
     return this._kv(null, C.LPUSHX, key, values);
   }
+  /**
+   * Like {@link rpush}, but only when the list already exists (`RPUSHX`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param values Values to push.
+   * @returns The list length after the push, or `0` when the key does not exist.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.rpushx('queue', 'a');
+   * ```
+   */
   rpushx(key: Key, ...values: Value[]): R<number> {
     return this._kv(null, C.RPUSHX, key, values);
   }
-  /** `LPUSHCAP key cap value...`: push left, trim the tail to `cap`; returns the new length. */
+  /**
+   * Pushes to the head and trims the tail to a maximum length (`LPUSHCAP key cap value...`, Ruvio extension). Good for "latest N items" lists; see {@link pushRecent}.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param cap Maximum list length to keep.
+   * @param values Values to push.
+   * @returns The list length after the push and trim.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.lpushcap('recent:7', 50, 'item-9'); // never more than 50 items
+   * ```
+   */
   lpushcap(key: Key, cap: number, ...values: Value[]): R<number> {
     return this._v(null, C.LPUSHCAP, pushAll([key, cap], values));
   }
-  /** `RPUSHCAP key cap value...`: push right, trim the head to `cap`; returns the new length. */
+  /**
+   * Pushes to the tail and trims the head to a maximum length (`RPUSHCAP key cap value...`, Ruvio extension).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param cap Maximum list length to keep.
+   * @param values Values to push.
+   * @returns The list length after the push and trim.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.rpushcap('log:app', 1000, 'line');
+   * ```
+   */
   rpushcap(key: Key, cap: number, ...values: Value[]): R<number> {
     return this._v(null, C.RPUSHCAP, pushAll([key, cap], values));
   }
+  /**
+   * Removes and returns elements from the head of a list (`LPOP [count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional positive number of elements. Without it a single element is returned.
+   * @returns Without `count`: the element, or `null` when the list is empty or missing. With `count`: an array of up to `count` elements, or `null` when the list is empty or missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.lpop('queue');      // 'a'
+   * await client.lpop('queue', 2);   // ['b', 'c']
+   * ```
+   */
   lpop(key: Key): R<string | null>;
+  /**
+   * Removes and returns elements from the head of a list (`LPOP [count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional positive number of elements. Without it a single element is returned.
+   * @returns Without `count`: the element, or `null` when the list is empty or missing. With `count`: an array of up to `count` elements, or `null` when the list is empty or missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.lpop('queue');      // 'a'
+   * await client.lpop('queue', 2);   // ['b', 'c']
+   * ```
+   */
   lpop(key: Key, count: number): R<string[] | null>;
+  /**
+   * Removes and returns elements from the head of a list (`LPOP [count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional positive number of elements. Without it a single element is returned.
+   * @returns Without `count`: the element, or `null` when the list is empty or missing. With `count`: an array of up to `count` elements, or `null` when the list is empty or missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.lpop('queue');      // 'a'
+   * await client.lpop('queue', 2);   // ['b', 'c']
+   * ```
+   */
   lpop(key: Key, count?: number): R<string | string[] | null>;
   lpop(key: Key, count?: number): R<any> {
     return count === undefined ? this._1(null, C.LPOP, key) : this._2(null, C.LPOP, key, count);
   }
+  /**
+   * Removes and returns elements from the tail of a list (`RPOP [count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional positive number of elements. Without it a single element is returned.
+   * @returns Without `count`: the element, or `null` when the list is empty or missing. With `count`: an array of up to `count` elements, or `null` when the list is empty or missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.rpop('queue');
+   * ```
+   */
   rpop(key: Key): R<string | null>;
+  /**
+   * Removes and returns elements from the tail of a list (`RPOP [count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional positive number of elements. Without it a single element is returned.
+   * @returns Without `count`: the element, or `null` when the list is empty or missing. With `count`: an array of up to `count` elements, or `null` when the list is empty or missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.rpop('queue');
+   * ```
+   */
   rpop(key: Key, count: number): R<string[] | null>;
+  /**
+   * Removes and returns elements from the tail of a list (`RPOP [count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional positive number of elements. Without it a single element is returned.
+   * @returns Without `count`: the element, or `null` when the list is empty or missing. With `count`: an array of up to `count` elements, or `null` when the list is empty or missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.rpop('queue');
+   * ```
+   */
   rpop(key: Key, count?: number): R<string | string[] | null>;
   rpop(key: Key, count?: number): R<any> {
     return count === undefined ? this._1(null, C.RPOP, key) : this._2(null, C.RPOP, key, count);
   }
+  /**
+   * Returns the list length (`LLEN`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The length, or `0` when the key does not exist.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.llen('queue');
+   * ```
+   */
   llen(key: Key): R<number> {
     return this._1(null, C.LLEN, key);
   }
+  /**
+   * Reads one element by position (`LINDEX`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param index Zero-based position; negative counts from the tail (`-1` is the last element).
+   * @returns The element, or `null` when the index is out of range or the key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.lindex('queue', -1);
+   * ```
+   */
   lindex(key: Key, index: number): R<string | null> {
     return this._2(null, C.LINDEX, key, index);
   }
+  /**
+   * Reads a range of elements (`LRANGE`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param start First position (inclusive); negative counts from the tail.
+   * @param stop Last position (inclusive); `-1` means the end.
+   * @returns The elements, or an empty array when the key is missing or the range is empty.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.lrange('queue', 0, -1); // everything
+   * ```
+   */
   lrange(key: Key, start: number, stop: number): R<string[]> {
     return this._3(null, C.LRANGE, key, start, stop);
   }
+  /**
+   * Keeps only a range of the list and drops the rest (`LTRIM`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param start First position to keep (inclusive); negative counts from the tail.
+   * @param stop Last position to keep (inclusive).
+   * @returns `'OK'`. A missing key is not an error; an empty range removes the key.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.ltrim('recent:7', 0, 49);
+   * ```
+   */
   ltrim(key: Key, start: number, stop: number): R<'OK'> {
     return this._3(null, C.LTRIM, key, start, stop);
   }
-  /** `BLPOP key... timeoutSeconds`. Blocks the connection: use a dedicated client (`duplicate()`). */
+  /**
+   * Blocking pop from the head of the first non-empty list (`BLPOP key... timeout`).
+   * Blocks the connection, so every other caller of a shared client waits too: use a dedicated client (`duplicate()` or `isolated()`). It is shard-local, with at most 1,024 blocked clients per shard.
+   *
+   * @param keys One key or several; the first non-empty list wins.
+   * @param timeoutSeconds Seconds to wait; `0` waits forever.
+   * @returns `[key, element]`, or `null` on timeout.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const worker = client.duplicate();
+   * const job = await worker.blpop('jobs', 5); // ['jobs', 'payload'] or null
+   * ```
+   */
   blpop(keys: Key | Key[], timeoutSeconds: number): R<[string, string] | null> {
     const a: Arg[] = Array.isArray(keys) ? [...keys] : [keys];
     a.push(timeoutSeconds);
     return this._v(T.kv, C.BLPOP, a);
   }
-  /** `BRPOP key... timeoutSeconds`. Blocks the connection: use a dedicated client (`duplicate()`). */
+  /**
+   * Blocking pop from the tail of the first non-empty list (`BRPOP key... timeout`). Same blocking rules as {@link blpop}.
+   *
+   * @param keys One key or several; the first non-empty list wins.
+   * @param timeoutSeconds Seconds to wait; `0` waits forever.
+   * @returns `[key, element]`, or `null` on timeout.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const job = await worker.brpop(['high', 'low'], 5);
+   * ```
+   */
   brpop(keys: Key | Key[], timeoutSeconds: number): R<[string, string] | null> {
     const a: Arg[] = Array.isArray(keys) ? [...keys] : [keys];
     a.push(timeoutSeconds);
     return this._v(T.kv, C.BRPOP, a);
   }
+  /**
+   * Inserts an element before or after a pivot element (`LINSERT`). Rewrites the list (cost grows with its length).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param where `'BEFORE'` or `'AFTER'` the pivot.
+   * @param pivot Existing element to insert next to (the first match is used).
+   * @param value Element to insert.
+   * @returns The new list length, `-1` when the pivot was not found, `0` when the key does not exist.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.linsert('queue', 'BEFORE', 'b', 'a');
+   * ```
+   */
   linsert(key: Key, where: 'BEFORE' | 'AFTER', pivot: Value, value: Value): R<number> {
     return this._4(null, C.LINSERT, key, where, pivot, value);
   }
+  /**
+   * Replaces the element at a position (`LSET`). Rewrites the list.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param index Zero-based position; negative counts from the tail.
+   * @param value New element.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `ERR` when the key does not exist or the index is out of range.
+   *
+   * @example
+   * ```ts
+   * await client.lset('queue', 0, 'first');
+   * ```
+   */
   lset(key: Key, index: number, value: Value): R<'OK'> {
     return this._3(null, C.LSET, key, index, value);
   }
+  /**
+   * Removes occurrences of an element (`LREM`). Rewrites the list.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Positive: remove that many from the head. Negative: from the tail. `0`: remove all.
+   * @param value Element to remove.
+   * @returns The number of elements removed.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.lrem('queue', 0, 'dup');
+   * ```
+   */
   lrem(key: Key, count: number, value: Value): R<number> {
     return this._3(null, C.LREM, key, count, value);
   }
+  /**
+   * Finds the position of an element (`LPOS key value [RANK r] [COUNT n] [MAXLEN m]`). Read-only, scans the list.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param value Element to look for.
+   * @param opts {@link LPosOptions}: `rank` picks the nth match (negative scans from the tail), `count` returns up to that many positions (`0` means all), `maxlen` limits how many elements are scanned.
+   * @returns Without `count`: the position of the match, or `null` when not found. With `count`: an array of positions (possibly empty).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.lpos('queue', 'b');                    // 1
+   * await client.lpos('queue', 'b', { count: 0 });      // [1, 4]
+   * ```
+   */
   lpos(key: Key, value: Value): R<number | null>;
+  /**
+   * Finds the position of an element (`LPOS key value [RANK r] [COUNT n] [MAXLEN m]`). Read-only, scans the list.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param value Element to look for.
+   * @param opts {@link LPosOptions}: `rank` picks the nth match (negative scans from the tail), `count` returns up to that many positions (`0` means all), `maxlen` limits how many elements are scanned.
+   * @returns Without `count`: the position of the match, or `null` when not found. With `count`: an array of positions (possibly empty).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.lpos('queue', 'b');                    // 1
+   * await client.lpos('queue', 'b', { count: 0 });      // [1, 4]
+   * ```
+   */
   lpos(key: Key, value: Value, opts: LPosOptions & { count: number }): R<number[]>;
+  /**
+   * Finds the position of an element (`LPOS key value [RANK r] [COUNT n] [MAXLEN m]`). Read-only, scans the list.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param value Element to look for.
+   * @param opts {@link LPosOptions}: `rank` picks the nth match (negative scans from the tail), `count` returns up to that many positions (`0` means all), `maxlen` limits how many elements are scanned.
+   * @returns Without `count`: the position of the match, or `null` when not found. With `count`: an array of positions (possibly empty).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.lpos('queue', 'b');                    // 1
+   * await client.lpos('queue', 'b', { count: 0 });      // [1, 4]
+   * ```
+   */
   lpos(key: Key, value: Value, opts?: LPosOptions): R<number | null | number[]>;
+  /**
+   * Finds the position of an element (`LPOS key value [RANK r] [COUNT n] [MAXLEN m]`). Read-only, scans the list.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param value Element to look for.
+   * @param opts {@link LPosOptions}: `rank` picks the nth match (negative scans from the tail), `count` returns up to that many positions (`0` means all), `maxlen` limits how many elements are scanned.
+   * @returns Without `count`: the position of the match, or `null` when not found. With `count`: an array of positions (possibly empty).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.lpos('queue', 'b');                    // 1
+   * await client.lpos('queue', 'b', { count: 0 });      // [1, 4]
+   * ```
+   */
   lpos(key: Key, value: Value, opts: LPosOptions): R<number | null | number[]>;
   lpos(key: Key, value: Value, opts?: LPosOptions): R<any> {
     if (opts === undefined) return this._2(null, C.LPOS, key, value);
@@ -757,22 +2326,93 @@ export abstract class Commands {
     if (opts.maxlen !== undefined) a.push(W.MAXLEN, opts.maxlen);
     return this._v(null, C.LPOS, a);
   }
+  /**
+   * Atomically pops from one list and pushes to another (`LMOVE`), as one atomic operation.
+   * Both keys must share a slot on a multi-shard server.
+   *
+   * @param source List to pop from.
+   * @param destination List to push to (may be the same list to rotate it).
+   * @param from Side to pop from: `'LEFT'` or `'RIGHT'`.
+   * @param to Side to push to: `'LEFT'` or `'RIGHT'`.
+   * @returns The moved element, or `null` when the source is empty or missing.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.lmove('pending', 'working', 'LEFT', 'RIGHT');
+   * ```
+   */
   lmove(source: Key, destination: Key, from: 'LEFT' | 'RIGHT', to: 'LEFT' | 'RIGHT'): R<string | null> {
     return this._4(null, C.LMOVE, source, destination, from, to);
   }
+  /**
+   * Pops from the tail of one list and pushes onto the head of another (`RPOPLPUSH`). Same as `lmove(source, destination, 'RIGHT', 'LEFT')`.
+   *
+   * @param source Key to read from.
+   * @param destination Key that receives the result (any existing value is replaced).
+   * @returns The moved element, or `null` when the source is empty or missing.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.rpoplpush('pending', 'working');
+   * ```
+   */
   rpoplpush(source: Key, destination: Key): R<string | null> {
     return this._2(null, C.RPOPLPUSH, source, destination);
   }
-  /** Blocks the connection: use a dedicated client (`duplicate()`). */
+  /**
+   * Blocking {@link lmove} (`BLMOVE`). Blocks the connection, so use a dedicated client (`duplicate()`).
+   * Ruvio retries every 5 ms instead of parking a waiter, counts against the 1,024 blocked-client limit, and refuses the command inside MULTI or scripts.
+   *
+   * @param source Key to read from.
+   * @param destination Key that receives the result (any existing value is replaced).
+   * @param from Side to pop from: `'LEFT'` or `'RIGHT'`.
+   * @param to Side to push to: `'LEFT'` or `'RIGHT'`.
+   * @param timeoutSeconds Seconds to wait; `0` waits forever.
+   * @returns The moved element, or `null` on timeout.
+   *
+   * @example
+   * ```ts
+   * const job = await worker.blmove('pending', 'working', 'LEFT', 'RIGHT', 5);
+   * ```
+   */
   blmove(source: Key, destination: Key, from: 'LEFT' | 'RIGHT', to: 'LEFT' | 'RIGHT', timeoutSeconds: number): R<string | null> {
     return this._v(null, C.BLMOVE, [source, destination, from, to, timeoutSeconds]);
   }
+  /**
+   * Pops from the first non-empty list of several (`LMPOP numkeys key... LEFT|RIGHT [COUNT n]`).
+   *
+   * @param keys Lists to try, in order.
+   * @param where Side to pop from: `'LEFT'` or `'RIGHT'`.
+   * @param count Maximum elements to pop (default 1).
+   * @returns A {@link ListPopResult} with the list `key` and the popped `elements`, or `null` when all lists are empty.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const r = await client.lmpop(['a', 'b'], 'LEFT', 10);
+   * ```
+   */
   lmpop(keys: Key[], where: 'LEFT' | 'RIGHT', count?: number): R<ListPopResult | null> {
     const a: Arg[] = [keys.length, ...keys, where];
     if (count !== undefined) a.push(W.COUNT, count);
     return this._v(T.lmpop, C.LMPOP, a);
   }
-  /** Blocks the connection: use a dedicated client (`duplicate()`). */
+  /**
+   * Blocking {@link lmpop} (`BLMPOP`). Blocks the connection: use a dedicated client. Ruvio retries every 5 ms, counts against the 1,024 blocked-client limit, and refuses it inside MULTI or scripts.
+   *
+   * @param timeoutSeconds Seconds to wait; `0` waits forever.
+   * @param keys Lists to try, in order.
+   * @param where Side to pop from: `'LEFT'` or `'RIGHT'`.
+   * @param count Maximum elements to pop (default 1).
+   * @returns A {@link ListPopResult}, or `null` on timeout.
+   *
+   * @example
+   * ```ts
+   * const r = await worker.blmpop(5, ['a', 'b'], 'LEFT');
+   * ```
+   */
   blmpop(timeoutSeconds: number, keys: Key[], where: 'LEFT' | 'RIGHT', count?: number): R<ListPopResult | null> {
     const a: Arg[] = [timeoutSeconds, keys.length, ...keys, where];
     if (count !== undefined) a.push(W.COUNT, count);
@@ -781,116 +2421,621 @@ export abstract class Commands {
 
   // ---- sets ------------------------------------------------------------------------------
 
+  /**
+   * Adds members to a set, creating it when missing (`SADD`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param members Member names.
+   * @returns The number of members that were new.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.sadd('tags', 'a', 'b'); // 2
+   * ```
+   */
   sadd(key: Key, ...members: Value[]): R<number> {
     return members.length === 1 ? this._2(null, C.SADD, key, members[0]!) : this._kv(null, C.SADD, key, members);
   }
+  /**
+   * Removes members from a set (`SREM`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param members Member names.
+   * @returns The number of members that were removed. A set that becomes empty is deleted.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.srem('tags', 'a');
+   * ```
+   */
   srem(key: Key, ...members: Value[]): R<number> {
     return this._kv(null, C.SREM, key, members);
   }
+  /**
+   * Tests set membership (`SISMEMBER`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param member Member name.
+   * @returns `true` when the member is in the set; `false` when it is not or the key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.sismember('tags', 'a');
+   * ```
+   */
   sismember(key: Key, member: Value): R<boolean> {
     return this._2(T.bool, C.SISMEMBER, key, member);
   }
+  /**
+   * Tests several members at once (`SMISMEMBER`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param members Member names.
+   * @returns One boolean per member, in order; all `false` when the key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.smismember('tags', 'a', 'z'); // [true, false]
+   * ```
+   */
   smismember(key: Key, ...members: Value[]): R<boolean[]> {
     return this._kv(T.boolArr, C.SMISMEMBER, key, members);
   }
+  /**
+   * Returns the number of members (`SCARD`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The cardinality, or `0` when the key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.scard('tags');
+   * ```
+   */
   scard(key: Key): R<number> {
     return this._1(null, C.SCARD, key);
   }
+  /**
+   * Returns all members (`SMEMBERS`). The reply is sorted.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The members, or an empty array when the key is missing. For big sets prefer {@link sscanIterator}.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.smembers('tags');
+   * ```
+   */
   smembers(key: Key): R<string[]> {
     return this._1(null, C.SMEMBERS, key);
   }
+  /**
+   * Intersection of sets (`SINTER`). The reply is sorted. Keys must share a slot on a multi-shard server.
+   *
+   * @param keys Keys to operate on.
+   * @returns Members present in every set; empty when any key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.sinter('a', 'b');
+   * ```
+   */
   sinter(...keys: Key[]): R<string[]> {
     return this._v(null, C.SINTER, keys);
   }
+  /**
+   * Union of sets (`SUNION`). The reply is sorted. Keys must share a slot on a multi-shard server.
+   *
+   * @param keys Keys to operate on.
+   * @returns Members present in any set.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.sunion('a', 'b');
+   * ```
+   */
   sunion(...keys: Key[]): R<string[]> {
     return this._v(null, C.SUNION, keys);
   }
+  /**
+   * Members of the first set that are in none of the others (`SDIFF`). The reply is sorted. Keys must share a slot.
+   *
+   * @param keys First key is the base set.
+   * @returns The difference.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.sdiff('a', 'b');
+   * ```
+   */
   sdiff(...keys: Key[]): R<string[]> {
     return this._v(null, C.SDIFF, keys);
   }
+  /**
+   * Stores the intersection of sets in `destination` (`SINTERSTORE`). Keys must share a slot.
+   *
+   * @param destination Key that receives the result (any existing value is replaced).
+   * @param keys Source sets.
+   * @returns The size of the stored set.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.sinterstore('both', 'a', 'b');
+   * ```
+   */
   sinterstore(destination: Key, ...keys: Key[]): R<number> {
     return this._kv(null, C.SINTERSTORE, destination, keys);
   }
+  /**
+   * Stores the union of sets in `destination` (`SUNIONSTORE`). Keys must share a slot.
+   *
+   * @param destination Key that receives the result (any existing value is replaced).
+   * @param keys Source sets.
+   * @returns The size of the stored set.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.sunionstore('all', 'a', 'b');
+   * ```
+   */
   sunionstore(destination: Key, ...keys: Key[]): R<number> {
     return this._kv(null, C.SUNIONSTORE, destination, keys);
   }
+  /**
+   * Stores the difference of sets in `destination` (`SDIFFSTORE`). Keys must share a slot.
+   *
+   * @param destination Key that receives the result (any existing value is replaced).
+   * @param keys Source sets; the first is the base.
+   * @returns The size of the stored set.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.sdiffstore('only-a', 'a', 'b');
+   * ```
+   */
   sdiffstore(destination: Key, ...keys: Key[]): R<number> {
     return this._kv(null, C.SDIFFSTORE, destination, keys);
   }
+  /**
+   * Size of the intersection without building it (`SINTERCARD`). Keys must share a slot.
+   *
+   * @param keys Sets to intersect.
+   * @param limit Stop counting at this value (`0` or omitted means no limit).
+   * @returns The intersection size, capped at `limit`.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.sintercard(['a', 'b'], 100);
+   * ```
+   */
   sintercard(keys: Key[], limit?: number): R<number> {
     const a: Arg[] = [keys.length, ...keys];
     if (limit !== undefined) a.push(W.LIMIT, limit);
     return this._v(null, C.SINTERCARD, a);
   }
+  /**
+   * Moves a member from one set to another (`SMOVE`). Keys must share a slot.
+   *
+   * @param source Key to read from.
+   * @param destination Key that receives the result (any existing value is replaced).
+   * @param member Member name.
+   * @returns `true` when moved; `false` when the member was not in the source.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.smove('todo', 'done', 'task1');
+   * ```
+   */
   smove(source: Key, destination: Key, member: Value): R<boolean> {
     return this._3(T.bool, C.SMOVE, source, destination, member);
   }
+  /**
+   * Removes and returns random members (`SPOP [count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional number of members. Without it a single member is returned.
+   * @returns Without `count`: a member, or `null` when the set is empty or missing. With `count`: an array of up to `count` members (empty when none).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.spop('lottery');       // 'ticket-7'
+   * await client.spop('lottery', 3);    // ['t1', 't2', 't3']
+   * ```
+   */
   spop(key: Key): R<string | null>;
+  /**
+   * Removes and returns random members (`SPOP [count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional number of members. Without it a single member is returned.
+   * @returns Without `count`: a member, or `null` when the set is empty or missing. With `count`: an array of up to `count` members (empty when none).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.spop('lottery');       // 'ticket-7'
+   * await client.spop('lottery', 3);    // ['t1', 't2', 't3']
+   * ```
+   */
   spop(key: Key, count: number): R<string[]>;
+  /**
+   * Removes and returns random members (`SPOP [count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional number of members. Without it a single member is returned.
+   * @returns Without `count`: a member, or `null` when the set is empty or missing. With `count`: an array of up to `count` members (empty when none).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.spop('lottery');       // 'ticket-7'
+   * await client.spop('lottery', 3);    // ['t1', 't2', 't3']
+   * ```
+   */
   spop(key: Key, count?: number): R<string | string[] | null>;
   spop(key: Key, count?: number): R<any> {
     return count === undefined ? this._1(null, C.SPOP, key) : this._2(T.strs, C.SPOP, key, count);
   }
+  /**
+   * Returns random members without removing them (`SRANDMEMBER [count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional. Positive: up to that many distinct members. Negative: exactly `|count|` members, repeats allowed. `0`: empty array.
+   * @returns Without `count`: a member, or `null` when the set is empty or missing. With `count`: an array.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.srandmember('tags', 2);
+   * ```
+   */
   srandmember(key: Key): R<string | null>;
+  /**
+   * Returns random members without removing them (`SRANDMEMBER [count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional. Positive: up to that many distinct members. Negative: exactly `|count|` members, repeats allowed. `0`: empty array.
+   * @returns Without `count`: a member, or `null` when the set is empty or missing. With `count`: an array.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.srandmember('tags', 2);
+   * ```
+   */
   srandmember(key: Key, count: number): R<string[]>;
+  /**
+   * Returns random members without removing them (`SRANDMEMBER [count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional. Positive: up to that many distinct members. Negative: exactly `|count|` members, repeats allowed. `0`: empty array.
+   * @returns Without `count`: a member, or `null` when the set is empty or missing. With `count`: an array.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.srandmember('tags', 2);
+   * ```
+   */
   srandmember(key: Key, count?: number): R<string | string[] | null>;
   srandmember(key: Key, count?: number): R<any> {
     return count === undefined ? this._1(null, C.SRANDMEMBER, key) : this._2(T.strs, C.SRANDMEMBER, key, count);
   }
+  /**
+   * Reads one page of set members (`SSCAN`). See {@link sscanIterator} for a lazy walk.
+   * The cursor is a position in member order. A missing key returns cursor `'0'` and no items.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param cursor Cursor from the previous page; start with `0`. A returned cursor of `"0"` means the walk is complete.
+   * @param opts {@link ScanOptions}: `match` glob and `count` page-size hint.
+   * @returns A {@link ScanPage} of members.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const page = await client.sscan('tags', 0, { match: 'a*' });
+   * ```
+   */
   sscan(key: Key, cursor: string | number, opts?: ScanOptions): R<ScanPage<string>> {
     return this._v(T.scan, C.SSCAN, pushScan([key, cursor], opts));
   }
 
   // ---- hashes ----------------------------------------------------------------------------
 
-  /** `HSET key field value` or `HSET key {field: value, ...}`; returns new-field count. */
+  /**
+   * Sets hash fields (`HSET`). Pass one field and value, or an object / array of pairs for several.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param field Field name (single-field form).
+   * @param value Field value (single-field form).
+   * @param fields Object `{ field: value }` or array of `[field, value]` pairs (multi-field form).
+   * @returns The number of fields that were new (updated fields are not counted).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hset('user:1', 'name', 'Ada');
+   * await client.hset('user:1', { name: 'Ada', age: 36 });
+   * ```
+   */
   hset(key: Key, field: Key, value: Value): R<number>;
+  /**
+   * Sets hash fields (`HSET`). Pass one field and value, or an object / array of pairs for several.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param field Field name (single-field form).
+   * @param value Field value (single-field form).
+   * @param fields Object `{ field: value }` or array of `[field, value]` pairs (multi-field form).
+   * @returns The number of fields that were new (updated fields are not counted).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hset('user:1', 'name', 'Ada');
+   * await client.hset('user:1', { name: 'Ada', age: 36 });
+   * ```
+   */
   hset(key: Key, fields: Record<string, Value> | ReadonlyArray<readonly [Key, Value]>): R<number>;
+  /**
+   * Sets hash fields (`HSET`). Pass one field and value, or an object / array of pairs for several.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param field Field name (single-field form).
+   * @param value Field value (single-field form).
+   * @param fields Object `{ field: value }` or array of `[field, value]` pairs (multi-field form).
+   * @returns The number of fields that were new (updated fields are not counted).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hset('user:1', 'name', 'Ada');
+   * await client.hset('user:1', { name: 'Ada', age: 36 });
+   * ```
+   */
   hset(key: Key, fieldOrFields: Key | Record<string, Value> | ReadonlyArray<readonly [Key, Value]>, value?: Value): R<number>;
   hset(key: Key, f: any, value?: Value): R<number> {
     if (value !== undefined) return this._3(null, C.HSET, key, f, value);
     return this._v(null, C.HSET, flatPairs([key], f));
   }
+  /**
+   * Reads one hash field (`HGET`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param field Hash field name.
+   * @returns The value, or `null` when the field or key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hget('user:1', 'name');
+   * ```
+   */
   hget(key: Key, field: Key): R<string | null> {
     return this._2(null, C.HGET, key, field);
   }
-  /** `HGET` returning raw bytes. */
+  /**
+   * Like {@link hget}, but returns the raw bytes.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param field Hash field name.
+   * @returns The value as a Buffer, or `null`.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const raw = await client.hgetBuffer('user:1', 'avatar');
+   * ```
+   */
   hgetBuffer(key: Key, field: Key): R<Buffer | null> {
     return this._bin(() => this._2(null, C.HGET, key, field));
   }
+  /**
+   * Deletes hash fields (`HDEL`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param fields Hash field names.
+   * @returns The number of fields removed. A hash that becomes empty is deleted.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hdel('user:1', 'age');
+   * ```
+   */
   hdel(key: Key, ...fields: Key[]): R<number> {
     return fields.length === 1 ? this._2(null, C.HDEL, key, fields[0]!) : this._kv(null, C.HDEL, key, fields);
   }
+  /**
+   * Number of fields in a hash (`HLEN`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The count, or `0` when the key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hlen('user:1');
+   * ```
+   */
   hlen(key: Key): R<number> {
     return this._1(null, C.HLEN, key);
   }
+  /**
+   * Reads the whole hash (`HGETALL`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns An object of field to value; `{}` when the key is missing. Field order is unspecified. For large hashes prefer {@link hscanIterator}.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const user = await client.hgetall('user:1'); // { name: 'Ada' }
+   * ```
+   */
   hgetall(key: Key): R<Record<string, string>> {
     return this._1(T.map, C.HGETALL, key);
   }
+  /**
+   * Reads several fields (`HMGET`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param fields Hash field names.
+   * @returns One entry per field, in order; `null` for missing fields (all `null` when the key is missing).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const [name, age] = await client.hmget('user:1', 'name', 'age');
+   * ```
+   */
   hmget(key: Key, ...fields: Key[]): R<(string | null)[]> {
     return this._kv(null, C.HMGET, key, fields);
   }
+  /**
+   * Tests whether a field exists (`HEXISTS`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param field Hash field name.
+   * @returns `true` or `false`.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hexists('user:1', 'name');
+   * ```
+   */
   hexists(key: Key, field: Key): R<boolean> {
     return this._2(T.bool, C.HEXISTS, key, field);
   }
+  /**
+   * Lists field names (`HKEYS`); order is unspecified.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns Field names, or `[]` when the key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hkeys('user:1');
+   * ```
+   */
   hkeys(key: Key): R<string[]> {
     return this._1(null, C.HKEYS, key);
   }
+  /**
+   * Lists values (`HVALS`); order is unspecified.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns Values, or `[]` when the key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hvals('user:1');
+   * ```
+   */
   hvals(key: Key): R<string[]> {
     return this._1(null, C.HVALS, key);
   }
+  /**
+   * Adds an integer to a field, creating it as `0` when missing (`HINCRBY`). Keeps a field TTL.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param field Hash field name.
+   * @param delta Whole number to add (may be negative).
+   * @returns The new value.
+   * @throws {@link RuvioError} `ERR` when the field is not an integer or the result overflows; nothing is written then.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hincrby('stats', 'views', 1);
+   * ```
+   */
   hincrby(key: Key, field: Key, delta: number): R<number> {
     return this._3(null, C.HINCRBY, key, field, delta);
   }
+  /**
+   * Adds a decimal number to a field (`HINCRBYFLOAT`). Computed in double precision and printed with 15 significant digits (Redis uses long double). Keeps a field TTL.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param field Hash field name.
+   * @param delta Number to add (may be negative).
+   * @returns The new value.
+   * @throws {@link RuvioError} `ERR` when the field is not a number.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hincrbyfloat('acct', 'balance', 2.5);
+   * ```
+   */
   hincrbyfloat(key: Key, field: Key, delta: number): R<number> {
     return this._3(T.float, C.HINCRBYFLOAT, key, field, delta);
   }
+  /**
+   * Sets a field only when it does not exist (`HSETNX`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param field Hash field name.
+   * @param value Value to store: string, Buffer or number (numbers are sent as ASCII text).
+   * @returns `true` when set; `false` when the field already existed (no write).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hsetnx('user:1', 'created', Date.now());
+   * ```
+   */
   hsetnx(key: Key, field: Key, value: Value): R<boolean> {
     return this._3(T.bool, C.HSETNX, key, field, value);
   }
+  /**
+   * Length in bytes of a field value (`HSTRLEN`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param field Hash field name.
+   * @returns The length, or `0` when the key or field is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hstrlen('user:1', 'name');
+   * ```
+   */
   hstrlen(key: Key, field: Key): R<number> {
     return this._2(null, C.HSTRLEN, key, field);
   }
+  /**
+   * Reads one page of hash entries (`HSCAN`). See {@link hscanIterator} for a lazy walk.
+   * Pages follow storage order. A missing key returns cursor `'0'` and no items.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param cursor Cursor from the previous page; start with `0`. A returned cursor of `"0"` means the walk is complete.
+   * @param opts {@link ScanOptions}: `match` glob (on field names) and `count` page-size hint.
+   * @returns A {@link ScanPage} of `[field, value]` pairs.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const page = await client.hscan('user:1', 0, { count: 100 });
+   * ```
+   */
   hscan(key: Key, cursor: string | number, opts?: ScanOptions): R<ScanPage<[string, string]>> {
     return this._v(T.hscan, C.HSCAN, pushScan([key, cursor], opts));
   }
@@ -901,37 +3046,222 @@ export abstract class Commands {
     pushAll(a, fields);
     return this._v(null, c, a);
   }
-  /** Per field: -2 missing, 0 condition not met, 1 set, 2 deleted. */
+  /**
+   * Sets a TTL in seconds on hash fields (`HEXPIRE key seconds [NX|XX|GT|LT] FIELDS n field...`).
+   * `HSET` and `HDEL` on a field drop its TTL; `HINCRBY` keeps it. Absolute deadlines are limited to 2^46-1 ms.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param seconds Time to live in seconds. Zero or negative deletes the field (result `2`).
+   * @param fields Fields to expire.
+   * @param cond Optional condition: `NX` (no TTL yet), `XX` (has a TTL), `GT` (new TTL greater), `LT` (new TTL smaller).
+   * @returns One code per field: `-2` field or key missing, `0` condition not met, `1` TTL set, `2` field deleted.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hexpire('session:9', 60, ['token']); // [1]
+   * ```
+   */
   hexpire(key: Key, seconds: number, fields: Key[], cond?: ExpireCondition): R<number[]> {
     return this._hfe(C.HEXPIRE, key, seconds, fields, cond);
   }
+  /**
+   * Like {@link hexpire}, with the TTL in milliseconds (`HPEXPIRE`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param ms Time to live in milliseconds.
+   * @param fields Fields to expire.
+   * @param cond Optional `NX`, `XX`, `GT` or `LT`.
+   * @returns One code per field: `-2` missing, `0` condition not met, `1` set, `2` deleted.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hpexpire('session:9', 1500, ['token']);
+   * ```
+   */
   hpexpire(key: Key, ms: number, fields: Key[], cond?: ExpireCondition): R<number[]> {
     return this._hfe(C.HPEXPIRE, key, ms, fields, cond);
   }
+  /**
+   * Like {@link hexpire}, with an absolute deadline in Unix seconds (`HEXPIREAT`). A time in the past deletes the field (result `2`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param unixSeconds Deadline in Unix seconds.
+   * @param fields Fields to expire.
+   * @param cond Optional `NX`, `XX`, `GT` or `LT`.
+   * @returns One code per field: `-2` missing, `0` condition not met, `1` set, `2` deleted.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hexpireat('session:9', Math.floor(Date.now() / 1000) + 60, ['token']);
+   * ```
+   */
   hexpireat(key: Key, unixSeconds: number, fields: Key[], cond?: ExpireCondition): R<number[]> {
     return this._hfe(C.HEXPIREAT, key, unixSeconds, fields, cond);
   }
+  /**
+   * Like {@link hexpire}, with an absolute deadline in Unix milliseconds (`HPEXPIREAT`). A time in the past deletes the field (result `2`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param unixMs Deadline in Unix milliseconds.
+   * @param fields Fields to expire.
+   * @param cond Optional `NX`, `XX`, `GT` or `LT`.
+   * @returns One code per field: `-2` missing, `0` condition not met, `1` set, `2` deleted.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hpexpireat('session:9', Date.now() + 5000, ['token']);
+   * ```
+   */
   hpexpireat(key: Key, unixMs: number, fields: Key[], cond?: ExpireCondition): R<number[]> {
     return this._hfe(C.HPEXPIREAT, key, unixMs, fields, cond);
   }
+  /**
+   * Remaining TTL of hash fields in seconds, rounded up (`HTTL`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param fields Hash field names.
+   * @returns One value per field: seconds left, `-1` field has no TTL, `-2` field or key missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.httl('session:9', 'token');
+   * ```
+   */
   httl(key: Key, ...fields: Key[]): R<number[]> {
     return this._hfe(C.HTTL, key, null, fields);
   }
+  /**
+   * Remaining TTL of hash fields in milliseconds (`HPTTL`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param fields Hash field names.
+   * @returns One value per field: milliseconds left, `-1` no TTL, `-2` field or key missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hpttl('session:9', 'token');
+   * ```
+   */
   hpttl(key: Key, ...fields: Key[]): R<number[]> {
     return this._hfe(C.HPTTL, key, null, fields);
   }
+  /**
+   * Absolute expiry of hash fields as Unix seconds, rounded up (`HEXPIRETIME`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param fields Hash field names.
+   * @returns One value per field: Unix seconds, `-1` no TTL, `-2` field or key missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hexpiretime('session:9', 'token');
+   * ```
+   */
   hexpiretime(key: Key, ...fields: Key[]): R<number[]> {
     return this._hfe(C.HEXPIRETIME, key, null, fields);
   }
+  /**
+   * Absolute expiry of hash fields as Unix milliseconds (`HPEXPIRETIME`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param fields Hash field names.
+   * @returns One value per field: Unix milliseconds, `-1` no TTL, `-2` field or key missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hpexpiretime('session:9', 'token');
+   * ```
+   */
   hpexpiretime(key: Key, ...fields: Key[]): R<number[]> {
     return this._hfe(C.HPEXPIRETIME, key, null, fields);
   }
+  /**
+   * Removes the TTL from hash fields (`HPERSIST`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param fields Hash field names.
+   * @returns One code per field: `1` TTL removed, `-1` field had no TTL, `-2` field or key missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hpersist('session:9', 'token');
+   * ```
+   */
   hpersist(key: Key, ...fields: Key[]): R<number[]> {
     return this._hfe(C.HPERSIST, key, null, fields);
   }
+  /**
+   * Returns random fields (`HRANDFIELD [count [WITHVALUES]]`). Reads the whole hash, so cost grows with its size.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional. Positive: up to that many distinct fields. Negative: `|count|` fields, repeats allowed.
+   * @param withValues With `count`, return `[field, value]` pairs instead of field names.
+   * @returns Without `count`: a field name or `null`. With `count`: an array of names, or of `[field, value]` pairs with `withValues`.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hrandfield('user:1');                 // 'name'
+   * await client.hrandfield('user:1', 2, true);        // [['name','Ada'], ['age','36']]
+   * ```
+   */
   hrandfield(key: Key): R<string | null>;
+  /**
+   * Returns random fields (`HRANDFIELD [count [WITHVALUES]]`). Reads the whole hash, so cost grows with its size.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional. Positive: up to that many distinct fields. Negative: `|count|` fields, repeats allowed.
+   * @param withValues With `count`, return `[field, value]` pairs instead of field names.
+   * @returns Without `count`: a field name or `null`. With `count`: an array of names, or of `[field, value]` pairs with `withValues`.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hrandfield('user:1');                 // 'name'
+   * await client.hrandfield('user:1', 2, true);        // [['name','Ada'], ['age','36']]
+   * ```
+   */
   hrandfield(key: Key, count: number): R<string[]>;
+  /**
+   * Returns random fields (`HRANDFIELD [count [WITHVALUES]]`). Reads the whole hash, so cost grows with its size.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional. Positive: up to that many distinct fields. Negative: `|count|` fields, repeats allowed.
+   * @param withValues With `count`, return `[field, value]` pairs instead of field names.
+   * @returns Without `count`: a field name or `null`. With `count`: an array of names, or of `[field, value]` pairs with `withValues`.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hrandfield('user:1');                 // 'name'
+   * await client.hrandfield('user:1', 2, true);        // [['name','Ada'], ['age','36']]
+   * ```
+   */
   hrandfield(key: Key, count: number, withValues: true): R<[string, string][]>;
+  /**
+   * Returns random fields (`HRANDFIELD [count [WITHVALUES]]`). Reads the whole hash, so cost grows with its size.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional. Positive: up to that many distinct fields. Negative: `|count|` fields, repeats allowed.
+   * @param withValues With `count`, return `[field, value]` pairs instead of field names.
+   * @returns Without `count`: a field name or `null`. With `count`: an array of names, or of `[field, value]` pairs with `withValues`.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.hrandfield('user:1');                 // 'name'
+   * await client.hrandfield('user:1', 2, true);        // [['name','Ada'], ['age','36']]
+   * ```
+   */
   hrandfield(key: Key, count?: number, withValues?: boolean): R<string | null | string[] | [string, string][]>;
   hrandfield(key: Key, count?: number, withValues?: boolean): R<any> {
     if (count === undefined) return this._1(null, C.HRANDFIELD, key);
@@ -941,9 +3271,65 @@ export abstract class Commands {
 
   // ---- sorted sets -----------------------------------------------------------------------
 
-  /** `ZADD key [NX|XX] [GT|LT] [CH] score member [score member ...]`. */
+  /**
+   * Adds or updates members of a sorted set (`ZADD key [NX|XX] [GT|LT] [CH] score member ...`).
+   * Pass one score and member, or an array of members (`{ member, score }` objects or `[score, member]` pairs).
+   * `nx` and `xx` are exclusive (`nx` wins); so are `gt` and `lt`. `gt`/`lt` still add a missing member.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param score Score of the member (single form). Doubles, `-Infinity` and `Infinity` are accepted.
+   * @param member Member name (single form).
+   * @param members Array of `{ member, score }` objects or `[score, member]` pairs (multi form).
+   * @param opts {@link ZAddOptions}: `nx` only add, `xx` only update, `gt`/`lt` only update when the new score is greater/smaller, `ch` count changed members too.
+   * @returns The number of members added; with `ch`, added plus changed.
+   * @throws {@link RuvioError} `ERR` for a non-numeric score or a bad option mix; `WRONGTYPE`.
+   *
+   * @example
+   * ```ts
+   * await client.zadd('board', 100, 'ada');
+   * await client.zadd('board', [{ member: 'bob', score: 80 }, [90, 'cy']], { ch: true });
+   * ```
+   */
   zadd(key: Key, score: number, member: Value, opts?: ZAddOptions): R<number>;
+  /**
+   * Adds or updates members of a sorted set (`ZADD key [NX|XX] [GT|LT] [CH] score member ...`).
+   * Pass one score and member, or an array of members (`{ member, score }` objects or `[score, member]` pairs).
+   * `nx` and `xx` are exclusive (`nx` wins); so are `gt` and `lt`. `gt`/`lt` still add a missing member.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param score Score of the member (single form). Doubles, `-Infinity` and `Infinity` are accepted.
+   * @param member Member name (single form).
+   * @param members Array of `{ member, score }` objects or `[score, member]` pairs (multi form).
+   * @param opts {@link ZAddOptions}: `nx` only add, `xx` only update, `gt`/`lt` only update when the new score is greater/smaller, `ch` count changed members too.
+   * @returns The number of members added; with `ch`, added plus changed.
+   * @throws {@link RuvioError} `ERR` for a non-numeric score or a bad option mix; `WRONGTYPE`.
+   *
+   * @example
+   * ```ts
+   * await client.zadd('board', 100, 'ada');
+   * await client.zadd('board', [{ member: 'bob', score: 80 }, [90, 'cy']], { ch: true });
+   * ```
+   */
   zadd(key: Key, members: ReadonlyArray<SortedSetEntry | readonly [number, Value]>, opts?: ZAddOptions): R<number>;
+  /**
+   * Adds or updates members of a sorted set (`ZADD key [NX|XX] [GT|LT] [CH] score member ...`).
+   * Pass one score and member, or an array of members (`{ member, score }` objects or `[score, member]` pairs).
+   * `nx` and `xx` are exclusive (`nx` wins); so are `gt` and `lt`. `gt`/`lt` still add a missing member.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param score Score of the member (single form). Doubles, `-Infinity` and `Infinity` are accepted.
+   * @param member Member name (single form).
+   * @param members Array of `{ member, score }` objects or `[score, member]` pairs (multi form).
+   * @param opts {@link ZAddOptions}: `nx` only add, `xx` only update, `gt`/`lt` only update when the new score is greater/smaller, `ch` count changed members too.
+   * @returns The number of members added; with `ch`, added plus changed.
+   * @throws {@link RuvioError} `ERR` for a non-numeric score or a bad option mix; `WRONGTYPE`.
+   *
+   * @example
+   * ```ts
+   * await client.zadd('board', 100, 'ada');
+   * await client.zadd('board', [{ member: 'bob', score: 80 }, [90, 'cy']], { ch: true });
+   * ```
+   */
   zadd(key: Key, scoreOrMembers: number | ReadonlyArray<SortedSetEntry | readonly [number, Value]>, memberOrOpts?: Value | ZAddOptions, opts?: ZAddOptions): R<number>;
   zadd(key: Key, a: any, b?: any, c?: any): R<number> {
     if (typeof a === 'number' && c === undefined) return this._3(null, C.ZADD, key, a, b);
@@ -954,149 +3340,701 @@ export abstract class Commands {
     else for (const e of a) Array.isArray(e) ? args.push(e[0], e[1]) : args.push(e.score, e.member);
     return this._v(null, C.ZADD, args);
   }
-  /** `ZADD key ... INCR score member`: the new score, or `null` when a condition blocked it. */
+  /**
+   * Increments one member's score (`ZADD ... INCR score member`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param increment Amount added to the score (the member is created with it if missing).
+   * @param member Member name.
+   * @param opts {@link ZAddOptions} conditions (`nx`, `xx`, `gt`, `lt`).
+   * @returns The new score, or `null` when a condition blocked the update.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zaddIncr('board', 5, 'ada'); // 105
+   * ```
+   */
   zaddIncr(key: Key, increment: number, member: Value, opts?: ZAddOptions): R<number | null> {
     const args: Arg[] = [key];
     pushZAddFlags(args, opts);
     args.push(W.INCR, increment, member);
     return this._v(T.float, C.ZADD, args);
   }
-  /** `ZRANGE key start stop [BYSCORE|BYLEX] [REV] [LIMIT offset count]`. */
+  /**
+   * Reads members by rank, score or lexicographic range (`ZRANGE key start stop [BYSCORE|BYLEX] [REV] [LIMIT offset count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param start Range start. A rank by default; with `by: 'SCORE'` a score bound (`-inf`, `+inf`, `(5` for exclusive); with `by: 'LEX'` `-`, `+`, `[member` or `(member`.
+   * @param stop Range end, in the same form as `start`. For ranks, negative counts from the end.
+   * @param opts {@link ZRangeOptions}: `by`, `rev` (with `rev` give the high bound first), `limit` (`{ offset, count }`; a negative count returns the rest).
+   * @returns Member names in order; empty when the key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zrange('board', 0, -1);                        // lowest to highest
+   * await client.zrange('board', '(80', '+inf', { by: 'SCORE', limit: { offset: 0, count: 10 } });
+   * ```
+   */
   zrange(key: Key, start: Value, stop: Value, opts?: ZRangeOptions): R<string[]> {
     return opts === undefined ? this._3(null, C.ZRANGE, key, start, stop) : this._v(null, C.ZRANGE, zrangeArgs(key, start, stop, opts, false));
   }
-  /** `ZRANGE ... WITHSCORES`. */
+  /**
+   * Like {@link zrange}, but returns scores too (`ZRANGE ... WITHSCORES`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param start Range start (see {@link zrange}).
+   * @param stop Range end (see {@link zrange}).
+   * @param opts {@link ZRangeOptions}.
+   * @returns {@link SortedSetEntry} objects `{ member, score }`; empty when the key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const top = await client.zrangeWithScores('board', 0, 2, { rev: true });
+   * ```
+   */
   zrangeWithScores(key: Key, start: Value, stop: Value, opts?: ZRangeOptions): R<SortedSetEntry[]> {
     return this._v(T.zentries, C.ZRANGE, zrangeArgs(key, start, stop, opts, true));
   }
+  /**
+   * Reads members by rank from the highest score down (`ZREVRANGE`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param start First rank (0 is the highest score).
+   * @param stop Last rank, inclusive; `-1` is the end.
+   * @returns Member names.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zrevrange('board', 0, 9); // top 10
+   * ```
+   */
   zrevrange(key: Key, start: number, stop: number): R<string[]> {
     return this._3(null, C.ZREVRANGE, key, start, stop);
   }
+  /**
+   * Like {@link zrevrange}, with scores (`ZREVRANGE ... WITHSCORES`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param start First rank.
+   * @param stop Last rank, inclusive.
+   * @returns {@link SortedSetEntry} objects.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zrevrangeWithScores('board', 0, 2);
+   * ```
+   */
   zrevrangeWithScores(key: Key, start: number, stop: number): R<SortedSetEntry[]> {
     return this._4(T.zentries, C.ZREVRANGE, key, start, stop, W.WITHSCORES);
   }
+  /**
+   * Reads members whose score is in a range, lowest first (`ZRANGEBYSCORE`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param min Lower bound: a number, `-inf`, or `(5` for exclusive.
+   * @param max Upper bound: a number, `+inf`, or `(5` for exclusive.
+   * @param limit Optional `{ offset, count }` page; a negative `count` returns the rest.
+   * @returns Member names.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zrangebyscore('board', 80, '(100');
+   * ```
+   */
   zrangebyscore(key: Key, min: Value, max: Value, limit?: { offset: number; count: number }): R<string[]> {
     const a: Arg[] = [key, min, max];
     if (limit !== undefined) a.push(W.LIMIT, limit.offset, limit.count);
     return this._v(null, C.ZRANGEBYSCORE, a);
   }
+  /**
+   * Like {@link zrangebyscore}, with scores.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param min Lower bound: a number, `-inf`, or `(5` for exclusive.
+   * @param max Upper bound: a number, `+inf`, or `(5` for exclusive.
+   * @param limit Optional `{ offset, count }` page.
+   * @returns {@link SortedSetEntry} objects.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zrangebyscoreWithScores('board', '-inf', '+inf', { offset: 0, count: 5 });
+   * ```
+   */
   zrangebyscoreWithScores(key: Key, min: Value, max: Value, limit?: { offset: number; count: number }): R<SortedSetEntry[]> {
     const a: Arg[] = [key, min, max, W.WITHSCORES];
     if (limit !== undefined) a.push(W.LIMIT, limit.offset, limit.count);
     return this._v(T.zentries, C.ZRANGEBYSCORE, a);
   }
+  /**
+   * Reads members in lexicographic order within a range (`ZRANGEBYLEX`). Meant for sets where all scores are equal; the score is ignored for ordering.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param min Lower bound: `-`, `+`, `[member` (inclusive) or `(member` (exclusive).
+   * @param max Upper bound in the same form.
+   * @param limit Optional `{ offset, count }` page; a negative `count` returns the rest.
+   * @returns Member names.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zrangebylex('words', '[a', '(b');
+   * ```
+   */
   zrangebylex(key: Key, min: Value, max: Value, limit?: { offset: number; count: number }): R<string[]> {
     const a: Arg[] = [key, min, max];
     if (limit !== undefined) a.push(W.LIMIT, limit.offset, limit.count);
     return this._v(null, C.ZRANGEBYLEX, a);
   }
+  /**
+   * Like {@link zrangebylex}, in reverse order (`ZREVRANGEBYLEX`). The first bound is the high one.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param max Upper bound: `+`, `-`, `[member` or `(member`.
+   * @param min Lower bound in the same form.
+   * @param limit Optional `{ offset, count }` page.
+   * @returns Member names, highest first.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zrevrangebylex('words', '+', '-');
+   * ```
+   */
   zrevrangebylex(key: Key, max: Value, min: Value, limit?: { offset: number; count: number }): R<string[]> {
     const a: Arg[] = [key, max, min];
     if (limit !== undefined) a.push(W.LIMIT, limit.offset, limit.count);
     return this._v(null, C.ZREVRANGEBYLEX, a);
   }
+  /**
+   * Removes members (`ZREM`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param members Member names.
+   * @returns The number of members removed. A set that becomes empty is deleted.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zrem('board', 'bob');
+   * ```
+   */
   zrem(key: Key, ...members: Value[]): R<number> {
     return this._kv(null, C.ZREM, key, members);
   }
+  /**
+   * Adds to a member's score, creating it when missing (`ZINCRBY`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param increment Amount to add (may be negative).
+   * @param member Member name.
+   * @returns The new score.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zincrby('board', 10, 'ada');
+   * ```
+   */
   zincrby(key: Key, increment: number, member: Value): R<number> {
     return this._3(T.float, C.ZINCRBY, key, increment, member);
   }
+  /**
+   * Number of members (`ZCARD`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The count, or `0` when the key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zcard('board');
+   * ```
+   */
   zcard(key: Key): R<number> {
     return this._1(null, C.ZCARD, key);
   }
+  /**
+   * Score of one member (`ZSCORE`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param member Member name.
+   * @returns The score, or `null` when the member or key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zscore('board', 'ada'); // 105
+   * ```
+   */
   zscore(key: Key, member: Value): R<number | null> {
     return this._2(T.float, C.ZSCORE, key, member);
   }
+  /**
+   * Scores of several members (`ZMSCORE`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param members Member names.
+   * @returns One entry per member: the score or `null`.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zmscore('board', 'ada', 'nobody'); // [105, null]
+   * ```
+   */
   zmscore(key: Key, ...members: Value[]): R<(number | null)[]> {
     return this._kv(T.floatArr, C.ZMSCORE, key, members);
   }
+  /**
+   * Rank of a member, lowest score first (`ZRANK`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param member Member name.
+   * @returns The zero-based rank, or `null` when the member or key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zrank('board', 'ada');
+   * ```
+   */
   zrank(key: Key, member: Value): R<number | null> {
     return this._2(null, C.ZRANK, key, member);
   }
+  /**
+   * Rank of a member, highest score first (`ZREVRANK`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param member Member name.
+   * @returns The zero-based rank (0 is the top), or `null` when the member or key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zrevrank('board', 'ada'); // 0
+   * ```
+   */
   zrevrank(key: Key, member: Value): R<number | null> {
     return this._2(null, C.ZREVRANK, key, member);
   }
+  /**
+   * Removes and returns the lowest-scored members (`ZPOPMIN [count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Number of members (default 1).
+   * @returns {@link SortedSetEntry} objects, lowest first; empty when the key is missing or `count` is 0.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const [lowest] = await client.zpopmin('board');
+   * ```
+   */
   zpopmin(key: Key, count?: number): R<SortedSetEntry[]> {
     return count === undefined ? this._1(T.zentries, C.ZPOPMIN, key) : this._2(T.zentries, C.ZPOPMIN, key, count);
   }
+  /**
+   * Removes and returns the highest-scored members (`ZPOPMAX [count]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Number of members (default 1).
+   * @returns {@link SortedSetEntry} objects, highest first; empty when the key is missing or `count` is 0.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const [best] = await client.zpopmax('board');
+   * ```
+   */
   zpopmax(key: Key, count?: number): R<SortedSetEntry[]> {
     return count === undefined ? this._1(T.zentries, C.ZPOPMAX, key) : this._2(T.zentries, C.ZPOPMAX, key, count);
   }
-  /** Blocks the connection: use a dedicated client (`duplicate()`). */
+  /**
+   * Blocking {@link zpopmin} on the first non-empty set (`BZPOPMIN`). Blocks the connection: use a dedicated client (`duplicate()`). Shard-local; at most 1,024 blocked clients per shard. `ZADD`, `ZINCRBY` and `GEOADD` serve the oldest waiting client.
+   *
+   * @param keys One key or several.
+   * @param timeoutSeconds Seconds to wait; `0` waits forever.
+   * @returns A {@link PoppedEntry} `{ key, member, score }`, or `null` on timeout.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const e = await worker.bzpopmin('delayed', 5);
+   * ```
+   */
   bzpopmin(keys: Key | Key[], timeoutSeconds: number): R<PoppedEntry | null> {
     const a: Arg[] = Array.isArray(keys) ? [...keys] : [keys];
     a.push(timeoutSeconds);
     return this._v(T.bzpop, C.BZPOPMIN, a);
   }
-  /** Blocks the connection: use a dedicated client (`duplicate()`). */
+  /**
+   * Blocking {@link zpopmax} on the first non-empty set (`BZPOPMAX`). Same blocking rules as {@link bzpopmin}.
+   *
+   * @param keys One key or several.
+   * @param timeoutSeconds Seconds to wait; `0` waits forever.
+   * @returns A {@link PoppedEntry}, or `null` on timeout.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const e = await worker.bzpopmax(['a', 'b'], 5);
+   * ```
+   */
   bzpopmax(keys: Key | Key[], timeoutSeconds: number): R<PoppedEntry | null> {
     const a: Arg[] = Array.isArray(keys) ? [...keys] : [keys];
     a.push(timeoutSeconds);
     return this._v(T.bzpop, C.BZPOPMAX, a);
   }
+  /**
+   * Removes members by rank range (`ZREMRANGEBYRANK`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param start First rank; negative counts from the end.
+   * @param stop Last rank, inclusive.
+   * @returns The number of members removed.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zremrangebyrank('board', 0, -101); // keep the top 100
+   * ```
+   */
   zremrangebyrank(key: Key, start: number, stop: number): R<number> {
     return this._3(null, C.ZREMRANGEBYRANK, key, start, stop);
   }
+  /**
+   * Removes members whose score is in a range (`ZREMRANGEBYSCORE`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param min Lower bound: a number, `-inf`, or `(5` for exclusive.
+   * @param max Upper bound: a number, `+inf`, or `(5` for exclusive.
+   * @returns The number of members removed.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zremrangebyscore('events', '-inf', Date.now() - 86_400_000);
+   * ```
+   */
   zremrangebyscore(key: Key, min: Value, max: Value): R<number> {
     return this._3(null, C.ZREMRANGEBYSCORE, key, min, max);
   }
+  /**
+   * Removes members in a lexicographic range (`ZREMRANGEBYLEX`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param min Lower bound: `-`, `[member` or `(member`.
+   * @param max Upper bound: `+`, `[member` or `(member`.
+   * @returns The number of members removed.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zremrangebylex('words', '[a', '(b');
+   * ```
+   */
   zremrangebylex(key: Key, min: Value, max: Value): R<number> {
     return this._3(null, C.ZREMRANGEBYLEX, key, min, max);
   }
+  /**
+   * Counts members with a score in a range (`ZCOUNT`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param min Lower bound: a number, `-inf`, or `(5` for exclusive.
+   * @param max Upper bound: a number, `+inf`, or `(5` for exclusive.
+   * @returns The count; `0` when the key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zcount('board', 80, '+inf');
+   * ```
+   */
   zcount(key: Key, min: Value, max: Value): R<number> {
     return this._3(null, C.ZCOUNT, key, min, max);
   }
+  /**
+   * Counts members in a lexicographic range (`ZLEXCOUNT`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param min Lower bound: `-`, `[member` or `(member`.
+   * @param max Upper bound: `+`, `[member` or `(member`.
+   * @returns The count.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zlexcount('words', '-', '+');
+   * ```
+   */
   zlexcount(key: Key, min: Value, max: Value): R<number> {
     return this._3(null, C.ZLEXCOUNT, key, min, max);
   }
+  /**
+   * Stores the union of sorted sets (or plain sets, score 1) in `destination` (`ZUNIONSTORE`). Keys must share a slot on a multi-shard server. An empty result removes the destination.
+   *
+   * @param destination Key that receives the result (any existing value is replaced).
+   * @param keys Input keys.
+   * @param opts {@link ZStoreOptions}: `weights` (one multiplier per input) and `aggregate` (`'SUM'` default, `'MIN'`, `'MAX'`).
+   * @returns The size of the stored set.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.zunionstore('total', ['{s}a', '{s}b'], { weights: [1, 2] });
+   * ```
+   */
   zunionstore(destination: Key, keys: Key[], opts?: ZStoreOptions): R<number> {
     return this._v(null, C.ZUNIONSTORE, pushZStore([destination], keys, opts));
   }
+  /**
+   * Stores the intersection of sorted sets (or plain sets, score 1) in `destination` (`ZINTERSTORE`). Same slot and empty-result rules as {@link zunionstore}.
+   *
+   * @param destination Key that receives the result (any existing value is replaced).
+   * @param keys Input keys.
+   * @param opts {@link ZStoreOptions}: `weights`, `aggregate`.
+   * @returns The size of the stored set.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.zinterstore('both', ['{s}a', '{s}b'], { aggregate: 'MAX' });
+   * ```
+   */
   zinterstore(destination: Key, keys: Key[], opts?: ZStoreOptions): R<number> {
     return this._v(null, C.ZINTERSTORE, pushZStore([destination], keys, opts));
   }
+  /**
+   * Stores members of the first set that are in none of the others (`ZDIFFSTORE`). Keys must share a slot. An empty result removes the destination.
+   *
+   * @param destination Key that receives the result (any existing value is replaced).
+   * @param keys Input keys; the first is the base.
+   * @returns The size of the stored set.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.zdiffstore('only-a', ['{s}a', '{s}b']);
+   * ```
+   */
   zdiffstore(destination: Key, keys: Key[]): R<number> {
     return this._v(null, C.ZDIFFSTORE, pushZStore([destination], keys));
   }
+  /**
+   * Union of sorted sets (or plain sets, score 1), returned directly (`ZUNION`). Keys must share a slot.
+   *
+   * @param keys Input keys.
+   * @param opts {@link ZStoreOptions}: `weights`, `aggregate`.
+   * @returns Member names.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.zunion(['{s}a', '{s}b']);
+   * ```
+   */
   zunion(keys: Key[], opts?: ZStoreOptions): R<string[]> {
     return this._v(null, C.ZUNION, pushZStore([], keys, opts));
   }
+  /**
+   * Like {@link zunion}, with the combined scores.
+   *
+   * @param keys Input keys.
+   * @param opts {@link ZStoreOptions}.
+   * @returns {@link SortedSetEntry} objects.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.zunionWithScores(['{s}a', '{s}b']);
+   * ```
+   */
   zunionWithScores(keys: Key[], opts?: ZStoreOptions): R<SortedSetEntry[]> {
     const a = pushZStore([], keys, opts);
     a.push(W.WITHSCORES);
     return this._v(T.zentries, C.ZUNION, a);
   }
+  /**
+   * Intersection of sorted sets (or plain sets), returned directly (`ZINTER`). Keys must share a slot.
+   *
+   * @param keys Input keys.
+   * @param opts {@link ZStoreOptions}: `weights`, `aggregate`.
+   * @returns Member names.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.zinter(['{s}a', '{s}b']);
+   * ```
+   */
   zinter(keys: Key[], opts?: ZStoreOptions): R<string[]> {
     return this._v(null, C.ZINTER, pushZStore([], keys, opts));
   }
+  /**
+   * Like {@link zinter}, with the combined scores.
+   *
+   * @param keys Input keys.
+   * @param opts {@link ZStoreOptions}.
+   * @returns {@link SortedSetEntry} objects.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.zinterWithScores(['{s}a', '{s}b']);
+   * ```
+   */
   zinterWithScores(keys: Key[], opts?: ZStoreOptions): R<SortedSetEntry[]> {
     const a = pushZStore([], keys, opts);
     a.push(W.WITHSCORES);
     return this._v(T.zentries, C.ZINTER, a);
   }
+  /**
+   * Members of the first sorted set that are in none of the others (`ZDIFF`). Keys must share a slot.
+   *
+   * @param keys Input keys; the first is the base.
+   * @returns Member names.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.zdiff(['{s}a', '{s}b']);
+   * ```
+   */
   zdiff(keys: Key[]): R<string[]> {
     return this._v(null, C.ZDIFF, pushZStore([], keys));
   }
+  /**
+   * Like {@link zdiff}, with scores.
+   *
+   * @param keys Input keys; the first is the base.
+   * @returns {@link SortedSetEntry} objects.
+   * @throws {@link RuvioError} `WRONGTYPE`; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.zdiffWithScores(['{s}a', '{s}b']);
+   * ```
+   */
   zdiffWithScores(keys: Key[]): R<SortedSetEntry[]> {
     const a = pushZStore([], keys);
     a.push(W.WITHSCORES);
     return this._v(T.zentries, C.ZDIFF, a);
   }
+  /**
+   * Returns random members (`ZRANDMEMBER [count [WITHSCORES]]`). Reads the whole set, so cost grows with its size.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional. Positive: up to that many distinct members. Negative: `|count|` members, repeats allowed.
+   * @param withScores With `count`, return {@link SortedSetEntry} objects instead of names.
+   * @returns Without `count`: a member or `null`. With `count`: names, or entries with `withScores`.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zrandmember('board');
+   * await client.zrandmember('board', 3, true);
+   * ```
+   */
   zrandmember(key: Key): R<string | null>;
+  /**
+   * Returns random members (`ZRANDMEMBER [count [WITHSCORES]]`). Reads the whole set, so cost grows with its size.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional. Positive: up to that many distinct members. Negative: `|count|` members, repeats allowed.
+   * @param withScores With `count`, return {@link SortedSetEntry} objects instead of names.
+   * @returns Without `count`: a member or `null`. With `count`: names, or entries with `withScores`.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zrandmember('board');
+   * await client.zrandmember('board', 3, true);
+   * ```
+   */
   zrandmember(key: Key, count: number): R<string[]>;
+  /**
+   * Returns random members (`ZRANDMEMBER [count [WITHSCORES]]`). Reads the whole set, so cost grows with its size.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional. Positive: up to that many distinct members. Negative: `|count|` members, repeats allowed.
+   * @param withScores With `count`, return {@link SortedSetEntry} objects instead of names.
+   * @returns Without `count`: a member or `null`. With `count`: names, or entries with `withScores`.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zrandmember('board');
+   * await client.zrandmember('board', 3, true);
+   * ```
+   */
   zrandmember(key: Key, count: number, withScores: true): R<SortedSetEntry[]>;
+  /**
+   * Returns random members (`ZRANDMEMBER [count [WITHSCORES]]`). Reads the whole set, so cost grows with its size.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param count Optional. Positive: up to that many distinct members. Negative: `|count|` members, repeats allowed.
+   * @param withScores With `count`, return {@link SortedSetEntry} objects instead of names.
+   * @returns Without `count`: a member or `null`. With `count`: names, or entries with `withScores`.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.zrandmember('board');
+   * await client.zrandmember('board', 3, true);
+   * ```
+   */
   zrandmember(key: Key, count?: number, withScores?: boolean): R<string | null | string[] | SortedSetEntry[]>;
   zrandmember(key: Key, count?: number, withScores?: boolean): R<any> {
     if (count === undefined) return this._1(null, C.ZRANDMEMBER, key);
     if (withScores) return this._3(T.zentries, C.ZRANDMEMBER, key, count, W.WITHSCORES);
     return this._2(null, C.ZRANDMEMBER, key, count);
   }
+  /**
+   * Reads one page of sorted set entries (`ZSCAN`). See {@link zscanIterator}.
+   * The cursor is a position in score order. A missing key returns cursor `'0'` and no items.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param cursor Cursor from the previous page; start with `0`. A returned cursor of `"0"` means the walk is complete.
+   * @param opts {@link ScanOptions}: `match` glob and `count` hint.
+   * @returns A {@link ScanPage} of {@link SortedSetEntry}.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const page = await client.zscan('board', 0);
+   * ```
+   */
   zscan(key: Key, cursor: string | number, opts?: ScanOptions): R<ScanPage<SortedSetEntry>> {
     return this._v(T.zscan, C.ZSCAN, pushScan([key, cursor], opts));
   }
 
   // ---- geo -------------------------------------------------------------------------------
 
+  /**
+   * Adds geographic points to a key (`GEOADD key [NX|XX] [CH] longitude latitude member ...`). The key is stored as a sorted set whose score is a 52-bit geohash, so the `z*` commands work on it too.
+   * Valid coordinates: longitude -180 to 180 and latitude -85.05112878 to 85.05112878 (degrees). Anything else is rejected and nothing is written.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param members Points to add: `{ longitude, latitude, member }`.
+   * @param opts `nx` only add new members, `xx` only update existing ones, `ch` count changed members too.
+   * @returns The number of members added; with `ch`, added plus changed.
+   * @throws {@link RuvioError} `ERR` when a longitude/latitude pair is out of range; `WRONGTYPE`.
+   *
+   * @example
+   * ```ts
+   * await client.geoadd('shops', [
+   *   { longitude: 13.361389, latitude: 38.115556, member: 'Palermo' },
+   *   { longitude: 15.087269, latitude: 37.502669, member: 'Catania' },
+   * ]);
+   * ```
+   */
   geoadd(key: Key, members: GeoMember[], opts?: { nx?: boolean; xx?: boolean; ch?: boolean }): R<number> {
     const a: Arg[] = [key];
     if (opts?.nx) a.push(W.NX);
@@ -1105,18 +4043,77 @@ export abstract class Commands {
     for (const m of members) a.push(m.longitude, m.latitude, m.member);
     return this._v(null, C.GEOADD, a);
   }
+  /**
+   * Distance between two members (`GEODIST`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param member1 First member.
+   * @param member2 Second member.
+   * @param unit Result unit: `m` (default), `km`, `ft` or `mi`.
+   * @returns The distance in `unit`, or `null` when either member or the key is missing.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.geodist('shops', 'Palermo', 'Catania', 'km'); // ~166.27
+   * ```
+   */
   geodist(key: Key, member1: Value, member2: Value, unit?: GeoUnit): R<number | null> {
     return unit === undefined
       ? this._3(T.float, C.GEODIST, key, member1, member2)
       : this._4(T.float, C.GEODIST, key, member1, member2, unit);
   }
+  /**
+   * Returns geohash strings (`GEOHASH`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param members Member names.
+   * @returns One 11-character geohash per member (the last character is always `0`), or `null` for a missing member.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * await client.geohash('shops', 'Palermo'); // ['sqc8b49rny0']
+   * ```
+   */
   geohash(key: Key, ...members: Value[]): R<(string | null)[]> {
     return this._kv(null, C.GEOHASH, key, members);
   }
+  /**
+   * Returns coordinates (`GEOPOS`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param members Member names.
+   * @returns One `[longitude, latitude]` per member, or `null` for a missing member. Values are the stored (rounded to 52-bit) coordinates.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const [palermo] = await client.geopos('shops', 'Palermo'); // [13.36, 38.11]
+   * ```
+   */
   geopos(key: Key, ...members: Value[]): R<([number, number] | null)[]> {
     return this._kv(T.geopos, C.GEOPOS, key, members);
   }
-  /** `GEOSEARCH`; with any `with*` option each match is a {@link GeoMatch}, else a member name. */
+  /**
+   * Finds members inside a circle or a box (`GEOSEARCH`).
+   * Give exactly one centre (`fromMember` or `fromLonLat`) and one shape (`byRadius` or `byBox`). Distances are in the shape's unit.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param opts {@link GeoSearchOptions}: centre, shape, `order` (`'ASC'` nearest first, `'DESC'`), `count` with `any` (return the first matches found, not the nearest), and `withCoord` / `withDist` / `withHash`.
+   * @returns Member names, or {@link GeoMatch} objects (`member`, plus `distance`, `hash`, `coordinates` as requested) when any `with*` option is set. Empty when the key is missing.
+   * @throws {@link RuvioError} `ERR` for a missing centre or shape, or an unknown member; `WRONGTYPE`.
+   *
+   * @example
+   * ```ts
+   * const near = await client.geosearch('shops', {
+   *   fromLonLat: [15, 37],
+   *   byRadius: { radius: 200, unit: 'km' },
+   *   order: 'ASC',
+   *   withDist: true,
+   * });
+   * ```
+   */
   geosearch(key: Key, opts: GeoSearchOptions): R<(string | GeoMatch)[]> {
     const a: Arg[] = [key];
     pushGeoShape(a, opts);
@@ -1125,17 +4122,66 @@ export abstract class Commands {
     if (opts.withHash) a.push(W.WITHHASH);
     return this._v(geoTf(opts), C.GEOSEARCH, a);
   }
+  /**
+   * Like {@link geosearch}, but stores the matches in `destination` (`GEOSEARCHSTORE`), replacing it.
+   * Keys must share a slot on a multi-shard server.
+   *
+   * @param destination Key that receives the result (any existing value is replaced).
+   * @param source Geo key to search.
+   * @param opts {@link GeoSearchOptions} plus `storeDist`: store each distance as the score instead of the geohash.
+   * @returns The number of members stored.
+   * @throws {@link RuvioError} `ERR` for a missing centre or shape; `CROSSSLOT` when the slots differ.
+   *
+   * @example
+   * ```ts
+   * await client.geosearchstore('{s}near', '{s}shops', { fromMember: 'Palermo', byRadius: { radius: 100, unit: 'km' } });
+   * ```
+   */
   geosearchstore(destination: Key, source: Key, opts: GeoSearchOptions & { storeDist?: boolean }): R<number> {
     const a: Arg[] = [destination, source];
     pushGeoShape(a, opts);
     if (opts.storeDist) a.push(W.STOREDIST);
     return this._v(null, C.GEOSEARCHSTORE, a);
   }
+  /**
+   * Finds members within a radius of a point (`GEORADIUS`). Prefer {@link geosearch}.
+   * With `store` or `storeDist` the matches are written to that key (replacing it, same slot required) and the reply is the stored count.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param longitude Centre longitude, -180 to 180.
+   * @param latitude Centre latitude, -85.05112878 to 85.05112878.
+   * @param radius Search radius, in `unit`.
+   * @param unit Distance unit: `m`, `km`, `ft` or `mi`.
+   * @param opts {@link GeoRadiusOptions}: `withCoord`, `withDist`, `withHash`, `count` (+`any`), `order`, `store`, `storeDist`.
+   * @returns Member names or {@link GeoMatch} objects; a number when storing.
+   * @throws {@link RuvioError} `ERR` for an invalid coordinate; `WRONGTYPE`.
+   *
+   * @example
+   * ```ts
+   * await client.georadius('shops', 15, 37, 200, 'km', { withDist: true, order: 'ASC' });
+   * ```
+   */
   georadius(key: Key, longitude: number, latitude: number, radius: number, unit: GeoUnit, opts?: GeoRadiusOptions): R<(string | GeoMatch)[] | number> {
     const a: Arg[] = [key, longitude, latitude, radius, unit];
     pushRadius(a, opts);
     return this._v(opts ? geoTf(opts) : null, C.GEORADIUS, a);
   }
+  /**
+   * Like {@link georadius}, centred on an existing member (`GEORADIUSBYMEMBER`). Prefer {@link geosearch}.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param member Member whose position is the centre.
+   * @param radius Search radius, in `unit`.
+   * @param unit Distance unit: `m`, `km`, `ft` or `mi`.
+   * @param opts {@link GeoRadiusOptions}.
+   * @returns Member names or {@link GeoMatch} objects; a number when storing.
+   * @throws {@link RuvioError} `ERR` when the member does not exist; `WRONGTYPE`.
+   *
+   * @example
+   * ```ts
+   * await client.georadiusbymember('shops', 'Palermo', 100, 'km');
+   * ```
+   */
   georadiusbymember(key: Key, member: Value, radius: number, unit: GeoUnit, opts?: GeoRadiusOptions): R<(string | GeoMatch)[] | number> {
     const a: Arg[] = [key, member, radius, unit];
     pushRadius(a, opts);
@@ -1144,20 +4190,75 @@ export abstract class Commands {
 
   // ---- bloom -----------------------------------------------------------------------------
 
+  /**
+   * Creates a Bloom filter with chosen accuracy (`BF.RESERVE key errorRate capacity [EXPANSION n | NONSCALING]`). RedisBloom wire shape, not certified module compatibility.
+   * Filters scale by default: each new layer is `expansion` times larger with half the error rate, and a layer above 64 MiB is refused.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param errorRate Target false-positive rate between 0 and 1, e.g. `0.01`.
+   * @param capacity Expected number of items.
+   * @param opts {@link BfReserveOptions}: `expansion` growth factor, or `nonScaling` for a fixed-size filter that errors when full.
+   * @returns `'OK'`.
+   * @throws {@link RuvioError} `ERR` when the key exists or a parameter is invalid.
+   *
+   * @example
+   * ```ts
+   * await client.bfReserve('seen:urls', 0.001, 1_000_000);
+   * ```
+   */
   bfReserve(key: Key, errorRate: number, capacity: number, opts?: BfReserveOptions): R<'OK'> {
     const a: Arg[] = [key, errorRate, capacity];
     if (opts?.expansion !== undefined) a.push(W.EXPANSION, opts.expansion);
     if (opts?.nonScaling) a.push(W.NONSCALING);
     return this._v(null, C.BF_RESERVE, a);
   }
-  /** True when the item was new. */
+  /**
+   * Adds an item to a Bloom filter (`BF.ADD`). A missing key becomes a scalable filter (error 0.01, capacity 100, expansion 2).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param item Item to test or add.
+   * @returns `true` when the item was new; `false` when it was probably already present.
+   * @throws {@link RuvioError} `ERR` when a non-scaling filter is full.
+   *
+   * @example
+   * ```ts
+   * if (await client.bfAdd('seen:urls', url)) crawl(url);
+   * ```
+   */
   bfAdd(key: Key, item: Value): R<boolean> {
     return this._2(T.bool, C.BF_ADD, key, item);
   }
-  /** Per item: true when added (new), false when probably present. */
+  /**
+   * Adds several items (`BF.MADD`) in one record.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param items Items to add.
+   * @returns Per item: `true` when added (new), `false` when probably present.
+   * @throws {@link RuvioError} `ERR` when a non-scaling filter is full.
+   *
+   * @example
+   * ```ts
+   * await client.bfMadd('seen:urls', 'a', 'b'); // [true, false]
+   * ```
+   */
   bfMadd(key: Key, ...items: Value[]): R<boolean[]> {
     return this._kv(T.boolArr, C.BF_MADD, key, items);
   }
+  /**
+   * Adds items, creating the filter with options if needed (`BF.INSERT`).
+   * The creation options apply only when the key is new.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param items Items to add.
+   * @param opts {@link BfInsertOptions}: `capacity`, `error`, `expansion`, `nonScaling` (creation only) and `noCreate` (fail instead of creating).
+   * @returns Per item: `true` when added, `false` when probably present.
+   * @throws {@link RuvioError} `ERR not found` with `noCreate` on a missing key; `ERR` when a non-scaling filter is full.
+   *
+   * @example
+   * ```ts
+   * await client.bfInsert('seen:ids', ['x', 'y'], { capacity: 10_000, error: 0.01 });
+   * ```
+   */
   bfInsert(key: Key, items: Value[], opts?: BfInsertOptions): R<boolean[]> {
     const a: Arg[] = [key];
     if (opts !== undefined) {
@@ -1171,19 +4272,92 @@ export abstract class Commands {
     pushAll(a, items);
     return this._v(T.boolArr, C.BF_INSERT, a);
   }
-  /** `BF.INFO key` as an object, or one field's value. */
+  /**
+   * Describes a filter (`BF.INFO key [field]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param field Optional single field name: `Capacity`, `Size`, `Number of filters`, `Number of items inserted` or `Expansion rate`.
+   * @returns Without `field`: an object of all fields (`Expansion rate` is `null` for a non-scaling filter). With `field`: that value.
+   * @throws {@link RuvioError} `ERR` when the key does not exist.
+   *
+   * @example
+   * ```ts
+   * const info = await client.bfInfo('seen:urls');
+   * ```
+   */
   bfInfo(key: Key): R<Record<string, number | null>>;
+  /**
+   * Describes a filter (`BF.INFO key [field]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param field Optional single field name: `Capacity`, `Size`, `Number of filters`, `Number of items inserted` or `Expansion rate`.
+   * @returns Without `field`: an object of all fields (`Expansion rate` is `null` for a non-scaling filter). With `field`: that value.
+   * @throws {@link RuvioError} `ERR` when the key does not exist.
+   *
+   * @example
+   * ```ts
+   * const info = await client.bfInfo('seen:urls');
+   * ```
+   */
   bfInfo(key: Key, field: string): R<unknown>;
+  /**
+   * Describes a filter (`BF.INFO key [field]`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param field Optional single field name: `Capacity`, `Size`, `Number of filters`, `Number of items inserted` or `Expansion rate`.
+   * @returns Without `field`: an object of all fields (`Expansion rate` is `null` for a non-scaling filter). With `field`: that value.
+   * @throws {@link RuvioError} `ERR` when the key does not exist.
+   *
+   * @example
+   * ```ts
+   * const info = await client.bfInfo('seen:urls');
+   * ```
+   */
   bfInfo(key: Key, field?: string): R<unknown>;
   bfInfo(key: Key, field?: string): R<any> {
     return field === undefined ? this._1(T.map, C.BF_INFO, key) : this._2(null, C.BF_INFO, key, field);
   }
+  /**
+   * Number of items added so far (`BF.CARD`). Counted when an item sets a new bit, so it is approximate.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @returns The count; `0` when the key is missing.
+   *
+   * @example
+   * ```ts
+   * await client.bfCard('seen:urls');
+   * ```
+   */
   bfCard(key: Key): R<number> {
     return this._1(null, C.BF_CARD, key);
   }
+  /**
+   * Tests one item (`BF.EXISTS`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param item Item to test or add.
+   * @returns `false` means definitely absent; `true` means probably present (false positives are possible). `false` for a missing key.
+   *
+   * @example
+   * ```ts
+   * await client.bfExists('seen:urls', url);
+   * ```
+   */
   bfExists(key: Key, item: Value): R<boolean> {
     return this._2(T.bool, C.BF_EXISTS, key, item);
   }
+  /**
+   * Tests several items (`BF.MEXISTS`).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param items Items to add.
+   * @returns One boolean per item (see {@link bfExists}); all `false` when the key is missing.
+   *
+   * @example
+   * ```ts
+   * await client.bfMexists('seen:urls', 'a', 'b');
+   * ```
+   */
   bfMexists(key: Key, ...items: Value[]): R<boolean[]> {
     return this._kv(T.boolArr, C.BF_MEXISTS, key, items);
   }
