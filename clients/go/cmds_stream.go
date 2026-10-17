@@ -11,7 +11,9 @@ import (
 // then a sequence number) and Values holds the fields as field, value, field, value ...
 // Use Map for field lookup.
 type XMessage struct {
-	ID     string
+	// ID is the entry id, "<ms>-<seq>".
+	ID string
+	// Values holds the fields as a flat list: name, value, name, value ... (see Map).
 	Values []string
 }
 
@@ -27,7 +29,9 @@ func (m XMessage) Map() map[string]string {
 
 // XStream is the entries read from one stream by XRead: the stream key and its messages.
 type XStream struct {
-	Stream   string
+	// Stream is the stream key.
+	Stream string
+	// Messages are the entries read, oldest first.
 	Messages []XMessage
 }
 
@@ -106,14 +110,22 @@ func toXStreams(v Value) ([]XStream, error) {
 // Delay (Ruvio) keeps the new entry hidden from XReadGroup for that long (milliseconds).
 // Values are the entry fields, field, value, ... in pairs, at least one pair.
 type XAddArgs struct {
-	Stream     string
-	ID         string
+	// Stream is the stream key.
+	Stream string
+	// ID is the entry id; empty (the default) lets the server generate one ("*"). An explicit id must be greater than the last one.
+	ID string
+	// NoMkStream makes XAdd do nothing when the stream does not exist, instead of creating it.
 	NoMkStream bool
-	MaxLen     int64
-	MinID      string
-	Approx     bool
-	Delay      time.Duration
-	Values     []string
+	// MaxLen caps the stream length by trimming the oldest entries; 0 or less disables it. Takes precedence over MinID.
+	MaxLen int64
+	// MinID trims entries with an id lower than this; used only when MaxLen is not set.
+	MinID string
+	// Approx makes the trim approximate ("~"), which is cheaper; the stream may keep a few more entries than the limit.
+	Approx bool
+	// Delay hides the entry from consumer-group delivery until the duration has passed (Ruvio extension, sent as DELAY in milliseconds). 0 means deliver at once.
+	Delay time.Duration
+	// Values are the entry fields as name, value, name, value ...; the count must be even and at least 2.
+	Values []string
 }
 
 // XAdd appends an entry to a stream and returns its id (XADD). A missing stream is
@@ -225,10 +237,14 @@ func blockMs(d time.Duration) int64 {
 // until one arrives. A blocking read runs on a dedicated connection. All streams must
 // share a hash slot in cluster mode.
 type XReadArgs struct {
+	// Streams are the stream keys to read.
 	Streams []string
-	IDs     []string
-	Count   int64
-	Block   time.Duration
+	// IDs are the last ids already seen, one per stream and in the same order; "$" means only entries added after the call starts (useful with Block).
+	IDs []string
+	// Count limits the entries returned per stream; 0 or less means no limit.
+	Count int64
+	// Block waits up to this long for new entries. 0 does not block; a positive value waits that long and returns nil on timeout. The wait uses a dedicated connection.
+	Block time.Duration
 }
 
 // XRead reads entries from one or more streams (XREAD). It returns one XStream per
@@ -334,12 +350,18 @@ func (c *cmds) XGroupDelConsumer(ctx context.Context, stream, group, consumer st
 // Group and always asks for new entries (id ">"). Count > 0 limits the batch. Block
 // works as in XReadArgs. NoAck delivers entries without adding them to the pending list.
 type XReadGroupArgs struct {
-	Group    string
+	// Group is the consumer group name.
+	Group string
+	// Consumer is the consumer name inside the group; it is created on first use.
 	Consumer string
-	Stream   string
-	Count    int64
-	Block    time.Duration
-	NoAck    bool
+	// Stream is the stream key to read.
+	Stream string
+	// Count limits the entries returned; 0 or less means no limit.
+	Count int64
+	// Block waits up to this long for new entries; 0 does not block. The wait uses a dedicated connection.
+	Block time.Duration
+	// NoAck delivers entries without adding them to the pending list, so they cannot be acknowledged or claimed.
+	NoAck bool
 }
 
 // XReadGroup delivers new entries of a stream to a consumer (XREADGROUP GROUP group
@@ -399,9 +421,13 @@ func (c *cmds) XAck(ctx context.Context, stream, group string, ids ...string) (i
 // Highest pending ids (empty when Count is 0) and Consumers, the pending count per
 // consumer name.
 type XPendingSummary struct {
-	Count     int64
-	Lowest    string
-	Highest   string
+	// Count is the number of pending entries in the group.
+	Count int64
+	// Lowest is the smallest pending entry id.
+	Lowest string
+	// Highest is the largest pending entry id.
+	Highest string
+	// Consumers maps each consumer name to its number of pending entries.
 	Consumers map[string]int64
 }
 
@@ -431,12 +457,19 @@ func (c *cmds) XPending(ctx context.Context, stream, group string) (XPendingSumm
 // Idle > 0 keeps only entries idle at least that long (milliseconds). Consumer, when
 // set, keeps one consumer's entries.
 type XPendingExtArgs struct {
-	Stream   string
-	Group    string
-	Idle     time.Duration
-	Start    string
-	End      string
-	Count    int64
+	// Stream is the stream key.
+	Stream string
+	// Group is the consumer group name.
+	Group string
+	// Idle keeps only entries idle for at least this long; 0 means no filter.
+	Idle time.Duration
+	// Start is the lowest id to include; "-" means the smallest.
+	Start string
+	// End is the highest id to include; "+" means the largest.
+	End string
+	// Count is the maximum number of entries to return.
+	Count int64
+	// Consumer keeps only the entries held by this consumer; empty means all.
 	Consumer string
 }
 
@@ -444,9 +477,13 @@ type XPendingExtArgs struct {
 // holds it, how long it has been idle (Idle) and how many times it was delivered
 // (Deliveries).
 type XPendingEntry struct {
-	ID         string
-	Consumer   string
-	Idle       time.Duration
+	// ID is the entry id.
+	ID string
+	// Consumer is the consumer that holds the entry.
+	Consumer string
+	// Idle is the time since the entry was last delivered.
+	Idle time.Duration
+	// Deliveries is how many times the entry was delivered.
 	Deliveries int64
 }
 
@@ -488,12 +525,18 @@ func (c *cmds) XPendingExt(ctx context.Context, a XPendingExtArgs) ([]XPendingEn
 // are moved to Consumer, scanning ids from Start ("0-0" to begin). Count > 0 limits the
 // batch (the server uses 100 when it is not given).
 type XAutoClaimArgs struct {
-	Stream   string
-	Group    string
+	// Stream is the stream key.
+	Stream string
+	// Group is the consumer group name.
+	Group string
+	// Consumer is the consumer that takes ownership.
 	Consumer string
-	MinIdle  time.Duration
-	Start    string
-	Count    int64
+	// MinIdle is the minimum idle time of an entry to be claimed.
+	MinIdle time.Duration
+	// Start is the id to scan from; "0-0" starts at the beginning, later calls pass the cursor returned by the previous one.
+	Start string
+	// Count is the maximum number of entries to claim; 0 or less uses the server default.
+	Count int64
 }
 
 func xautoclaimReq(a *XAutoClaimArgs, justID bool) *request {
@@ -555,16 +598,26 @@ func (c *cmds) XAutoClaimJustID(ctx context.Context, a XAutoClaimArgs) (string, 
 // counter. Force claims ids that are not pending. LastID moves the group's last
 // delivered id.
 type XClaimArgs struct {
-	Stream     string
-	Group      string
-	Consumer   string
-	MinIdle    time.Duration
-	IDs        []string
-	Idle       time.Duration
-	Time       time.Time
+	// Stream is the stream key.
+	Stream string
+	// Group is the consumer group name.
+	Group string
+	// Consumer is the consumer that takes ownership.
+	Consumer string
+	// MinIdle skips entries idle for less than this long.
+	MinIdle time.Duration
+	// IDs are the entry ids to claim.
+	IDs []string
+	// Idle sets the entry idle time after the claim; 0 leaves it unset.
+	Idle time.Duration
+	// Time sets the last-delivery time to this instant; the zero time leaves it unset.
+	Time time.Time
+	// RetryCount sets the delivery counter; 0 or less leaves it unset.
 	RetryCount int64
-	Force      bool
-	LastID     string
+	// Force claims ids that are not in the pending list.
+	Force bool
+	// LastID sets the group last-delivered id; empty leaves it unset.
+	LastID string
 }
 
 func xclaimReq(a *XClaimArgs, justID bool) *request {

@@ -14,8 +14,11 @@ import (
 	"sync/atomic"
 )
 
-// ErrCrossSlot is returned (without sending anything) for a multi-key command, pipeline
-// or transaction whose keys do not share one hash slot and which the client cannot split.
+// ErrCrossSlot is returned, without sending anything, for a multi-key command, pipeline
+// or transaction whose keys do not all hash to one slot and that the client cannot
+// split. MGET, MSET, DEL, UNLINK, EXISTS and TOUCH are split per node automatically
+// (their replies are merged and the split is not atomic). Use hash tags such as
+// {user:1}:a and {user:1}:b to put related keys on one slot.
 var ErrCrossSlot = errors.New("ruvio: CROSSSLOT keys in request don't hash to the same slot")
 
 const (
@@ -287,8 +290,8 @@ func (cl *cluster) stats() Stats {
 	return s
 }
 
-// Nodes returns the addresses of the cluster nodes, in slot order (nil for a standalone
-// server or before the first command).
+// Nodes returns the addresses of the cluster nodes in slot order. It returns nil for a
+// standalone server or before the first command has discovered the topology.
 func (c *Client) Nodes() []string {
 	if c.cl == nil {
 		return nil
@@ -299,11 +302,13 @@ func (c *Client) Nodes() []string {
 	return nil
 }
 
-// IsCluster reports whether the client discovered a cluster (false for a standalone
-// server, or before the first command).
+// IsCluster reports whether the client discovered a cluster. It is false for a
+// standalone server (including a single-shard server) and before the first command.
 func (c *Client) IsCluster() bool { return c.cl != nil && c.cl.t.Load() != nil }
 
-// RefreshSlots reloads the slot table now (CLUSTER SLOTS).
+// RefreshSlots reloads the slot table now with CLUSTER SLOTS. The client also refreshes
+// it by itself after a MOVED reply. It does nothing and returns nil when Options.Cluster
+// is not set.
 func (c *Client) RefreshSlots(ctx context.Context) error {
 	if c.cl == nil {
 		return nil

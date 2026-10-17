@@ -36,7 +36,11 @@ func hashSlot(key []byte) int {
 	return int(crc) & (slotCount - 1)
 }
 
-// KeySlot returns the cluster hash slot of key (CRC16-XMODEM mod 16384, {hashtag} aware).
+// KeySlot returns the cluster hash slot (0 to 16383) of key: CRC16-XMODEM modulo 16384.
+// If the key contains a non-empty {hashtag}, only the text inside the first braces is
+// hashed.
+//
+//	ruvio.KeySlot("{user:1}:name") == ruvio.KeySlot("{user:1}:email") // true
 func KeySlot(key string) int {
 	if i := indexByte(key, '{'); i >= 0 {
 		if j := indexByte(key[i+1:], '}'); j > 0 {
@@ -295,8 +299,11 @@ func keysOf(r *commandKeyRule, args [][]byte, dst [][]byte) [][]byte {
 	return dst
 }
 
-// CommandKeys returns the keys the router would use for the command (name first), in
-// argument order. It exists for tests and tooling.
+// CommandKeys returns the keys the router would use for a command, in argument order;
+// args[0] is the command name. It returns nil for commands without keys or for an empty
+// call. It is meant for tests and tooling.
+//
+//	ruvio.CommandKeys("MGET", "a", "b") // ["a" "b"]
 func CommandKeys(args ...string) []string {
 	bs := make([][]byte, len(args))
 	for i, a := range args {

@@ -24,6 +24,7 @@ type Options struct {
 	// Username and Password send AUTH on every new connection when Password is set.
 	// An empty Username authenticates the default user.
 	Username string
+	// Password is the AUTH password; see Username.
 	Password string
 	// DB is the logical database selected on every new connection (SELECT). The
 	// default is 0. A sharded server only has database 0.
@@ -334,7 +335,9 @@ func (c *Client) Do(ctx context.Context, args ...any) (Value, error) {
 // number of commands sent. In cluster mode the counters add up over all node
 // connections.
 type Stats struct {
-	Writes       uint64
+	// Writes is the number of socket write calls made.
+	Writes uint64
+	// BytesWritten is the number of bytes written to the socket.
 	BytesWritten uint64
 }
 

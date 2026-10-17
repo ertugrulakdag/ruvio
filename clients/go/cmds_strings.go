@@ -428,6 +428,7 @@ const (
 // IdemResult is the reply of IdemBegin. Result is only set when State is IdemCompleted
 // (it may be empty).
 type IdemResult struct {
+	// State is the outcome (IdemAcquired, IdemPending, IdemCompleted or IdemConflict).
 	State  IdemState
 	Result []byte // saved result when State is IdemCompleted
 }
@@ -522,6 +523,7 @@ const (
 // FillResult is the reply of FillGet. Value is set for FillHit and FillStale. Token is
 // set for FillFill, and for FillStale when this caller was chosen to refresh.
 type FillResult struct {
+	// State is the outcome (FillHit, FillStale, FillFill or FillBusy).
 	State FillState
 	Value string // cached value (FillHit, FillStale)
 	Token string // fill token for FillSet (FillFill, FillStale)
@@ -743,6 +745,7 @@ func (c *cmds) BitFieldRO(ctx context.Context, key string, ops ...BitFieldOp) ([
 
 // NullInt is an integer that may be absent: Valid is false for a null reply.
 type NullInt struct {
+	// Val is the value; 0 when Valid is false.
 	Val   int64
 	Valid bool // false for a null reply
 }

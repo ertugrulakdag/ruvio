@@ -167,8 +167,9 @@ func (c *cmds) ZLexCount(ctx context.Context, key, min, max string) (int64, erro
 // lower one (as in Redis). Limit is only allowed together with ByScore or ByLex;
 // otherwise the server returns a syntax error.
 type ZRangeArgs struct {
-	Key     string // sorted set
-	Start   string // rank index, score bound or lex bound (see above)
+	Key   string // sorted set
+	Start string // rank index, score bound or lex bound (see above)
+	// Stop is the end of the range, in the same form as Start.
 	Stop    string
 	ByScore bool   // Start and Stop are score bounds
 	ByLex   bool   // Start and Stop are lexicographic bounds
@@ -319,6 +320,7 @@ func (c *cmds) ZPopMax(ctx context.Context, key string, count int64) ([]Z, error
 // KeyZ is the reply of BZPopMin and BZPopMax: the sorted set the member came from, with
 // the member and its score (the embedded Z).
 type KeyZ struct {
+	// Key is the sorted set the member was popped from.
 	Key string
 	Z
 }
