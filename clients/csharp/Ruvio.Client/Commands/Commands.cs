@@ -8,12 +8,12 @@ namespace Ruvio.Client;
 
 public sealed partial class RuvioClient
 {
-    /// <summary>Begins a native idempotency operation. Returns [acquired], [pending], [conflict], or [completed, binary result].</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> BeginIdempotencyAsync(string key, string fingerprint, string owner, long ttlMs,
         CancellationToken cancellationToken = default)
         => ExecuteCommandAsync(new RespCommand("IDEM", key, "BEGIN", fingerprint, owner, ttlMs), cancellationToken);
 
-    /// <summary>Completes only the matching live owner; identical completion is acknowledged without rewriting or renewing TTL.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<bool> CompleteIdempotencyAsync(string key, string fingerprint, string owner, string result,
         CancellationToken cancellationToken = default)
@@ -27,7 +27,7 @@ public sealed partial class RuvioClient
         return reply.Integer == 1;
     }
 
-    /// <summary>Sends <c>LIMIT</c>. Null means this call did not fit. Otherwise the remaining allowance.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<long?> LimitAsync(
         string key,
@@ -42,13 +42,13 @@ public sealed partial class RuvioClient
         return reply.Kind == RespKind.Null ? null : reply.Integer;
     }
 
-    /// <summary>Sends <c>ONCE</c>. 1 is the first call. 0 means the key is already taken.</summary>
+    /// <inheritdoc />
     public ValueTask<long> OnceAsync(string key, long ttlMs, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("ONCE", key, ttlMs), cancellationToken);
     }
 
-    /// <summary>Sends <c>TAKE</c>. Null means the key did not hold enough.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<long?> TakeAsync(string key, long count, CancellationToken cancellationToken = default)
     {
@@ -57,13 +57,13 @@ public sealed partial class RuvioClient
         return reply.Kind == RespKind.Null ? null : reply.Integer;
     }
 
-    /// <summary>Sends <c>GETEX</c>. Returns the string and sets its TTL.</summary>
+    /// <inheritdoc />
     public ValueTask<string?> GetExpireAsync(string key, long ttlMs, CancellationToken cancellationToken = default)
     {
         return BulkOrNull(new RespCommand("GETEX", key, ttlMs), cancellationToken);
     }
 
-    /// <summary>Sends <c>LEASE</c>. Null means the lease is still held.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<long?> LeaseAsync(string key, long ttlMs, CancellationToken cancellationToken = default)
     {
@@ -72,7 +72,7 @@ public sealed partial class RuvioClient
         return reply.Kind == RespKind.Null ? null : reply.Integer;
     }
 
-    /// <summary>Sends <c>SEMAPHORE key max ttlMs</c>. A token while fewer than <paramref name="max"/> holders are live; null when full. Pass the token to <see cref="ReleaseAsync"/>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<long?> AcquireSemaphoreAsync(string key, long max, long ttlMs, CancellationToken cancellationToken = default)
     {
@@ -81,7 +81,7 @@ public sealed partial class RuvioClient
         return reply.Kind == RespKind.Null ? null : reply.Integer;
     }
 
-    /// <summary>Sends <c>INCRBY key delta MAX limit</c>. Null means the result would pass <paramref name="limit"/>, and the key was left unchanged.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<long?> IncrementWithLimitAsync(string key, long delta, long limit, CancellationToken cancellationToken = default)
     {
@@ -90,31 +90,31 @@ public sealed partial class RuvioClient
         return reply.Kind == RespKind.Null ? null : reply.Integer;
     }
 
-    /// <summary>Sends <c>RELEASE</c> for a lease or a semaphore token.</summary>
+    /// <inheritdoc />
     public ValueTask<long> ReleaseAsync(string key, long token, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("RELEASE", key, token), cancellationToken);
     }
 
-    /// <summary>Sends <c>SETV</c> and creates version 1.</summary>
+    /// <inheritdoc />
     public ValueTask<long> SetVersionAsync(string key, string value, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("SETV", key, value), cancellationToken);
     }
 
-    /// <summary>Sends <c>SETV</c> when <paramref name="version"/> is still current.</summary>
+    /// <inheritdoc />
     public ValueTask<long> SetVersionAsync(string key, string value, long version, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("SETV", key, value, version), cancellationToken);
     }
 
-    /// <summary>Sends <c>CHANGES START</c> and returns the cursor.</summary>
+    /// <inheritdoc />
     public ValueTask<long> StartChangesAsync(CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("CHANGES", "START"), cancellationToken);
     }
 
-    /// <summary>Sends <c>CHANGES</c> and returns notes after <paramref name="cursor"/>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<ChangeNote>> ReadChangesAsync(
         long cursor,
@@ -142,7 +142,7 @@ public sealed partial class RuvioClient
         return notes;
     }
 
-    /// <summary>Sends <c>MGET</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<string?>> GetManyAsync(
         params string[] keys)
@@ -150,26 +150,26 @@ public sealed partial class RuvioClient
         return await ArrayOfNullableBulks(Join("MGET", keys));
     }
 
-    /// <summary>Sends <c>MSET</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public async ValueTask SetManyAsync(params (string Key, string Value)[] pairs)
     {
         await Ok(FlattenPairs("MSET", pairs));
     }
 
-    /// <summary>Sends <c>GETSET</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<string?> GetSetAsync(string key, string value, CancellationToken cancellationToken = default)
     {
         return BulkOrNull(new RespCommand("GETSET", key, value), cancellationToken);
     }
 
-    /// <summary>Sends <c>JSON.GET</c>. Returns compact JSON, or null when the key or path is absent.</summary>
+    /// <inheritdoc />
     public ValueTask<string?> JsonGetAsync(string key, string path = "$", CancellationToken cancellationToken = default)
     {
         return BulkOrNull(new RespCommand("JSON.GET", key, path), cancellationToken);
     }
 
-    /// <summary>Sends <c>JSON.MGET</c>: one path from several keys of one slot. A missing key is null.</summary>
+    /// <inheritdoc />
     public async ValueTask<IReadOnlyList<string?>> JsonGetManyAsync(string path, params string[] keys)
     {
         string[] arguments = new string[keys.Length + 1];
@@ -180,7 +180,7 @@ public sealed partial class RuvioClient
         return await ArrayOfNullableBulks(Join("JSON.MGET", arguments));
     }
 
-    /// <summary>Sends <c>JSON.SET</c>. False when the path cannot be reached (nothing was written).</summary>
+    /// <inheritdoc />
     public async ValueTask<bool> JsonSetAsync(string key, string path, string json, CancellationToken cancellationToken = default)
     {
         RespValue reply = await ExecuteCommandAsync(new RespCommand("JSON.SET", key, path, json), cancellationToken);
@@ -188,7 +188,7 @@ public sealed partial class RuvioClient
         return reply.Kind is not RespKind.Null;
     }
 
-    /// <summary>Sends <c>JSON.MERGE</c> (RFC 7396). False when the path cannot be reached.</summary>
+    /// <inheritdoc />
     public async ValueTask<bool> JsonMergeAsync(string key, string path, string patch, CancellationToken cancellationToken = default)
     {
         RespValue reply = await ExecuteCommandAsync(new RespCommand("JSON.MERGE", key, path, patch), cancellationToken);
@@ -196,13 +196,13 @@ public sealed partial class RuvioClient
         return reply.Kind is not RespKind.Null;
     }
 
-    /// <summary>Sends <c>JSON.TYPE</c>: object, array, string, integer, number, boolean or null; null when absent.</summary>
+    /// <inheritdoc />
     public ValueTask<string?> JsonTypeAsync(string key, string path = "$", CancellationToken cancellationToken = default)
     {
         return BulkOrNull(new RespCommand("JSON.TYPE", key, path), cancellationToken);
     }
 
-    /// <summary>Sends <c>JSON.STRLEN</c>. Null when the key or path is absent.</summary>
+    /// <inheritdoc />
     public async ValueTask<long?> JsonStringLengthAsync(string key, string path = "$", CancellationToken cancellationToken = default)
     {
         RespValue reply = await ExecuteCommandAsync(new RespCommand("JSON.STRLEN", key, path), cancellationToken);
@@ -210,7 +210,7 @@ public sealed partial class RuvioClient
         return reply.Kind == RespKind.Null ? null : reply.Integer;
     }
 
-    /// <summary>Sends <c>JSON.ARRLEN</c>. Null when the key or path is absent.</summary>
+    /// <inheritdoc />
     public async ValueTask<long?> JsonArrayLengthAsync(string key, string path = "$", CancellationToken cancellationToken = default)
     {
         RespValue reply = await ExecuteCommandAsync(new RespCommand("JSON.ARRLEN", key, path), cancellationToken);
@@ -218,7 +218,7 @@ public sealed partial class RuvioClient
         return reply.Kind == RespKind.Null ? null : reply.Integer;
     }
 
-    /// <summary>Sends <c>JSON.OBJKEYS</c>. Empty when the key or path is absent.</summary>
+    /// <inheritdoc />
     public async ValueTask<IReadOnlyList<string>> JsonObjectKeysAsync(string key, string path = "$", CancellationToken cancellationToken = default)
     {
         RespValue reply = await ExecuteCommandAsync(new RespCommand("JSON.OBJKEYS", key, path), cancellationToken);
@@ -231,7 +231,7 @@ public sealed partial class RuvioClient
         return reply.Items.Select(item => item.AsString() ?? string.Empty).ToArray();
     }
 
-    /// <summary>Sends <c>JSON.NUMINCRBY</c> and returns the new number as JSON text; null when absent.</summary>
+    /// <inheritdoc />
     public ValueTask<string?> JsonIncrementAsync(string key, string path, double by, CancellationToken cancellationToken = default)
     {
         return BulkOrNull(
@@ -239,7 +239,7 @@ public sealed partial class RuvioClient
             cancellationToken);
     }
 
-    /// <summary>Sends <c>JSON.TOGGLE</c> and returns the new boolean; null when absent.</summary>
+    /// <inheritdoc />
     public async ValueTask<bool?> JsonToggleAsync(string key, string path = "$", CancellationToken cancellationToken = default)
     {
         RespValue reply = await ExecuteCommandAsync(new RespCommand("JSON.TOGGLE", key, path), cancellationToken);
@@ -247,7 +247,7 @@ public sealed partial class RuvioClient
         return reply.Kind == RespKind.Null ? null : reply.Integer != 0;
     }
 
-    /// <summary>Sends <c>JSON.ARRAPPEND</c> with one JSON value and returns the new length; null when absent.</summary>
+    /// <inheritdoc />
     public async ValueTask<long?> JsonArrayAppendAsync(string key, string path, string json, CancellationToken cancellationToken = default)
     {
         RespValue reply = await ExecuteCommandAsync(new RespCommand("JSON.ARRAPPEND", key, path, json), cancellationToken);
@@ -255,7 +255,7 @@ public sealed partial class RuvioClient
         return reply.Kind == RespKind.Null ? null : reply.Integer;
     }
 
-    /// <summary>Sends <c>JSON.CLEAR</c>: empties an array or object, zeroes a number. Returns how many values changed.</summary>
+    /// <inheritdoc />
     public async ValueTask<long> JsonClearAsync(string key, string path = "$", CancellationToken cancellationToken = default)
     {
         RespValue reply = await ExecuteCommandAsync(new RespCommand("JSON.CLEAR", key, path), cancellationToken);
@@ -263,55 +263,55 @@ public sealed partial class RuvioClient
         return reply.Kind == RespKind.Null ? 0 : reply.Integer;
     }
 
-    /// <summary>Sends <c>JSON.DEL</c>. Returns 1 when a field, element or the whole key was removed, else 0.</summary>
+    /// <inheritdoc />
     public ValueTask<long> JsonDeleteAsync(string key, string path = "$", CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("JSON.DEL", key, path), cancellationToken);
     }
 
-    /// <summary>Sends <c>APPEND</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> AppendAsync(string key, string value, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("APPEND", key, value), cancellationToken);
     }
 
-    /// <summary>Sends <c>STRLEN</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> GetStringLengthAsync(string key, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("STRLEN", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>DECR</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> DecrementAsync(string key, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("DECR", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>INCRBY</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> IncrementByAsync(string key, long delta, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("INCRBY", key, delta), cancellationToken);
     }
 
-    /// <summary>Sends <c>DECRBY</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> DecrementByAsync(string key, long delta, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("DECRBY", key, delta), cancellationToken);
     }
 
-    /// <summary>Sends <c>UNLINK</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> UnlinkAsync(params string[] keys)
     {
         return Integer(Join("UNLINK", keys));
     }
 
-    /// <summary>Sends <c>EXISTS</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> ExistsAsync(params string[] keys)
     {
         return Integer(Join("EXISTS", keys));
     }
 
-    /// <summary>Sends <c>TYPE</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string> GetKeyTypeAsync(string key, CancellationToken cancellationToken = default)
     {
@@ -319,13 +319,13 @@ public sealed partial class RuvioClient
             ?? throw new RuvioException("TYPE returned a null reply");
     }
 
-    /// <summary>Sends <c>RENAME</c>.</summary>
+    /// <inheritdoc />
     public ValueTask RenameAsync(string key, string newKey, CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("RENAME", key, newKey), cancellationToken);
     }
 
-    /// <summary>Sends <c>SCAN</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<ScanPage> ScanAsync(
         long cursor,
@@ -350,13 +350,13 @@ public sealed partial class RuvioClient
         return ParseScan(await ExecuteAsync(arguments, cancellationToken));
     }
 
-    /// <summary>Sends <c>DBSIZE</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> GetDatabaseSizeAsync(CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("DBSIZE"), cancellationToken);
     }
 
-    /// <summary>Sends <c>EXPIREAT</c> or <c>PEXPIREAT</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<bool> ExpireAtAsync(string key, DateTimeOffset when, CancellationToken cancellationToken = default)
     {
         long milliseconds = when.ToUnixTimeMilliseconds();
@@ -366,85 +366,85 @@ public sealed partial class RuvioClient
             : Flag(new RespCommand("PEXPIREAT", key, milliseconds), cancellationToken);
     }
 
-    /// <summary>Sends <c>TTL</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> GetTimeToLiveAsync(string key, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("TTL", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>PTTL</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> GetTimeToLiveMillisecondsAsync(string key, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("PTTL", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>PERSIST</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<bool> PersistAsync(string key, CancellationToken cancellationToken = default)
     {
         return Flag(new RespCommand("PERSIST", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>LPUSH</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> PushListLeftAsync(string key, params string[] values)
     {
         return Integer(RespCommand.Keyed("LPUSH", key, values));
     }
 
-    /// <summary>Sends <c>RPUSH</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> PushListRightAsync(string key, params string[] values)
     {
         return Integer(RespCommand.Keyed("RPUSH", key, values));
     }
 
-    /// <summary>Sends <c>LPOP</c> for one element.</summary>
+    /// <inheritdoc />
     public ValueTask<string?> PopListLeftAsync(string key, CancellationToken cancellationToken = default)
     {
         return BulkOrNull(new RespCommand("LPOP", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>LPOP</c> with a count. An empty list returns an empty array.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> PopListLeftAsync(string key, long count, CancellationToken cancellationToken = default)
     {
         return ArrayOfBulks(new RespCommand("LPOP", key, count), cancellationToken);
     }
 
-    /// <summary>Sends <c>RPOP</c> for one element.</summary>
+    /// <inheritdoc />
     public ValueTask<string?> PopListRightAsync(string key, CancellationToken cancellationToken = default)
     {
         return BulkOrNull(new RespCommand("RPOP", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>RPOP</c> with a count.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> PopListRightAsync(string key, long count, CancellationToken cancellationToken = default)
     {
         return ArrayOfBulks(new RespCommand("RPOP", key, count), cancellationToken);
     }
 
-    /// <summary>Sends <c>LLEN</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> GetListLengthAsync(string key, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("LLEN", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>LINDEX</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<string?> GetListItemAsync(string key, long index, CancellationToken cancellationToken = default)
     {
         return BulkOrNull(new RespCommand("LINDEX", key, index), cancellationToken);
     }
 
-    /// <summary>Sends <c>LRANGE</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetListRangeAsync(string key, long start, long stop, CancellationToken cancellationToken = default)
     {
         return ArrayOfBulks(new RespCommand("LRANGE", key, start, stop), cancellationToken);
     }
 
-    /// <summary>Sends <c>LTRIM</c>.</summary>
+    /// <inheritdoc />
     public ValueTask TrimListAsync(string key, long start, long stop, CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("LTRIM", key, start, stop), cancellationToken);
     }
 
-    /// <summary>Sends <c>BLPOP</c> for one key.</summary>
+    /// <inheritdoc />
     public ValueTask<KeyValuePair<string, string>?> PopListLeftBlockingAsync(
         string key,
         TimeSpan timeout,
@@ -453,7 +453,7 @@ public sealed partial class RuvioClient
         return PopListLeftBlockingAsync([key], timeout, cancellationToken);
     }
 
-    /// <summary>Sends <c>BLPOP</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<KeyValuePair<string, string>?> PopListLeftBlockingAsync(
         IReadOnlyList<string> keys,
         TimeSpan timeout,
@@ -462,7 +462,7 @@ public sealed partial class RuvioClient
         return BlockPop("BLPOP", keys, timeout, cancellationToken);
     }
 
-    /// <summary>Sends <c>BRPOP</c> for one key.</summary>
+    /// <inheritdoc />
     public ValueTask<KeyValuePair<string, string>?> PopListRightBlockingAsync(
         string key,
         TimeSpan timeout,
@@ -471,7 +471,7 @@ public sealed partial class RuvioClient
         return PopListRightBlockingAsync([key], timeout, cancellationToken);
     }
 
-    /// <summary>Sends <c>BRPOP</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<KeyValuePair<string, string>?> PopListRightBlockingAsync(
         IReadOnlyList<string> keys,
         TimeSpan timeout,
@@ -480,176 +480,170 @@ public sealed partial class RuvioClient
         return BlockPop("BRPOP", keys, timeout, cancellationToken);
     }
 
-    /// <summary>Sends <c>SADD</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> AddSetMembersAsync(string key, params string[] members)
     {
         return Integer(RespCommand.Keyed("SADD", key, members));
     }
 
-    /// <summary>Sends <c>SREM</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> RemoveSetMembersAsync(string key, params string[] members)
     {
         return Integer(RespCommand.Keyed("SREM", key, members));
     }
 
-    /// <summary>Sends <c>SISMEMBER</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<bool> SetContainsAsync(string key, string member, CancellationToken cancellationToken = default)
     {
         return Flag(new RespCommand("SISMEMBER", key, member), cancellationToken);
     }
 
-    /// <summary>Sends <c>SCARD</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> GetSetCountAsync(string key, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("SCARD", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>SMEMBERS</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetSetMembersAsync(string key, CancellationToken cancellationToken = default)
     {
         return ArrayOfBulks(new RespCommand("SMEMBERS", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>SINTER</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetSetIntersectionAsync(params string[] keys)
     {
         return ArrayOfBulks(Join("SINTER", keys));
     }
 
-    /// <summary>Sends <c>SUNION</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetSetUnionAsync(params string[] keys)
     {
         return ArrayOfBulks(Join("SUNION", keys));
     }
 
-    /// <summary>Sends <c>SDIFF</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetSetDifferenceAsync(params string[] keys)
     {
         return ArrayOfBulks(Join("SDIFF", keys));
     }
 
-    /// <summary>Sends <c>SINTERSTORE</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> StoreSetIntersectionAsync(string destination, params string[] keys)
     {
         return Integer(Join("SINTERSTORE", destination, keys));
     }
 
-    /// <summary>Sends <c>SUNIONSTORE</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> StoreSetUnionAsync(string destination, params string[] keys)
     {
         return Integer(Join("SUNIONSTORE", destination, keys));
     }
 
-    /// <summary>Sends <c>SDIFFSTORE</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> StoreSetDifferenceAsync(string destination, params string[] keys)
     {
         return Integer(Join("SDIFFSTORE", destination, keys));
     }
 
-    /// <summary>Sends <c>SMOVE</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<bool> MoveSetMemberAsync(string source, string destination, string member, CancellationToken cancellationToken = default)
     {
         return Flag(new RespCommand("SMOVE", source, destination, member), cancellationToken);
     }
 
-    /// <summary>Sends <c>SPOP</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<string?> PopSetMemberAsync(string key, CancellationToken cancellationToken = default)
     {
         return BulkOrNull(new RespCommand("SPOP", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>SPOP</c> with a count and returns the removed members.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> PopSetMembersAsync(string key, long count, CancellationToken cancellationToken = default)
     {
         return ArrayOfBulks(new RespCommand("SPOP", key, count), cancellationToken);
     }
 
-    /// <summary>Sends <c>SRANDMEMBER</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<string?> GetSetRandomMemberAsync(string key, CancellationToken cancellationToken = default)
     {
         return BulkOrNull(new RespCommand("SRANDMEMBER", key), cancellationToken);
     }
 
-    /// <summary>
-    /// Sends <c>SRANDMEMBER</c> with a count. A positive count returns distinct members;
-    /// a negative count may repeat members.
-    /// </summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetSetRandomMembersAsync(string key, long count, CancellationToken cancellationToken = default)
     {
         return ArrayOfBulks(new RespCommand("SRANDMEMBER", key, count), cancellationToken);
     }
 
-    /// <summary>Sends <c>HSET</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> SetHashFieldsAsync(string key, params (string Field, string Value)[] fields)
     {
         return Integer(RespCommand.KeyedPairs("HSET", key, fields));
     }
 
-    /// <summary>Sends <c>HGET</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<string?> GetHashFieldAsync(string key, string field, CancellationToken cancellationToken = default)
     {
         return BulkOrNull(new RespCommand("HGET", key, field), cancellationToken);
     }
 
-    /// <summary>Sends <c>HDEL</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> DeleteHashFieldsAsync(string key, params string[] fields)
     {
         return Integer(RespCommand.Keyed("HDEL", key, fields));
     }
 
-    /// <summary>Sends <c>HLEN</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> GetHashLengthAsync(string key, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("HLEN", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>HGETALL</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyDictionary<string, string>> GetHashAllAsync(string key, CancellationToken cancellationToken = default)
     {
         return Pairs((await ExecuteCommandAsync(new RespCommand("HGETALL", key), cancellationToken)).Items);
     }
 
-    /// <summary>Sends <c>HMGET</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string?>> GetHashFieldsAsync(string key, params string[] fields)
     {
         return ArrayOfNullableBulks(RespCommand.Keyed("HMGET", key, fields));
     }
 
-    /// <summary>Sends <c>HEXISTS</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<bool> HashFieldExistsAsync(string key, string field, CancellationToken cancellationToken = default)
     {
         return Flag(new RespCommand("HEXISTS", key, field), cancellationToken);
     }
 
-    /// <summary>Sends <c>HKEYS</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetHashFieldNamesAsync(string key, CancellationToken cancellationToken = default)
     {
         return ArrayOfBulks(new RespCommand("HKEYS", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>HVALS</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetHashFieldValuesAsync(string key, CancellationToken cancellationToken = default)
     {
         return ArrayOfBulks(new RespCommand("HVALS", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>HINCRBY</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> IncrementHashFieldAsync(string key, string field, long delta, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("HINCRBY", key, field, delta), cancellationToken);
     }
 
-    /// <summary>
-    /// Sets a TTL on hash fields: <c>HEXPIRE</c> for whole seconds, otherwise <c>HPEXPIRE</c>.
-    /// One reply per field: 1 set, 0 condition not met, 2 deleted by a zero TTL, -2 no such field or key.
-    /// </summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<long>> ExpireHashFieldsAsync(string key, TimeSpan ttl, params string[] fields)
     {
         return ExpireHashFieldsAsync(key, ttl, FieldExpireCondition.Always, fields);
     }
 
-    /// <summary>Like <see cref="ExpireHashFieldsAsync(string, TimeSpan, string[])"/> with <c>NX</c>, <c>XX</c>, <c>GT</c>, or <c>LT</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<long>> ExpireHashFieldsAsync(
         string key,
         TimeSpan ttl,
@@ -664,7 +658,7 @@ public sealed partial class RuvioClient
         return IntegerArray(FieldBlock(head, condition, fields));
     }
 
-    /// <summary>Sets an absolute deadline on hash fields: <c>HEXPIREAT</c> for a whole second, otherwise <c>HPEXPIREAT</c>. A past time deletes the field (reply 2).</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<long>> ExpireHashFieldsAtAsync(string key, DateTimeOffset when, params string[] fields)
     {
         long milliseconds = when.ToUnixTimeMilliseconds();
@@ -675,49 +669,49 @@ public sealed partial class RuvioClient
         return IntegerArray(FieldBlock(head, FieldExpireCondition.Always, fields));
     }
 
-    /// <summary>Sends <c>HTTL</c>: seconds left per field, -1 without a TTL, -2 when missing.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<long>> GetHashFieldTimeToLiveAsync(string key, params string[] fields)
     {
         return IntegerArray(FieldBlock(["HTTL", key], FieldExpireCondition.Always, fields));
     }
 
-    /// <summary>Sends <c>HPTTL</c>: milliseconds left per field, -1 without a TTL, -2 when missing.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<long>> GetHashFieldTimeToLiveMillisecondsAsync(string key, params string[] fields)
     {
         return IntegerArray(FieldBlock(["HPTTL", key], FieldExpireCondition.Always, fields));
     }
 
-    /// <summary>Sends <c>HEXPIRETIME</c>: the Unix second each field expires at.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<long>> GetHashFieldExpireTimeAsync(string key, params string[] fields)
     {
         return IntegerArray(FieldBlock(["HEXPIRETIME", key], FieldExpireCondition.Always, fields));
     }
 
-    /// <summary>Sends <c>HPEXPIRETIME</c>: the Unix millisecond each field expires at.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<long>> GetHashFieldExpireTimeMillisecondsAsync(string key, params string[] fields)
     {
         return IntegerArray(FieldBlock(["HPEXPIRETIME", key], FieldExpireCondition.Always, fields));
     }
 
-    /// <summary>Sends <c>HPERSIST</c>: 1 removed a TTL, -1 the field had none, -2 it is missing.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<long>> PersistHashFieldsAsync(string key, params string[] fields)
     {
         return IntegerArray(FieldBlock(["HPERSIST", key], FieldExpireCondition.Always, fields));
     }
 
-    /// <summary>Sends <c>HSETNX</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<bool> SetHashFieldIfAbsentAsync(string key, string field, string value, CancellationToken cancellationToken = default)
     {
         return Flag(new RespCommand("HSETNX", key, field, value), cancellationToken);
     }
 
-    /// <summary>Sends <c>HSTRLEN</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> GetHashFieldLengthAsync(string key, string field, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("HSTRLEN", key, field), cancellationToken);
     }
 
-    /// <summary>Sends <c>HSCAN</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<HashScanPage> ScanHashAsync(string key, long cursor, CancellationToken cancellationToken = default)
     {
@@ -727,7 +721,7 @@ public sealed partial class RuvioClient
         return new HashScanPage(page.Cursor, PairsFromFlat(page.Keys));
     }
 
-    /// <summary>Sends <c>HSCAN</c> with <c>MATCH</c> and an optional <c>COUNT</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<HashScanPage> ScanHashAsync(
         string key,
@@ -755,7 +749,7 @@ public sealed partial class RuvioClient
         return new HashScanPage(page.Cursor, PairsFromFlat(page.Keys));
     }
 
-    /// <summary>Sends <c>ZADD</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> AddSortedSetAsync(string key, params SortedSetEntry[] entries)
     {
         var arguments = new List<string> { "ZADD", key };
@@ -769,7 +763,7 @@ public sealed partial class RuvioClient
         return Integer(arguments);
     }
 
-    /// <summary>Sends <c>ZADD</c> for one member. False when the member already existed.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<bool> AddSortedSetAsync(
         string key,
@@ -780,13 +774,13 @@ public sealed partial class RuvioClient
         return await Integer(new RespCommand("ZADD", key, Number(score), member), cancellationToken) > 0;
     }
 
-    /// <summary>Sends <c>ZADD</c> with <c>(member, score)</c> pairs: <c>AddSortedSetAsync("board", ("ada", 100), ("bob", 50))</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> AddSortedSetAsync(string key, params (string Member, double Score)[] entries)
     {
         return AddSortedSetAsync(key, SortedSetAddFlags.None, entries);
     }
 
-    /// <summary>Sends <c>ZADD</c> with flags and <c>(member, score)</c> pairs.</summary>
+    /// <inheritdoc />
     public ValueTask<long> AddSortedSetAsync(string key, SortedSetAddFlags flags, params (string Member, double Score)[] entries)
     {
         return AddSortedSetAsync(
@@ -795,10 +789,7 @@ public sealed partial class RuvioClient
             Array.ConvertAll(entries, entry => new SortedSetEntry(entry.Member, entry.Score)));
     }
 
-    /// <summary>
-    /// Sends <c>ZADD</c> with <c>NX</c>, <c>XX</c>, <c>GT</c>, <c>LT</c>, or <c>CH</c>.
-    /// Without <see cref="SortedSetAddFlags.Changed"/> the reply counts new members.
-    /// </summary>
+    /// <inheritdoc />
     public ValueTask<long> AddSortedSetAsync(string key, SortedSetAddFlags flags, params SortedSetEntry[] entries)
     {
         List<string> arguments = SortedSetAddArguments(key, flags);
@@ -812,9 +803,7 @@ public sealed partial class RuvioClient
         return Integer(arguments);
     }
 
-    /// <summary>
-    /// Sends <c>ZADD ... INCR</c>. Returns the new score, or null when a flag skipped the update.
-    /// </summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<double?> IncrementSortedSetAsync(
         string key,
@@ -866,7 +855,7 @@ public sealed partial class RuvioClient
         return arguments;
     }
 
-    /// <summary>Sends <c>ZRANGE</c> or <c>ZREVRANGE</c> without scores.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetSortedSetRangeByRankAsync(
         string key,
         long start,
@@ -879,7 +868,7 @@ public sealed partial class RuvioClient
         return ArrayOfBulks(new RespCommand(command, key, start, stop), cancellationToken);
     }
 
-    /// <summary>Sends <c>ZRANGE</c> or <c>ZREVRANGE</c> with <c>WITHSCORES</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<SortedSetEntry>> GetSortedSetRangeByRankWithScoresAsync(
         string key,
@@ -894,7 +883,7 @@ public sealed partial class RuvioClient
         return ParseSortedSet(reply);
     }
 
-    /// <summary>Sends <c>ZRANGE</c> <c>BYLEX</c>. Bounds are <c>-</c>, <c>+</c>, <c>[member</c>, or <c>(member</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetSortedSetRangeByLexAsync(
         string key,
         string min,
@@ -904,7 +893,7 @@ public sealed partial class RuvioClient
         return ArrayOfBulks(new RespCommand("ZRANGE", key, min, max, "BYLEX"), cancellationToken);
     }
 
-    /// <summary>Sends <c>ZRANGEBYSCORE</c> with <c>WITHSCORES</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<SortedSetEntry>> GetSortedSetRangeByScoreWithScoresAsync(
         string key,
@@ -917,27 +906,27 @@ public sealed partial class RuvioClient
         return ParseSortedSet(reply);
     }
 
-    /// <summary>Sends <c>ZREM</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> RemoveSortedSetMembersAsync(string key, params string[] members)
     {
         return Integer(RespCommand.Keyed("ZREM", key, members));
     }
 
-    /// <summary>Sends <c>ZPOPMIN key count</c>: removes and returns up to <paramref name="count"/> lowest-scored members.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<SortedSetEntry>> PopSortedSetMinAsync(string key, long count = 1, CancellationToken cancellationToken = default)
     {
         return ParseSortedSet(await ExecuteCommandAsync(new RespCommand("ZPOPMIN", key, count), cancellationToken));
     }
 
-    /// <summary>Sends <c>ZPOPMAX key count</c>: removes and returns up to <paramref name="count"/> highest-scored members.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<SortedSetEntry>> PopSortedSetMaxAsync(string key, long count = 1, CancellationToken cancellationToken = default)
     {
         return ParseSortedSet(await ExecuteCommandAsync(new RespCommand("ZPOPMAX", key, count), cancellationToken));
     }
 
-    /// <summary>Sends <c>BZPOPMIN</c> for one key. Null when the timeout passes.</summary>
+    /// <inheritdoc />
     public ValueTask<(string Key, SortedSetEntry Entry)?> PopSortedSetMinBlockingAsync(
         string key,
         TimeSpan timeout,
@@ -946,7 +935,7 @@ public sealed partial class RuvioClient
         return PopSortedSetMinBlockingAsync([key], timeout, cancellationToken);
     }
 
-    /// <summary>Sends <c>BZPOPMIN</c>. The timeout rounds up to whole seconds; zero waits forever.</summary>
+    /// <inheritdoc />
     public ValueTask<(string Key, SortedSetEntry Entry)?> PopSortedSetMinBlockingAsync(
         IReadOnlyList<string> keys,
         TimeSpan timeout,
@@ -955,7 +944,7 @@ public sealed partial class RuvioClient
         return BlockPopSorted("BZPOPMIN", keys, timeout, cancellationToken);
     }
 
-    /// <summary>Sends <c>BZPOPMAX</c> for one key. Null when the timeout passes.</summary>
+    /// <inheritdoc />
     public ValueTask<(string Key, SortedSetEntry Entry)?> PopSortedSetMaxBlockingAsync(
         string key,
         TimeSpan timeout,
@@ -964,7 +953,7 @@ public sealed partial class RuvioClient
         return PopSortedSetMaxBlockingAsync([key], timeout, cancellationToken);
     }
 
-    /// <summary>Sends <c>BZPOPMAX</c>. The timeout rounds up to whole seconds; zero waits forever.</summary>
+    /// <inheritdoc />
     public ValueTask<(string Key, SortedSetEntry Entry)?> PopSortedSetMaxBlockingAsync(
         IReadOnlyList<string> keys,
         TimeSpan timeout,
@@ -973,25 +962,25 @@ public sealed partial class RuvioClient
         return BlockPopSorted("BZPOPMAX", keys, timeout, cancellationToken);
     }
 
-    /// <summary>Sends <c>ZREMRANGEBYRANK</c>. <paramref name="stop"/> is inclusive; negative ranks count from the end.</summary>
+    /// <inheritdoc />
     public ValueTask<long> RemoveSortedSetRangeByRankAsync(string key, long start, long stop, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("ZREMRANGEBYRANK", key, start, stop), cancellationToken);
     }
 
-    /// <summary>Sends <c>ZREMRANGEBYSCORE</c>. Bounds accept <c>-inf</c>, <c>+inf</c>, and <c>(</c> for exclusive.</summary>
+    /// <inheritdoc />
     public ValueTask<long> RemoveSortedSetRangeByScoreAsync(string key, string min, string max, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("ZREMRANGEBYSCORE", key, min, max), cancellationToken);
     }
 
-    /// <summary>Sends <c>ZREMRANGEBYLEX</c>. Bounds are <c>-</c>, <c>+</c>, <c>[member</c>, or <c>(member</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> RemoveSortedSetRangeByLexAsync(string key, string min, string max, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("ZREMRANGEBYLEX", key, min, max), cancellationToken);
     }
 
-    /// <summary>Sends <c>ZINCRBY</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<double> IncrementSortedSetAsync(string key, string member, double delta, CancellationToken cancellationToken = default)
     {
@@ -1000,13 +989,13 @@ public sealed partial class RuvioClient
         return ParseDouble(text ?? throw new RuvioException("ZINCRBY returned a null reply"));
     }
 
-    /// <summary>Sends <c>ZCARD</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> GetSortedSetCountAsync(string key, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("ZCARD", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>ZSCORE</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<double?> GetSortedSetScoreAsync(string key, string member, CancellationToken cancellationToken = default)
     {
@@ -1015,7 +1004,7 @@ public sealed partial class RuvioClient
         return text is null ? null : ParseDouble(text);
     }
 
-    /// <summary>Sends <c>GEOADD</c>. Each place is longitude, latitude, member.</summary>
+    /// <inheritdoc />
     public ValueTask<long> AddGeoAsync(
         string key,
         params (double Longitude, double Latitude, string Member)[] places)
@@ -1036,7 +1025,7 @@ public sealed partial class RuvioClient
         return Integer(arguments, CancellationToken.None);
     }
 
-    /// <summary>Sends <c>GEODIST</c>. Unit is <c>m</c>, <c>km</c>, <c>ft</c>, or <c>mi</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<double?> GeoDistanceAsync(
         string key,
@@ -1050,7 +1039,7 @@ public sealed partial class RuvioClient
         return text is null ? null : ParseDouble(text);
     }
 
-    /// <summary>Sends <c>GEODIST</c> with a typed unit, sent as a pre-encoded token. Example: <c>GeoDistanceAsync("cities", "a", "b", GeoUnit.Kilometers)</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<double?> GeoDistanceAsync(
         string key,
@@ -1064,7 +1053,7 @@ public sealed partial class RuvioClient
         return text is null ? null : ParseDouble(text);
     }
 
-    /// <summary>Sends <c>GEOHASH</c>. A missing member is null.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string?>> GeoHashAsync(
         string key,
         params string[] members)
@@ -1076,7 +1065,7 @@ public sealed partial class RuvioClient
         return ArrayOfNullableBulks(arguments, CancellationToken.None);
     }
 
-    /// <summary>Sends <c>GEOPOS</c>. A missing member is null.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<(double Longitude, double Latitude)?>> GeoPositionAsync(
         string key,
@@ -1115,7 +1104,7 @@ public sealed partial class RuvioClient
         return points;
     }
 
-    /// <summary>Sends <c>GEOSEARCH</c> from a longitude and latitude, ordered nearest first.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GeoSearchAsync(
         string key,
         double longitude,
@@ -1128,7 +1117,7 @@ public sealed partial class RuvioClient
             CancellationToken.None);
     }
 
-    /// <summary>Sends <c>GEOSEARCHSTORE</c> from a member and a radius.</summary>
+    /// <inheritdoc />
     public ValueTask<long> GeoSearchStoreAsync(
         string destination,
         string source,
@@ -1141,7 +1130,7 @@ public sealed partial class RuvioClient
             CancellationToken.None);
     }
 
-    /// <summary>Sends <c>GEORADIUSBYMEMBER</c>, ordered nearest first.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GeoRadiusByMemberAsync(
         string key,
         string member,
@@ -1153,7 +1142,7 @@ public sealed partial class RuvioClient
             CancellationToken.None);
     }
 
-    /// <summary>Sends <c>GEORADIUS</c>, ordered nearest first.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GeoRadiusAsync(
         string key,
         double longitude,
@@ -1166,7 +1155,7 @@ public sealed partial class RuvioClient
             CancellationToken.None);
     }
 
-    /// <summary>Sends <c>GEOSEARCH</c> from a longitude and latitude with a typed unit and result order. Example: <c>GeoSearchAsync("cities", 32.8, 39.9, 100, GeoUnit.Kilometers)</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GeoSearchAsync(
         string key,
         double longitude,
@@ -1180,7 +1169,7 @@ public sealed partial class RuvioClient
             CancellationToken.None);
     }
 
-    /// <summary>Sends <c>GEOSEARCHSTORE</c> from a member and a radius with a typed unit.</summary>
+    /// <inheritdoc />
     public ValueTask<long> GeoSearchStoreAsync(
         string destination,
         string source,
@@ -1193,7 +1182,7 @@ public sealed partial class RuvioClient
             CancellationToken.None);
     }
 
-    /// <summary>Sends <c>GEORADIUSBYMEMBER</c> with a typed unit and result order, both sent as pre-encoded tokens.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GeoRadiusByMemberAsync(
         string key,
         string member,
@@ -1206,7 +1195,7 @@ public sealed partial class RuvioClient
             CancellationToken.None);
     }
 
-    /// <summary>Sends <c>GEORADIUS</c> with a typed unit and result order.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GeoRadiusAsync(
         string key,
         double longitude,
@@ -1220,7 +1209,7 @@ public sealed partial class RuvioClient
             CancellationToken.None);
     }
 
-    /// <summary>Sends <c>ZRANK</c> or <c>ZREVRANK</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<long?> GetSortedSetRankAsync(
         string key,
@@ -1244,25 +1233,25 @@ public sealed partial class RuvioClient
         return reply.Integer;
     }
 
-    /// <summary>Sends <c>BF.RESERVE</c>.</summary>
+    /// <inheritdoc />
     public ValueTask ReserveBloomFilterAsync(string key, double errorRate, long capacity, CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("BF.RESERVE", key, Number(errorRate), capacity), cancellationToken);
     }
 
-    /// <summary>Sends <c>BF.ADD</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<bool> AddBloomFilterAsync(string key, string item, CancellationToken cancellationToken = default)
     {
         return Flag(new RespCommand("BF.ADD", key, item), cancellationToken);
     }
 
-    /// <summary>Sends <c>BF.EXISTS</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<bool> BloomFilterContainsAsync(string key, string item, CancellationToken cancellationToken = default)
     {
         return Flag(new RespCommand("BF.EXISTS", key, item), cancellationToken);
     }
 
-    /// <summary>Sends <c>XADD NOMKSTREAM</c>. A missing key stays absent and the reply is null.</summary>
+    /// <inheritdoc />
     public ValueTask<string?> AddStreamEntryIfExistsAsync(
         string key,
         string id,
@@ -1275,7 +1264,7 @@ public sealed partial class RuvioClient
         return BulkOrNull(arguments);
     }
 
-    /// <summary>Sends <c>XADD</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string> AddStreamEntryAsync(string key, string id, params (string Field, string Value)[] fields)
     {
@@ -1284,7 +1273,7 @@ public sealed partial class RuvioClient
         return result ?? throw new RuvioException("XADD returned a null reply");
     }
 
-    /// <summary>Sends <c>XADD key DELAY ms</c>. <c>XREADGROUP</c> skips the entry until the delay passes.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string> AddStreamEntryDelayedAsync(
         string key,
@@ -1300,7 +1289,7 @@ public sealed partial class RuvioClient
         return result ?? throw new RuvioException("XADD returned a null reply");
     }
 
-    /// <summary>Sends <c>XADD key MAXLEN n</c>: the stream keeps exactly the newest <paramref name="maxLength"/> entries.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string> AddStreamEntryAsync(
         string key,
@@ -1316,31 +1305,31 @@ public sealed partial class RuvioClient
         return result ?? throw new RuvioException("XADD returned a null reply");
     }
 
-    /// <summary>Sends <c>XLEN</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> GetStreamLengthAsync(string key, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("XLEN", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>XINFO STREAM</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> GetStreamInfoAsync(string key, CancellationToken cancellationToken = default)
     {
         return ExecuteCommandAsync(new RespCommand("XINFO", "STREAM", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>XINFO GROUPS</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> GetStreamGroupsAsync(string key, CancellationToken cancellationToken = default)
     {
         return ExecuteCommandAsync(new RespCommand("XINFO", "GROUPS", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>XSETID</c>. <paramref name="id"/> is <c>ms-seq</c> and must not be below the stream's top id.</summary>
+    /// <inheritdoc />
     public ValueTask SetStreamIdAsync(string key, string id, CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("XSETID", key, id), cancellationToken);
     }
 
-    /// <summary>Sends <c>XAUTOCLAIM</c>. <paramref name="start"/> is exclusive; <c>0-0</c> starts at the beginning.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> AutoClaimStreamAsync(
         string key,
         string group,
@@ -1354,7 +1343,7 @@ public sealed partial class RuvioClient
             cancellationToken);
     }
 
-    /// <summary>Sends <c>XINFO CONSUMERS</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> GetStreamConsumersAsync(
         string key,
         string group,
@@ -1363,7 +1352,7 @@ public sealed partial class RuvioClient
         return ExecuteCommandAsync(new RespCommand("XINFO", "CONSUMERS", key, group), cancellationToken);
     }
 
-    /// <summary>Sends <c>XRANGE</c> or <c>XREVRANGE</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<StreamEntry>> GetStreamRangeAsync(
         string key,
@@ -1377,7 +1366,7 @@ public sealed partial class RuvioClient
         return ParseStreamEntries(await ExecuteCommandAsync(new RespCommand(command, key, start, end), cancellationToken));
     }
 
-    /// <summary>Sends <c>XRANGE</c> or <c>XREVRANGE</c> with <c>COUNT</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<StreamEntry>> GetStreamRangeAsync(
         string key,
@@ -1393,25 +1382,25 @@ public sealed partial class RuvioClient
         return ParseStreamEntries(reply);
     }
 
-    /// <summary>Sends <c>XDEL</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> DeleteStreamEntriesAsync(string key, params string[] ids)
     {
         return Integer(Join("XDEL", key, ids));
     }
 
-    /// <summary>Sends <c>XTRIM MINID</c>. Entries below <paramref name="id"/> are removed.</summary>
+    /// <inheritdoc />
     public ValueTask<long> TrimStreamMinIdAsync(string key, string id, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("XTRIM", key, "MINID", id), cancellationToken);
     }
 
-    /// <summary>Sends <c>XTRIM MAXLEN</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> TrimStreamAsync(string key, long maxLength, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("XTRIM", key, "MAXLEN", maxLength), cancellationToken);
     }
 
-    /// <summary>Sends <c>XREAD STREAMS</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<StreamReadResult>> GetStreamUpdatesAsync(
         params (string Key, string Id)[] streams)
@@ -1423,9 +1412,7 @@ public sealed partial class RuvioClient
         return ParseStreamRead(await ExecuteAsync(arguments));
     }
 
-    /// <summary>
-    /// Sends <c>XREAD</c> with <c>COUNT</c> and <c>BLOCK</c>. A block that times out returns an empty list.
-    /// </summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<StreamReadResult>> GetStreamUpdatesAsync(
         StreamReadOptions options,
@@ -1448,7 +1435,7 @@ public sealed partial class RuvioClient
         return ParseStreamRead(await ExecuteAsync(arguments));
     }
 
-    /// <summary>Sends <c>XGROUP CREATECONSUMER</c>. Returns 1 when the consumer name is new.</summary>
+    /// <inheritdoc />
     public ValueTask<long> CreateStreamConsumerAsync(
         string key,
         string group,
@@ -1458,13 +1445,13 @@ public sealed partial class RuvioClient
         return Integer(new RespCommand("XGROUP", "CREATECONSUMER", key, group, consumer), cancellationToken);
     }
 
-    /// <summary>Sends <c>XGROUP CREATE</c>.</summary>
+    /// <inheritdoc />
     public ValueTask CreateStreamGroupAsync(string key, string group, string id, CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("XGROUP", "CREATE", key, group, id), cancellationToken);
     }
 
-    /// <summary>Sends <c>XGROUP CREATE</c>; with <paramref name="createStream"/> it adds <c>MKSTREAM</c>.</summary>
+    /// <inheritdoc />
     public ValueTask CreateStreamGroupAsync(
         string key,
         string group,
@@ -1479,7 +1466,7 @@ public sealed partial class RuvioClient
         return Ok(new RespCommand(arguments), cancellationToken);
     }
 
-    /// <summary>Sends <c>XREADGROUP GROUP</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<StreamReadResult>> GetStreamGroupUpdatesAsync(
         string group,
@@ -1495,10 +1482,7 @@ public sealed partial class RuvioClient
         return ParseStreamRead(reply);
     }
 
-    /// <summary>
-    /// Sends <c>XREADGROUP GROUP</c> with <c>COUNT</c>, <c>BLOCK</c>, and <c>NOACK</c>.
-    /// A block that times out returns an empty list.
-    /// </summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<StreamReadResult>> GetStreamGroupUpdatesAsync(
         string group,
@@ -1544,41 +1528,37 @@ public sealed partial class RuvioClient
         }
     }
 
-    /// <summary>Sends <c>XGROUP DESTROY</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> DestroyStreamGroupAsync(string key, string group, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("XGROUP", "DESTROY", key, group), cancellationToken);
     }
 
-    /// <summary>Sends <c>XGROUP SETID</c>.</summary>
+    /// <inheritdoc />
     public ValueTask SetStreamGroupIdAsync(string key, string group, string id, CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("XGROUP", "SETID", key, group, id), cancellationToken);
     }
 
-    /// <summary>Sends <c>XGROUP DELCONSUMER</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> DeleteStreamGroupConsumerAsync(string key, string group, string consumer, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("XGROUP", "DELCONSUMER", key, group, consumer), cancellationToken);
     }
 
-    /// <summary>Sends <c>XACK</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> AcknowledgeStreamAsync(string key, string group, params string[] ids)
     {
         return Integer(Join("XACK", key, group, ids));
     }
 
-    /// <summary>Sends <c>XPENDING</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> GetStreamPendingAsync(string key, string group, CancellationToken cancellationToken = default)
     {
         return ExecuteCommandAsync(new RespCommand("XPENDING", key, group), cancellationToken);
     }
 
-    /// <summary>
-    /// Sends the extended <c>XPENDING</c> form: ids from <paramref name="start"/> to <paramref name="end"/>
-    /// (inclusive), at most <paramref name="count"/>, optionally only one consumer and entries idle
-    /// for at least <paramref name="minIdle"/>.
-    /// </summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<StreamPendingEntry>> GetStreamPendingAsync(
         string key,
@@ -1625,7 +1605,7 @@ public sealed partial class RuvioClient
         return rows;
     }
 
-    /// <summary>Sends <c>XCLAIM</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<StreamEntry>> ClaimStreamEntriesAsync(
         string key,
@@ -1641,7 +1621,7 @@ public sealed partial class RuvioClient
         return ParseStreamEntries(await ExecuteAsync(arguments));
     }
 
-    /// <summary>Sends <c>XCLAIM</c> with <c>IDLE</c>, <c>TIME</c>, <c>RETRYCOUNT</c>, <c>FORCE</c>, or <c>LASTID</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<StreamEntry>> ClaimStreamEntriesAsync(
         string key,
@@ -1656,7 +1636,7 @@ public sealed partial class RuvioClient
         return ParseStreamEntries(await ExecuteAsync(arguments));
     }
 
-    /// <summary>Sends <c>XCLAIM ... JUSTID</c> and returns only the claimed ids.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> ClaimStreamEntryIdsAsync(
         string key,
         string group,
@@ -1726,7 +1706,7 @@ public sealed partial class RuvioClient
         return arguments;
     }
 
-    /// <summary>Sends <c>INFO</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string> GetInfoAsync(CancellationToken cancellationToken = default)
     {
@@ -1734,7 +1714,7 @@ public sealed partial class RuvioClient
             ?? throw new RuvioException("INFO returned a null reply");
     }
 
-    /// <summary>Sends <c>INFO section</c>. <c>prometheus</c> returns Prometheus text.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string> GetInfoAsync(string section, CancellationToken cancellationToken = default)
     {
@@ -1742,43 +1722,43 @@ public sealed partial class RuvioClient
             ?? throw new RuvioException("INFO returned a null reply");
     }
 
-    /// <summary>Sends <c>SAVE</c>.</summary>
+    /// <inheritdoc />
     public ValueTask SaveAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("SAVE"), cancellationToken);
     }
 
-    /// <summary>Sends <c>BGSAVE</c>.</summary>
+    /// <inheritdoc />
     public ValueTask SaveInBackgroundAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("BGSAVE"), cancellationToken);
     }
 
-    /// <summary>Sends <c>PUBLISH</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> PublishAsync(string channel, string message, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("PUBLISH", channel, message), cancellationToken);
     }
 
-    /// <summary>Sends <c>SPUBLISH</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> PublishShardedAsync(string channel, string message, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("SPUBLISH", channel, message), cancellationToken);
     }
 
-    /// <summary>Sends <c>EVAL</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> EvaluateAsync(string script, long keyCount, params string[] arguments)
     {
         return ExecuteAsync(Join("EVAL", script, Number(keyCount), arguments));
     }
 
-    /// <summary>Sends <c>MULTI</c>.</summary>
+    /// <inheritdoc />
     public ValueTask BeginTransactionAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("MULTI"), cancellationToken);
     }
 
-    /// <summary>Sends <c>EXEC</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<RespValue>> ExecuteTransactionAsync(CancellationToken cancellationToken = default)
     {
@@ -1787,25 +1767,25 @@ public sealed partial class RuvioClient
         return reply.Items ?? [];
     }
 
-    /// <summary>Sends <c>DISCARD</c>.</summary>
+    /// <inheritdoc />
     public ValueTask DiscardTransactionAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("DISCARD"), cancellationToken);
     }
 
-    /// <summary>Sends <c>WATCH</c>.</summary>
+    /// <inheritdoc />
     public ValueTask WatchAsync(params string[] keys)
     {
         return Ok(Join("WATCH", keys));
     }
 
-    /// <summary>Sends <c>UNWATCH</c>.</summary>
+    /// <inheritdoc />
     public ValueTask UnwatchAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("UNWATCH"), cancellationToken);
     }
 
-    /// <summary>Sends <c>ACL WHOAMI</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string> GetAclUserNameAsync(CancellationToken cancellationToken = default)
     {
@@ -1813,13 +1793,13 @@ public sealed partial class RuvioClient
             ?? throw new RuvioException("ACL WHOAMI returned a null reply");
     }
 
-    /// <summary>Sends <c>CLUSTER SLOTS</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> GetClusterSlotsAsync(CancellationToken cancellationToken = default)
     {
         return ExecuteCommandAsync(new RespCommand("CLUSTER", "SLOTS"), cancellationToken);
     }
 
-    /// <summary>Sends <c>CLUSTER NODES</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string> GetClusterNodesAsync(CancellationToken cancellationToken = default)
     {
@@ -1827,13 +1807,13 @@ public sealed partial class RuvioClient
             ?? throw new RuvioException("CLUSTER NODES returned a null reply");
     }
 
-    /// <summary>Sends <c>CLUSTER SHARDS</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> GetClusterShardsAsync(CancellationToken cancellationToken = default)
     {
         return ExecuteCommandAsync(new RespCommand("CLUSTER", "SHARDS"), cancellationToken);
     }
 
-    /// <summary>Sends <c>CLUSTER INFO</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string> GetClusterInfoAsync(CancellationToken cancellationToken = default)
     {
@@ -1841,7 +1821,7 @@ public sealed partial class RuvioClient
             ?? throw new RuvioException("CLUSTER INFO returned a null reply");
     }
 
-    /// <summary>Sends <c>CLUSTER MYID</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string> GetClusterMyIdAsync(CancellationToken cancellationToken = default)
     {
@@ -1849,25 +1829,25 @@ public sealed partial class RuvioClient
             ?? throw new RuvioException("CLUSTER MYID returned a null reply");
     }
 
-    /// <summary>Sends <c>CLUSTER KEYSLOT</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<long> GetClusterKeySlotAsync(string key, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("CLUSTER", "KEYSLOT", key), cancellationToken);
     }
 
-    /// <summary>Sends <c>READONLY</c>. Ruvio has no replicas; the reply is still <c>OK</c> in cluster mode.</summary>
+    /// <inheritdoc />
     public ValueTask ReadOnlyAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("READONLY"), cancellationToken);
     }
 
-    /// <summary>Sends <c>READWRITE</c>.</summary>
+    /// <inheritdoc />
     public ValueTask ReadWriteAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("READWRITE"), cancellationToken);
     }
 
-    /// <summary>Sends <c>SCRIPT LOAD</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<string> LoadScriptAsync(string script, CancellationToken cancellationToken = default)
     {
@@ -1875,13 +1855,13 @@ public sealed partial class RuvioClient
             ?? throw new RuvioException("SCRIPT LOAD returned a null reply");
     }
 
-    /// <summary>Sends <c>EVALSHA</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> EvaluateShaAsync(string sha, long keyCount, params string[] arguments)
     {
         return ExecuteAsync(Join("EVALSHA", sha, Number(keyCount), arguments));
     }
 
-    /// <summary>Sends <c>SCRIPT EXISTS</c>.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<bool>> ScriptExistsAsync(params string[] hashes)
     {
@@ -1898,155 +1878,145 @@ public sealed partial class RuvioClient
         return exists;
     }
 
-    /// <summary>Sends <c>SCRIPT FLUSH</c>.</summary>
+    /// <inheritdoc />
     public ValueTask FlushScriptsAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("SCRIPT", "FLUSH"), cancellationToken);
     }
 
-    /// <summary>Sends <c>SCRIPT KILL</c>.</summary>
+    /// <inheritdoc />
     public ValueTask KillScriptAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("SCRIPT", "KILL"), cancellationToken);
     }
 
-    /// <summary>Sends <c>FCALL</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> CallFunctionAsync(string name, long keyCount, params string[] arguments)
     {
         return ExecuteAsync(Join("FCALL", name, Number(keyCount), arguments));
     }
 
-    /// <summary>
-    /// Sends <c>FUNCTION LOAD name body</c>. The body is plain Lua, not a Redis library shebang,
-    /// and is lost when the server restarts.
-    /// </summary>
+    /// <inheritdoc />
     public ValueTask LoadFunctionAsync(string name, string body, CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("FUNCTION", "LOAD", name, body), cancellationToken);
     }
 
-    /// <summary>Sends <c>FUNCTION LIST</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> GetFunctionListAsync(CancellationToken cancellationToken = default)
     {
         return ExecuteCommandAsync(new RespCommand("FUNCTION", "LIST"), cancellationToken);
     }
 
-    /// <summary>Sends <c>FUNCTION DELETE</c>. False when no function had that name.</summary>
+    /// <inheritdoc />
     public ValueTask<bool> DeleteFunctionAsync(string name, CancellationToken cancellationToken = default)
     {
         return Flag(new RespCommand("FUNCTION", "DELETE", name), cancellationToken);
     }
 
-    /// <summary>Sends <c>ACL USERS</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetAclUsersAsync(CancellationToken cancellationToken = default)
     {
         return ArrayOfBulks(new RespCommand("ACL", "USERS"), cancellationToken);
     }
 
-    /// <summary>Sends <c>CLIENT GETNAME</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<string?> GetConnectionNameAsync(CancellationToken cancellationToken = default)
     {
         return BulkOrNull(new RespCommand("CLIENT", "GETNAME"), cancellationToken);
     }
 
-    /// <summary>Sends <c>CLIENT SETNAME</c>.</summary>
+    /// <inheritdoc />
     public ValueTask SetConnectionNameAsync(string name, CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("CLIENT", "SETNAME", name), cancellationToken);
     }
 
-    /// <summary>Sends <c>CLIENT TRACKING ON|OFF</c>.</summary>
+    /// <inheritdoc />
     public ValueTask SetTrackingAsync(bool enabled, CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("CLIENT", "TRACKING", enabled ? "ON" : "OFF"), cancellationToken);
     }
 
-    /// <summary>Sends <c>CONFIG GET</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> GetConfigAsync(string parameter, CancellationToken cancellationToken = default)
     {
         return ExecuteCommandAsync(new RespCommand("CONFIG", "GET", parameter), cancellationToken);
     }
 
-    /// <summary>Sends <c>FLUSHDB</c>. Only the selected database is emptied.</summary>
+    /// <inheritdoc />
     public ValueTask FlushDatabaseAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("FLUSHDB"), cancellationToken);
     }
 
-    /// <summary>Sends <c>FLUSHALL</c>. Every database is emptied.</summary>
+    /// <inheritdoc />
     public ValueTask FlushAllDatabasesAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("FLUSHALL"), cancellationToken);
     }
 
-    /// <summary>Sends <c>SWAPDB</c>.</summary>
+    /// <inheritdoc />
     public ValueTask SwapDatabasesAsync(int first, int second, CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("SWAPDB", first, second), cancellationToken);
     }
 
-    /// <summary>Sends <c>MOVE</c>. False when the key is missing or already exists in <paramref name="database"/>.</summary>
+    /// <inheritdoc />
     public ValueTask<bool> MoveKeyAsync(string key, int database, CancellationToken cancellationToken = default)
     {
         return Flag(new RespCommand("MOVE", key, database), cancellationToken);
     }
 
-    /// <summary>Sends <c>HELLO</c>. Connecting itself does not send this.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> HelloAsync(int protocol = 2, CancellationToken cancellationToken = default)
     {
         return ExecuteCommandAsync(new RespCommand("HELLO", protocol), cancellationToken);
     }
 
-    /// <summary>Sends <c>ACL LIST</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetAclListAsync(CancellationToken cancellationToken = default)
     {
         return ArrayOfBulks(new RespCommand("ACL", "LIST"), cancellationToken);
     }
 
-    /// <summary>Sends <c>ACL GETUSER</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<RespValue> GetAclUserAsync(string user, CancellationToken cancellationToken = default)
     {
         return ExecuteCommandAsync(new RespCommand("ACL", "GETUSER", user), cancellationToken);
     }
 
-    /// <summary>Sends <c>ACL CAT</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<string>> GetAclCategoriesAsync(CancellationToken cancellationToken = default)
     {
         return ArrayOfBulks(new RespCommand("ACL", "CAT"), cancellationToken);
     }
 
-    /// <summary>Sends <c>ACL SETUSER</c>.</summary>
+    /// <inheritdoc />
     public ValueTask SetAclUserAsync(string user, params string[] rules)
     {
         return Ok(Join("ACL", "SETUSER", user, rules));
     }
 
-    /// <summary>Sends <c>ACL LOAD</c>.</summary>
+    /// <inheritdoc />
     public ValueTask LoadAclAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("ACL", "LOAD"), cancellationToken);
     }
 
-    /// <summary>Sends <c>ACL SAVE</c>.</summary>
+    /// <inheritdoc />
     public ValueTask SaveAclAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("ACL", "SAVE"), cancellationToken);
     }
 
-    /// <summary>
-    /// Sends <c>SUBSCRIBE</c> on a dedicated socket (not the command socket) and
-    /// reads one confirmation per channel.
-    /// </summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<RespValue>> SubscribeAsync(params string[] channels)
     {
         return ExecuteManyReplies(Join("SUBSCRIBE", channels), channels.Length);
     }
 
-    /// <summary>
-    /// Subscribes on a dedicated socket and invokes <paramref name="handler"/> for
-    /// later <c>message</c> deliveries on <paramref name="channel"/>. Same idea as
-    /// StackExchange.Redis <c>ISubscriber.Subscribe</c>.
-    /// </summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public async ValueTask SubscribeAsync(
         string channel,
@@ -2058,7 +2028,7 @@ public sealed partial class RuvioClient
         await ExecuteManyReplies(Join("SUBSCRIBE", channel), 1, cancellationToken);
     }
 
-    /// <summary>Same as the action overload, with an async handler.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public async ValueTask SubscribeAsync(
         string channel,
@@ -2070,10 +2040,7 @@ public sealed partial class RuvioClient
         await ExecuteManyReplies(Join("SUBSCRIBE", channel), 1, cancellationToken);
     }
 
-    /// <summary>
-    /// Subscribes to a pattern on a dedicated socket and invokes
-    /// <paramref name="handler"/> for matching <c>pmessage</c> deliveries.
-    /// </summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public async ValueTask SubscribePatternsAsync(
         string pattern,
@@ -2085,7 +2052,7 @@ public sealed partial class RuvioClient
         await ExecuteManyReplies(Join("PSUBSCRIBE", pattern), 1, cancellationToken);
     }
 
-    /// <summary>Same as the action overload, with an async handler.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public async ValueTask SubscribePatternsAsync(
         string pattern,
@@ -2097,10 +2064,7 @@ public sealed partial class RuvioClient
         await ExecuteManyReplies(Join("PSUBSCRIBE", pattern), 1, cancellationToken);
     }
 
-    /// <summary>
-    /// Subscribes to a sharded channel on a dedicated socket and invokes
-    /// <paramref name="handler"/> for <c>smessage</c> deliveries.
-    /// </summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public async ValueTask SubscribeShardedAsync(
         string channel,
@@ -2112,7 +2076,7 @@ public sealed partial class RuvioClient
         await ExecuteManyReplies(Join("SSUBSCRIBE", channel), 1, cancellationToken);
     }
 
-    /// <summary>Same as the action overload, with an async handler.</summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
     public async ValueTask SubscribeShardedAsync(
         string channel,
@@ -2124,10 +2088,7 @@ public sealed partial class RuvioClient
         await ExecuteManyReplies(Join("SSUBSCRIBE", channel), 1, cancellationToken);
     }
 
-    /// <summary>
-    /// Subscribes to key expiration events for the currently selected database.
-    /// The event key is in <see cref="PubSubMessage.Payload"/>.
-    /// </summary>
+    /// <inheritdoc />
     public ValueTask SubscribeExpiredAsync(
         Action<PubSubMessage> handler,
         CancellationToken cancellationToken = default)
@@ -2135,7 +2096,7 @@ public sealed partial class RuvioClient
         return SubscribeKeyEventAsync("expired", handler, cancellationToken);
     }
 
-    /// <summary>Async-handler overload of <see cref="SubscribeExpiredAsync(Action{PubSubMessage}, CancellationToken)"/>.</summary>
+    /// <inheritdoc />
     public ValueTask SubscribeExpiredAsync(
         Func<PubSubMessage, Task> handler,
         CancellationToken cancellationToken = default)
@@ -2143,10 +2104,7 @@ public sealed partial class RuvioClient
         return SubscribeKeyEventAsync("expired", handler, cancellationToken);
     }
 
-    /// <summary>
-    /// Subscribes to key eviction events for the currently selected database.
-    /// The event key is in <see cref="PubSubMessage.Payload"/>.
-    /// </summary>
+    /// <inheritdoc />
     public ValueTask SubscribeEvictedAsync(
         Action<PubSubMessage> handler,
         CancellationToken cancellationToken = default)
@@ -2154,7 +2112,7 @@ public sealed partial class RuvioClient
         return SubscribeKeyEventAsync("evicted", handler, cancellationToken);
     }
 
-    /// <summary>Async-handler overload of <see cref="SubscribeEvictedAsync(Action{PubSubMessage}, CancellationToken)"/>.</summary>
+    /// <inheritdoc />
     public ValueTask SubscribeEvictedAsync(
         Func<PubSubMessage, Task> handler,
         CancellationToken cancellationToken = default)
@@ -2178,9 +2136,7 @@ public sealed partial class RuvioClient
         return SubscribeShardedAsync($"__keyevent@{_database}__:{eventName}", handler, cancellationToken);
     }
 
-    /// <summary>
-    /// Yields deliveries from the subscriber socket. Opens one if needed.
-    /// </summary>
+    /// <inheritdoc />
     public async IAsyncEnumerable<PubSubMessage> ListenAsync(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
@@ -2190,7 +2146,7 @@ public sealed partial class RuvioClient
         }
     }
 
-    /// <summary>Sends <c>UNSUBSCRIBE</c>. No channels drops every exact subscription on this connection.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<RespValue>> UnsubscribeAsync(params string[] channels)
     {
         RemoveHandlers(channels);
@@ -2200,13 +2156,13 @@ public sealed partial class RuvioClient
             : ExecuteManyReplies(Join("UNSUBSCRIBE", channels), channels.Length);
     }
 
-    /// <summary>Sends <c>PSUBSCRIBE</c> and reads one confirmation per pattern.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<RespValue>> SubscribePatternsAsync(params string[] patterns)
     {
         return ExecuteManyReplies(Join("PSUBSCRIBE", patterns), patterns.Length);
     }
 
-    /// <summary>Sends <c>PUNSUBSCRIBE</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<RespValue>> UnsubscribePatternsAsync(params string[] patterns)
     {
         RemoveHandlers(patterns);
@@ -2216,13 +2172,13 @@ public sealed partial class RuvioClient
             : ExecuteManyReplies(Join("PUNSUBSCRIBE", patterns), patterns.Length);
     }
 
-    /// <summary>Sends <c>SSUBSCRIBE</c> and reads one confirmation per channel.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<RespValue>> SubscribeShardedAsync(params string[] channels)
     {
         return ExecuteManyReplies(Join("SSUBSCRIBE", channels), channels.Length);
     }
 
-    /// <summary>Sends <c>SUNSUBSCRIBE</c>.</summary>
+    /// <inheritdoc />
     public ValueTask<IReadOnlyList<RespValue>> UnsubscribeShardedAsync(params string[] channels)
     {
         RemoveHandlers(channels);
@@ -2232,12 +2188,7 @@ public sealed partial class RuvioClient
             : ExecuteManyReplies(Join("SUNSUBSCRIBE", channels), channels.Length);
     }
 
-    /// <summary>
-    /// Reads the next RESP value without sending a command. Use this after a
-    /// subscribe for <c>message</c>, <c>pmessage</c>, and <c>smessage</c> pushes.
-    /// A delivery is an array; <see cref="RespValue.AsString"/> on that array is
-    /// null. Prefer <see cref="ReadPubSubMessageAsync"/>.
-    /// </summary>
+    /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<RespValue> ReadMessageAsync(CancellationToken cancellationToken = default)
     {
@@ -2246,10 +2197,7 @@ public sealed partial class RuvioClient
         return RuvioSocket.ThrowOnError(reply);
     }
 
-    /// <summary>
-    /// Reads until a <c>message</c>, <c>pmessage</c>, or <c>smessage</c> arrives,
-    /// skipping subscribe confirmations.
-    /// </summary>
+    /// <inheritdoc />
     public ValueTask<PubSubMessage> ReadPubSubMessageAsync(CancellationToken cancellationToken = default)
     {
         return new ValueTask<PubSubMessage>(ReadPubSubDeliveryAsync(cancellationToken));
