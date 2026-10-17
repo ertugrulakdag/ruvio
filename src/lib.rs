@@ -51,6 +51,8 @@ mod slots;
 mod slowlog;
 mod store;
 mod stream;
+#[cfg(test)]
+mod test_ports;
 pub mod time;
 mod tls;
 mod transaction;
