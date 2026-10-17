@@ -44,7 +44,7 @@ app.UseAuthorization();
 app.UseRuvioRateLimiting();
 app.MapPost("/orders", HandleOrder)
     .RequireAuthorization()
-    .WithMetadata(new RuvioRateLimitAttribute("create-order", 100, 60));
+    .WithRuvioRateLimit("create-order", permits: 100, window: TimeSpan.FromMinutes(1));
 ```
 
 `AddRuvioClient` registers the connection owner and the shared database-scoped

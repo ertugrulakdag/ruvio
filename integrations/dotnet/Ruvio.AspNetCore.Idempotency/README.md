@@ -48,8 +48,8 @@ app.UseAuthorization(); // MUST execute before idempotency, including on replays
 app.UseRuvioIdempotency();
 app.MapPost("/orders", HandleOrder)
     .RequireAuthorization()
-    .WithMetadata(new RuvioIdempotencyAttribute());
-// Controllers can use [RuvioIdempotency] together with [Authorize].
+    .WithRuvioIdempotency();
+// Controllers can use [RuvioIdempotency] together with [Authorize]; endpoints can also use .WithMetadata(new RuvioIdempotencyAttribute()).
 ```
 
 By default, each request must have an authenticated `NameIdentifier` or `sub`

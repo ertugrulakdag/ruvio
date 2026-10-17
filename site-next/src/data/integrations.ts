@@ -44,16 +44,23 @@ const ecosystemDetails: Record<string, EcosystemDetails> = {
 const details: Record<string, Details> = {
   "Ruvio.Extensions.Caching": {
     summary:
-      "Binary-safe IDistributedCache for web, worker and console apps. GetOrCreateAsync builds a missing entry once across every instance with FILLGET and FILLSET.",
+      "Binary-safe IDistributedCache for web, worker and console apps. Store strings and models as JSON without touching byte[]. GetOrCreate builds a missing entry once across every instance with FILLGET and FILLSET.",
     useCases: ["cache", "sessions"],
     example: cs(`builder.Services.AddRuvioClient(builder.Configuration.GetSection("Ruvio"));
 builder.Services.AddRuvioDistributedCache(options => options.InstanceName = "orders");
 
 // One caller across every instance runs the factory; the others receive its result.
-byte[] page = await cache.GetOrCreateAsync(
-    "invoice:42",
-    async token => await RenderAsync(token),
-    new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10) });`),
+var entry = new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10) };
+
+// A plain string: no byte[] conversion on your side.
+string page = await cache.GetOrCreateStringAsync("invoice:42", token => RenderAsync(token), entry);
+
+// A model stored as JSON; pass your JsonSerializerOptions, or a source-generated JsonTypeInfo<T> for AOT.
+Invoice invoice = await cache.GetOrCreateJsonAsync(
+    "invoice-model:42", token => LoadInvoiceAsync(token), AppJson.Default.Invoice, entry);
+
+// Already have a JSON string? Store it as a string.
+await cache.SetStringAsync("invoice-json:42", json, entry);`),
     caseExamples: {
       sessions: cs(`builder.Services.AddRuvioDistributedCache(o => o.InstanceName = "orders-session-v1");
 builder.Services.AddSession(o => o.IdleTimeout = TimeSpan.FromMinutes(20));
@@ -105,7 +112,7 @@ app.UseAuthorization();
 app.UseRuvioRateLimiting();
 app.MapPost("/orders", HandleOrder)
     .RequireAuthorization()
-    .WithMetadata(new RuvioRateLimitAttribute("create-order", permits: 100, windowSeconds: 60));`),
+    .WithRuvioRateLimit("create-order", permits: 100, window: TimeSpan.FromMinutes(1));`),
   },
   "Ruvio.AspNetCore.Idempotency": {
     summary:
@@ -125,7 +132,7 @@ app.UseAuthorization(); // must run before idempotency, including on replays
 app.UseRuvioIdempotency();
 app.MapPost("/orders", HandleOrder)
     .RequireAuthorization()
-    .WithMetadata(new RuvioIdempotencyAttribute());`),
+    .WithRuvioIdempotency();`),
   },
   "Ruvio.AspNetCore.DistributedLock": {
     summary:
