@@ -84,6 +84,7 @@ jobs:
           scripts/test_benchmark_regression.py
           scripts/resp_conformance.py
           scripts/redis_differential.py
+          scripts/_ruvio.py
           scripts/docker_resilience.py
           scripts/native_resilience.py
           scripts/check_compatibility_matrix.py
@@ -125,14 +126,7 @@ jobs:
       - name: Reset Ruvio so the differential starts empty
         run: |
           docker restart ruvio-test
-          python3 -c "import socket,time
-          for _ in range(50):
-              try:
-                  socket.create_connection(('127.0.0.1', 16379), timeout=1).close()
-                  raise SystemExit(0)
-              except OSError:
-                  time.sleep(0.1)
-          raise SystemExit('ruvio did not restart')"
+          python3 scripts/_ruvio.py wait-ready --timeout 30 --port 16379
       - name: Verify Redis differential behavior
         run: >-
           python3 scripts/redis_differential.py
@@ -212,24 +206,30 @@ jobs:
       # Each step starts a standalone server and a 3-shard per-shard cluster (RUVIO_TEST_ADDR,
       # RUVIO_CLUSTER_ADDR), so every client's live and cluster tests run, and stops them after.
       - name: Rust client
+        timeout-minutes: 15
         run: scripts/run_with_servers.sh "$PWD/target/debug/ruvio" 17400 -- cargo test --locked --manifest-path clients/ruvio-client/Cargo.toml
       - name: C# client and .NET integrations
+        timeout-minutes: 15
         run: |
           # shellcheck disable=SC2016 # the inner script expands its own variables
           scripts/run_with_servers.sh "$PWD/target/debug/ruvio" 17420 -- bash -c '
             set -euo pipefail
             for project in clients/csharp/Ruvio.Client.Tests clients/csharp/Ruvio.Client.AspNetCore.Tests integrations/dotnet/*.Tests; do
-              dotnet test "$project" --nologo
+              dotnet test "$project" --nologo --blame-hang-timeout 5m
             done'
       - name: Go client
+        timeout-minutes: 15
         run: scripts/run_with_servers.sh "$PWD/target/debug/ruvio" 17440 -- bash -c 'cd clients/go && go test -race -count=1 ./...'
       - name: Java client
+        timeout-minutes: 15
         run: scripts/run_with_servers.sh "$PWD/target/debug/ruvio" 17460 -- mvn -B -f clients/java/pom.xml verify
       - name: Node client
+        timeout-minutes: 15
         run: |
           npm ci --prefix clients/node
           scripts/run_with_servers.sh "$PWD/target/debug/ruvio" 17480 -- npm test --prefix clients/node
       - name: Python client
+        timeout-minutes: 15
         run: |
           python -m pip install "./clients/python[test]"
           scripts/run_with_servers.sh "$PWD/target/debug/ruvio" 17500 -- python -m pytest -q clients/python

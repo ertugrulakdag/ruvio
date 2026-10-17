@@ -118,10 +118,10 @@ jobs:
       - name: C# client and .NET integrations against a live server
         run: |
           scripts/run_with_servers.sh "$PWD/server-bin/ruvio" 17400 -- bash -euo pipefail -c '
-            dotnet test clients/csharp/Ruvio.Client.Tests/Ruvio.Client.Tests.csproj --nologo
-            dotnet test clients/csharp/Ruvio.Client.AspNetCore.Tests/Ruvio.Client.AspNetCore.Tests.csproj --nologo
+            dotnet test clients/csharp/Ruvio.Client.Tests/Ruvio.Client.Tests.csproj --nologo --blame-hang-timeout 5m
+            dotnet test clients/csharp/Ruvio.Client.AspNetCore.Tests/Ruvio.Client.AspNetCore.Tests.csproj --nologo --blame-hang-timeout 5m
             for project in integrations/dotnet/*Tests/*Tests.csproj; do
-              dotnet test "$project" --nologo
+              dotnet test "$project" --nologo --blame-hang-timeout 5m
             done
           '
 
