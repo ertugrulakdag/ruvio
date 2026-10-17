@@ -317,9 +317,9 @@ fn forms(name: &str, rng: &mut Rng, limit: usize) -> Vec<(Vec<String>, Vec<Strin
         .iter()
         .chain(OPTION_SAMPLES)
         .filter(|words| words[0].eq_ignore_ascii_case(name))
-        .map(|words| words.iter().map(|word| (*word).to_owned()).collect());
+        .map(|words| words.to_vec());
     let random = (0..4_000usize).map(|round| {
-        let mut words = vec![name.to_owned()];
+        let mut words = vec![name];
 
         for index in 0..round % 9 {
             let pool: &[&str] =
@@ -328,33 +328,51 @@ fn forms(name: &str, rng: &mut Rng, limit: usize) -> Vec<(Vec<String>, Vec<Strin
                 } else {
                     POOL
                 };
-            words.push(pool[rng.next() % pool.len()].to_owned());
+            words.push(pool[rng.next() % pool.len()]);
         }
         words
     });
     let mut out: Vec<(Vec<String>, Vec<String>)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let mut tried = std::collections::HashSet::new();
 
-    let random: Vec<Vec<String>> = random.collect();
-    let sampled: Vec<Vec<String>> = samples.collect();
+    let random: Vec<Vec<&str>> = random.collect();
+    let sampled: Vec<Vec<&str>> = samples.collect();
     let sample_count = sampled.len();
 
     for (index, words) in sampled.into_iter().chain(random).enumerate() {
         let is_sample = index < sample_count;
-        let renamed: Vec<String> = words
+
+        // The rest could only add forms past the limit; the generator has already drawn them,
+        // so the numbers the next row gets stay the same.
+        if !is_sample && out.len() >= limit {
+            break;
+        }
+        // A repeated draw parses as it did before: its shape is seen or it does not parse.
+        if !is_sample && !tried.insert(words.clone()) {
+            continue;
+        }
+
+        let renamed: Vec<std::borrow::Cow<str>> = words
             .iter()
             .enumerate()
             .map(|(at, word)| {
                 if at > 0 && is_plain_name(word) {
-                    format!("{word}{at}")
+                    format!("{word}{at}").into()
                 } else {
-                    word.clone()
+                    (*word).into()
                 }
             })
             .collect();
+        let renamed: Vec<&str> = renamed.iter().map(|word| word.as_ref()).collect();
+        // Without plain names to rename, the second candidate is the first again.
+        let candidates = if renamed == words {
+            vec![renamed]
+        } else {
+            vec![renamed, words.clone()]
+        };
 
-        for candidate in [renamed, words] {
-            let refs: Vec<&str> = candidate.iter().map(String::as_str).collect();
+        for refs in candidates {
             let bytes = frame(&refs);
             let Ok(Some((command, _))) = parse_command(&bytes) else {
                 continue;
@@ -370,12 +388,12 @@ fn forms(name: &str, rng: &mut Rng, limit: usize) -> Vec<(Vec<String>, Vec<Strin
             let shape = format!(
                 "{}|{}|{}",
                 format!("{command:?}").split('(').next().unwrap_or_default(),
-                candidate.len(),
+                refs.len(),
                 keys.len()
             );
 
             if is_sample || (seen.insert(shape) && out.len() < limit) {
-                out.push((candidate, keys));
+                out.push((refs.iter().map(|word| (*word).to_owned()).collect(), keys));
             }
             break;
         }

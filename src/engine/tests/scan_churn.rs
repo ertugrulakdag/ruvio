@@ -261,10 +261,11 @@ fn every_scan_command_ends_and_misses_no_stable_element_under_random_churn() {
 /// is drawn.
 fn assert_uniform(what: &str, draws: &[Vec<u8>], members: &[Vec<u8>]) {
     let mut counts: AHashMap<&[u8], usize> = AHashMap::new();
+    let pool: AHashSet<&[u8]> = members.iter().map(Vec::as_slice).collect();
 
     for draw in draws {
         assert!(
-            members.contains(draw),
+            pool.contains(draw.as_slice()),
             "{what}: drew {:?}, not a member",
             String::from_utf8_lossy(draw)
         );
@@ -363,9 +364,10 @@ fn random_draws_reach_every_element_evenly_for_every_encoding() {
         ] {
             let what = format!("{} size {size}", String::from_utf8_lossy(verb));
 
-            // Single draws.
+            // Single draws, the command parsed once.
+            let single = command_of(&[verb, key]);
             let singles: Vec<Vec<u8>> = (0..draws)
-                .flat_map(|_| bulk_names(execute(&mut shard, command_of(&[verb, key])), false))
+                .flat_map(|_| bulk_names(execute(&mut shard, single.clone()), false))
                 .collect();
             assert_uniform(&format!("{what} single"), &singles, pool);
 

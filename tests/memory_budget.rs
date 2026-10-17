@@ -2,8 +2,10 @@
 //! (about 15% above today's measurement) fails here instead of being found in a benchmark.
 //!
 //! One test function runs every case in turn: the counting allocator is process-wide.
-//! The HyperLogLog case is the slow one in debug, so it runs over fewer keys; the key table
-//! is then less amortized, and its budget is about 15% above the measurement at that count.
+//! The HyperLogLog case is the slow one in debug, so it runs over fewer keys and is counted
+//! from its second key on: the first write's allocation (about 1 MiB of store) would
+//! otherwise outweigh the sketches at that count. Its budget is about 15% above the
+//! measurement counted that way.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicI64, Ordering::Relaxed};
@@ -51,7 +53,14 @@ fn frame(parts: &[String]) -> Vec<u8> {
     out
 }
 
-type Case = (&'static str, f64, usize, Box<dyn Fn(usize) -> Vec<String>>);
+/// Name, budget, keys written, keys written before counting starts, and the command.
+type Case = (
+    &'static str,
+    f64,
+    usize,
+    usize,
+    Box<dyn Fn(usize) -> Vec<String>>,
+);
 
 #[test]
 fn bytes_per_key_stay_within_budget() {
@@ -62,12 +71,14 @@ fn bytes_per_key_stay_within_budget() {
             "string 16 B",
             58.0,
             keys,
+            0,
             Box::new(move |i| vec!["SET".into(), key(i), "v".repeat(16)]),
         ),
         (
             "string 16 B with TTL",
             105.0,
             keys,
+            0,
             Box::new(move |i| {
                 vec![
                     "SET".into(),
@@ -82,12 +93,14 @@ fn bytes_per_key_stay_within_budget() {
             "list of 1",
             56.0,
             keys,
+            0,
             Box::new(move |i| vec!["RPUSH".into(), key(i), "element-0".into()]),
         ),
         (
             "list of 20",
             330.0,
             keys,
+            0,
             Box::new(move |i| {
                 let mut v = vec!["RPUSH".to_string(), key(i)];
                 v.extend((0..20).map(|j| format!("element-{j}")));
@@ -98,6 +111,7 @@ fn bytes_per_key_stay_within_budget() {
             "hash of 3",
             64.0,
             keys,
+            0,
             Box::new(move |i| {
                 let mut v = vec!["HSET".to_string(), key(i)];
                 v.extend(["f1", "v1", "f2", "v2", "f3", "v3"].map(String::from));
@@ -108,6 +122,7 @@ fn bytes_per_key_stay_within_budget() {
             "set of 4",
             56.0,
             keys,
+            0,
             Box::new(move |i| {
                 vec![
                     "SADD".into(),
@@ -123,6 +138,7 @@ fn bytes_per_key_stay_within_budget() {
             "sorted set of 3",
             56.0,
             keys,
+            0,
             Box::new(move |i| {
                 vec![
                     "ZADD".into(),
@@ -138,8 +154,9 @@ fn bytes_per_key_stay_within_budget() {
         ),
         (
             "HyperLogLog of 100",
-            470.0,
-            20_000,
+            400.0,
+            5_000,
+            1,
             Box::new(move |i| {
                 let mut v = vec!["PFADD".to_string(), key(i)];
                 v.extend((0..100).map(|j| format!("m{j}")));
@@ -148,18 +165,21 @@ fn bytes_per_key_stay_within_budget() {
         ),
     ];
 
-    for (name, budget, keys, make) in &cases {
+    for (name, budget, keys, warm, make) in &cases {
         let frames: Vec<Vec<u8>> = (0..*keys).map(|i| frame(&make(i))).collect();
         let mut shard = KvShard::new();
-        let before = LIVE.load(Relaxed);
+        let mut before = LIVE.load(Relaxed);
 
-        for bytes in &frames {
+        for (index, bytes) in frames.iter().enumerate() {
+            if index == *warm {
+                before = LIVE.load(Relaxed);
+            }
             let (command, _) = parse_command(bytes).unwrap().unwrap();
 
             execute_in_database(&mut shard, command, &mut NoopMutationSink, &mut (), 0).unwrap();
         }
 
-        let per_key = (LIVE.load(Relaxed) - before) as f64 / *keys as f64;
+        let per_key = (LIVE.load(Relaxed) - before) as f64 / (keys - warm) as f64;
 
         assert!(
             per_key <= *budget,

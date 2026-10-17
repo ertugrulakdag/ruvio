@@ -570,31 +570,48 @@ fn scan_under_churn(
     std::ops::Range<u32>,
 ) {
     let mut shard = KvShard::new();
-    let add = |shard: &mut KvShard, member: &str| {
-        let parts: Vec<&[u8]> = match kind {
-            "zset" => vec![b"ZADD", b"k", b"1", member.as_bytes()],
-            "hash" => vec![b"HSET", b"k", member.as_bytes(), b"v"],
-            _ => vec![b"SADD", b"k", member.as_bytes()],
+    // One command adds or removes many members: each still goes in or out one at a time.
+    let add_all = |shard: &mut KvShard, members: &[String]| {
+        let mut parts: Vec<&[u8]> = match kind {
+            "zset" => vec![b"ZADD", b"k"],
+            "hash" => vec![b"HSET", b"k"],
+            _ => vec![b"SADD", b"k"],
         };
+
+        for member in members {
+            match kind {
+                "zset" => parts.extend([b"1".as_slice(), member.as_bytes()]),
+                "hash" => parts.extend([member.as_bytes(), b"v"]),
+                _ => parts.push(member.as_bytes()),
+            }
+        }
         let reply = execute(shard, command_of(&parts)).into_owned();
 
         assert!(!matches!(reply, Response::Error(_)), "{reply:?}");
     };
-    let remove = |shard: &mut KvShard, member: &str| {
+    let remove_all = |shard: &mut KvShard, members: &[String]| {
         let verb: &[u8] = match kind {
             "zset" => b"ZREM",
             "hash" => b"HDEL",
             _ => b"SREM",
         };
+        let mut parts: Vec<&[u8]> = vec![verb, b"k"];
 
-        execute(shard, command_of(&[verb, b"k", member.as_bytes()]));
+        parts.extend(members.iter().map(String::as_bytes));
+        execute(shard, command_of(&parts));
     };
+    let add = |shard: &mut KvShard, member: &str| add_all(shard, &[member.to_owned()]);
+    let remove = |shard: &mut KvShard, member: &str| remove_all(shard, &[member.to_owned()]);
+    let transient: Vec<String> = (0..20_000).map(|index| format!("x{index}")).collect();
     let window = 5_000u32;
     let (mut low, mut high) = (0u32, window);
 
-    for index in low..high {
-        add(&mut shard, &format!("m{index}"));
-    }
+    add_all(
+        &mut shard,
+        &(low..high)
+            .map(|index| format!("m{index}"))
+            .collect::<Vec<_>>(),
+    );
 
     let initial_high = high;
     let mut seen = std::collections::HashSet::new();
@@ -619,14 +636,10 @@ fn scan_under_churn(
             low += 1;
         }
         if pages % 20 == 5 {
-            for index in 0..20_000 {
-                add(&mut shard, &format!("x{index}"));
-            }
+            add_all(&mut shard, &transient);
         }
         if pages % 20 == 15 {
-            for index in 0..20_000 {
-                remove(&mut shard, &format!("x{index}"));
-            }
+            remove_all(&mut shard, &transient);
         }
     }
 
