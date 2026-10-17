@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ClusterClient, RuvioError, hashSlot, createClusterClient, type PubSubMessage } from '../src/index.js';
 import { _forceStaleTable } from '../src/cluster.js';
-import { CLUSTER_ADDR, CSKIP, SKIP, addr, clusterAddr, rejects, sleep } from './helpers.js';
+import { CLUSTER_ADDR, CSKIP, SKIP, addr, clusterAddr, rejects, sleep, until, within } from './helpers.js';
 
 async function cluster(): Promise<ClusterClient> {
   const c = createClusterClient(clusterAddr());
@@ -287,8 +287,10 @@ test('cluster: blocking commands use a dedicated connection to the owning node',
     await c.rpush(k2, 'two');
     await c.rpush(key, 'one');
     assert.deepEqual([await x, await y], [[key, 'one'], [k2, 'two']]);
-    // XREAD BLOCK follows the same rule
-    const xr = c.xread({ '{blk}s': '$' }, { block: 2000 });
+    // XREAD BLOCK follows the same rule. It reads after a known ID rather than `$`: the XADD
+    // may reach the node before the blocking read does, and `$` would then miss it.
+    const first = (await c.xadd('{blk}s', '*', { f: 'first' }))!;
+    const xr = c.xread({ '{blk}s': first }, { block: 10_000 });
     await sleep(30);
     await c.xadd('{blk}s', '*', { f: 'v' });
     assert.ok(await xr);
@@ -328,7 +330,7 @@ test('cluster: pub/sub on the seed or on the channel owner', { skip: CSKIP }, as
     sub.on('message', (m: PubSubMessage<string>) => got.push(m));
     await sub.ssubscribe('{ps}chan');
     assert.equal(await c.spublish('{ps}chan', 'hello'), 1);
-    for (let i = 0; i < 50 && got.length < 1; i++) await sleep(10);
+    await until(() => got.length >= 1, 'the sharded delivery');
     assert.equal(got[0]?.message, 'hello');
     // plain SUBSCRIBE on the seed node, PUBLISH from the same node's shared connection
     const seed = c.subscriber();
@@ -336,7 +338,7 @@ test('cluster: pub/sub on the seed or on the channel owner', { skip: CSKIP }, as
     seed.on('message', (m: PubSubMessage<string>) => seedGot.push(m.message));
     await seed.subscribe('plain');
     await c.publish('plain', 'p1');
-    for (let i = 0; i < 50 && seedGot.length < 1; i++) await sleep(10);
+    await until(() => seedGot.length >= 1, 'the delivery on the seed');
     assert.deepEqual(seedGot, ['p1']);
     seed.close();
   } finally {
@@ -355,10 +357,12 @@ test('cluster: losing one node connection does not break the others', { skip: CS
     const killer = c.nodes[0]!.client.duplicate();
     // kill the victim's shared connection from a separate connection to the same node
     const killerV = victim.client.duplicate();
+    const dropped = new Promise((r) => victim.client.on('disconnect', r));
     assert.equal(await killerV.clientKill({ id, skipMe: true }), 1);
     killerV.disconnect();
     killer.disconnect();
-    await sleep(30);
+    // The GETs below go out once the client has seen the close, so none rides the dead socket.
+    await within(dropped, "the victim's connection to close");
     const results = await Promise.allSettled(ks.map((k) => c.get(k)));
     const fine = results.filter((r) => r.status === 'fulfilled').length;
     assert.ok(fine >= ks.length - 1, 'at most the one in-flight call per dead connection can fail');

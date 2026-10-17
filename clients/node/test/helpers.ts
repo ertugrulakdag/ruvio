@@ -39,6 +39,28 @@ export async function settle<T>(p: Promise<T>): Promise<T | RuvioError> {
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Polls `cond` every 5 ms until it holds; fails, naming `what`, after `ms`. */
+export async function until(cond: () => boolean, what: string, ms = 10_000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > end) throw new Error(`timed out after ${ms} ms waiting for ${what}`);
+    await sleep(5);
+  }
+}
+
+/** Resolves what `p` resolves; fails, naming `what`, when that takes longer than `ms`. */
+export async function within<T>(p: Promise<T>, what: string, ms = 10_000): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${ms} ms waiting for ${what}`)), ms);
+  });
+  try {
+    return await Promise.race([p, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** `host:port` of the first shard of a live 3-shard (per-shard port) server, or undefined. */
 export const CLUSTER_ADDR = process.env.RUVIO_CLUSTER_ADDR;
 export const CSKIP = CLUSTER_ADDR ? false : 'RUVIO_CLUSTER_ADDR not set';

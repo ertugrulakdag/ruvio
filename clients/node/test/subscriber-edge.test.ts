@@ -78,7 +78,7 @@ async function withSub(
   }
 }
 
-async function until(cond: () => boolean, ms = 2000): Promise<void> {
+async function until(cond: () => boolean, ms = 10_000): Promise<void> {
   const end = Date.now() + ms;
   while (!cond()) {
     if (Date.now() > end) throw new Error('condition not reached');
@@ -190,8 +190,10 @@ test('the iterator buffers up to iteratorBuffer messages and drops the oldest', 
   await withSub(async (sub, s) => {
     await sub.subscribe('ch');
     const it = sub[Symbol.asyncIterator]();
+    let delivered = 0;
+    sub.on('message', () => delivered++);
     s.push(msg('ch', '1') + msg('ch', '2') + msg('ch', '3') + msg('ch', '4'));
-    await sleep(30);
+    await until(() => delivered === 4);
     const got: string[] = [];
     for (let i = 0; i < 2; i++) got.push(((await it.next()).value as PubSubMessage).message);
     assert.deepEqual(got, ['3', '4']);
@@ -225,10 +227,11 @@ test('close() ends iterators (waiting and buffered), later iterators end at once
     const w = waiting.next();
     s.push(msg('ch', 'x'));
     assert.equal(((await w).value as PubSubMessage).message, 'x');
-    await sleep(10);
     assert.equal((await detached.return!()).done, true);
+    let arrived = false;
+    sub.on('message', (m: PubSubMessage) => (arrived ||= m.message === 'y'));
     s.push(msg('ch', 'y'));
-    await sleep(20);
+    await until(() => arrived);
     const w2 = waiting.next();
     sub.close();
     sub.close(); // idempotent
@@ -258,9 +261,12 @@ test('a for-await loop ends on break and on close', async () => {
       for await (const m of sub) r.push(m.message);
       return r;
     })();
-    await sleep(20);
+    let arrived = false;
+    sub.on('message', (m: PubSubMessage) => (arrived ||= m.message === 'c'));
     s.push(msg('ch', 'c'));
-    await sleep(20);
+    // The loop's iterator was attached when the loop started; delivery reaches it and the
+    // listener in the same step.
+    await until(() => arrived);
     sub.close();
     assert.deepEqual(await loop, ['c']);
   });

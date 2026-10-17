@@ -100,7 +100,7 @@ test('JSON.INDEX and JSON.FIND (database 0 only)', { skip: SKIP }, async () => {
     await c.jsonSetAs('nusr:2', '$', { city: 'izmir' });
     await c.jsonSetAs('nusr:3', '$', { city: 'ankara' });
     let found: string[] = [];
-    for (let i = 0; i < 50; i++) {
+    for (const end = Date.now() + 15_000; Date.now() < end; ) {
       try {
         found = await c.jsonFind(idx, 'izmir');
         break;
@@ -179,16 +179,21 @@ test('streams and consumer groups', { skip: SKIP }, async () => {
     assert.equal(await c.xgroupDelconsumer('gs', 'g', 'c3'), 1);
     // NOACK and DELAY
     await c.xgroupCreate('gs', 'g2', '$');
-    await c.xadd('gs', '*', { x: 1 }, { delayMs: 60 });
+    // The 3 s delay leaves the read right after it a wide margin; the entry then shows up
+    // within a deadline.
+    await c.xadd('gs', '*', { x: 1 }, { delayMs: 3000 });
     assert.equal(await c.xreadgroup('g2', 'c', 'gs', { noAck: true }), null);
-    await sleep(80);
-    const delayed = await c.xreadgroup('g2', 'c', 'gs', { noAck: true });
+    let delayed: Awaited<ReturnType<typeof c.xreadgroup>> = null;
+    for (const end = Date.now() + 15_000; delayed === null && Date.now() < end; ) {
+      await sleep(50);
+      delayed = await c.xreadgroup('g2', 'c', 'gs', { noAck: true });
+    }
     assert.equal(delayed![0]!.entries.length, 1);
     assert.equal((await c.xpending('gs', 'g2')).count, 0);
     // blocking group read on a dedicated connection
     const b = c.duplicate();
     try {
-      const waiting = b.xreadgroup('g2', 'c', 'gs', { block: 2000 });
+      const waiting = b.xreadgroup('g2', 'c', 'gs', { block: 10_000 });
       setTimeout(() => void c.xadd('gs', '*', { late: 1 }), 30);
       const late = await waiting;
       assert.equal(late![0]!.entries[0]!.fields['late'], '1');

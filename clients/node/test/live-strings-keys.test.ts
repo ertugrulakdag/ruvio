@@ -132,7 +132,8 @@ test('FILLGET / FILLSET and getOrCreate', { skip: SKIP }, async () => {
     assert.equal(await c.getOrCreate('goc2', 50, () => 'v1', { staleMs: 10000 }), 'v1');
     await sleep(80);
     assert.equal(await c.getOrCreate('goc2', 10000, () => 'v2', { staleMs: 10000 }), 'v1');
-    await sleep(30);
+    // The refresh runs in the background: poll for it.
+    for (const end = Date.now() + 10_000; (await c.get('goc2')) !== 'v2' && Date.now() < end; ) await sleep(10);
     assert.equal(await c.get('goc2'), 'v2');
   } finally {
     await c.quit();

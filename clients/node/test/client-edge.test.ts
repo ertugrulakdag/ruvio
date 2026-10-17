@@ -23,7 +23,7 @@ import {
   type ClientOptions,
 } from '../src/index.js';
 import { arr, bulk, err, fakeServer, int, ok, type FakeServer, type Handler } from './fake-server.js';
-import { rejects, sleep } from './helpers.js';
+import { rejects, sleep, until } from './helpers.js';
 
 async function withClient<T>(handler: Handler, opts: ClientOptions, fn: (c: RuvioClient, s: FakeServer) => Promise<T>): Promise<T> {
   const s = await fakeServer(handler);
@@ -324,7 +324,7 @@ test('a reply nobody asked for is reported as an "unexpected" event, not deliver
     const stray: unknown[] = [];
     c.on('unexpected', (v: unknown) => stray.push(v));
     assert.equal(await c.ping(), 'PONG');
-    await sleep(10);
+    await until(() => stray.length >= 1, 'the stray reply');
     assert.deepEqual(stray, ['STRAY']);
     assert.equal(await c.get('k'), 'v');
   });
@@ -493,8 +493,8 @@ test('getOrCreate: hit, fill (with and without stale window), stale with and wit
         }),
         'old',
       );
-      await sleep(30);
-      assert.ok(refreshed);
+      // The refresh runs in the background: wait for its FILLSET.
+      await until(() => refreshed && s.seen.at(-1)?.[0] === 'FILLSET', 'the background FILLSET');
       assert.deepEqual(s.seen.at(-1), ['FILLSET', 'k', 'fresh', '1000', '9']);
       // a failing background refresh is swallowed
       assert.equal(

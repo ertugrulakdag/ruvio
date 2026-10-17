@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RuvioClient, RuvioError, ConnectionError, Subscriber, type PubSubMessage } from '../src/index.js';
-import { SKIP, addr, live, rejects, settle, sleep } from './helpers.js';
+import { SKIP, addr, live, rejects, settle, sleep, until, within } from './helpers.js';
 
 test('connection commands', { skip: SKIP }, async () => {
   const c = await live(6);
@@ -30,8 +30,9 @@ test('connection commands', { skip: SKIP }, async () => {
     // kill another connection by id
     const victim = c.duplicate();
     const vid = await victim.clientId();
+    const dropped = new Promise((r) => victim.on('disconnect', r));
     assert.equal(await c.clientKill({ id: vid, skipMe: true }), 1);
-    await sleep(20);
+    await within(dropped, 'the killed client to see its socket close');
     assert.equal(await victim.ping(), 'PONG', 'reconnects lazily after being killed');
     const vaddr = (await victim.clientInfo()).match(/addr=(\S+)/)![1]!;
     assert.equal(await c.clientKill(vaddr), 'OK');
@@ -243,7 +244,7 @@ test('pub/sub on a dedicated connection', { skip: SKIP }, async () => {
     assert.equal(await c.publish('ch1', 'hello'), 1);
     assert.equal(await c.publish('news.tech', 'n1'), 1);
     assert.equal(await c.spublish('sch', 's1'), 1);
-    await sleep(30);
+    await until(() => events.length >= 3, 'three deliveries');
     assert.deepEqual(events, [
       { kind: 'message', channel: 'ch1', message: 'hello' },
       { kind: 'pmessage', pattern: 'news.*', channel: 'news.tech', message: 'n1' },
@@ -268,7 +269,7 @@ test('pub/sub on a dedicated connection', { skip: SKIP }, async () => {
       bsub.on('error', () => undefined);
       await bsub.subscribe('bin');
       await c.publish('bin', Buffer.from([0, 1, 255]));
-      await sleep(20);
+      await until(() => got.length >= 1, 'the binary delivery');
       assert.deepEqual(got[0], Buffer.from([0, 1, 255]));
       const reconnected = new Promise((r) => bsub.once('reconnect', r));
       // Kill every other connection (the subscriber's among them).
@@ -277,10 +278,9 @@ test('pub/sub on a dedicated connection', { skip: SKIP }, async () => {
         const m = line.match(/id=(\d+)/);
         if (m && Number(m[1]) !== me) await settle(c.clientKill({ id: Number(m[1]) }));
       }
-      await Promise.race([reconnected, sleep(2000)]);
+      await within(reconnected, 'the subscriber to reconnect and resubscribe');
       assert.equal(await c.publish('bin', 'after'), 1);
-      await sleep(30);
-      assert.equal(got[got.length - 1]?.toString(), 'after');
+      await until(() => got[got.length - 1]?.toString() === 'after', 'the delivery after the reconnect');
     } finally {
       bsub.close();
     }
@@ -301,9 +301,8 @@ test('RESP3 protocol option and client tracking pushes', { skip: SKIP }, async (
     assert.equal(await c.get('tk'), 'v1');
     const pushed = new Promise<unknown[]>((r) => c.on('push', r));
     await w.set('tk', 'v2');
-    const push = await Promise.race([pushed, sleep(1000).then(() => null)]);
-    assert.ok(push, 'invalidate push received');
-    assert.equal(push![0], 'invalidate');
+    const push = await within(pushed, 'the invalidate push');
+    assert.equal(push[0], 'invalidate');
     assert.equal(await c.get('tk'), 'v2');
     assert.equal(await c.zscore('nozset', 'm'), null);
   } finally {
