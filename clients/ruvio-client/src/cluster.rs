@@ -26,13 +26,30 @@ const SPLIT: &[&str] = &["DEL", "EXISTS", "MGET", "MSET", "TOUCH", "UNLINK"];
 
 const TRANSACTION: &[&str] = &["DISCARD", "EXEC", "MULTI", "UNWATCH", "WATCH"];
 
-/// CRC16-XMODEM of the key, or of the first non-empty `{tag}` in it.
-/// Must match the server's routing (src/routing.rs), or a key would be sent to a shard that does not own its slot.
+/// Returns the hash slot (0 to 16383) of a key: CRC16-XMODEM of the key modulo 16384, the
+/// same rule as the Ruvio server and Redis Cluster.
+///
+/// If the key contains a non-empty `{tag}`, only the text between the first `{` and the
+/// next `}` is hashed, so `{user:1}:profile` and `{user:1}:cart` land in the same slot. Keys
+/// that must be used together in a multi-key command, transaction or script should share a
+/// tag.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use ruvio_client::*;
+/// # use std::time::Duration;
+/// # fn run(client: &mut Client) -> Result<(), Error> {
+/// assert_eq!(hash_slot("{user:1}:profile"), hash_slot("{user:1}:cart"));
+/// assert!(hash_slot("any-key") < 16384);
+/// # Ok(())
+/// # }
+/// ```
 pub fn hash_slot(key: &str) -> u16 {
     hash_slot_bytes(key.as_bytes())
 }
 
-/// [`hash_slot`] for a binary key.
+/// [`hash_slot`] for a binary (non-UTF-8) key.
 pub fn hash_slot_bytes(key: &[u8]) -> u16 {
     crc16(hash_tag(key)) % SLOT_COUNT
 }
