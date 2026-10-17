@@ -49,7 +49,57 @@ fn thread_time() -> Duration {
     Duration::new(now.tv_sec as u64, now.tv_nsec as u32)
 }
 
-#[cfg(not(unix))]
+/// CPU time of this thread. Windows counts it in clock ticks of about 15.6 ms
+/// (`GetThreadTimes`), far too coarse for these runs, but `QueryThreadCycleTime` counts the
+/// cycles the thread ran with no such step. The cycles are converted with a rate measured
+/// against the wall clock while this thread spins: losing the CPU during that spin only makes
+/// the rate lower, so the best of a few spins is kept. Only `MEASURABLE` depends on the rate;
+/// the ratios between runs do not.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn thread_time() -> Duration {
+    use std::{ffi::c_void, sync::OnceLock, time::Instant};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentThread() -> *mut c_void;
+        fn QueryThreadCycleTime(thread: *mut c_void, cycles: *mut u64) -> i32;
+    }
+
+    fn cycles() -> u64 {
+        let mut cycles = 0u64;
+
+        // SAFETY: the pseudo handle of the calling thread needs no closing, and `cycles` is
+        // a valid u64 for the call to fill.
+        let status = unsafe { QueryThreadCycleTime(GetCurrentThread(), &mut cycles) };
+
+        assert_ne!(status, 0, "QueryThreadCycleTime failed");
+        cycles
+    }
+
+    static CYCLES_PER_SECOND: OnceLock<f64> = OnceLock::new();
+
+    let rate = *CYCLES_PER_SECOND.get_or_init(|| {
+        (0..3)
+            .map(|_| {
+                let wall = Instant::now();
+                let first = cycles();
+
+                while wall.elapsed() < Duration::from_millis(10) {
+                    std::hint::spin_loop();
+                }
+
+                let spun = cycles().saturating_sub(first) as f64;
+
+                spun / wall.elapsed().as_secs_f64()
+            })
+            .fold(1.0, f64::max)
+    });
+
+    Duration::from_secs_f64(cycles() as f64 / rate)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn thread_time() -> Duration {
     static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
