@@ -11,7 +11,7 @@ const C_MULTI = cmd('MULTI');
 const C_EXEC = cmd('EXEC');
 
 type AnyFn = (...a: any[]) => any;
-/** The command surface with every method returning the builder, for chaining. */
+/** The command surface of {@link Commands} with every method returning the builder, for chaining. */
 export type Chain<Self> = {
   [K in keyof Commands as Commands[K] extends AnyFn ? (K extends `_${string}` ? never : K) : never]: Commands[K] extends (
     ...a: infer A
@@ -20,6 +20,7 @@ export type Chain<Self> = {
     : never;
 };
 
+/** @internal Shared queueing logic of pipelines and transactions. */
 export abstract class Batch extends Commands {
   /** @internal */
   protected conn: Connection;
@@ -86,6 +87,7 @@ class PipelineImpl extends Batch {
   }
 }
 
+/** @internal Collects the replies of a pipeline. */
 export class PipelineSink implements BatchSink {
   private readonly vals: unknown[];
   private left: number;
@@ -157,6 +159,7 @@ class TransactionImpl extends Batch {
   }
 }
 
+/** @internal Collects the replies of a transaction. */
 export class TxSink implements BatchSink {
   private left: number;
   private readonly queued: unknown[];
@@ -226,17 +229,71 @@ function unbin(v: unknown): unknown {
   return v;
 }
 
-/** A chainable pipeline. */
+/**
+ * A chainable pipeline from `client.pipeline()`. It has every command method of {@link Commands}
+ * (same arguments), but each one queues the command and returns the pipeline instead of a promise.
+ * `exec()` then sends everything in one write and resolves the replies in call order, already
+ * converted the same way as for single calls (for example `get` gives a string, `sismember` a boolean).
+ *
+ * A pipeline is not atomic: commands of other callers on the same connection may run between yours.
+ * On a {@link ClusterClient} the commands are grouped per node and replies still come back in call order.
+ * A pipeline is single use: after `exec()` the queue is empty.
+ *
+ * @example
+ * ```ts
+ * const results = await client.pipeline()
+ *   .set('a', 1)
+ *   .incr('a')
+ *   .get('a')
+ *   .exec();                  // ['OK', 2, '2']
+ * ```
+ */
 export interface Pipeline extends Chain<Pipeline> {
+  /** Number of commands queued so far. */
   readonly length: number;
+  /**
+   * Sends the queued commands in one write.
+   *
+   * @returns One entry per command, in order: the converted reply, or a {@link RuvioError} object in the slot of a command that failed (a failure does not reject the whole batch). Resolves `[]` for an empty pipeline.
+   * @throws {@link ConnectionError} when the connection is lost before all replies arrive.
+   */
   exec(): Promise<unknown[]>;
+  /**
+   * Like {@link exec}, but rejects with the first failed command's error instead of leaving it in the result.
+   *
+   * @returns The converted replies, all successful.
+   * @throws {@link RuvioError} for the first command that failed; {@link ConnectionError} on connection loss.
+   */
   execStrict(): Promise<unknown[]>;
 }
 
-/** A chainable MULTI/EXEC transaction. */
+/**
+ * A chainable `MULTI` / `EXEC` transaction from `client.multi()`. It has every command method of
+ * {@link Commands}, each queuing the command and returning the transaction. `exec()` sends
+ * `MULTI`, the queue and `EXEC` as one contiguous write and the server runs them atomically
+ * (one WAL record).
+ *
+ * Limits: at most 1,024 queued commands; commands not allowed in `MULTI` (blocking ones, `WAIT`, `FILLGET ... WAIT`) are refused.
+ * On a {@link ClusterClient} every key must hash to one slot, otherwise `exec()` rejects with `CROSSSLOT`.
+ * For optimistic locking add `WATCH` on a dedicated connection: `client.isolated(c => c.watch(...))`.
+ *
+ * @example
+ * ```ts
+ * const res = await client.multi().incr('a').incr('b').exec(); // [1, 1]
+ * ```
+ */
 export interface Transaction extends Chain<Transaction> {
+  /** Number of commands queued so far. */
   readonly length: number;
+  /**
+   * Sends `MULTI`, the queued commands and `EXEC`.
+   *
+   * @returns The converted replies in order, or `null` when a watched key changed and the server discarded the transaction. A command that failed when it ran has its {@link RuvioError} in its slot.
+   * @throws {@link RuvioError} `EXECABORT` when the server refused a command while queueing (wrong arity, unknown, `NOPERM`, ...); its message lists the queue-time errors. `CROSSSLOT` on a cluster client with keys in several slots.
+   * @throws {@link ConnectionError} when the connection is lost.
+   */
   exec(): Promise<unknown[] | null>;
+  /** Drops the queued commands. Nothing was sent yet, so no round trip happens. */
   discard(): void;
 }
 

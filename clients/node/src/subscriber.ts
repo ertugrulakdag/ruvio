@@ -6,21 +6,25 @@ import { Connection, type ConnectionOptions } from './connection.js';
 import { cmd, type Arg, type Cmd } from './encoder.js';
 import { str } from './transforms.js';
 
+/** One message delivered to a {@link Subscriber}. */
 export interface PubSubMessage<M = string> {
-  /** `message` (SUBSCRIBE), `pmessage` (PSUBSCRIBE) or `smessage` (SSUBSCRIBE). */
+  /** `message` (from `SUBSCRIBE`), `pmessage` (from `PSUBSCRIBE`) or `smessage` (from `SSUBSCRIBE`). */
   kind: 'message' | 'pmessage' | 'smessage';
+  /** The channel the message was published to. */
   channel: string;
-  /** The matching pattern for `pmessage`. */
+  /** The pattern that matched, for `pmessage` only. */
   pattern?: string;
+  /** The payload: a string, or a Buffer when the subscriber was created with `binary: true`. */
   message: M;
 }
 
+/** Options for {@link Subscriber}: all {@link ConnectionOptions} (the `db` option is ignored) plus the fields below. */
 export interface SubscriberOptions extends ConnectionOptions {
   /** Deliver payloads as Buffers (default false: UTF-8 strings). */
   binary?: boolean;
-  /** Delay before reconnecting and re-subscribing after a drop (ms, default 100, doubles to 5 s). */
+  /** Delay in milliseconds before reconnecting and re-subscribing after a drop (default 100, doubling up to 5000). Reset after a successful resubscribe. */
   reconnectDelayMs?: number;
-  /** Messages buffered for an async iterator that is not reading (default 10000; oldest dropped). */
+  /** Messages buffered per async iterator that is not reading fast enough (default 10000; the oldest are dropped first). */
   iteratorBuffer?: number;
 }
 
@@ -38,8 +42,31 @@ const pingTf = (v: unknown): unknown => (Array.isArray(v) ? v.map((x) => (Buffer
 const countTf = (v: unknown[]): number => (Array.isArray(v) ? Number(v[2] ?? 0) : 0);
 
 /**
- * A Pub/Sub connection. Events: `message` ({@link PubSubMessage}), `subscribe`/`unsubscribe`
- * (kind, channel, count), `reconnect`, `error`. Also `for await (const m of subscriber)`.
+ * A Pub/Sub connection, separate from the command connection (a connection in subscribe mode can
+ * only run Pub/Sub commands and `PING`). Create one with `client.subscriber()`,
+ * `cluster.subscriber()` or `cluster.subscriberFor(channel)`.
+ *
+ * Receive messages with the `message` event or with `for await (const m of subscriber)`.
+ * Events:
+ * - `message` ({@link PubSubMessage}): a message arrived.
+ * - `subscribe` / `unsubscribe` (kind, channel, count): a confirmation from the server.
+ * - `reconnect`: the connection dropped and all subscriptions were restored.
+ * - `error` (error): a connection error; emitted only if you have an `error` listener.
+ *
+ * After a drop the subscriber reconnects by itself (with backoff) and re-subscribes to everything in
+ * {@link channels}, {@link patterns} and {@link shardChannels}; messages published meanwhile are lost
+ * (Pub/Sub is not stored). Classic channels are per shard on the server: `PUBLISH` reaches subscribers
+ * on every shard, `SPUBLISH` only those on the shard that owns the channel.
+ *
+ * @example
+ * ```ts
+ * const sub = client.subscriber();
+ * sub.on('message', (m) => console.log(m.channel, m.message));
+ * await sub.subscribe('news');
+ * await sub.psubscribe('alerts.*');
+ * // later
+ * sub.close();
+ * ```
  */
 export class Subscriber extends EventEmitter implements AsyncIterable<PubSubMessage<any>> {
   private readonly conn: Connection;
@@ -47,8 +74,11 @@ export class Subscriber extends EventEmitter implements AsyncIterable<PubSubMess
   /** Remaining confirmations per pending (un)subscribe command, FIFO. */
   private expect: number[] = [];
   private expHead = 0;
+  /** Exact channels currently subscribed (re-subscribed after a reconnect). */
   readonly channels = new Set<string>();
+  /** Patterns currently subscribed with {@link psubscribe}. */
   readonly patterns = new Set<string>();
+  /** Sharded channels currently subscribed with {@link ssubscribe}. */
   readonly shardChannels = new Set<string>();
   private closed = false;
   private delay: number;
@@ -56,6 +86,7 @@ export class Subscriber extends EventEmitter implements AsyncIterable<PubSubMess
   private readonly iterMax: number;
   private iters = new Set<MessageQueue>();
 
+  /** @param opts {@link SubscriberOptions}; usually obtained via `client.subscriber()` instead. */
   constructor(opts: SubscriberOptions) {
     super();
     this.binary = opts.binary ?? false;
@@ -164,34 +195,90 @@ export class Subscriber extends EventEmitter implements AsyncIterable<PubSubMess
     return this.conn.track(countTf, this.binary ? 1 : 0);
   }
 
-  /** Resolves once the socket is up. */
+  /**
+   * Opens the connection now. Optional: subscribing connects on demand.
+   *
+   * @throws {@link ConnectionError} when the connection fails.
+   */
   connect(): Promise<void> {
     return this.conn.connect();
   }
 
-  /** `SUBSCRIBE channel...`; resolves the subscription count after the last channel. */
+  /**
+   * Subscribes to exact channels (`SUBSCRIBE`). Matches the channel name exactly; no glob.
+   *
+   * @param channels Channel names.
+   * @returns The connection's total subscription count (channels plus patterns) after the last channel.
+   * @throws {@link RuvioError} when the server refuses (for example `NOPERM`).
+   *
+   * @example
+   * ```ts
+   * await sub.subscribe('news', 'sports');
+   * ```
+   */
   subscribe(...channels: string[]): Promise<number> {
     return this.send(C.SUBSCRIBE, channels);
   }
-  /** `UNSUBSCRIBE [channel...]`; no arguments drops every exact channel. */
+  /**
+   * Unsubscribes from exact channels (`UNSUBSCRIBE`). Patterns are left in place.
+   *
+   * @param channels Channels to leave; none drops every exact channel of this connection.
+   * @returns The remaining subscription count.
+   */
   unsubscribe(...channels: string[]): Promise<number> {
     return this.send(C.UNSUBSCRIBE, channels, channels.length || this.channels.size);
   }
-  /** `PSUBSCRIBE pattern...` (`*` and `?`). */
+  /**
+   * Subscribes to channel patterns (`PSUBSCRIBE`). Patterns use `*` and `?`; character classes are
+   * not supported. Messages arrive with `kind: 'pmessage'` and the matching `pattern`.
+   *
+   * @param patterns Glob patterns such as `'alerts.*'`.
+   * @returns The connection's total subscription count after the last pattern.
+   *
+   * @example
+   * ```ts
+   * await sub.psubscribe('user:*:events');
+   * ```
+   */
   psubscribe(...patterns: string[]): Promise<number> {
     return this.send(C.PSUBSCRIBE, patterns);
   }
+  /**
+   * Leaves patterns (`PUNSUBSCRIBE`). Exact channels are left in place.
+   *
+   * @param patterns Patterns to leave; none drops every pattern of this connection.
+   * @returns The remaining subscription count.
+   */
   punsubscribe(...patterns: string[]): Promise<number> {
     return this.send(C.PUNSUBSCRIBE, patterns, patterns.length || this.patterns.size);
   }
-  /** `SSUBSCRIBE channel...` (shard channels, used for keyspace notices). */
+  /**
+   * Subscribes to sharded channels (`SSUBSCRIBE`), also used for keyspace notices. A sharded
+   * channel lives on the shard that owns its hash slot, so on a multi-shard server connect to
+   * that shard (use `cluster.subscriberFor(channel)`); a wrong shard redirects the subscription.
+   * There is no pattern form. Messages arrive with `kind: 'smessage'`.
+   *
+   * @param channels Sharded channel names.
+   * @returns The connection's subscription count after the last channel.
+   * @throws {@link RuvioError} `MOVED` when this connection is on the wrong shard.
+   */
   ssubscribe(...channels: string[]): Promise<number> {
     return this.send(C.SSUBSCRIBE, channels);
   }
+  /**
+   * Leaves sharded channels (`SUNSUBSCRIBE`).
+   *
+   * @param channels Channels to leave; none leaves all sharded channels of this connection.
+   * @returns The remaining subscription count.
+   */
   sunsubscribe(...channels: string[]): Promise<number> {
     return this.send(C.SUNSUBSCRIBE, channels, channels.length || this.shardChannels.size);
   }
-  /** `PING` in Pub/Sub mode. */
+  /**
+   * Sends `PING` in Pub/Sub mode, e.g. as a liveness check.
+   *
+   * @returns The raw reply: `['pong', '']` in subscribe mode.
+   */
   ping(): Promise<unknown> {
     const e = this.conn.encoder();
     e.begin(C.PING, 0);
@@ -199,7 +286,7 @@ export class Subscriber extends EventEmitter implements AsyncIterable<PubSubMess
     return this.conn.track(pingTf, 0);
   }
 
-  /** Closes the connection and ends every iterator. */
+  /** Closes the connection for good, stops reconnecting and ends every `for await` loop. Safe to call twice. */
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -212,7 +299,10 @@ export class Subscriber extends EventEmitter implements AsyncIterable<PubSubMess
     this.close();
   }
 
-  /** Iterates messages until {@link close} (or `break`). */
+  /**
+   * Lets you write `for await (const m of subscriber)`. Each loop gets its own buffer of up to
+   * `iteratorBuffer` messages (the oldest are dropped when it fills). The loop ends on {@link close} or `break`.
+   */
   [Symbol.asyncIterator](): AsyncIterator<PubSubMessage<any>> {
     const q = new MessageQueue(this.iterMax, () => this.iters.delete(q));
     if (this.closed) q.end();
