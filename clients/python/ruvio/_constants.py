@@ -11,7 +11,7 @@ argument (no ``str`` conversion, no encode, no allocation per call).
 from __future__ import annotations
 
 from enum import Enum
-from typing import Set
+from typing import Any, Set, Tuple, Union
 
 __all__ = [
     "Keyword",
@@ -25,6 +25,19 @@ __all__ = [
     "KeyType",
     "BitFieldOp",
     "Overflow",
+    "InfoSection",
+    "ClientType",
+    "ChangeType",
+    "TrimStrategy",
+    "TrimMode",
+    "StreamTrim",
+    "StreamId",
+    "ScoreBound",
+    "LexBound",
+    "change_types",
+    "score_exclusive",
+    "lex_inclusive",
+    "lex_exclusive",
     "bit_type",
     "signed",
     "unsigned",
@@ -197,3 +210,182 @@ def unsigned(bits: int) -> str:
 def bit_type(bits: int, is_signed: bool = False) -> str:
     """``BITFIELD`` type word: ``bit_type(8)`` is ``"u8"``, ``bit_type(16, True)`` is ``"i16"``."""
     return signed(bits) if is_signed else unsigned(bits)
+
+
+class InfoSection(Keyword):
+    """Section name of ``INFO`` (``section=``). Names the server does not know give an empty reply.
+
+    Values: ``server``, ``stats``, ``buffers``, ``memory``, ``memorybreakdown``, ``keyspace``, ``snapshot``,
+    ``cluster``, ``replication``, ``commandcounters``, ``latencystats``, ``logs``, ``slabs``, ``all``,
+    ``default`` and ``prometheus`` (Prometheus text format instead of sections).
+
+    Example: ``ruvio.parse_info(r.info(InfoSection.MEMORY_BREAKDOWN))``.
+    """
+
+    SERVER = "server"
+    STATS = "stats"
+    BUFFERS = "buffers"
+    MEMORY = "memory"
+    MEMORY_BREAKDOWN = "memorybreakdown"
+    KEYSPACE = "keyspace"
+    SNAPSHOT = "snapshot"
+    CLUSTER = "cluster"
+    REPLICATION = "replication"
+    COMMAND_COUNTERS = "commandcounters"
+    LATENCY_STATS = "latencystats"
+    LOGS = "logs"
+    SLABS = "slabs"
+    ALL = "all"
+    DEFAULT = "default"
+    PROMETHEUS = "prometheus"
+
+
+class ClientType(Keyword):
+    """Connection type of ``CLIENT LIST TYPE`` (``type=``): ``normal``, ``master``, ``replica`` or ``pubsub``.
+
+    Example: ``r.client_list(ClientType.PUBSUB)``.
+    """
+
+    NORMAL = "normal"
+    MASTER = "master"
+    REPLICA = "replica"
+    PUBSUB = "pubsub"
+
+
+class ChangeType(Keyword):
+    """Event kind of ``CHANGES SUBSCRIBE ... TYPES``: ``put``, ``json``, ``del``, ``expire``, ``rename``, ``list``,
+    ``set``, ``hash``, ``zset``, ``stream``, ``flush`` or ``other``.
+
+    Join several with :func:`change_types`.
+
+    Example: ``r.execute_command("CHANGES", "SUBSCRIBE", "TYPES", change_types(ChangeType.PUT, ChangeType.DEL))``.
+    """
+
+    PUT = "put"
+    JSON = "json"
+    DEL = "del"
+    EXPIRE = "expire"
+    RENAME = "rename"
+    LIST = "list"
+    SET = "set"
+    HASH = "hash"
+    ZSET = "zset"
+    STREAM = "stream"
+    FLUSH = "flush"
+    OTHER = "other"
+
+
+def change_types(*types: Union[ChangeType, str]) -> str:
+    """Comma-joined list for ``CHANGES SUBSCRIBE ... TYPES``: ``change_types(ChangeType.PUT, "del")`` is ``"put,del"``.
+
+    Raises:
+        ValueError: No type given.
+
+    Example: ``r.execute_command("CHANGES", "SUBSCRIBE", "TYPES", change_types(ChangeType.PUT, ChangeType.DEL))``.
+    """
+    if not types:
+        raise ValueError("give at least one change type")
+    return ",".join(str(t) for t in types)
+
+
+class TrimStrategy(Keyword):
+    """Trim rule of ``XADD`` / ``XTRIM``: ``MAXLEN`` (keep this many entries) or ``MINID`` (drop lower ids)."""
+
+    MAXLEN = "MAXLEN"
+    MINID = "MINID"
+
+
+class TrimMode(Keyword):
+    """Trim mode word of ``XADD`` / ``XTRIM``: ``"="`` (exact) or ``"~"`` (approximate; Ruvio trims exactly either way)."""
+
+    EXACT = "="
+    APPROXIMATE = "~"
+
+
+class StreamTrim:
+    """One stream trim option for ``xadd(trim=...)`` and ``xtrim(trim=...)``: strategy, mode and threshold.
+
+    The server accepts ``MAXLEN`` and ``MINID``, each with ``=`` or ``~``; it does not accept ``LIMIT``.
+    The argument tuple is built once at construction and sent as is.
+
+    Example::
+
+        r.xadd("events", {"type": "signup"}, trim=StreamTrim.maxlen(10_000, TrimMode.APPROXIMATE))
+        r.xtrim("events", trim=StreamTrim.minid("1700000000000-0"))
+    """
+
+    __slots__ = ("strategy", "mode", "threshold", "args")
+
+    def __init__(self, strategy: TrimStrategy, threshold: Union[int, str], mode: TrimMode = TrimMode.EXACT) -> None:
+        """``strategy`` with its ``threshold`` (an ``int`` for MAXLEN, an id for MINID) and ``mode``."""
+        self.strategy = TrimStrategy(strategy)
+        self.mode = TrimMode(mode)
+        self.threshold = threshold
+        self.args: Tuple[Any, ...] = (self.strategy, self.mode, threshold)
+
+    @classmethod
+    def maxlen(cls, count: int, mode: TrimMode = TrimMode.EXACT) -> "StreamTrim":
+        """``MAXLEN mode count``: keep at most ``count`` newest entries. Example: ``StreamTrim.maxlen(1000)``."""
+        return cls(TrimStrategy.MAXLEN, count, mode)
+
+    @classmethod
+    def minid(cls, id: str, mode: TrimMode = TrimMode.EXACT) -> "StreamTrim":  # noqa: A002
+        """``MINID mode id``: drop entries with a lower id. Example: ``StreamTrim.minid("1700000000000-0")``."""
+        return cls(TrimStrategy.MINID, id, mode)
+
+    def __repr__(self) -> str:
+        return f"StreamTrim({self.strategy.value} {self.mode.value} {self.threshold})"
+
+
+class StreamId(Keyword):
+    """Special stream ids accepted by the stream commands.
+
+    ``NEW_ENTRY`` (``"*"``) lets ``XADD`` pick the id; ``LAST`` (``"$"``) is the newest entry (``XREAD``,
+    ``XGROUP CREATE``); ``NEW_MESSAGES`` (``">"``) asks ``XREADGROUP`` for never-delivered entries; ``MIN``
+    (``"-"``) and ``MAX`` (``"+"``) are the range ends of ``XRANGE`` / ``XREVRANGE`` / ``XPENDING``.
+
+    Example: ``r.xrange("events", StreamId.MIN, StreamId.MAX)``.
+    """
+
+    NEW_ENTRY = "*"
+    LAST = "$"
+    NEW_MESSAGES = ">"
+    MIN = "-"
+    MAX = "+"
+
+
+class ScoreBound(Keyword):
+    """Infinite sorted-set score bounds for ``ZRANGEBYSCORE``, ``ZCOUNT``, ``ZREMRANGEBYSCORE`` ...
+
+    Example: ``r.zrangebyscore("z", ScoreBound.NEGATIVE_INFINITY, score_exclusive(10))``.
+    """
+
+    NEGATIVE_INFINITY = "-inf"
+    POSITIVE_INFINITY = "+inf"
+
+
+class LexBound(Keyword):
+    """Open lexicographic range ends for ``ZRANGEBYLEX``, ``ZLEXCOUNT`` and ``ZREMRANGEBYLEX``.
+
+    ``MIN`` is ``"-"`` (before every member) and ``MAX`` is ``"+"`` (after every member).
+
+    Example: ``r.zrangebylex("z", LexBound.MIN, lex_inclusive("m"))``.
+    """
+
+    MIN = "-"
+    MAX = "+"
+
+
+def score_exclusive(score: Union[int, float]) -> str:
+    """Exclusive score bound: ``score_exclusive(10)`` is ``"(10"`` (strictly greater / less than 10)."""
+    return f"({score!r}" if isinstance(score, float) else f"({score}"
+
+
+def lex_inclusive(member: str) -> str:
+    """Inclusive lexicographic bound: ``lex_inclusive("m")`` is ``"[m"``."""
+    return "[" + member
+
+
+def lex_exclusive(member: str) -> str:
+    """Exclusive lexicographic bound: ``lex_exclusive("m")`` is ``"(m"``."""
+    return "(" + member

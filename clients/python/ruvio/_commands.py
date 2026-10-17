@@ -13,7 +13,19 @@ from __future__ import annotations
 import json as _json
 from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
-from ._constants import Aggregate, BitOperation, BitUnit, GeoOrder, GeoUnit, InsertPosition, KeyType, ListSide
+from ._constants import (
+    Aggregate,
+    BitOperation,
+    BitUnit,
+    ClientType,
+    GeoOrder,
+    GeoUnit,
+    InfoSection,
+    InsertPosition,
+    KeyType,
+    ListSide,
+    StreamTrim,
+)
 from ._resp import _BULK_LEN, _CRLF, _TABLE, encode, head
 
 __all__ = ["Commands", "Arg"]
@@ -27,6 +39,8 @@ ListSideT = Union[ListSide, Literal["LEFT", "RIGHT"]]
 BitOperationT = Union[BitOperation, Literal["AND", "OR", "XOR", "NOT"]]
 BitUnitT = Union[BitUnit, Literal["BYTE", "BIT"]]
 AggregateT = Union[Aggregate, Literal["SUM", "MIN", "MAX"]]
+InfoSectionT = Union[InfoSection, str]
+ClientTypeT = Union[ClientType, Literal["normal", "master", "replica", "pubsub"]]
 KeyTypeT = Union[
     KeyType,
     Literal["string", "json", "list", "set", "hash", "zset", "bloomfilter", "stream", "lease", "limit", "semaphore", "once"],
@@ -389,14 +403,15 @@ class Commands:
         """
         return self._c(None, "CLIENT ID")
 
-    def client_list(self, type: Optional[str] = None) -> Any:  # noqa: A002
+    def client_list(self, type: Optional[ClientTypeT] = None) -> Any:  # noqa: A002
         """``CLIENT LIST [TYPE type]`` - describes the connections of the shard that got the command.
 
         Each shard only knows its own connections. Lines report id, addr, laddr, name, age, db,
         multi, resp and user. ``TYPE`` is validated but not used as a filter.
 
         Args:
-            type: Optional connection type (``normal``, ``pubsub`` ...), accepted for compatibility.
+            type: Optional connection type (:class:`ClientType` or ``"normal"``, ``"master"``, ``"replica"``,
+                ``"pubsub"``), accepted for compatibility. Example: ``client_list(ClientType.PUBSUB)``.
 
         Returns:
             The text of the reply, one line per connection.
@@ -4515,6 +4530,7 @@ Sends ``JSON.INDEX CREATE name PREFIX p PATH $.field [TYPE string|number|bool]``
         approximate: bool = False,
         nomkstream: bool = False,
         delay_ms: Optional[int] = None,
+        trim: Optional[StreamTrim] = None,
     ) -> Any:
         """``XADD key [NOMKSTREAM] [DELAY ms] [MAXLEN|MINID [~] n] id field value [...]`` - appends an entry to a stream.
 
@@ -4529,6 +4545,8 @@ Sends ``JSON.INDEX CREATE name PREFIX p PATH $.field [TYPE string|number|bool]``
             nomkstream: Do not create a missing stream.
             delay_ms: Ruvio extension - hide the entry from :meth:`xreadgroup` for this many milliseconds
                 (delayed jobs). ``xread`` and ``xrange`` still see it.
+            trim: A :class:`StreamTrim` (``MAXLEN`` or ``MINID``, ``=`` or ``~``, threshold); use it instead of
+                ``maxlen`` / ``minid`` / ``approximate``. Example: ``trim=StreamTrim.maxlen(10000, TrimMode.APPROXIMATE)``.
 
         Returns:
             The new entry id as text, or ``None`` with ``nomkstream`` on a missing key.
@@ -4545,6 +4563,10 @@ Sends ``JSON.INDEX CREATE name PREFIX p PATH $.field [TYPE string|number|bool]``
             args.append("NOMKSTREAM")
         if delay_ms is not None:
             args += ["DELAY", delay_ms]
+        if trim is not None:
+            if maxlen is not None or minid is not None:
+                raise ValueError("give trim or maxlen/minid, not both")
+            args += trim.args
         if maxlen is not None:
             args += ["MAXLEN", "~", maxlen] if approximate else ["MAXLEN", maxlen]
         if minid is not None:
@@ -4701,20 +4723,33 @@ Sends ``XREADGROUP GROUP group consumer [COUNT n] [BLOCK ms] [NOACK] STREAMS key
         """
         return self._c(_ok, "XSETID", key, last_id)
 
-    def xtrim(self, key: KeyT, maxlen: Optional[int] = None, minid: Optional[str] = None, approximate: bool = False) -> Any:
-        """``XTRIM key MAXLEN|MINID [~] threshold`` - trims a stream.
+    def xtrim(
+        self,
+        key: KeyT,
+        maxlen: Optional[int] = None,
+        minid: Optional[str] = None,
+        approximate: bool = False,
+        trim: Optional[StreamTrim] = None,
+    ) -> Any:
+        """``XTRIM key MAXLEN|MINID [=|~] threshold`` - trims a stream.
 
-        Give exactly one of ``maxlen`` and ``minid``. Ruvio trims exactly even with ``~`` and does not accept ``LIMIT``.
+        Give exactly one of ``maxlen``, ``minid`` and ``trim``. Ruvio trims exactly even with ``~`` and does not accept ``LIMIT``.
 
         Args:
             key: The stream key.
             maxlen: Keep at most this many newest entries.
             minid: Drop entries with an id lower than this (that id is kept).
             approximate: Send ``~`` (no effect on the result in Ruvio).
+            trim: A :class:`StreamTrim`, e.g. ``StreamTrim.minid("1700000000000-0")``; replaces the three
+                arguments above.
 
         Returns:
             The number of entries removed.
         """
+        if trim is not None:
+            if maxlen is not None or minid is not None:
+                raise ValueError("give trim or maxlen/minid, not both")
+            return self._c(None, "XTRIM", key, *trim.args)
         if maxlen is not None:
             return self._c(None, "XTRIM", key, "MAXLEN", *(("~", maxlen) if approximate else (maxlen,)))
         return self._c(None, "XTRIM", key, "MINID", *(("~", minid) if approximate else (minid,)))
@@ -4998,12 +5033,15 @@ Sends ``XCLAIM key group consumer min_idle_ms id... [IDLE ms] [TIME ms] [RETRYCO
         return self._c(_list_of_dicts, "XINFO CONSUMERS", key, group)
 
     # ======================================================= server / introspection
-    def info(self, section: Optional[str] = None) -> Any:
+    def info(self, section: Optional[InfoSectionT] = None) -> Any:
         """``INFO [section]`` - server statistics as text.
 
         Args:
-            section: A section name such as ``"server"``, ``"memory"``, ``"keyspace"``, or ``"prometheus"`` for
-                Prometheus text format. ``None`` returns the default sections.
+            section: An :class:`InfoSection` or its name: ``"server"``, ``"stats"``, ``"buffers"``, ``"memory"``,
+                ``"memorybreakdown"``, ``"keyspace"``, ``"snapshot"``, ``"cluster"``, ``"replication"``,
+                ``"commandcounters"``, ``"latencystats"``, ``"logs"``, ``"slabs"``, ``"all"``, ``"default"``, or
+                ``"prometheus"`` for Prometheus text format. An unknown name gives an empty reply. ``None``
+                returns the default sections.
 
         Returns:
             The report as text (``# Section`` headers and ``field:value`` lines). Turn it into a dict
@@ -5013,7 +5051,7 @@ Sends ``XCLAIM key group consumer min_idle_ms id... [IDLE ms] [TIME ms] [RETRYCO
             Keyless admin commands go to one node: ``ClusterRuvio`` asks its seed node only.
 
         Example:
-            stats = ruvio.parse_info(client.info("memory"))
+            stats = ruvio.parse_info(client.info(InfoSection.MEMORY))
         """
         return self._c(_info, "INFO") if section is None else self._c(_info, "INFO", section)
 

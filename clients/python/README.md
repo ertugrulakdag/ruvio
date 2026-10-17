@@ -105,6 +105,15 @@ r.scan(0, type=KeyType.HASH)
 r.lmove("src", "dst", ListSide.LEFT, ListSide.RIGHT)
 ```
 
+More typed helpers: `InfoSection` (`r.info(InfoSection.MEMORY_BREAKDOWN)`), `ClientType` (`r.client_list(ClientType.PUBSUB)`), `ChangeType` with `change_types(...)` for `CHANGES SUBSCRIBE ... TYPES`, `StreamId` (`NEW_ENTRY`, `LAST`, `NEW_MESSAGES`, `MIN`, `MAX`), `ScoreBound` / `LexBound` with `score_exclusive(x)`, `lex_inclusive(m)`, `lex_exclusive(m)`, and `StreamTrim` for `XADD` / `XTRIM`:
+
+```python
+from ruvio import StreamTrim, TrimMode
+
+r.xadd("events", {"type": "signup"}, trim=StreamTrim.maxlen(10_000, TrimMode.APPROXIMATE))  # MAXLEN ~ 10000
+r.xtrim("events", trim=StreamTrim.minid("1700000000000-0"))                                 # MINID = ...
+```
+
 ### Pipelines and transactions
 
 ```python

@@ -4,6 +4,7 @@ Notable changes to the Python client `ruvio-client` on PyPI. New entries go unde
 
 ## Unreleased
 
+- Added `StreamTrim` (`MAXLEN` or `MINID`, `=` or `~`, threshold) for `xadd(trim=...)` and `xtrim(trim=...)`, the `InfoSection`, `ClientType` and `ChangeType` enums (with `change_types()`), `StreamId`, `ScoreBound` and `LexBound` constants, and `score_exclusive()`, `lex_inclusive()` and `lex_exclusive()` bound builders. Existing string arguments keep working.
 - Added typed keyword constants (`GeoUnit`, `GeoOrder`, `InsertPosition`, `ListSide`, `BitOperation`, `BitUnit`, `Aggregate`, `KeyType`, `BitFieldOp`, `Overflow`, `signed`, `unsigned`). They are `str` enums, so existing string arguments keep working; the encoder sends each member's pre-encoded bytes.
 
 ## 0.1.1 - 2026-10-17

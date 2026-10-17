@@ -11,12 +11,25 @@ from ruvio import (
     BitFieldOp,
     BitOperation,
     BitUnit,
+    ChangeType,
+    ClientType,
     GeoOrder,
     GeoUnit,
+    InfoSection,
     InsertPosition,
     KeyType,
+    LexBound,
     ListSide,
     Overflow,
+    ScoreBound,
+    StreamId,
+    StreamTrim,
+    TrimMode,
+    TrimStrategy,
+    change_types,
+    lex_exclusive,
+    lex_inclusive,
+    score_exclusive,
     signed,
     unsigned,
 )
@@ -35,6 +48,18 @@ TABLES = [
     (KeyType, ["string", "json", "list", "set", "hash", "zset", "bloomfilter", "stream", "lease", "limit", "semaphore", "once"]),
     (BitFieldOp, ["GET", "SET", "INCRBY"]),
     (Overflow, ["WRAP", "SAT", "FAIL"]),
+    (
+        InfoSection,
+        ["server", "stats", "buffers", "memory", "memorybreakdown", "keyspace", "snapshot", "cluster", "replication",
+         "commandcounters", "latencystats", "logs", "slabs", "all", "default", "prometheus"],
+    ),
+    (ClientType, ["normal", "master", "replica", "pubsub"]),
+    (ChangeType, ["put", "json", "del", "expire", "rename", "list", "set", "hash", "zset", "stream", "flush", "other"]),
+    (TrimStrategy, ["MAXLEN", "MINID"]),
+    (TrimMode, ["=", "~"]),
+    (StreamId, ["*", "$", ">", "-", "+"]),
+    (ScoreBound, ["-inf", "+inf"]),
+    (LexBound, ["-", "+"]),
 ]
 
 
@@ -87,3 +112,43 @@ def test_commands_accept_enum_and_str():
     _same(
         lambda r, e: r.bitfield("k", "OVERFLOW", Overflow.SAT if e else "SAT", BitFieldOp.INCRBY if e else "INCRBY", unsigned(8), 0, 10)
     )
+
+
+def test_wave2_commands_accept_enum_and_str():
+    _same(lambda r, e: r.info(InfoSection.MEMORY_BREAKDOWN if e else "memorybreakdown"), "x")
+    _same(lambda r, e: r.client_list(ClientType.PUBSUB if e else "pubsub"), "x")
+    _same(lambda r, e: r.xrange("s", StreamId.MIN if e else "-", StreamId.MAX if e else "+"))
+    _same(lambda r, e: r.xadd("s", {"a": "1"}, StreamId.NEW_ENTRY if e else "*"))
+    _same(lambda r, e: r.xgroup_create("s", "g", StreamId.LAST if e else "$"))
+    _same(lambda r, e: r.zrangebyscore("z", ScoreBound.NEGATIVE_INFINITY if e else "-inf", score_exclusive(5) if e else "(5"))
+    _same(lambda r, e: r.zrangebylex("z", LexBound.MIN if e else "-", lex_inclusive("m") if e else "[m"))
+
+
+def test_stream_trim_wire_equals_old_path():
+    for mode, word in ((TrimMode.EXACT, "="), (TrimMode.APPROXIMATE, "~")):
+        a, b = Rec(), Rec()
+        a.xtrim("s", trim=StreamTrim.maxlen(100, mode))
+        b.xtrim("s", maxlen=100) if word == "=" else b.xtrim("s", maxlen=100, approximate=True)
+        if word == "~":
+            assert a.frame == b.frame
+        assert a.args == ["XTRIM", "s", "MAXLEN", word, "100"]
+        a.xtrim("s", trim=StreamTrim.minid("5-0", mode))
+        assert a.args == ["XTRIM", "s", "MINID", word, "5-0"]
+        a.xadd("s", {"f": "v"}, trim=StreamTrim.maxlen(10, mode))
+        assert a.args == ["XADD", "s", "MAXLEN", word, "10", "*", "f", "v"]
+    a, b = Rec(), Rec()
+    a.xadd("s", {"f": "v"}, trim=StreamTrim.minid("5-0", TrimMode.APPROXIMATE))
+    b.xadd("s", {"f": "v"}, minid="5-0", approximate=True)
+    assert a.frame == b.frame
+    with pytest.raises(ValueError):
+        a.xtrim("s", maxlen=1, trim=StreamTrim.maxlen(1))
+    with pytest.raises(ValueError):
+        a.xadd("s", {"f": "v"}, minid="1-0", trim=StreamTrim.maxlen(1))
+
+
+def test_helpers():
+    assert change_types(ChangeType.PUT, ChangeType.DEL, "json") == "put,del,json"
+    with pytest.raises(ValueError):
+        change_types()
+    assert score_exclusive(10) == "(10" and score_exclusive(1.5) == "(1.5"
+    assert lex_inclusive("m") == "[m" and lex_exclusive("m") == "(m"
