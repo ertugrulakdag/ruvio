@@ -265,6 +265,18 @@ fn sync_directory(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Windows refuses to flush a handle without write access (`ERROR_ACCESS_DENIED`), so the
+/// file is opened for writing there; Unix syncs through any descriptor, which also works for
+/// a file the user made read-only.
+fn sync_file(path: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    let file = fs::OpenOptions::new().write(true).open(path)?;
+    #[cfg(not(windows))]
+    let file = fs::File::open(path)?;
+
+    file.sync_all()
+}
+
 /// fsyncs every file and directory under `root`, `root` included.
 fn sync_tree(root: &Path) -> io::Result<()> {
     for entry in fs::read_dir(root)? {
@@ -273,7 +285,7 @@ fn sync_tree(root: &Path) -> io::Result<()> {
         if entry.file_type()?.is_dir() {
             sync_tree(&entry.path())?;
         } else {
-            fs::File::open(entry.path())?.sync_all()?;
+            sync_file(&entry.path())?;
         }
     }
     sync_directory(root)

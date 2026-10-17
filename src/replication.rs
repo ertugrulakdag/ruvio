@@ -233,7 +233,11 @@ pub fn load_or_create_history(data_dir: &Path) -> io::Result<HistoryId> {
     ));
 
     std::fs::write(&staged, id)?;
-    std::fs::File::open(&staged)?.sync_all()?;
+    // Write access: Windows refuses to flush a read-only handle.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&staged)?
+        .sync_all()?;
     // Linking never replaces: when another shard created the file first, its id wins.
     let linked = std::fs::hard_link(&staged, &path);
 
@@ -295,7 +299,11 @@ fn write_history_file(path: &Path, id: &HistoryId) -> io::Result<()> {
     let temporary = path.with_extension("tmp");
 
     std::fs::write(&temporary, id)?;
-    std::fs::File::open(&temporary)?.sync_all()?;
+    // Write access: Windows refuses to flush a read-only handle.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&temporary)?
+        .sync_all()?;
     std::fs::rename(&temporary, path)?;
 
     if let Some(directory) = path.parent() {
