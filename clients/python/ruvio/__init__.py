@@ -6,6 +6,21 @@
 """
 
 from ._commands import parse_info
+from ._constants import (
+    Aggregate,
+    BitFieldOp,
+    BitOperation,
+    BitUnit,
+    GeoOrder,
+    GeoUnit,
+    InsertPosition,
+    KeyType,
+    ListSide,
+    Overflow,
+    bit_type,
+    signed,
+    unsigned,
+)
 from ._models import (
     AutoClaimResult,
     FillResult,
@@ -47,6 +62,19 @@ __all__ = [
     "Lock",
     "parse_url",
     "parse_info",
+    "Aggregate",
+    "BitFieldOp",
+    "BitOperation",
+    "BitUnit",
+    "GeoOrder",
+    "GeoUnit",
+    "InsertPosition",
+    "KeyType",
+    "ListSide",
+    "Overflow",
+    "bit_type",
+    "signed",
+    "unsigned",
     "AutoClaimResult",
     "FillResult",
     "GeoResult",

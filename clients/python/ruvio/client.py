@@ -26,7 +26,7 @@ import uuid
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
 
-from ._commands import Commands, Conv, KeyT, _s
+from ._commands import Commands, Conv, KeyT, KeyTypeT, _s
 from ._models import Message
 from ._pipeline import PipelineBase
 from ._resp import NEED, Push, encode, make_parser
@@ -695,13 +695,13 @@ class Ruvio(Commands):
             return "executed", result
         return r.state, r.result
 
-    def scan_iter(self, match: Optional[str] = None, count: Optional[int] = None, type: Optional[str] = None) -> Iterator[Any]:  # noqa: A002
+    def scan_iter(self, match: Optional[str] = None, count: Optional[int] = None, type: Optional[KeyTypeT] = None) -> Iterator[Any]:  # noqa: A002
         """Iterates over all keys by calling :meth:`scan` page by page.
 
         Args:
             match: Glob pattern for key names.
             count: Work hint per page.
-            type: Only keys of this type, as ``TYPE`` reports it.
+            type: Only keys of this type: a :class:`KeyType` or its string as ``TYPE`` reports it.
 
         Yields:
             Key names. A key may be yielded twice if the table was rebuilt during the walk.

@@ -93,6 +93,18 @@ a `.code` such as `"WRONGTYPE"`. Socket problems raise `ruvio.ConnectionError` o
 For any other command, `execute_command("CMD", arg, …)` sends it as written and returns the
 raw reply.
 
+### Typed keyword constants
+
+Keyword arguments have `str` enums: `GeoUnit` (`m`, `km`, `ft`, `mi`), `GeoOrder`, `InsertPosition`, `ListSide`, `BitOperation`, `BitUnit`, `Aggregate`, `KeyType` (for `SCAN TYPE`), and for `BITFIELD` `BitFieldOp`, `Overflow`, `signed(bits)` / `unsigned(bits)`. A member is a `str`, so plain strings keep working and send the same bytes; the encoder uses each member's pre-encoded bytes, with no per-call cost.
+
+```python
+from ruvio import GeoUnit, GeoOrder, KeyType, ListSide
+
+r.geosearch("cities", member="A", radius=5, unit=GeoUnit.KILOMETERS, sort=GeoOrder.ASC)  # same as unit="km", sort="ASC"
+r.scan(0, type=KeyType.HASH)
+r.lmove("src", "dst", ListSide.LEFT, ListSide.RIGHT)
+```
+
 ### Pipelines and transactions
 
 ```python

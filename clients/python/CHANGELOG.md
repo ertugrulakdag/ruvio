@@ -4,6 +4,8 @@ Notable changes to the Python client `ruvio-client` on PyPI. New entries go unde
 
 ## Unreleased
 
+- Added typed keyword constants (`GeoUnit`, `GeoOrder`, `InsertPosition`, `ListSide`, `BitOperation`, `BitUnit`, `Aggregate`, `KeyType`, `BitFieldOp`, `Overflow`, `signed`, `unsigned`). They are `str` enums, so existing string arguments keep working; the encoder sends each member's pre-encoded bytes.
+
 ## 0.1.1 - 2026-10-17
 
 - Cluster routing is cheaper: the command name and first key are read with one match per frame, a pipeline is routed in one pass into reused per-node buffers, every node is written before any is read, and a pipeline for one node goes out unchanged. Cluster CPU per pipelined request fell 8-17%; see `docs/evidence/2026-10-16-client-cluster-routing.md`.

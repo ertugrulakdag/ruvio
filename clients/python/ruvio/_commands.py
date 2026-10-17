@@ -11,13 +11,26 @@ hover to read the per-command notes: arguments, return value, errors and an exam
 from __future__ import annotations
 
 import json as _json
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
+from ._constants import Aggregate, BitOperation, BitUnit, GeoOrder, GeoUnit, InsertPosition, KeyType, ListSide
 from ._resp import _BULK_LEN, _CRLF, _TABLE, encode, head
 
 __all__ = ["Commands", "Arg"]
 
 Arg = Union[str, bytes, int, float]
+
+GeoUnitT = Union[GeoUnit, Literal["m", "km", "ft", "mi"]]
+GeoOrderT = Union[GeoOrder, Literal["ASC", "DESC"]]
+InsertPositionT = Union[InsertPosition, Literal["BEFORE", "AFTER"]]
+ListSideT = Union[ListSide, Literal["LEFT", "RIGHT"]]
+BitOperationT = Union[BitOperation, Literal["AND", "OR", "XOR", "NOT"]]
+BitUnitT = Union[BitUnit, Literal["BYTE", "BIT"]]
+AggregateT = Union[Aggregate, Literal["SUM", "MIN", "MAX"]]
+KeyTypeT = Union[
+    KeyType,
+    Literal["string", "json", "list", "set", "hash", "zset", "bloomfilter", "stream", "lease", "limit", "semaphore", "once"],
+]
 
 from ._converters import (  # noqa: F401
     Conv,
@@ -1462,7 +1475,7 @@ class Commands:
         return self._c(_bool, "RENAMENX", src, dst)
 
     def scan(
-        self, cursor: int = 0, match: Optional[str] = None, count: Optional[int] = None, type: Optional[str] = None  # noqa: A002
+        self, cursor: int = 0, match: Optional[str] = None, count: Optional[int] = None, type: Optional[KeyTypeT] = None  # noqa: A002
     ) -> Any:
         """``SCAN cursor [MATCH pattern] [COUNT n] [TYPE type]`` - one page of key names.
 
@@ -1475,7 +1488,7 @@ class Commands:
             cursor: ``0`` to start, then the cursor of the previous page.
             match: Glob pattern (``*``, ``?``, ``[abc]``) applied to the keys of the page.
             count: Work hint; the server default applies when omitted.
-            type: Only keys of this type, as ``TYPE`` reports it (for example ``"string"``).
+            type: Only keys of this type: a :class:`KeyType` or its string as ``TYPE`` reports it (for example ``KeyType.HASH`` or ``"string"``).
 
         Returns:
             ``(next_cursor, keys)``; ``next_cursor == 0`` means the walk is finished.
@@ -2116,12 +2129,12 @@ class Commands:
         """
         return self._c(None, "LREM", key, count, value)
 
-    def linsert(self, key: KeyT, where: str, pivot: Arg, value: Arg) -> Any:
+    def linsert(self, key: KeyT, where: InsertPositionT, pivot: Arg, value: Arg) -> Any:
         """``LINSERT key BEFORE|AFTER pivot value`` - inserts next to an existing element (O(N)).
 
         Args:
             key: The list key.
-            where: ``"BEFORE"`` or ``"AFTER"``.
+            where: ``"BEFORE"`` or ``"AFTER"`` (:class:`InsertPosition` or the string).
             pivot: The existing element to insert next to (first match from the head).
             value: The element to insert.
 
@@ -2161,13 +2174,13 @@ class Commands:
             args += ["MAXLEN", maxlen]
         return self._c(None, "LPOS", *args)
 
-    def lmove(self, src: KeyT, dst: KeyT, wherefrom: str = "LEFT", whereto: str = "RIGHT") -> Any:
+    def lmove(self, src: KeyT, dst: KeyT, wherefrom: ListSideT = "LEFT", whereto: ListSideT = "RIGHT") -> Any:
         """``LMOVE src dst LEFT|RIGHT LEFT|RIGHT`` - atomically pops from one list and pushes to another.
 
         Args:
             src: Source list.
             dst: Destination list (may equal ``src`` to rotate).
-            wherefrom: End of ``src`` to pop from, ``"LEFT"`` (head) or ``"RIGHT"`` (tail).
+            wherefrom: End of ``src`` to pop from, ``"LEFT"`` (head) or ``"RIGHT"`` (tail); a :class:`ListSide` or the string.
             whereto: End of ``dst`` to push to, ``"LEFT"`` or ``"RIGHT"``.
 
         Returns:
@@ -2194,7 +2207,7 @@ class Commands:
         """
         return self._c(None, "RPOPLPUSH", src, dst)
 
-    def blmove(self, src: KeyT, dst: KeyT, timeout: float, wherefrom: str = "LEFT", whereto: str = "RIGHT") -> Any:
+    def blmove(self, src: KeyT, dst: KeyT, timeout: float, wherefrom: ListSideT = "LEFT", whereto: ListSideT = "RIGHT") -> Any:
         """``BLMOVE src dst LEFT|RIGHT LEFT|RIGHT timeout`` - blocking :meth:`lmove`.
 
         The server polls every 5 ms instead of parking a waiter and counts it against the limit of
@@ -2207,7 +2220,7 @@ class Commands:
             src: Source list.
             dst: Destination list.
             timeout: Seconds to wait (float); ``0`` waits until an element arrives.
-            wherefrom: ``"LEFT"`` or ``"RIGHT"`` end of ``src``.
+            wherefrom: ``"LEFT"`` or ``"RIGHT"`` end of ``src`` (:class:`ListSide` or the string).
             whereto: ``"LEFT"`` or ``"RIGHT"`` end of ``dst``.
 
         Returns:
@@ -2249,12 +2262,12 @@ class Commands:
         """
         return self._c(_key_value, "BRPOP", *_keys(keys), timeout)
 
-    def lmpop(self, keys: Union[KeyT, Sequence[KeyT]], direction: str = "LEFT", count: Optional[int] = None) -> Any:
+    def lmpop(self, keys: Union[KeyT, Sequence[KeyT]], direction: ListSideT = "LEFT", count: Optional[int] = None) -> Any:
         """``LMPOP numkeys key [key ...] LEFT|RIGHT [COUNT n]`` - pops from the first non-empty list.
 
         Args:
             keys: One key or a list of keys, checked in order.
-            direction: ``"LEFT"`` (head) or ``"RIGHT"`` (tail).
+            direction: ``"LEFT"`` (head) or ``"RIGHT"`` (tail); a :class:`ListSide` or the string.
             count: Maximum number of elements to pop (default one).
 
         Returns:
@@ -2267,7 +2280,7 @@ class Commands:
         return self._c(_mpop, "LMPOP", *args)
 
     def blmpop(
-        self, timeout: float, keys: Union[KeyT, Sequence[KeyT]], direction: str = "LEFT", count: Optional[int] = None
+        self, timeout: float, keys: Union[KeyT, Sequence[KeyT]], direction: ListSideT = "LEFT", count: Optional[int] = None
     ) -> Any:
         """``BLMPOP timeout numkeys key [key ...] LEFT|RIGHT [COUNT n]`` - blocking :meth:`lmpop`.
 
@@ -3323,7 +3336,7 @@ class Commands:
         dst: Optional[KeyT],
         keys: Sequence[KeyT],
         weights: Optional[Sequence[float]],
-        aggregate: Optional[str],
+        aggregate: Optional[AggregateT],
         withscores: bool,
     ) -> Any:
         args: List[Any] = [] if dst is None else [dst]
@@ -3340,7 +3353,7 @@ class Commands:
         return self._c(None, name, *args)
 
     def zunionstore(
-        self, dst: KeyT, keys: Sequence[KeyT], weights: Optional[Sequence[float]] = None, aggregate: Optional[str] = None
+        self, dst: KeyT, keys: Sequence[KeyT], weights: Optional[Sequence[float]] = None, aggregate: Optional[AggregateT] = None
     ) -> Any:
         """``ZUNIONSTORE dst numkeys key [key ...] [WEIGHTS w ...] [AGGREGATE SUM|MIN|MAX]`` - stores a union.
 
@@ -3361,7 +3374,7 @@ class Commands:
         return self._zcombine("ZUNIONSTORE", dst, keys, weights, aggregate, False)
 
     def zinterstore(
-        self, dst: KeyT, keys: Sequence[KeyT], weights: Optional[Sequence[float]] = None, aggregate: Optional[str] = None
+        self, dst: KeyT, keys: Sequence[KeyT], weights: Optional[Sequence[float]] = None, aggregate: Optional[AggregateT] = None
     ) -> Any:
         """``ZINTERSTORE dst numkeys key [key ...] [WEIGHTS w ...] [AGGREGATE SUM|MIN|MAX]`` - stores an intersection.
 
@@ -3397,7 +3410,7 @@ class Commands:
         self,
         keys: Sequence[KeyT],
         weights: Optional[Sequence[float]] = None,
-        aggregate: Optional[str] = None,
+        aggregate: Optional[AggregateT] = None,
         withscores: bool = False,
     ) -> Any:
         """``ZUNION numkeys key [key ...] [WEIGHTS ...] [AGGREGATE ...] [WITHSCORES]`` - union without storing.
@@ -3417,7 +3430,7 @@ class Commands:
         self,
         keys: Sequence[KeyT],
         weights: Optional[Sequence[float]] = None,
-        aggregate: Optional[str] = None,
+        aggregate: Optional[AggregateT] = None,
         withscores: bool = False,
     ) -> Any:
         """``ZINTER numkeys key [key ...] [WEIGHTS ...] [AGGREGATE ...] [WITHSCORES]`` - intersection without storing.
@@ -3523,14 +3536,14 @@ class Commands:
             args += [lon, lat, member]
         return self._c(None, "GEOADD", *args)
 
-    def geodist(self, key: KeyT, member1: Arg, member2: Arg, unit: Optional[str] = None) -> Any:
+    def geodist(self, key: KeyT, member1: Arg, member2: Arg, unit: Optional[GeoUnitT] = None) -> Any:
         """``GEODIST key member1 member2 [unit]`` - distance between two members.
 
         Args:
             key: The geo key.
             member1: First member.
             member2: Second member.
-            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"``.
+            unit: ``"m"`` (default), ``"km"``, ``"ft"`` or ``"mi"``; a :class:`GeoUnit` or the string.
 
         Returns:
             The distance as ``float`` in ``unit``, or ``None`` when a member or the key is missing.
@@ -3578,7 +3591,7 @@ class Commands:
         radius: Optional[float],
         width: Optional[float],
         height: Optional[float],
-        unit: str,
+        unit: GeoUnitT,
     ) -> None:
         if member is not None:
             args += ["FROMMEMBER", member]
@@ -3590,7 +3603,7 @@ class Commands:
             args += ["BYBOX", width, height, unit]
 
     @staticmethod
-    def _geo_tail(args: List[Any], sort: Optional[str], count: Optional[int], any: bool) -> None:  # noqa: A002
+    def _geo_tail(args: List[Any], sort: Optional[GeoOrderT], count: Optional[int], any: bool) -> None:  # noqa: A002
         if sort is not None:
             args.append(sort)
         if count is not None:
@@ -3607,8 +3620,8 @@ class Commands:
         radius: Optional[float] = None,
         width: Optional[float] = None,
         height: Optional[float] = None,
-        unit: str = "m",
-        sort: Optional[str] = None,
+        unit: GeoUnitT = "m",
+        sort: Optional[GeoOrderT] = None,
         count: Optional[int] = None,
         any: bool = False,  # noqa: A002
         withcoord: bool = False,
@@ -3669,8 +3682,8 @@ class Commands:
         radius: Optional[float] = None,
         width: Optional[float] = None,
         height: Optional[float] = None,
-        unit: str = "m",
-        sort: Optional[str] = None,
+        unit: GeoUnitT = "m",
+        sort: Optional[GeoOrderT] = None,
         count: Optional[int] = None,
         any: bool = False,  # noqa: A002
         storedist: bool = False,
@@ -3716,7 +3729,7 @@ class Commands:
         withhash: bool,
         count: Optional[int],
         any: bool,  # noqa: A002
-        sort: Optional[str],
+        sort: Optional[GeoOrderT],
         store: Optional[KeyT],
         storedist: Optional[KeyT],
     ) -> Any:
@@ -3741,13 +3754,13 @@ class Commands:
         longitude: float,
         latitude: float,
         radius: float,
-        unit: str = "m",
+        unit: GeoUnitT = "m",
         withcoord: bool = False,
         withdist: bool = False,
         withhash: bool = False,
         count: Optional[int] = None,
         any: bool = False,  # noqa: A002
-        sort: Optional[str] = None,
+        sort: Optional[GeoOrderT] = None,
         store: Optional[KeyT] = None,
         storedist: Optional[KeyT] = None,
     ) -> Any:
@@ -3784,13 +3797,13 @@ class Commands:
         key: KeyT,
         member: Arg,
         radius: float,
-        unit: str = "m",
+        unit: GeoUnitT = "m",
         withcoord: bool = False,
         withdist: bool = False,
         withhash: bool = False,
         count: Optional[int] = None,
         any: bool = False,  # noqa: A002
-        sort: Optional[str] = None,
+        sort: Optional[GeoOrderT] = None,
         store: Optional[KeyT] = None,
         storedist: Optional[KeyT] = None,
     ) -> Any:
@@ -5376,14 +5389,14 @@ class Commands:
         """
         return self._c(None, "GETBIT", key, offset)
 
-    def bitcount(self, key: KeyT, start: Optional[int] = None, end: Optional[int] = None, mode: Optional[str] = None) -> Any:
+    def bitcount(self, key: KeyT, start: Optional[int] = None, end: Optional[int] = None, mode: Optional[BitUnitT] = None) -> Any:
         """``BITCOUNT key [start end [BYTE|BIT]]`` - counts set bits.
 
         Args:
             key: The key.
             start: First position of the range (needs ``end``). Omit both for the whole string.
             end: Last position, inclusive; negative counts from the end.
-            mode: ``"BYTE"`` (default) or ``"BIT"`` - unit of ``start``/``end``.
+            mode: ``"BYTE"`` (default) or ``"BIT"`` (:class:`BitUnit` or the string) - unit of ``start``/``end``.
 
         Returns:
             The number of bits set to 1 (``0`` when missing).
@@ -5413,11 +5426,11 @@ class Commands:
                 args.append(end)
         return self._c(None, "BITPOS", *args)
 
-    def bitop(self, operation: str, dst: KeyT, *keys: KeyT) -> Any:
+    def bitop(self, operation: BitOperationT, dst: KeyT, *keys: KeyT) -> Any:
         """``BITOP operation dst key [key ...]`` - bitwise operation between strings.
 
         Args:
-            operation: ``"AND"``, ``"OR"``, ``"XOR"`` or ``"NOT"`` (``NOT`` takes one key).
+            operation: ``"AND"``, ``"OR"``, ``"XOR"`` or ``"NOT"`` (``NOT`` takes one key); a :class:`BitOperation` or the string.
             dst: Destination key (an empty result deletes it).
             *keys: Source keys (same slot on a cluster).
 
@@ -5432,6 +5445,8 @@ class Commands:
         Operations are passed as raw words: ``GET type offset``, ``SET type offset value``,
         ``INCRBY type offset increment`` and ``OVERFLOW WRAP|SAT|FAIL``. Types are ``i1``..``i64`` and ``u1``..``u63``;
         offset is a bit number or ``#n`` (n times the width). A write rewrites the value.
+        Typed words work too: ``bitfield(k, "OVERFLOW", Overflow.SAT, BitFieldOp.INCRBY, unsigned(8), 0, 10)``
+        (:class:`BitFieldOp`, :class:`Overflow`, :func:`signed`, :func:`unsigned`).
 
         Args:
             key: The key.

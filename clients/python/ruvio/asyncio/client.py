@@ -19,7 +19,7 @@ import uuid
 from collections import deque
 from typing import Any, AsyncIterator, Awaitable, Callable, Deque, Dict, List, Optional, Tuple, Union
 
-from .._commands import Commands, Conv, KeyT
+from .._commands import Commands, Conv, KeyT, KeyTypeT
 from .._models import Message
 from .._pipeline import PipelineBase
 from .._resp import NEED, Push, encode, make_parser
@@ -437,7 +437,7 @@ class Ruvio(Commands):
             await conn.aclose()
 
     async def scan_iter(
-        self, match: Optional[str] = None, count: Optional[int] = None, type: Optional[str] = None  # noqa: A002
+        self, match: Optional[str] = None, count: Optional[int] = None, type: Optional[KeyTypeT] = None  # noqa: A002
     ) -> AsyncIterator[Any]:
         cursor = 0
         while True:
