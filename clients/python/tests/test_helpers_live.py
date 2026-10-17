@@ -12,6 +12,7 @@ import pytest
 
 import ruvio
 import ruvio.asyncio
+from conftest import await_for, wait_for
 
 
 def _u() -> str:
@@ -100,28 +101,28 @@ def test_sync_idempotent_and_rate_limit(sync_client):
 def test_sync_pubsub(sync_client):
     ps = sync_client.pubsub()
     ps.subscribe("news")
-    m = ps.get_message(timeout=1)
+    m = ps.get_message(timeout=10)
     assert m.kind == "subscribe" and m.channel == "news" and m.data == 1
     ps.psubscribe("ev.*")
-    assert ps.get_message(timeout=1).kind == "psubscribe"
+    assert ps.get_message(timeout=10).kind == "psubscribe"
     ps.ssubscribe("shard")
-    assert ps.get_message(timeout=1).kind == "ssubscribe"
+    assert ps.get_message(timeout=10).kind == "ssubscribe"
     assert sync_client.publish("news", "hello") == 1
-    assert ps.get_message(timeout=1) == ruvio.Message("message", "news", "hello")
+    assert ps.get_message(timeout=10) == ruvio.Message("message", "news", "hello")
     assert sync_client.publish("ev.x", "p") == 1
-    assert ps.get_message(timeout=1) == ruvio.Message("pmessage", "ev.x", "p", "ev.*")
+    assert ps.get_message(timeout=10) == ruvio.Message("pmessage", "ev.x", "p", "ev.*")
     assert sync_client.spublish("shard", "s") == 1
-    m = ps.get_message(timeout=1)
+    m = ps.get_message(timeout=10)
     assert m.kind == "smessage" and m.data == "s"
     ps.ping()
-    assert ps.get_message(timeout=1).kind == "pong"
+    assert ps.get_message(timeout=10).kind == "pong"
     assert ps.get_message(timeout=0.05) is None
     ps.unsubscribe("news")
-    assert ps.get_message(timeout=1).kind == "unsubscribe"
+    assert ps.get_message(timeout=10).kind == "unsubscribe"
     ps.punsubscribe()
-    assert ps.get_message(timeout=1).kind == "punsubscribe"
+    assert ps.get_message(timeout=10).kind == "punsubscribe"
     ps.sunsubscribe("shard")
-    assert ps.get_message(timeout=1).kind == "sunsubscribe"
+    assert ps.get_message(timeout=10).kind == "sunsubscribe"
     ps.close()
     # resubscribe after reconnect
     ps2 = sync_client.pubsub(ignore_subscribe_messages=True)
@@ -129,9 +130,10 @@ def test_sync_pubsub(sync_client):
     ps2.get_message(timeout=0.2)
     ps2._conn.close()  # simulate a dropped socket
     ps2.get_message(timeout=0.2)  # reopens and re-sends SUBSCRIBE
-    time.sleep(0.05)
-    assert sync_client.publish("again", "x") == 1
-    assert ps2.get_message(timeout=1).data == "x"
+    # Published until the server counts the resubscribed socket; a publish that reaches nobody
+    # delivers nothing.
+    wait_for(lambda: sync_client.publish("again", "x") == 1, "the resubscribe")
+    assert ps2.get_message(timeout=10).data == "x"
     ps2.close()
 
 
@@ -149,9 +151,8 @@ def test_sync_resp3_and_tracking(sync_client):
     r.set("tracked", "1")
     r.get("tracked")
     sync_client.set("tracked", "2")  # another connection invalidates
-    time.sleep(0.05)
-    assert r.ping() == "PONG"  # reading this reply also drains the push
-    assert any("tracked" in str(p) for p in pushes)
+    # Reading a reply also drains a push that came before it.
+    wait_for(lambda: r.ping() == "PONG" and any("tracked" in str(p) for p in pushes), "the invalidate push")
     assert r.client_tracking(False) is True
     r.close()
 
@@ -169,7 +170,7 @@ def test_sync_reconnect_and_timeout(sync_client):
     host, port = r._conn.opts.host, r._conn.opts.port
     slow = ruvio.Ruvio(host, port, db=11, socket_timeout=0.05)
     with pytest.raises(ruvio.TimeoutError):
-        slow.blpop("never", 1)
+        slow.blpop("never", 5)
     assert slow.ping() == "PONG"
     slow.close()
     with pytest.raises(ruvio.ConnectionError):
@@ -318,31 +319,32 @@ async def test_async_pubsub(async_client):
     r = async_client
     ps = await r.pubsub()
     await ps.subscribe("ch")
-    assert (await ps.get_message(timeout=1)).kind == "subscribe"
+    assert (await ps.get_message(timeout=10)).kind == "subscribe"
     await ps.psubscribe("p.*")
-    assert (await ps.get_message(timeout=1)).kind == "psubscribe"
+    assert (await ps.get_message(timeout=10)).kind == "psubscribe"
     await ps.ssubscribe("sch")
-    assert (await ps.get_message(timeout=1)).kind == "ssubscribe"
+    assert (await ps.get_message(timeout=10)).kind == "ssubscribe"
     assert await r.publish("ch", "m1") == 1
-    assert await ps.get_message(timeout=1) == ruvio.Message("message", "ch", "m1")
+    assert await ps.get_message(timeout=10) == ruvio.Message("message", "ch", "m1")
     assert await r.publish("p.1", "m2") == 1
-    assert (await ps.get_message(timeout=1)).pattern == "p.*"
+    assert (await ps.get_message(timeout=10)).pattern == "p.*"
     assert await r.spublish("sch", "m3") == 1
-    assert (await ps.get_message(timeout=1)).kind == "smessage"
+    assert (await ps.get_message(timeout=10)).kind == "smessage"
     await ps.ping("x")
-    assert (await ps.get_message(timeout=1)).kind == "pong"
+    assert (await ps.get_message(timeout=10)).kind == "pong"
     assert await ps.get_message(timeout=0.05) is None
     await ps.unsubscribe()
-    assert (await ps.get_message(timeout=1)).kind == "unsubscribe"
+    assert (await ps.get_message(timeout=10)).kind == "unsubscribe"
     await ps.punsubscribe("p.*")
-    assert (await ps.get_message(timeout=1)).kind == "punsubscribe"
+    assert (await ps.get_message(timeout=10)).kind == "punsubscribe"
     await ps.sunsubscribe()
-    assert (await ps.get_message(timeout=1)).kind == "sunsubscribe"
+    assert (await ps.get_message(timeout=10)).kind == "sunsubscribe"
     await ps.aclose()
     async with await r.pubsub(ignore_subscribe_messages=True) as ps2:
         await ps2.subscribe("it")
-        await asyncio.sleep(0.05)
-        await r.publish("it", "a")
+        # Published until the server counts the subscriber; a publish that reaches nobody delivers
+        # nothing.
+        await await_for(lambda: _published(r, "it", "a"), "the subscription")
         await r.publish("it", "b")
         got = []
         async for m in ps2.listen():
@@ -359,7 +361,7 @@ async def test_async_reconnect(async_client):
     killer = r.dedicated()
     assert await killer.client_kill(id=victim) == 1
     await killer.aclose()
-    await asyncio.sleep(0.05)
+    await await_for(lambda: r._st.proto is None or r._st.proto.closed, "the client to see the kill")
     assert await r.get("rc") == "1"  # lost connection noticed; next command reconnects
     assert await r.client_id() != victim
     bad = ruvio.asyncio.Ruvio("127.0.0.1", 1, connect_timeout=0.5)
@@ -378,10 +380,7 @@ async def test_async_resp3_push(async_client):
     await r.set("t3", "1")
     await r.get("t3")
     await async_client.set("t3", "2")
-    for _ in range(50):
-        if pushes:
-            break
-        await asyncio.sleep(0.01)
+    await await_for(lambda: pushes, "the invalidate push")
     assert any("t3" in str(p) for p in pushes)
     assert await r.ping() == "PONG"
     await r.aclose()
@@ -441,3 +440,7 @@ async def test_async_select_survives_reconnect(async_client):
     assert await r.get("sel") == "12"
     await r.delete("sel")
     await r.aclose()
+
+
+async def _published(client, channel, message):
+    return await client.publish(channel, message) == 1

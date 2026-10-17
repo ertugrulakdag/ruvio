@@ -9,14 +9,13 @@ import asyncio
 import inspect
 import os
 import threading
-import time
 import uuid
 
 import pytest
 
 import ruvio
 import ruvio.asyncio
-from conftest import PARSER, SyncAsAsync
+from conftest import PARSER, SyncAsAsync, await_for, wait_for
 from ruvio import _cluster as cl
 
 CADDR = os.environ.get("RUVIO_CLUSTER_ADDR")
@@ -457,9 +456,8 @@ async def test_blocking_pop_on_the_owner_node(cc):
     if isinstance(cc, SyncAsAsync):
         c = cc._c
         threading.Timer(0.2, lambda: ruvio.Ruvio(*caddr(), cluster=True).rpush(key, "late")).start()
-        t0 = time.monotonic()
-        assert c.blpop([key], 3) == (key, "late")
-        assert time.monotonic() - t0 < 2.5
+        # The value, not a nil timeout reply, shows that the push woke the blocked pop.
+        assert c.blpop([key], 10) == (key, "late")
         assert c.blpop([key], 0.1) is None
     else:
         other = ruvio.asyncio.Ruvio(*caddr(), cluster=True)
@@ -469,7 +467,7 @@ async def test_blocking_pop_on_the_owner_node(cc):
             await other.rpush(key, "late")
 
         task = asyncio.ensure_future(later())
-        got, pong = await asyncio.gather(cc.blpop([key], 3), cc.ping())  # PING is not stuck behind BLPOP
+        got, pong = await asyncio.gather(cc.blpop([key], 10), cc.ping())  # PING is not stuck behind BLPOP
         assert got == (key, "late") and pong == "PONG"
         await task
         assert await cc.blpop([key], 0.1) is None
@@ -480,15 +478,15 @@ async def test_pubsub_on_cluster(cc):
     if isinstance(cc, SyncAsAsync):
         ps = cc._c.pubsub(ignore_subscribe_messages=True)
         ps.subscribe("news")
-        time.sleep(0.1)
-        assert cc._c.publish("news", "hello") >= 1
-        m = ps.get_message(timeout=2)
+        # Published until the server counts the subscriber; a publish that reaches nobody
+        # delivers nothing.
+        wait_for(lambda: cc._c.publish("news", "hello") >= 1, "the subscription")
+        m = ps.get_message(timeout=10)
         assert m.kind == "message" and m.data == "hello"
         sp = cc._c.pubsub(ignore_subscribe_messages=True)
         sp.ssubscribe("{sh}chan")
-        time.sleep(0.1)
-        assert cc._c.spublish("{sh}chan", "sharded") == 1
-        m = sp.get_message(timeout=2)
+        wait_for(lambda: cc._c.spublish("{sh}chan", "sharded") == 1, "the shard subscription")
+        m = sp.get_message(timeout=10)
         assert m.kind == "smessage" and m.data == "sharded"
         with pytest.raises(ruvio.CrossSlotError):
             sp.ssubscribe("{sh}chan", "{other}chan")
@@ -497,18 +495,20 @@ async def test_pubsub_on_cluster(cc):
     else:
         ps = await cc.pubsub(ignore_subscribe_messages=True)
         await ps.subscribe("news")
-        await asyncio.sleep(0.1)
-        assert await cc.publish("news", "hello") >= 1
-        m = await ps.get_message(timeout=2)
+        await await_for(lambda: _reached(cc.publish("news", "hello")), "the subscription")
+        m = await ps.get_message(timeout=10)
         assert m.kind == "message" and m.data == "hello"
         sp = await cc.pubsub(ignore_subscribe_messages=True)
         await sp.ssubscribe("{sh}chan")
-        await asyncio.sleep(0.1)
-        assert await cc.spublish("{sh}chan", "sharded") == 1
-        m = await sp.get_message(timeout=2)
+        await await_for(lambda: _reached(cc.spublish("{sh}chan", "sharded")), "the shard subscription")
+        m = await sp.get_message(timeout=10)
         assert m.kind == "smessage" and m.data == "sharded"
         await ps.aclose()
         await sp.aclose()
+
+
+async def _reached(publish):
+    return await publish >= 1
 
 
 async def test_losing_one_node_connection_keeps_the_others_and_reconnects(cc):

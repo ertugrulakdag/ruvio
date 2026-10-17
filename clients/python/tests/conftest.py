@@ -7,8 +7,12 @@ database 0, so those tests use a unique key prefix there and clean up after them
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import os
+import signal
 import sys
+import time
 
 import pytest
 
@@ -20,6 +24,59 @@ import ruvio.asyncio  # noqa: E402
 ADDR = os.environ.get("RUVIO_TEST_ADDR")
 DB = 11
 PARSER = os.environ.get("RUVIO_TEST_PARSER", "auto")
+# Hang guards: a sync live client gives up on a reply after SOCKET_TIMEOUT seconds, and any test
+# still running after TEST_TIMEOUT seconds fails (where SIGALRM exists), instead of blocking the
+# run until the CI job times out.
+SOCKET_TIMEOUT = 10.0
+TEST_TIMEOUT = 120
+
+
+# How long a test waits for something that normally takes milliseconds.
+DEADLINE = 10.0
+
+
+def wait_for(cond, what: str, timeout: float = DEADLINE):
+    """Calls ``cond`` until it returns a truthy value and returns that; fails after ``timeout``."""
+    deadline = time.monotonic() + timeout
+    while True:
+        value = cond()
+        if value:
+            return value
+        if time.monotonic() >= deadline:
+            pytest.fail(f"timed out after {timeout} s waiting for {what}")
+        time.sleep(0.01)
+
+
+async def await_for(cond, what: str, timeout: float = DEADLINE):
+    """Like ``wait_for``; ``cond`` may return an awaitable."""
+    deadline = time.monotonic() + timeout
+    while True:
+        value = cond()
+        if inspect.isawaitable(value):
+            value = await value
+        if value:
+            return value
+        if time.monotonic() >= deadline:
+            pytest.fail(f"timed out after {timeout} s waiting for {what}")
+        await asyncio.sleep(0.01)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    if not hasattr(signal, "setitimer"):
+        yield
+        return
+
+    def expire(signum, frame):
+        pytest.fail(f"{item.nodeid} ran longer than {TEST_TIMEOUT} s")
+
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.setitimer(signal.ITIMER_REAL, TEST_TIMEOUT)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def addr():
@@ -88,7 +145,7 @@ class _Raise:
 @pytest.fixture
 def sync_client():
     host, port = addr()
-    c = ruvio.Ruvio(host, port, db=DB, parser=PARSER)
+    c = ruvio.Ruvio(host, port, db=DB, parser=PARSER, socket_timeout=SOCKET_TIMEOUT)
     c.flushdb()
     yield c
     c.close()
@@ -108,7 +165,7 @@ async def c(request):
     """The same scenario runs against the sync client and the asyncio client."""
     host, port = addr()
     if request.param == "sync":
-        s = ruvio.Ruvio(host, port, db=DB, parser=PARSER)
+        s = ruvio.Ruvio(host, port, db=DB, parser=PARSER, socket_timeout=SOCKET_TIMEOUT)
         s.flushdb()
         w = SyncAsAsync(s)
         yield w

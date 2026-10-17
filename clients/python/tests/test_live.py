@@ -679,10 +679,15 @@ async def test_streams(c):
         await c.xreadgroup("missing", "c", {"gs": ">"})
     # Ruvio: XADD DELAY hides the entry from XREADGROUP for a while
     await c.xgroup_create("ds", "g", "$", mkstream=True)
-    await c.xadd("ds", {"job": "later"}, delay_ms=150)
+    # The 3 s delay leaves the read right after it a wide margin; the entry then shows up within
+    # a deadline.
+    await c.xadd("ds", {"job": "later"}, delay_ms=3000)
     assert await c.xreadgroup("g", "w", {"ds": ">"}) in (None, [], [("ds", [])])
-    await asyncio.sleep(0.25)
-    later = await c.xreadgroup("g", "w", {"ds": ">"})
+    deadline = time.monotonic() + 15
+    later = None
+    while later in (None, [], [("ds", [])]) and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+        later = await c.xreadgroup("g", "w", {"ds": ">"})
     assert later[0][1][0].fields == {"job": "later"}
 
 
