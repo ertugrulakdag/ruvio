@@ -18,6 +18,7 @@ public final class XAddArgs {
     private long maxLen = -1;
     private String minId;
     private boolean approximate;
+    private StreamTrim trim;
     private long delayMillis = -1;
 
     /**
@@ -85,6 +86,18 @@ public final class XAddArgs {
     }
 
     /**
+     * Sets the trim rule from a {@link StreamTrim}: {@code MAXLEN|MINID =|~ threshold}, sent from pre-encoded keyword bytes. Replaces {@code maxLen} and {@code minId}.
+     * Example: {@code XAddArgs.builder().trim(StreamTrim.maxLen(10_000, StreamTrim.Mode.APPROXIMATE))}.
+     *
+     * @param trim the trim rule
+     * @return this builder
+     */
+    public XAddArgs trim(StreamTrim trim) {
+        this.trim = trim;
+        return this;
+    }
+
+    /**
      * Sets the Ruvio {@code DELAY}: hide the entry from {@code XREADGROUP} for this long (delayed jobs).
      *
      * @param millis the hold in milliseconds (0 or more)
@@ -103,7 +116,9 @@ public final class XAddArgs {
     public void write(Args a) {
         if (noMkStream) a.s("NOMKSTREAM");
         if (delayMillis >= 0) a.s("DELAY").l(delayMillis);
-        if (maxLen >= 0) {
+        if (trim != null) {
+            trim.write(a);
+        } else if (maxLen >= 0) {
             a.s("MAXLEN");
             if (approximate) a.s("~");
             a.l(maxLen);

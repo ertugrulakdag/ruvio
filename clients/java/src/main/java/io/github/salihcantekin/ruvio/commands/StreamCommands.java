@@ -3,6 +3,7 @@ package io.github.salihcantekin.ruvio.commands;
 
 import io.github.salihcantekin.ruvio.RuvioCodec;
 import io.github.salihcantekin.ruvio.RuvioServerException;
+import io.github.salihcantekin.ruvio.args.StreamTrim;
 import io.github.salihcantekin.ruvio.args.XAddArgs;
 import io.github.salihcantekin.ruvio.args.XClaimArgs;
 import io.github.salihcantekin.ruvio.args.XReadArgs;
@@ -376,6 +377,24 @@ public abstract class StreamCommands<K, V> extends GeoCommands<K, V> {
         Args a = args().w(Cmd.XTRIM).k(key).s("MINID");
         if (approximate) a.s("~");
         return send(a.s(minId), Reply.LONG);
+    }
+
+    /**
+     * Sends {@code XTRIM key MAXLEN|MINID =|~ threshold} from a {@link StreamTrim}; the keywords are sent from pre-encoded bytes. The {@code LIMIT} option is not supported.
+     *
+     * <pre>{@code
+     * long removed = client.xtrim("events", StreamTrim.maxLen(1000));
+     * }</pre>
+     *
+     * @param key the stream key
+     * @param trim the trim rule
+     * @return how many entries were removed
+     * @throws RuvioServerException {@code ERR} for an invalid id; {@code WRONGTYPE} for a non-stream
+     */
+    public CompletableFuture<Long> xtrim(K key, StreamTrim trim) {
+        Args a = args().w(Cmd.XTRIM).k(key);
+        trim.write(a);
+        return send(a, Reply.LONG);
     }
 
     /**

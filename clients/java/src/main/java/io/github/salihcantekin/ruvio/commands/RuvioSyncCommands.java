@@ -10,10 +10,12 @@ import io.github.salihcantekin.ruvio.args.BitFieldArgs;
 import io.github.salihcantekin.ruvio.args.BitOp;
 import io.github.salihcantekin.ruvio.args.BitUnit;
 import io.github.salihcantekin.ruvio.args.ClientKillArgs;
+import io.github.salihcantekin.ruvio.args.ClientType;
 import io.github.salihcantekin.ruvio.args.ExpireCondition;
 import io.github.salihcantekin.ruvio.args.GeoOrder;
 import io.github.salihcantekin.ruvio.args.GeoSearchArgs;
 import io.github.salihcantekin.ruvio.args.GeoUnit;
+import io.github.salihcantekin.ruvio.args.InfoSection;
 import io.github.salihcantekin.ruvio.args.InsertPosition;
 import io.github.salihcantekin.ruvio.args.KeyType;
 import io.github.salihcantekin.ruvio.args.LPosArgs;
@@ -21,6 +23,7 @@ import io.github.salihcantekin.ruvio.args.ListDirection;
 import io.github.salihcantekin.ruvio.args.RestoreArgs;
 import io.github.salihcantekin.ruvio.args.ScanArgs;
 import io.github.salihcantekin.ruvio.args.SetOptions;
+import io.github.salihcantekin.ruvio.args.StreamTrim;
 import io.github.salihcantekin.ruvio.args.XAddArgs;
 import io.github.salihcantekin.ruvio.args.XClaimArgs;
 import io.github.salihcantekin.ruvio.args.XReadArgs;
@@ -3538,6 +3541,22 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Sends {@code XTRIM key MAXLEN|MINID =|~ threshold} from a {@link StreamTrim}; the keywords are sent from pre-encoded bytes. The {@code LIMIT} option is not supported.
+     *
+     * <pre>{@code
+     * long removed = client.xtrim("events", StreamTrim.maxLen(1000));
+     * }</pre>
+     *
+     * @param key the stream key
+     * @param trim the trim rule
+     * @return how many entries were removed
+     * @throws RuvioServerException {@code ERR} for an invalid id; {@code WRONGTYPE} for a non-stream
+     */
+    public Long xtrim(K key, StreamTrim trim) {
+        return await(async.xtrim(key, trim));
+    }
+
+    /**
      * Sends {@code XGROUP CREATE key group id}: creates a consumer group. The stream must already exist; see the overload with {@code mkStream}.
      *
      * @param key the stream key
@@ -4909,6 +4928,17 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Sends {@code CLIENT LIST TYPE type}. Ruvio checks the type but lists every connection.
+     * Example: {@code client.clientList(ClientType.NORMAL)}.
+     *
+     * @param type the connection type
+     * @return one text line per connection ({@code key=value} fields), lines separated by newlines
+     */
+    public String clientList(ClientType type) {
+        return await(async.clientList(type));
+    }
+
+    /**
      * Sends {@code CLIENT INFO}.
      *
      * @return one text line with the fields of this connection
@@ -5093,6 +5123,17 @@ public abstract class RuvioSyncCommands<K, V> {
      * @return the report text
      */
     public String info(String section) {
+        return await(async.info(section));
+    }
+
+    /**
+     * Sends {@code INFO section} with a typed section name sent from pre-encoded bytes.
+     * Example: {@code client.info(InfoSection.MEMORY)}.
+     *
+     * @param section the section; {@code InfoSection.PROMETHEUS} gives metrics text
+     * @return the report text of that section (empty when the shard has no such block)
+     */
+    public String info(InfoSection section) {
         return await(async.info(section));
     }
 

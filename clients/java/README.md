@@ -112,6 +112,11 @@ c.linsert("list", InsertPosition.BEFORE, "pivot", "value");           // instead
 c.bitcount("bits", 0, 7, BitUnit.BIT);                                // instead of the boolean overload
 c.scan("0", ScanArgs.count(100).type(KeyType.HASH));                  // instead of .type("hash")
 c.georadius("geo", 13.4, 52.5, 10, GeoUnit.KM, GeoSearchArgs.options().order(GeoOrder.ASC));
+c.xtrim("events", StreamTrim.maxLen(1000));                            // XTRIM events MAXLEN = 1000
+c.xadd("events", XAddArgs.builder().trim(StreamTrim.minId("1700000000000-0", StreamTrim.Mode.APPROXIMATE)), Map.of("k", "v"));
+c.info(InfoSection.MEMORY_BREAKDOWN);                                  // INFO memorybreakdown
+c.clientList(ClientType.PUBSUB);                                       // CLIENT LIST TYPE pubsub
+c.zrangebyscore("board", RangeBounds.NEGATIVE_INFINITY, RangeBounds.exclusive(100));
 c.bitfield("bits", BitFieldArgs.builder().get(BitFieldArgs.Type.unsigned(8), 0));
 ```
 

@@ -8,6 +8,8 @@ import io.github.salihcantekin.ruvio.RuvioServerException;
 import io.github.salihcantekin.ruvio.RuvioPubSub;
 import io.github.salihcantekin.ruvio.Transaction;
 import io.github.salihcantekin.ruvio.args.ClientKillArgs;
+import io.github.salihcantekin.ruvio.args.ClientType;
+import io.github.salihcantekin.ruvio.args.InfoSection;
 import io.github.salihcantekin.ruvio.internal.Args;
 import io.github.salihcantekin.ruvio.internal.Cmd;
 import io.github.salihcantekin.ruvio.internal.Reply;
@@ -242,6 +244,17 @@ public abstract class RuvioCommands<K, V> extends ScriptingCommands<K, V> {
     }
 
     /**
+     * Sends {@code CLIENT LIST TYPE type}. Ruvio checks the type but lists every connection.
+     * Example: {@code client.clientList(ClientType.NORMAL)}.
+     *
+     * @param type the connection type
+     * @return one text line per connection ({@code key=value} fields), lines separated by newlines
+     */
+    public CompletableFuture<String> clientList(ClientType type) {
+        return send(args().w(Cmd.CLIENT).s("LIST").w(Cmd.TYPE).w(type.fragment()), Reply.STRING);
+    }
+
+    /**
      * Sends {@code CLIENT INFO}.
      *
      * @return one text line with the fields of this connection
@@ -438,6 +451,17 @@ public abstract class RuvioCommands<K, V> extends ScriptingCommands<K, V> {
      */
     public CompletableFuture<String> info(String section) {
         return send(args().w(Cmd.INFO).s(section), Reply.STRING);
+    }
+
+    /**
+     * Sends {@code INFO section} with a typed section name sent from pre-encoded bytes.
+     * Example: {@code client.info(InfoSection.MEMORY)}.
+     *
+     * @param section the section; {@code InfoSection.PROMETHEUS} gives metrics text
+     * @return the report text of that section (empty when the shard has no such block)
+     */
+    public CompletableFuture<String> info(InfoSection section) {
+        return send(args().w(Cmd.INFO).w(section.fragment()), Reply.STRING);
     }
 
     /**

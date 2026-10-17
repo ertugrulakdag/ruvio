@@ -5,6 +5,7 @@ Notable changes to the Java client `io.github.salihcantekin:ruvio-client`. New e
 ## Unreleased
 
 - Typed keyword constants: new enums `InsertPosition` (`linsert`), `BitUnit` (`bitcount`), `GeoOrder` (`GeoSearchArgs.order`) and `KeyType` (`ScanArgs.type`), and `BitFieldArgs.Type.signed(n)` / `unsigned(n)` for BITFIELD types. The existing boolean and string overloads still work. Every enum, including `GeoUnit`, `ListDirection`, `BitOp`, `Overflow` and `Aggregate`, writes a pre-encoded constant, so the keyword costs no per-call encoding.
+- More typed constants: `StreamTrim` (strategy `MAXLEN`/`MINID`, mode `=`/`~`) for `XAddArgs.trim` and the new `xtrim(key, StreamTrim)`, `InfoSection` for `info(InfoSection)`, `ClientType` for `clientList(ClientType)`, plus the id and bound helpers `StreamIds` and `RangeBounds`. The Java client has no `CHANGES SUBSCRIBE` call, so there is no change-type set. The existing overloads still work.
 
 ## 0.1.1 - 2026-10-17
 
