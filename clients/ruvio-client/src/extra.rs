@@ -345,7 +345,9 @@ impl Client {
         self.integer(prefixed(&["RPUSHCAP", key, cap.as_str()], values))
     }
 
-    /// Sends `BLMPOP timeout numkeys key... LEFT|RIGHT COUNT n`. `None` when `timeout` passes.
+    /// Sends `BLMPOP`: like [`Client::lmpop`] but waits up to `timeout` (rounded up to whole
+    /// seconds; `Duration::ZERO` waits forever). Returns `None` when the timeout passes. Ruvio
+    /// polls every 5 ms and refuses it inside `MULTI` and scripts.
     pub fn blmpop(
         &mut self,
         timeout: Duration,
@@ -746,7 +748,10 @@ impl Client {
         self.integer(["BITCOUNT", key])
     }
 
-    /// Sends `BITCOUNT key start end [BYTE|BIT]`.
+    /// Sends `BITCOUNT key start end [BYTE|BIT]`: set bits in a range.
+    ///
+    /// `start`/`end` are inclusive; negative values count from the end. `unit` is
+    /// [`BitUnit::Byte`] (default) or [`BitUnit::Bit`]. A missing key counts 0.
     pub fn bitcount_range(
         &mut self,
         key: &str,
@@ -770,7 +775,10 @@ impl Client {
         self.integer(["BITPOS", key, if bit { "1" } else { "0" }])
     }
 
-    /// Sends `BITPOS key bit start [end [BYTE|BIT]]`.
+    /// Sends `BITPOS key bit start [end [BYTE|BIT]]`: first bit equal to `bit` within a range.
+    ///
+    /// `start`/`end` are inclusive (negative from the end); with `end` omitted the search runs to
+    /// the end of the string. `unit` as [`Client::bitcount_range`]. Returns `-1` when not found.
     pub fn bitpos_range(
         &mut self,
         key: &str,
@@ -795,7 +803,17 @@ impl Client {
         }
     }
 
-    /// Sends `BITOP operation destination key...` and returns the destination length.
+    /// Sends `BITOP operation destination key...`: bitwise operation over strings.
+    ///
+    /// # Arguments
+    /// * `operation` - [`BitOperation`] `And`, `Or`, `Xor` or `Not` (`Not` takes exactly one
+    ///   source key).
+    /// * `destination` - key that receives the result; same slot as the sources on a sharded
+    ///   server.
+    ///
+    /// # Returns
+    /// The length in bytes of the result string (shorter inputs are zero-padded). An empty result
+    /// deletes `destination`.
     pub fn bitop(
         &mut self,
         operation: BitOperation,
@@ -1191,7 +1209,7 @@ impl Client {
     ///
     /// # Arguments
     /// * `value` - the field value as plain text: a string without quotes (`paid`), a number as
-///   digits (`7`), a bool as `true`/`false`.
+    ///   digits (`7`), a bool as `true`/`false`.
     /// * `count` - page size. `after` - the last key of the previous page, for paging.
     ///
     /// Keys come back in ascending order. Error `index is building` until the first build ends.
@@ -1262,8 +1280,32 @@ impl Client {
         self.integer(arguments)
     }
 
-    /// Sends a full `GEOSEARCH` (`FROMMEMBER`/`FROMLONLAT`, `BYRADIUS`/`BYBOX`, `ASC`/`DESC`,
-    /// `COUNT [ANY]`, `WITHDIST`, `WITHHASH`, `WITHCOORD`).
+    /// Sends a full `GEOSEARCH` described by a [`GeoSearch`]: centre (`FROMMEMBER` /
+    /// `FROMLONLAT`), area (`BYRADIUS` / `BYBOX`), unit, order (`ASC` / `DESC`), `COUNT [ANY]` and
+    /// the `WITHDIST`, `WITHHASH`, `WITHCOORD` extras.
+    ///
+    /// # Returns
+    /// One [`GeoMatch`] per member; the optional fields are filled only for the `with_*` flags
+    /// you set. `distance` is in the search unit. Empty when nothing matches.
+    ///
+    /// # Errors
+    /// [`Error::Server`] for a missing `FROMMEMBER` member, an invalid unit or `WRONGTYPE`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # use std::time::Duration;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let mut search = GeoSearch::radius(GeoFrom::LonLat(15.0, 37.0), 200.0, "km");
+    /// search.count = Some(5);
+    /// search.with_distance = true;
+    /// for place in client.geo_search_with("shops", &search)? {
+    ///     println!("{} {:?}", place.member, place.distance);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn geo_search_with(
         &mut self,
         key: &str,

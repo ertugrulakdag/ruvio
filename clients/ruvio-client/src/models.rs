@@ -368,7 +368,8 @@ pub struct RangeOptions {
     pub limit: Option<(i64, i64)>,
 }
 
-/// The answer to `IDEM key BEGIN`.
+/// The answer to `IDEM key BEGIN`, returned by
+/// [`Client::idem_begin`](crate::Client::idem_begin).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdemState {
     /// This caller owns the reservation and must run the work, then `COMPLETE`.
@@ -774,22 +775,24 @@ pub enum BitFieldOp {
 /// Where a `GEOSEARCH` starts.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GeoFrom<'a> {
-    /// `FROMMEMBER member`.
+    /// `FROMMEMBER member`: centre on an existing member of the index.
     Member(&'a str),
-    /// `FROMLONLAT longitude latitude`.
+    /// `FROMLONLAT longitude latitude` in degrees. Longitude is first, -180 to 180; latitude
+    /// -85.05112878 to 85.05112878.
     LonLat(f64, f64),
 }
 
-/// The `GEOSEARCH` area.
+/// The area of a `GEOSEARCH`, measured in the request's unit.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GeoShape {
-    /// `BYRADIUS radius`.
+    /// `BYRADIUS radius`: a circle.
     Radius(f64),
-    /// `BYBOX width height`.
+    /// `BYBOX width height`: an axis-aligned rectangle centred on the origin.
     Box(f64, f64),
 }
 
-/// A full `GEOSEARCH` request.
+/// A full `GEOSEARCH` request for [`Client::geo_search_with`](crate::Client::geo_search_with).
+/// Build a radius search with [`GeoSearch::radius`] and set the other fields as needed.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GeoSearch<'a> {
     /// Center.
@@ -803,7 +806,8 @@ pub struct GeoSearch<'a> {
     pub order: Option<GeoOrder>,
     /// `COUNT n`.
     pub count: Option<u64>,
-    /// `ANY` (with `count`): stop at the first `count` matches.
+    /// Only with `count`: `ANY` stops at the first `count` matches found instead of the nearest
+    /// `count`; the order is then not meaningful.
     pub any: bool,
     /// `WITHDIST`.
     pub with_distance: bool,
@@ -852,7 +856,7 @@ pub struct ListPositionOptions {
     pub max_len: Option<u64>,
 }
 
-/// The answer of [`crate::Client::rate_limit`].
+/// The answer of [`Client::rate_limit`](crate::Client::rate_limit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RateLimit {
     /// True when this call fit in the window.

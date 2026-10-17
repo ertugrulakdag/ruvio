@@ -1656,7 +1656,16 @@ impl Client {
         ])
     }
 
-    /// Sends `GEOSEARCHSTORE` from a member and a radius. Returns how many members were stored.
+    /// Sends `GEOSEARCHSTORE destination source FROMMEMBER member BYRADIUS radius unit`: stores
+    /// the members within a circle around another member into a new geo index.
+    ///
+    /// # Arguments
+    /// * `destination` - key to write (replaced); `source` - geo index to search. Same slot on a
+    ///   sharded server.
+    /// * `member` - centre member in `source`. `radius`, `unit` as [`Client::geo_search`].
+    ///
+    /// # Returns
+    /// How many members were stored (an empty result deletes `destination`).
     pub fn geo_search_store(
         &mut self,
         destination: &str,
@@ -1679,7 +1688,9 @@ impl Client {
         ])
     }
 
-    /// Sends `GEORADIUSBYMEMBER ... ASC`.
+    /// Sends `GEORADIUSBYMEMBER key member radius unit ASC`: members within `radius` of an
+    /// existing member, nearest first (the member itself is included). `unit` is `"m"`, `"km"`,
+    /// `"ft"` or `"mi"`. Error if `member` is missing.
     pub fn geo_radius_by_member(
         &mut self,
         key: &str,
@@ -1699,7 +1710,9 @@ impl Client {
         ])
     }
 
-    /// Sends `GEORADIUS ... ASC`.
+    /// Sends `GEORADIUS key lon lat radius unit ASC`: members within a circle around a point,
+    /// nearest first. Arguments as [`Client::geo_search`]. Redis deprecates `GEORADIUS` in favour
+    /// of `GEOSEARCH`.
     pub fn geo_radius(
         &mut self,
         key: &str,
@@ -2356,7 +2369,11 @@ impl Client {
         self.strings(arguments)
     }
 
-    /// Sends `INFO`, or `INFO section`. The `prometheus` section returns Prometheus text.
+    /// Sends `INFO` or `INFO section` and returns the text.
+    ///
+    /// `section` such as `"memory"`, `"server"`, `"keyspace"`, or `"prometheus"` (Prometheus text
+    /// format). `None` returns the default sections. On a sharded server the answering shard
+    /// reports its own numbers.
     pub fn info(&mut self, section: Option<&str>) -> Result<String, Error> {
         match section {
             Some(section) => self.text(["INFO", section]),
@@ -3055,7 +3072,11 @@ impl Client {
         self.bulk_or_null(["RPOPLPUSH", source, destination])
     }
 
-    /// Sends `BLMOVE`. `None` when `timeout` passes. `Duration::ZERO` waits forever.
+    /// Sends `BLMOVE`: like [`Client::lmove`] but waits for an element.
+    ///
+    /// `timeout` rounds up to whole seconds; `Duration::ZERO` waits forever. Returns the element
+    /// or `None` on timeout. Ruvio retries every 5 ms instead of parking a waiter, and `BLMOVE`
+    /// is refused inside `MULTI` and scripts. Set a longer (or no) read timeout on the client.
     pub fn blmove(
         &mut self,
         source: &str,
@@ -3076,8 +3097,14 @@ impl Client {
         ])
     }
 
-    /// Sends `LMPOP` over `keys`. Returns the key that was popped and its elements,
-    /// or `None` when every list is empty.
+    /// Sends `LMPOP`: pops up to `count` elements from the first non-empty list.
+    ///
+    /// # Arguments
+    /// * `keys` - lists checked in order (one slot). `from_left` - pop from the head or tail.
+    /// * `count` - maximum elements, at least 1.
+    ///
+    /// # Returns
+    /// `Some((key, elements))`, or `None` when every list is empty.
     pub fn lmpop(
         &mut self,
         keys: &[&str],
