@@ -1174,47 +1174,214 @@ class Commands:
 
     # ======================================================= keys / Ruvio primitives
     def limit(self, key: KeyT, max: int, window_ms: int) -> Any:  # noqa: A002
-        """``LIMIT key max window_ms`` - remaining allowance, or None when the window is full."""
+        """``LIMIT key max window_ms`` - fixed-window rate limiter on one key. Ruvio extension.
+
+        The first call opens a window of ``window_ms`` milliseconds; up to ``max`` calls are allowed
+        inside it. A rejected call does not increase the counter. When the window ends the key
+        disappears, so an unused limiter costs nothing. See :meth:`rate_limit` for a tuple form.
+
+        Args:
+            key: The limiter key (one per user, IP, API key ...).
+            max: Allowed calls per window (positive integer).
+            window_ms: Window length in milliseconds (positive integer).
+
+        Returns:
+            The remaining allowance after this call (``int``, ``0`` for the last allowed call), or
+            ``None`` when the window is already full.
+
+        Raises:
+            WrongTypeError: The key holds something other than a limiter.
+            ResponseError: ``max`` or ``window_ms`` is not a positive integer.
+
+        Example:
+            left = client.limit("api:user:7", 100, 60000)
+            if left is None:
+                ...   # over the limit, reject the request
+        """
         return self._c(None, "LIMIT", key, max, window_ms)
 
     def rate_limit(self, key: KeyT, max: int, window_ms: int) -> Any:  # noqa: A002
-        """Helper on ``LIMIT``: ``(allowed, remaining)``."""
+        """Rate-limit helper on ``LIMIT``: the same command as :meth:`limit`, returned as a tuple.
+
+        Args:
+            key: The limiter key.
+            max: Allowed calls per window (positive integer).
+            window_ms: Window length in milliseconds (positive integer).
+
+        Returns:
+            ``(True, remaining)`` when the call is allowed, ``(False, 0)`` when the window is full.
+
+        Example:
+            allowed, remaining = client.rate_limit("login:1.2.3.4", 5, 60000)
+        """
         return self._c(_limit, "LIMIT", key, max, window_ms)
 
     def idem_begin(self, key: KeyT, fingerprint: Arg, owner: Arg, ttl_ms: int) -> Any:
-        """``IDEM key BEGIN fingerprint owner ttl_ms`` -> :class:`IdemResult`."""
+        """``IDEM key BEGIN fingerprint owner ttl_ms`` - starts an idempotent operation. Ruvio extension.
+
+        Use it so a retried request runs its side effect once. :meth:`idempotent` wraps the whole
+        flow. The server only compares the tokens; it does not compute a fingerprint. Use a digest of
+        all request inputs as ``fingerprint`` and an unguessable per-attempt value as ``owner``, and a
+        key scoped to the tenant and operation. Keep the key namespace for this command only: plain
+        ``SET``/``DEL`` on it can break the guarantee. This is not exactly-once for external systems.
+
+        Args:
+            key: The operation key (for example ``"order:42"``).
+            fingerprint: Digest of the request, 1-128 bytes.
+            owner: Token of this attempt, 1-128 bytes.
+            ttl_ms: Retention in milliseconds, 1 to 604800000 (7 days). Only the call that creates the
+                record sets it; later calls never extend it.
+
+        Returns:
+            An :class:`IdemResult` ``(state, result)``:
+
+            * ``acquired``: the key was free; this attempt owns it. Run the operation, then call
+              :meth:`idem_complete`.
+            * ``pending``: the same request is running (even if the owner matches). Do not run it again.
+            * ``conflict``: the key holds a different fingerprint.
+            * ``completed``: the saved ``result`` is returned for replay.
+
+        Raises:
+            ResponseError: Tokens or ``ttl_ms`` out of range, or the key holds data that is not an
+                idempotency record.
+        """
         return self._c(_idem, "IDEM", key, "BEGIN", fingerprint, owner, ttl_ms)
 
     def idem_complete(self, key: KeyT, fingerprint: Arg, owner: Arg, result: Arg) -> Any:
-        """``IDEM key COMPLETE fingerprint owner result`` - 1 when published."""
+        """``IDEM key COMPLETE fingerprint owner result`` - stores the result of an operation. Ruvio extension.
+
+        Args:
+            key: The operation key used in :meth:`idem_begin`.
+            fingerprint: Same fingerprint as in ``idem_begin``.
+            owner: Same owner token as in ``idem_begin``.
+            result: The result to replay later (text or bytes, at most 4 MiB). Retention is not extended.
+
+        Returns:
+            ``1`` when the result was stored (an identical repeat also returns ``1``), ``0`` when the
+            record is missing or expired, the owner/fingerprint differ, or a different result is
+            already stored.
+
+        Raises:
+            ResponseError: Tokens or ``result`` out of range.
+        """
         return self._c(None, "IDEM", key, "COMPLETE", fingerprint, owner, result)
 
     def once(self, key: KeyT, ttl_ms: int) -> Any:
-        """``ONCE key ttl_ms`` - True for the first call within the TTL."""
+        """``ONCE key ttl_ms`` - true only for the first call within the TTL. Ruvio extension.
+
+        Use it to send a notification or run a job at most once per period. A later call does not
+        refresh the TTL.
+
+        Args:
+            key: The marker key.
+            ttl_ms: How long the marker lasts, in milliseconds (positive integer).
+
+        Returns:
+            ``True`` for the first call, ``False`` until the deadline has passed.
+
+        Raises:
+            WrongTypeError: The key holds something other than a ``ONCE`` marker.
+        """
         return self._c(_bool, "ONCE", key, ttl_ms)
 
     def lease(self, key: KeyT, ttl_ms: int) -> Any:
-        """``LEASE key ttl_ms`` - a new fencing token, or None while held."""
+        """``LEASE key ttl_ms`` - takes a lease with a fencing token. Ruvio extension.
+
+        Only one holder at a time. The token grows with every new grant of the same key (it keeps
+        counting after expiry or :meth:`release`), so a downstream system can reject writes from an
+        older holder. See :meth:`lease_scope` for a ``with`` block.
+
+        Args:
+            key: The lease key.
+            ttl_ms: Lease duration in milliseconds (positive integer). It is not renewed automatically.
+
+        Returns:
+            The fencing token (``int``), or ``None`` while the lease is held by someone else.
+
+        Raises:
+            WrongTypeError: The key holds something other than a lease.
+
+        Example:
+            token = client.lease("job:nightly", 30000)
+            if token is not None:
+                try:
+                    run_job(token)
+                finally:
+                    client.release("job:nightly", token)
+        """
         return self._c(None, "LEASE", key, ttl_ms)
 
     def semaphore(self, key: KeyT, max: int, ttl_ms: int) -> Any:  # noqa: A002
-        """``SEMAPHORE key max ttl_ms`` - a holder token, or None when full."""
+        """``SEMAPHORE key max ttl_ms`` - takes one of ``max`` slots. Ruvio extension.
+
+        Each holder has its own TTL. The key goes away when the last holder expires or releases. See
+        :meth:`semaphore_scope`.
+
+        Args:
+            key: The semaphore key.
+            max: Number of concurrent holders allowed (positive integer, at most 4294967295).
+            ttl_ms: Hold time of this slot in milliseconds (positive integer).
+
+        Returns:
+            A holder token (``int``) while fewer than ``max`` holders are live, or ``None`` when full.
+
+        Raises:
+            WrongTypeError: The key holds something other than a semaphore.
+        """
         return self._c(None, "SEMAPHORE", key, max, ttl_ms)
 
     def release(self, key: KeyT, token: int) -> Any:
-        """``RELEASE key token`` (lease or semaphore) - True when the token was the holder."""
+        """``RELEASE key token`` - frees a lease or a semaphore slot. Ruvio extension.
+
+        Args:
+            key: The lease or semaphore key.
+            token: The token returned by :meth:`lease` or :meth:`semaphore`.
+
+        Returns:
+            ``True`` when the token was a current holder and is released, ``False`` otherwise (the
+            holder stays in place).
+        """
         return self._c(_bool, "RELEASE", key, token)
 
     def changes_start(self) -> Any:
-        """``CHANGES START`` - arms the feed and returns the cursor."""
+        """``CHANGES START`` - arms the in-memory change feed of this shard. Ruvio extension.
+
+        Nothing is recorded before this call and the feed is empty after a restart. For a durable feed
+        use ``CHANGES SUBSCRIBE`` with :meth:`execute_command`.
+
+        Returns:
+            The starting cursor (``int``) to pass to :meth:`changes`.
+        """
         return self._c(None, "CHANGES", "START")
 
     def changes(self, cursor: int) -> Any:
-        """``CHANGES cursor`` - ``[(sequence, note), ...]`` after ``cursor``."""
+        """``CHANGES cursor`` - change notes recorded after ``cursor`` on this shard. Ruvio extension.
+
+        Args:
+            cursor: A cursor from :meth:`changes_start` or the last sequence number you processed.
+
+        Returns:
+            A list of ``(sequence, note)`` pairs, oldest first, at most 1024 per call. Pass the last
+            ``sequence`` as the next ``cursor``. An empty list means nothing new.
+        """
         return self._c(_changes, "CHANGES", cursor)
 
     def delete(self, *keys: KeyT) -> Any:
-        """``DEL`` - number of keys removed."""
+        """``DEL key [key ...]`` - deletes keys of any type.
+
+        Args:
+            *keys: One or more keys.
+
+        Returns:
+            The number of keys that existed and were removed.
+
+        Note:
+            Cluster client: keys in several slots are deleted per shard and the counts are added up (not
+            atomic).
+
+        Example:
+            client.delete("a", "b")   # -> 2 if both existed
+        """
         if len(keys) == 1:
             key = keys[0]
             if type(key) is str:
@@ -1227,24 +1394,104 @@ class Commands:
         return self._c(None, "DEL", *keys)
 
     def unlink(self, *keys: KeyT) -> Any:
+        """``UNLINK key [key ...]`` - same as :meth:`delete` (Ruvio frees memory synchronously).
+
+        Args:
+            *keys: One or more keys.
+
+        Returns:
+            The number of keys removed.
+        """
         return self._c(None, "UNLINK", *keys)
 
     def exists(self, *keys: KeyT) -> Any:
+        """``EXISTS key [key ...]`` - counts the given keys that exist.
+
+        Args:
+            *keys: One or more keys. A key named twice counts twice.
+
+        Returns:
+            How many of the keys exist (``0`` for none).
+        """
         return self._c(None, "EXISTS", *keys)
 
     def type(self, key: KeyT) -> Any:
+        """``TYPE key`` - the type name of a key.
+
+        Args:
+            key: The key.
+
+        Returns:
+            ``"none"`` for a missing key, otherwise ``"string"``, ``"list"``, ``"set"``, ``"zset"``
+            (also used by geo), ``"hash"``, ``"stream"``, or a Ruvio type: ``"json"``,
+            ``"bloomfilter"``, ``"lease"``, ``"limit"``, ``"semaphore"``, ``"once"``.
+        """
         return self._c(None, "TYPE", key)
 
     def rename(self, src: KeyT, dst: KeyT) -> Any:
+        """``RENAME src dst`` - renames a key, replacing ``dst`` if it exists.
+
+        Args:
+            src: Existing key.
+            dst: New name.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: ``ERR no such key`` - ``src`` does not exist.
+            CrossSlotError: Cluster client - ``src`` and ``dst`` are in different slots (use a shared
+                ``{hash tag}``).
+        """
         return self._c(_ok, "RENAME", src, dst)
 
     def renamenx(self, src: KeyT, dst: KeyT) -> Any:
+        """``RENAMENX src dst`` - renames a key only if ``dst`` does not exist.
+
+        Args:
+            src: Existing key.
+            dst: New name.
+
+        Returns:
+            ``True`` when renamed, ``False`` when ``dst`` already exists.
+
+        Raises:
+            ResponseError: ``src`` does not exist.
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._c(_bool, "RENAMENX", src, dst)
 
     def scan(
         self, cursor: int = 0, match: Optional[str] = None, count: Optional[int] = None, type: Optional[str] = None  # noqa: A002
     ) -> Any:
-        """``SCAN`` page -> ``(next_cursor, keys)``. See :meth:`scan_iter`."""
+        """``SCAN cursor [MATCH pattern] [COUNT n] [TYPE type]`` - one page of key names.
+
+        Start with cursor ``0`` and call again with the returned cursor until it is ``0``;
+        :meth:`scan_iter` does that loop. A key present for the whole walk is returned at least once,
+        but a key can repeat if the table was rebuilt between calls. ``COUNT`` bounds the work per
+        call (about ten slots per requested key), so a page may hold fewer keys than ``count``.
+
+        Args:
+            cursor: ``0`` to start, then the cursor of the previous page.
+            match: Glob pattern (``*``, ``?``, ``[abc]``) applied to the keys of the page.
+            count: Work hint; the server default applies when omitted.
+            type: Only keys of this type, as ``TYPE`` reports it (for example ``"string"``).
+
+        Returns:
+            ``(next_cursor, keys)``; ``next_cursor == 0`` means the walk is finished.
+
+        Note:
+            SCAN is shard-local on the server. ``ClusterRuvio`` walks the shards one after the other and
+            folds the shard number into the cursor, so treat the cursor as opaque.
+
+        Example:
+            cursor = 0
+            while True:
+                cursor, keys = client.scan(cursor, match="user:*", count=100)
+                handle(keys)
+                if cursor == 0:
+                    break
+        """
         args: List[Any] = [cursor]
         if match is not None:
             args += ["MATCH", match]
@@ -1255,75 +1502,323 @@ class Commands:
         return self._c(_scan, "SCAN", *args)
 
     def dbsize(self) -> Any:
+        """``DBSIZE`` - number of keys in the selected database.
+
+        Includes keys past their TTL that have not been reclaimed yet.
+
+        Returns:
+            The count (``int``).
+
+        Note:
+            Per-shard server (``port_mode = "per-shard"``): the count is for the shard behind the
+            connected port only. ``ClusterRuvio`` adds up all shards.
+        """
         return self._c(None, "DBSIZE")
 
     def flushdb(self, asynchronous: bool = False) -> Any:
+        """``FLUSHDB [ASYNC]`` - deletes every key of the selected database.
+
+        Args:
+            asynchronous: Sends ``ASYNC``; Ruvio still runs it synchronously.
+
+        Returns:
+            ``True``.
+
+        Note:
+            Per-shard server: a plain client clears only the shard behind its port. ``ClusterRuvio``
+            sends it to every shard (not atomic across shards).
+        """
         return self._c(_ok, "FLUSHDB", "ASYNC") if asynchronous else self._c(_ok, "FLUSHDB")
 
     def flushall(self, asynchronous: bool = False) -> Any:
+        """``FLUSHALL [ASYNC]`` - deletes every key of every database.
+
+        Args:
+            asynchronous: Sends ``ASYNC``; Ruvio still runs it synchronously.
+
+        Returns:
+            ``True``.
+
+        Note:
+            Per-shard server: a plain client clears only the shard behind its port. ``ClusterRuvio``
+            sends it to every shard.
+        """
         return self._c(_ok, "FLUSHALL", "ASYNC") if asynchronous else self._c(_ok, "FLUSHALL")
 
     def swapdb(self, first: int, second: int) -> Any:
+        """``SWAPDB first second`` - swaps two databases in O(1).
+
+        Connections on either database see the other's keys. Does not wake clients blocked on keys
+        that now exist. Refused on a multi-shard server.
+
+        Args:
+            first: Database number.
+            second: Database number.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: A number is out of range, or the server is sharded.
+        """
         return self._c(_ok, "SWAPDB", first, second)
 
     def move(self, key: KeyT, db: int) -> Any:
+        """``MOVE key db`` - moves a key to another database.
+
+        Args:
+            key: The key.
+            db: Target database number.
+
+        Returns:
+            ``True`` when moved, ``False`` when the key is missing or already exists in ``db``.
+
+        Raises:
+            ResponseError: ``db`` is the current database, is out of range, or the server is sharded.
+        """
         return self._c(_bool, "MOVE", key, db)
 
     def expire(self, key: KeyT, seconds: int) -> Any:
+        """``EXPIRE key seconds`` - sets a TTL in seconds.
+
+        Args:
+            key: The key.
+            seconds: Time to live. Zero or negative deletes the key (and returns ``True``).
+
+        Returns:
+            ``True`` when the key exists and the TTL was set, ``False`` when the key is missing.
+        """
         return self._c(_bool, "EXPIRE", key, seconds)
 
     def pexpire(self, key: KeyT, ms: int) -> Any:
+        """``PEXPIRE key ms`` - sets a TTL in milliseconds.
+
+        Args:
+            key: The key.
+            ms: Time to live. Zero or negative deletes the key (and returns ``True``).
+
+        Returns:
+            ``True`` when set, ``False`` when the key is missing.
+        """
         return self._c(_bool, "PEXPIRE", key, ms)
 
     def expireat(self, key: KeyT, when: int) -> Any:
+        """``EXPIREAT key when`` - sets an absolute expiry.
+
+        Args:
+            key: The key.
+            when: Unix time in seconds. A time in the past removes the key.
+
+        Returns:
+            ``True`` when set, ``False`` when the key is missing.
+        """
         return self._c(_bool, "EXPIREAT", key, when)
 
     def pexpireat(self, key: KeyT, when_ms: int) -> Any:
+        """``PEXPIREAT key when_ms`` - sets an absolute expiry in milliseconds.
+
+        Args:
+            key: The key.
+            when_ms: Unix time in milliseconds. A time in the past removes the key.
+
+        Returns:
+            ``True`` when set, ``False`` when the key is missing.
+        """
         return self._c(_bool, "PEXPIREAT", key, when_ms)
 
     def ttl(self, key: KeyT) -> Any:
+        """``TTL key`` - remaining time to live in seconds.
+
+        Args:
+            key: The key.
+
+        Returns:
+            Seconds left; ``-1`` when the key has no expiry; ``-2`` when it does not exist.
+        """
         return self._c(None, "TTL", key)
 
     def pttl(self, key: KeyT) -> Any:
+        """``PTTL key`` - remaining time to live in milliseconds.
+
+        Args:
+            key: The key.
+
+        Returns:
+            Milliseconds left; ``-1`` when the key has no expiry; ``-2`` when it does not exist.
+        """
         return self._c(None, "PTTL", key)
 
     def persist(self, key: KeyT) -> Any:
+        """``PERSIST key`` - removes the TTL of a key.
+
+        Args:
+            key: The key.
+
+        Returns:
+            ``True`` when a TTL was removed, ``False`` when the key is missing or had none.
+        """
         return self._c(_bool, "PERSIST", key)
 
     def expiretime(self, key: KeyT) -> Any:
+        """``EXPIRETIME key`` - absolute expiry as Unix time in seconds.
+
+        Args:
+            key: The key.
+
+        Returns:
+            The Unix time; ``-1`` when the key has no expiry; ``-2`` when it does not exist.
+        """
         return self._c(None, "EXPIRETIME", key)
 
     def pexpiretime(self, key: KeyT) -> Any:
+        """``PEXPIRETIME key`` - absolute expiry as Unix time in milliseconds.
+
+        Args:
+            key: The key.
+
+        Returns:
+            The Unix time in ms; ``-1`` when no expiry; ``-2`` when the key does not exist.
+        """
         return self._c(None, "PEXPIRETIME", key)
 
     def keys(self, pattern: Arg = "*") -> Any:
+        r"""``KEYS pattern`` - all keys matching a glob pattern.
+
+        Walks the whole database in one call, so the server refuses databases with more than 100,000
+        keys per shard; use :meth:`scan` there.
+
+        Args:
+            pattern: Glob: ``*``, ``?``, ``[abc]``, ``[^a-z]`` and ``\`` escapes. Default ``"*"``.
+
+        Returns:
+            A list of key names (empty when nothing matches).
+
+        Raises:
+            ResponseError: The database is too large for ``KEYS``.
+
+        Note:
+            Per-shard server: only the shard behind the port answers. ``ClusterRuvio`` joins the answers
+            of all shards.
+        """
         return self._c(None, "KEYS", pattern)
 
     def randomkey(self) -> Any:
+        """``RANDOMKEY`` - a random key of the selected database (not uniform).
+
+        Returns:
+            A key name, or ``None`` when the database is empty.
+        """
         return self._c(None, "RANDOMKEY")
 
     def touch(self, *keys: KeyT) -> Any:
+        """``TOUCH key [key ...]`` - counts existing keys. Does not change the access time used by eviction.
+
+        Args:
+            *keys: One or more keys (same shard).
+
+        Returns:
+            How many of the keys exist.
+        """
         return self._c(None, "TOUCH", *keys)
 
     def copy(self, src: KeyT, dst: KeyT, replace: bool = False) -> Any:
+        """``COPY src dst [REPLACE]`` - copies a key with its TTL.
+
+        Works for strings, lists, sets, hashes and sorted sets. Streams, JSON, bloom filters and hashes
+        with field TTLs are refused. The copy is atomic and costs O(size of the value).
+
+        Args:
+            src: Source key.
+            dst: Destination key.
+            replace: Overwrite ``dst`` when it exists.
+
+        Returns:
+            ``True`` when copied, ``False`` when ``src`` is missing or ``dst`` exists without ``replace``.
+
+        Raises:
+            ResponseError: The value type cannot be copied.
+            CrossSlotError: Cluster client - the keys are in different slots.
+        """
         return self._c(_bool, "COPY", src, dst, "REPLACE") if replace else self._c(_bool, "COPY", src, dst)
 
     def object_encoding(self, key: KeyT) -> Any:
+        """``OBJECT ENCODING key`` - the internal encoding Redis 7 would report.
+
+        Args:
+            key: The key.
+
+        Returns:
+            A name such as ``"int"``, ``"embstr"``, ``"raw"``, ``"listpack"``, ``"hashtable"``,
+            ``"skiplist"``, ``"quicklist"``, ``"intset"`` or ``"stream"`` (informational, not the real
+            layout); ``None`` when the key is missing.
+        """
         return self._c(_text, "OBJECT", "ENCODING", key)
 
     def object_idletime(self, key: KeyT) -> Any:
+        """``OBJECT IDLETIME key`` - seconds since the key was last accessed.
+
+        Needs an LRU ``maxmemory-policy`` on the server.
+
+        Args:
+            key: The key.
+
+        Returns:
+            Idle seconds (``int``), or ``None`` when the key is missing.
+
+        Raises:
+            ResponseError: The server policy does not track idle time.
+        """
         return self._c(None, "OBJECT", "IDLETIME", key)
 
     def object_freq(self, key: KeyT) -> Any:
+        """``OBJECT FREQ key`` - access frequency counter of the key.
+
+        Needs ``allkeys-lfu`` as ``maxmemory-policy``.
+
+        Args:
+            key: The key.
+
+        Returns:
+            The counter (``int``), or ``None`` when the key is missing.
+
+        Raises:
+            ResponseError: The server policy does not track frequency.
+        """
         return self._c(None, "OBJECT", "FREQ", key)
 
     def memory_usage(self, key: KeyT, samples: Optional[int] = None) -> Any:
+        """``MEMORY USAGE key [SAMPLES n]`` - bytes charged to a key by the server memory budget.
+
+        The size is exact for Ruvio and is not comparable byte for byte with Redis.
+
+        Args:
+            key: The key.
+            samples: Accepted for compatibility.
+
+        Returns:
+            The size in bytes, or ``None`` when the key is missing.
+        """
         if samples is None:
             return self._c(None, "MEMORY", "USAGE", key)
         return self._c(None, "MEMORY", "USAGE", key, "SAMPLES", samples)
 
     def dump(self, key: KeyT) -> Any:
-        """``DUMP`` - Ruvio's own payload as bytes (always undecoded), or None."""
+        """``DUMP key`` - serializes a key into Ruvio's own payload (not Redis RDB).
+
+        Only Ruvio's :meth:`restore` can read it. Works for strings, lists, sets, hashes and sorted sets;
+        streams, JSON, bloom filters and hashes with field TTLs are refused. The TTL is not included.
+        The reply is always returned as ``bytes``.
+
+        Args:
+            key: The key.
+
+        Returns:
+            The payload (``bytes``), or ``None`` when the key does not exist.
+
+        Example:
+            blob = client.dump("k")
+            client.restore("k2", 0, blob)
+        """
         return self._x(None, encode("DUMP", (key,)), False)
 
     def restore(
@@ -1336,6 +1831,24 @@ class Commands:
         idletime: Optional[int] = None,
         freq: Optional[int] = None,
     ) -> Any:
+        """``RESTORE key ttl_ms payload [REPLACE] [ABSTTL] [IDLETIME n] [FREQ n]`` - creates a key from :meth:`dump`.
+
+        Args:
+            key: Key to create.
+            ttl_ms: Time to live in milliseconds, ``0`` for none. With ``absttl`` it is a Unix time in ms
+                (a time in the past creates nothing).
+            payload: ``bytes`` returned by :meth:`dump`.
+            replace: Overwrite an existing key.
+            absttl: Treat ``ttl_ms`` as an absolute Unix time.
+            idletime: Accepted and ignored.
+            freq: Accepted and ignored.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: ``BUSYKEY`` - the key exists and ``replace`` is not set; or the payload is invalid.
+        """
         args: List[Any] = [key, ttl_ms, payload]
         if replace:
             args.append("REPLACE")
