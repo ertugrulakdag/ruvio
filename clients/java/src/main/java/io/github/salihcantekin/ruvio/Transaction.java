@@ -33,6 +33,14 @@ import java.util.concurrent.CompletableFuture;
  *
  * Typed calls return futures that complete when EXEC returns. MULTI is sent before the first
  * queued command. Not thread safe. Ruvio requires same-slot keys inside MULTI in multi-shard mode.
+ *
+ * <p>In a cluster the transaction binds to the node and slot of its first key; a command on another
+ * slot fails with {@code CROSSSLOT} (use a {@code {hashtag}} to co-locate keys). Calling {@link #close()}
+ * without {@link #exec()} discards the transaction. The connection returns to the pool when the
+ * transaction ends.
+ *
+ * @param <K> the key type
+ * @param <V> the value type
  */
 public final class Transaction<K, V> extends RuvioCommands<K, V> implements AutoCloseable {
     private static final byte[] MULTI_FRAME = "*1\r\n$5\r\nMULTI\r\n".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
@@ -169,7 +177,14 @@ public final class Transaction<K, V> extends RuvioCommands<K, V> implements Auto
         c.end(r);
     }
 
-    /** WATCH key...: sent immediately; must be called before the first queued command. */
+    /**
+     * Sends {@code WATCH key [key ...]} immediately and waits for the answer. If a watched key changes
+     * before {@link #exec()}, the transaction does not run and {@code exec()} returns {@code false}.
+     *
+     * @param keys the keys to watch
+     * @throws IllegalStateException when a command was already queued (MULTI was sent)
+     * @throws RuvioServerException on a server error
+     */
     @SafeVarargs
     public final void watch(K... keys) {
         if (multiSent) {
@@ -202,7 +217,11 @@ public final class Transaction<K, V> extends RuvioCommands<K, V> implements Auto
         Link.await(r, timeoutMillis);
     }
 
-    /** UNWATCH: forgets every watched key (before MULTI). */
+    /**
+     * Sends {@code UNWATCH} and waits for the answer: forgets every watched key.
+     *
+     * @throws IllegalStateException when a command was already queued (MULTI was sent)
+     */
     public void unwatch() {
         if (multiSent) {
             throw new IllegalStateException("UNWATCH is not allowed after MULTI");
@@ -213,7 +232,15 @@ public final class Transaction<K, V> extends RuvioCommands<K, V> implements Auto
         Link.await(r, timeoutMillis);
     }
 
-    /** EXEC asynchronously: true when executed, false when a watched key changed (results then fail). */
+    /**
+     * Sends {@code EXEC} without waiting. The futures of the queued commands complete with their results.
+     * Commands the server refused when they were queued (for example a syntax error) fail on their own
+     * future and are skipped.
+     *
+     * @return a future that completes with {@code true} when the transaction ran, or {@code false} when a
+     *         watched key changed (the queued commands' futures then fail); it fails with a
+     *         {@link RuvioServerException} {@code EXECABORT} when the server refused the transaction
+     */
     public CompletableFuture<Boolean> execAsync() {
         if (!multiSent) {
             sendFrame(MULTI_FRAME, new Request<>(Reply.OK, kc, vc));
@@ -233,12 +260,30 @@ public final class Transaction<K, V> extends RuvioCommands<K, V> implements Auto
         return exec;
     }
 
-    /** EXEC: true when executed, false when a watched key changed. Throws on EXECABORT. */
+    /**
+     * Sends {@code EXEC} and waits for it.
+     *
+     * <pre>{@code
+     * tx.watch("balance");
+     * tx.decrby("balance", 10);
+     * if (!tx.exec()) {
+     *     // someone else changed "balance": retry
+     * }
+     * }</pre>
+     *
+     * @return {@code true} when the transaction ran, {@code false} when a watched key changed
+     * @throws RuvioServerException {@code EXECABORT} when a queued command was refused
+     * @throws RuvioException when there is no reply within {@code commandTimeoutMillis}
+     */
     public boolean exec() {
         return Link.await(execAsync(), timeoutMillis);
     }
 
-    /** DISCARD: drops the queued commands (their futures fail) and clears watches. */
+    /**
+     * Sends {@code DISCARD} (and {@code UNWATCH} if keys were watched): drops the queued commands and
+     * clears the watches. The futures of the queued commands fail with a {@link RuvioException}. Does
+     * nothing when the transaction already ended.
+     */
     public void discard() {
         if (finished) {
             return;
@@ -276,7 +321,10 @@ public final class Transaction<K, V> extends RuvioCommands<K, V> implements Auto
         }
     }
 
-    /** Discards the transaction if it was neither executed nor discarded. */
+    /**
+     * Discards the transaction if it was neither executed nor discarded, and returns the connection to
+     * the pool.
+     */
     @Override
     public void close() {
         if (!finished) {

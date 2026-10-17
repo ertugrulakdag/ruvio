@@ -5,7 +5,18 @@ import io.github.salihcantekin.ruvio.internal.Link;
 
 /**
  * A held LEASE (fencing token) or SEMAPHORE slot, released with {@code RELEASE key token}. Pass
- * {@link #token()} to the protected resource as the fencing token. Use with try-with-resources.
+ * {@link #token()} to the protected resource as the fencing token. Use with try-with-resources. Get one
+ * from {@link RuvioClient#tryLease(Object, long)} or {@link RuvioClient#tryAcquirePermit(Object, long, long)}.
+ *
+ * <pre>{@code
+ * try (RuvioToken<String> permit = client.tryAcquirePermit("uploads", 4, 60_000)) {
+ *     if (permit != null) {
+ *         // at most 4 holders at a time
+ *     }
+ * }
+ * }</pre>
+ *
+ * @param <K> the key type
  */
 public final class RuvioToken<K> implements AutoCloseable {
     private final RuvioAsync<K, ?> commands;
@@ -21,15 +32,29 @@ public final class RuvioToken<K> implements AutoCloseable {
         this.timeout = timeout;
     }
 
+    /**
+     * Returns the lease or semaphore key.
+     *
+     * @return the key
+     */
     public K key() {
         return key;
     }
 
+    /**
+     * Returns the number the server gave for this hold. For a lease it is the fencing token.
+     *
+     * @return the token
+     */
     public long token() {
         return token;
     }
 
-    /** Releases the lease or slot. Returns false when the token no longer held it. */
+    /**
+     * Releases the lease or slot with {@code RELEASE key token}. Calling it again does nothing.
+     *
+     * @return {@code true} when this call released it, {@code false} when it had expired or was already released
+     */
     public boolean release() {
         if (released) {
             return false;
@@ -38,6 +63,7 @@ public final class RuvioToken<K> implements AutoCloseable {
         return Link.await(commands.release(key, token), timeout);
     }
 
+    /** Releases the hold, same as {@link #release()}. */
     @Override
     public void close() {
         release();

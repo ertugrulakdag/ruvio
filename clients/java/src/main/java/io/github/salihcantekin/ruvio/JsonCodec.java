@@ -19,13 +19,27 @@ package io.github.salihcantekin.ruvio;
  * }</pre>
  */
 public interface JsonCodec {
+    /**
+     * Serializes a value to JSON text.
+     *
+     * @param value the object to serialize
+     * @return the JSON text
+     */
     String toJson(Object value);
 
+    /**
+     * Parses JSON text into an object.
+     *
+     * @param json the JSON text
+     * @param type the target class
+     * @param <T> the target type
+     * @return the parsed object
+     */
     <T> T fromJson(String json, Class<T> type);
 
     /**
      * Passthrough codec: values must already be JSON text (any CharSequence) and can only be read
-     * back as String. This is the default.
+     * back as String. This is the default. Any other type throws {@link IllegalArgumentException}.
      */
     JsonCodec PASSTHROUGH = new JsonCodec() {
         @Override
