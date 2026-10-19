@@ -737,6 +737,30 @@ impl<'a> Command<'a> {
                 count,
                 max,
             },
+            Self::SortedSetPopByScore {
+                key,
+                min,
+                max,
+                count,
+                with_scores,
+            } => Command::SortedSetPopByScore {
+                key: owned(key),
+                min,
+                max,
+                count,
+                with_scores,
+            },
+            Self::SortedSetMoveDue {
+                source,
+                destination,
+                max,
+                count,
+            } => Command::SortedSetMoveDue {
+                source: owned(source),
+                destination: owned(destination),
+                max,
+                count,
+            },
             Self::SortedSetBlockPop {
                 keys,
                 timeout_ms,

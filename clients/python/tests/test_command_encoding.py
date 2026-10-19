@@ -247,3 +247,15 @@ def test_flush_variants_and_geo_without_hash():
     assert r.georadius("g", 1, 2, 3, withcoord=True, withdist=True) == [GeoResult("m", 2.5, None, (1.0, 2.0))]
     r.reply = [["m", ["1", "2"]]]
     assert r.georadius("g", 1, 2, 3, withcoord=True) == [GeoResult("m", None, None, (1.0, 2.0))]
+
+
+def test_due_commands_encode_their_options():
+    r = Rec(reply=[b"m", b"2"])
+
+    assert r.zpopbyscore("z", "(5", min=1, count=3) == [(b"m", 2.0)]
+    assert r.args == ["ZPOPBYSCORE", "z", "(5", "MIN", "1", "COUNT", "3", "WITHSCORES"]
+
+    r = Rec(reply=2)
+
+    assert r.zmovedue("{t}z", "{t}l", "+inf", count=4) == 2
+    assert r.args == ["ZMOVEDUE", "{t}z", "{t}l", "+inf", "COUNT", "4"]

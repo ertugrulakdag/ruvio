@@ -1583,6 +1583,27 @@ unsafe fn push_response(
                 }
             }
 
+            Response::PoppedByScore(entries, with_scores) => {
+                let width = 1 + usize::from(with_scores);
+
+                push_table(state, budget, entries.len().saturating_mul(width))?;
+
+                for (position, (member, score)) in entries.iter().enumerate() {
+                    let index = position * width;
+
+                    push_item(state, budget, member, index)?;
+
+                    if with_scores {
+                        push_item(
+                            state,
+                            budget,
+                            &crate::engine::format_score(score),
+                            index + 1,
+                        )?;
+                    }
+                }
+            }
+
             Response::HashEntries(stream, kind) => {
                 use crate::store::HashStreamKind;
 

@@ -4,6 +4,8 @@ Notable changes to the Python client `ruvio-client` on PyPI. New entries go unde
 
 ## Unreleased
 
+- `zpopbyscore` and `zmovedue` send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call.
+
 ## 0.1.2 - 2026-10-17
 
 - Added `StreamTrim` (`MAXLEN` or `MINID`, `=` or `~`, threshold) for `xadd(trim=...)` and `xtrim(trim=...)`, the `InfoSection`, `ClientType` and `ChangeType` enums (with `change_types()`), `StreamId`, `ScoreBound` and `LexBound` constants, and `score_exclusive()`, `lex_inclusive()` and `lex_exclusive()` bound builders. Existing string arguments keep working.

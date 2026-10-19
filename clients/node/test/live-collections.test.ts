@@ -207,6 +207,11 @@ test('sorted sets', { skip: SKIP }, async () => {
     assert.equal(await c.zremrangebyrank('zs', 0, 4), 5);
     assert.equal(await c.zremrangebyscore('zs', '(20', '+inf'), 4);
     assert.deepEqual(await c.zpopmin('zs'), [{ member: 'm5', score: 5 }]);
+    await c.zadd('due', [[1, 'a'], [2, 'b'], [3, 'c'], [9, 'd']]);
+    assert.deepEqual(await c.zpopbyscore('due', 1), [{ member: 'a', score: 1 }]);
+    assert.equal(await c.zmovedue('due', 'ready', 3, 5), 2);
+    assert.deepEqual(await c.lrange('ready', 0, -1), ['b', 'c']);
+    assert.deepEqual(await c.zpopbyscore('due', 3, '-inf', 5), []);
     assert.deepEqual(await c.zpopmax('zs', 2), [{ member: 'm20', score: 20 }, { member: 'm19', score: 19 }]);
     const b = c.duplicate();
     try {

@@ -245,6 +245,8 @@ var (
 	cZINTERSTORE       = preEnc("ZINTERSTORE")
 	cZLEXCOUNT         = preEnc("ZLEXCOUNT")
 	cZMSCORE           = preEnc("ZMSCORE")
+	cZMOVEDUE          = preEnc("ZMOVEDUE")
+	cZPOPBYSCORE       = preEnc("ZPOPBYSCORE")
 	cZPOPMAX           = preEnc("ZPOPMAX")
 	cZPOPMIN           = preEnc("ZPOPMIN")
 	cZRANDMEMBER       = preEnc("ZRANDMEMBER")

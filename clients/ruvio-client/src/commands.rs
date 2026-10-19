@@ -1864,6 +1864,46 @@ impl Client {
         sorted_set(&self.run(args!["ZPOPMAX", key, count])?)
     }
 
+    /// Sends `ZPOPBYSCORE key max MIN min COUNT count WITHSCORES`: removes and returns up to
+    /// `count` members (1 to 10000) whose score lies between `min` and `max`, lowest score
+    /// first. With scores set to due times, this takes the jobs that are ready.
+    ///
+    /// `min`/`max` are score text: `-inf`, `+inf`, `(` prefix for exclusive. Returns an empty
+    /// list when nothing is due.
+    pub fn zpopbyscore(
+        &mut self,
+        key: &str,
+        min: &str,
+        max: &str,
+        count: u64,
+    ) -> Result<Vec<SortedSetEntry>, Error> {
+        sorted_set(&self.run(args![
+            "ZPOPBYSCORE",
+            key,
+            max,
+            "MIN",
+            min,
+            "COUNT",
+            count,
+            "WITHSCORES"
+        ])?)
+    }
+
+    /// Sends `ZMOVEDUE source destination max COUNT count`: moves up to `count` members
+    /// (1 to 10000) whose score is at most `max` from the sorted set `source` to the tail of
+    /// the list `destination`, lowest score first, and returns how many moved. Both keys must
+    /// hash to the same slot on a sharded server; clients blocked on `destination` are served
+    /// first.
+    pub fn zmovedue(
+        &mut self,
+        source: &str,
+        destination: &str,
+        max: &str,
+        count: u64,
+    ) -> Result<i64, Error> {
+        self.integer(args!["ZMOVEDUE", source, destination, max, "COUNT", count])
+    }
+
     /// Sends `BZPOPMIN`: waits for the lowest-scored member of the first non-empty set.
     ///
     /// # Arguments

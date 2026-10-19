@@ -72,7 +72,7 @@ const W = {
   GROUP: w('GROUP'), NOACK: w('NOACK'), GTID: w('>'), IDLE: w('IDLE'), JUSTID: w('JUSTID'), TIME: w('TIME'),
   RETRYCOUNT: w('RETRYCOUNT'), FORCE: w('FORCE'), LASTID: w('LASTID'), ON: w('ON'), OFF: w('OFF'), ID: w('ID'),
   ADDR: w('ADDR'), SKIPME: w('SKIPME'), YES: w('yes'), NO: w('no'), SETNAME: w('SETNAME'), AUTH: w('AUTH'),
-  OWNER: w('OWNER'), OVERFLOW: w('OVERFLOW'),
+  OWNER: w('OWNER'), OVERFLOW: w('OVERFLOW'), MIN: w('MIN'),
 } as const;
 
 type R<T> = Promise<T>;
@@ -3687,6 +3687,46 @@ export abstract class Commands {
    */
   zpopmin(key: Key, count?: number): R<SortedSetEntry[]> {
     return count === undefined ? this._1(T.zentries, C.ZPOPMIN, key) : this._2(T.zentries, C.ZPOPMIN, key, count);
+  }
+  /**
+   * Removes and returns the members that are due (`ZPOPBYSCORE key max MIN min COUNT count WITHSCORES`):
+   * up to `count` members whose score is between `min` and `max`, lowest score first. With scores set to due
+   * times this takes the jobs that are ready.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param max Upper bound: a number, `+inf`, or `(5` for exclusive.
+   * @param min Lower bound: a number, `-inf` (default), or `(5` for exclusive.
+   * @param count Number of members, 1 to 10000 (default 1).
+   * @returns {@link SortedSetEntry} objects, lowest first; empty when nothing is due.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   *
+   * @example
+   * ```ts
+   * const jobs = await client.zpopbyscore('scheduled', Date.now(), '-inf', 100);
+   * ```
+   */
+  zpopbyscore(key: Key, max: Value, min: Value = '-inf', count = 1): R<SortedSetEntry[]> {
+    return this._v(T.zentries, C.ZPOPBYSCORE, [key, max, W.MIN, min, W.COUNT, count, W.WITHSCORES]);
+  }
+  /**
+   * Moves the members that are due from a sorted set to the tail of a list (`ZMOVEDUE source destination max COUNT count`):
+   * up to `count` members whose score is at most `max`, lowest score first. Clients blocked on `destination`
+   * are served first. On a sharded server both keys must hash to the same slot.
+   *
+   * @param source Sorted set to take members from.
+   * @param destination List that receives them.
+   * @param max Upper bound: a number, `+inf`, or `(5` for exclusive.
+   * @param count Number of members, 1 to 10000 (default 1).
+   * @returns The number of members moved.
+   * @throws {@link RuvioError} `WRONGTYPE` when `source` is not a sorted set or `destination` is not a list.
+   *
+   * @example
+   * ```ts
+   * const moved = await client.zmovedue('{q}scheduled', '{q}ready', Date.now(), 100);
+   * ```
+   */
+  zmovedue(source: Key, destination: Key, max: Value, count = 1): R<number> {
+    return this._v(null, C.ZMOVEDUE, [source, destination, max, W.COUNT, count]);
   }
   /**
    * Removes and returns the highest-scored members (`ZPOPMAX [count]`).

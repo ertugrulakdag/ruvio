@@ -4,6 +4,8 @@ Notable changes to the Java client `io.github.salihcantekin:ruvio-client`. New e
 
 ## Unreleased
 
+- `zpopbyscore` and `zmovedue` (async and blocking) send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call.
+
 ## 0.1.2 - 2026-10-17
 
 - Typed keyword constants: new enums `InsertPosition` (`linsert`), `BitUnit` (`bitcount`), `GeoOrder` (`GeoSearchArgs.order`) and `KeyType` (`ScanArgs.type`), and `BitFieldArgs.Type.signed(n)` / `unsigned(n)` for BITFIELD types. The existing boolean and string overloads still work. Every enum, including `GeoUnit`, `ListDirection`, `BitOp`, `Overflow` and `Aggregate`, writes a pre-encoded constant, so the keyword costs no per-call encoding.

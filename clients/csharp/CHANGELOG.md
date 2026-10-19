@@ -4,6 +4,8 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 
 ## Unreleased
 
+- `PopSortedSetByScoreAsync` and `MoveDueSortedSetAsync` send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call. Not compiled or run in the cloud session that added them.
+
 ## 0.3.4 - 2026-10-17
 
 - Wave 2 of typed keywords: `StreamTrim` (`MaxLen` or `MinId`, `StreamTrimMode.Exact` `=` or `Approximate` `~`) for `XADD` and `XTRIM` (`AddStreamEntryAsync` and `TrimStreamAsync` overloads; the server does not accept `LIMIT`); `InfoSection` for `GetInfoAsync`; `ClientType` for `GetClientListAsync`; `StreamIds`, `ScoreBound` and `LexBound` constants and builders for the stream and sorted-set range arguments. `XTRIM`, `INFO` and `CLIENT LIST` write the keyword from a shared pre-encoded token. The client has no `CHANGES SUBSCRIBE` wrapper, so no change-type set was added.

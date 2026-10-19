@@ -4,6 +4,8 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+- New `ZPOPBYSCORE key max [MIN min] [COUNT n] [WITHSCORES]` and `ZMOVEDUE source destination max [COUNT n]`: take the due members of a sorted set (score up to `max`) and return them, or move them to the tail of a list, in one command. At most 10000 members per call.
+
 ## 0.3.4 - 2026-10-17
 
 - `XADD ... MAXLEN` accepts `=` as well as `~` before the count, like `XTRIM` and `XADD ... MINID` already did.

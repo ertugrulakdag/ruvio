@@ -462,6 +462,11 @@ async def test_sorted_sets(c):
     assert await c.zpopmax("z", 1) == [("d", 6.0)]
     await c.zadd("r", {"x": 1, "y": 2, "w": 3})
     assert await c.zremrangebyrank("r", 0, 0) == 1
+    await c.zadd("due", {"a": 1, "b": 2, "c": 3, "d": 9})
+    assert await c.zpopbyscore("due", 1) == [("a", 1.0)]
+    assert await c.zmovedue("due", "ready", 3, count=5) == 2
+    assert await c.lrange("ready", 0, -1) == ["b", "c"]
+    assert await c.zpopbyscore("due", 3, count=5) == []
     assert await c.zremrangebyscore("r", 3, 3) == 1
     assert await c.bzpopmin("r", 0.1) == ("r", "y", 2.0)
     await c.zadd("r", {"x": 1, "y": 2})

@@ -4,6 +4,8 @@ Notable changes to the Go client `github.com/salihcantekin/ruvio/clients/go`. A 
 
 ## Unreleased
 
+- `ZPopByScore` and `ZMoveDue` send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call.
+
 ## v0.2.0 - 2026-10-17
 
 Breaking for callers that pass a plain `string` variable where a typed keyword is now expected (see the first item); string literals still compile.

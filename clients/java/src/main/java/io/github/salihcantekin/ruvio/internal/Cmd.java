@@ -494,8 +494,12 @@ public final class Cmd {
     public static final byte[] ZINTERSTORE = RespOut.fragment("ZINTERSTORE");
     /** The word {@code ZLEXCOUNT}, pre-encoded as a RESP bulk string. */
     public static final byte[] ZLEXCOUNT = RespOut.fragment("ZLEXCOUNT");
+    /** The word {@code ZMOVEDUE}, pre-encoded as a RESP bulk string. */
+    public static final byte[] ZMOVEDUE = RespOut.fragment("ZMOVEDUE");
     /** The word {@code ZMSCORE}, pre-encoded as a RESP bulk string. */
     public static final byte[] ZMSCORE = RespOut.fragment("ZMSCORE");
+    /** The word {@code ZPOPBYSCORE}, pre-encoded as a RESP bulk string. */
+    public static final byte[] ZPOPBYSCORE = RespOut.fragment("ZPOPBYSCORE");
     /** The word {@code ZPOPMAX}, pre-encoded as a RESP bulk string. */
     public static final byte[] ZPOPMAX = RespOut.fragment("ZPOPMAX");
     /** The word {@code ZPOPMIN}, pre-encoded as a RESP bulk string. */
