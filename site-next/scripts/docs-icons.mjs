@@ -119,12 +119,15 @@ export function sidebarCss() {
   rules.push(`.sidebar-content details:has(> ul > li > a[href="/docs/integrations/dotnet/"]) > summary{--ic:var(--i-package)}`);
   used.add("file");
   rules.push(`.sidebar-content details:has(> ul > li > a[href="/docs/evidence/"]) > summary{--ic:var(--i-file)}`);
+  // The changelog link points outside /docs/ but sits in the Reference group, so it keeps an icon.
+  used.add("tag");
+  rules.push(`.sidebar-content a[href="/changelog/"]{--ic:var(--i-tag)}`);
   const vars = [...used].map((n) => `--i-${n}:${maskUrl(n)};`).join("");
   const base =
     `.sidebar-content :is(a,summary .group-label)::before{content:"";display:inline-block;flex:none;width:1.05em;height:1.05em;margin-right:.6em;vertical-align:-.17em;` +
     `background:currentColor;opacity:.78;-webkit-mask:var(--ic) center/contain no-repeat;mask:var(--ic) center/contain no-repeat}` +
     `.sidebar-content summary .group-label::before{margin-right:.55em;opacity:.9}` +
-    `.sidebar-content :is(a,summary){--ic:none}.sidebar-content a:not([href^="/docs/"])::before{display:none}` +
+    `.sidebar-content :is(a,summary){--ic:none}.sidebar-content a:not([href^="/docs/"], [href="/changelog/"])::before{display:none}` +
     `.sidebar-content summary .group-label{display:inline-flex;align-items:center}`;
   return `:root{${vars}}${base}${rules.join("")}`;
 }

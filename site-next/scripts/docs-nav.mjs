@@ -196,5 +196,10 @@ export function starlightSidebar() {
     if (item.label) entry.label = item.label;
     return entry;
   };
-  return [{ label: "Overview", slug: "docs" }, ...allGroups().map((g) => ({ label: g.label, items: g.items.map(toEntry) }))];
+  // Pages outside the docs that belong in the menu, by group: the changelog is a marketing page at /changelog/.
+  const extra = { Reference: [{ label: "Changelog", link: "/changelog/" }] };
+  return [
+    { label: "Overview", slug: "docs" },
+    ...allGroups().map((g) => ({ label: g.label, items: [...g.items.map(toEntry), ...(extra[g.label] ?? [])] })),
+  ];
 }
