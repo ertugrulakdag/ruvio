@@ -1,5 +1,6 @@
 use super::*;
 use crate::persistence::read_bounded_history;
+use std::io::{Read, Write};
 
 #[test]
 fn a_deadline_or_persist_for_a_key_the_replica_lacks_is_a_divergence() {
@@ -948,6 +949,7 @@ fn gap_handshake_leaves_the_live_generation() {
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
             announce: None,
+            tls: None,
         },
     )
     .unwrap();
@@ -1053,6 +1055,7 @@ fn two_replicas_receive_the_same_appended_frame() {
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
             announce: None,
+            tls: None,
         },
     )
     .unwrap();
@@ -1115,6 +1118,7 @@ fn closing_one_replica_leaves_the_other_streaming() {
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
             announce: None,
+            tls: None,
         },
     )
     .unwrap();
@@ -1175,6 +1179,7 @@ fn replica_limit_closes_the_extra_connection() {
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
             announce: None,
+            tls: None,
         },
     )
     .unwrap();
@@ -1248,6 +1253,7 @@ fn a_replica_that_hangs_up_on_an_idle_primary_frees_its_slot() {
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
             announce: None,
+            tls: None,
         },
     )
     .unwrap();
@@ -1328,6 +1334,7 @@ fn primary_refuses_a_replica_from_another_history_or_shard_layout() {
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
             announce: None,
+            tls: None,
         },
     )
     .unwrap();
@@ -1514,6 +1521,7 @@ fn idle_shipment(data_dir: &Path, history: HistoryId) -> Shipment {
         newer_epoch: Arc::new(AtomicU64::new(0)),
         snapshot_requests: Arc::new(AtomicU64::new(0)),
         announce: None,
+        tls: None,
     }
 }
 
@@ -1586,6 +1594,7 @@ fn link_to(
             wake_shard: Arc::new(tokio::sync::Notify::new()),
             announce: None,
             peers: Arc::new(DurableAcks::new()),
+            tls: None,
         },
         outbound,
     )
