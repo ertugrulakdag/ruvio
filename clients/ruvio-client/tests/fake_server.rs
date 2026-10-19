@@ -201,6 +201,35 @@ fn optional_integer_commands_map_null_and_reject_garbage() {
 }
 
 #[test]
+fn transfer_commands_send_the_cap_and_decode_the_pair() {
+    let (reply, request) = probe("*2\r\n:6\r\n:4\r\n", |c| c.transfer("a", "b", 4, None));
+    assert_eq!(reply.unwrap(), Some((6, 4)));
+    assert_eq!(request, words(&["TRANSFER", "a", "b", "4"]));
+    let (reply, request) = probe("*2\r\n:6\r\n:4\r\n", |c| c.transfer("a", "b", 4, Some(9)));
+    assert_eq!(reply.unwrap(), Some((6, 4)));
+    assert_eq!(request, words(&["TRANSFER", "a", "b", "4", "MAX", "9"]));
+    let (reply, _) = probe("$-1\r\n", |c| c.transfer("a", "b", 4, None));
+    assert_eq!(reply.unwrap(), None);
+    let (reply, _) = probe("+nope\r\n", |c| c.transfer("a", "b", 4, None));
+    assert!(protocol(reply).contains("TRANSFER returned"));
+    let (reply, _) = probe("*1\r\n:1\r\n", |c| c.transfer("a", "b", 4, None));
+    assert!(protocol(reply).contains("TRANSFER returned"));
+
+    let (reply, request) = probe("*2\r\n:1\r\n:2\r\n", |c| {
+        c.htransfer("h", "f", "g", 1, Some(5))
+    });
+    assert_eq!(reply.unwrap(), Some((1, 2)));
+    assert_eq!(
+        request,
+        words(&["HTRANSFER", "h", "f", "g", "1", "MAX", "5"])
+    );
+    let (reply, _) = probe("$-1\r\n", |c| c.htransfer("h", "f", "g", 1, None));
+    assert_eq!(reply.unwrap(), None);
+    let (reply, _) = probe(":1\r\n", |c| c.htransfer("h", "f", "g", 1, None));
+    assert!(protocol(reply).contains("HTRANSFER returned"));
+}
+
+#[test]
 fn getex_returns_the_string_or_none() {
     let (reply, request) = probe("$1\r\nv\r\n", |c| c.getex("k", 100));
     assert_eq!(reply.unwrap().as_deref(), Some("v"));

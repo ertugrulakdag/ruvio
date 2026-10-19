@@ -6,6 +6,7 @@ Notable changes to the Python client `ruvio-client` on PyPI. New entries go unde
 
 - Added keyword-only `ttl=` (seconds as `int`/`float`, or `timedelta`) to `incr`, `decr`, `incrby`, `decrby`, `incrbyfloat`, `hincrby`, `zincrby`, `setbit`, `zadd`, `geoadd`, `xadd`, `json_set`, `json_set_obj` and `bf_insert`. The deadline is set only when the call creates the key; an existing key keeps its deadline. Whole seconds send `EX`, a sub-second part sends `PX`; zero or negative raises `ValueError`.
 - Added `ExpireCondition` (`NX`, `XX`, `GT`, `LT`) and the optional `condition=` argument on `expire`, `pexpire`, `expireat` and `pexpireat`. A key without a deadline counts as infinite; a failed condition returns `False`.
+- New `transfer(source, destination, amount, max=None)` and `htransfer(key, from_field, to_field, amount, max=None)` for the server's `TRANSFER` and `HTRANSFER`: they return a `(a, b)` tuple after the move, or `None` when nothing moved.
 
 ## 0.1.2 - 2026-10-17
 

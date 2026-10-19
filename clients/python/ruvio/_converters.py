@@ -86,6 +86,10 @@ def _key_value(r: Any) -> Optional[Tuple[Any, Any]]:
     return None if r is None else (r[0], r[1])
 
 
+def _balances(r: Any) -> Optional[Tuple[int, int]]:
+    return None if r is None else (int(r[0]), int(r[1]))
+
+
 def _bzpop(r: Any) -> Optional[Tuple[Any, Any, float]]:
     return None if r is None else (r[0], r[1], float(r[2]))
 

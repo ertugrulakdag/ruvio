@@ -927,6 +927,50 @@ export abstract class Commands {
     return this._2(null, C.TAKE, key, count);
   }
   /**
+   * Moves an amount between two integer keys in one step (`TRANSFER source destination amount [MAX max]`, Ruvio extension). Both writes are one WAL record; a missing `destination` starts at 0.
+   *
+   * @param source Key holding a decimal integer; it must hold at least `amount`.
+   * @param destination Integer key that receives the amount. On a cluster it must share a slot with `source` (use a hash tag such as `{user:42}`).
+   * @param amount Positive amount to move.
+   * @param max Optional ceiling for `destination` after the move.
+   * @returns `[sourceAfter, destinationAfter]`, or `null` when `source` is missing or short, or `destination` would overflow or pass `max`. Nothing is written in the `null` case.
+   * @throws {@link RuvioError} `WRONGTYPE` for another type, an error when a value is not an integer, `amount` is not positive, or the keys are the same.
+   *
+   * @example
+   * ```ts
+   * await client.set('{u}:wallet', 50);
+   * await client.transfer('{u}:wallet', '{u}:escrow', 30); // [20, 30]
+   * await client.transfer('{u}:wallet', '{u}:escrow', 30); // null, nothing changed
+   * ```
+   */
+  transfer(source: Key, destination: Key, amount: number, max?: number): R<[number, number] | null> {
+    return max === undefined
+      ? this._3(T.balances, C.TRANSFER, source, destination, amount)
+      : this._v(T.balances, C.TRANSFER, [source, destination, amount, W.MAX, max]);
+  }
+  /**
+   * Moves an amount between two integer fields of one hash (`HTRANSFER key from to amount [MAX max]`, Ruvio extension). A missing `to` field starts at 0 and field TTLs stay.
+   *
+   * @param key Hash key.
+   * @param from Field to subtract from.
+   * @param to Field to add to.
+   * @param amount Positive amount to move.
+   * @param max Optional ceiling for the `to` field after the move.
+   * @returns `[fromAfter, toAfter]`, or `null` when the key or `from` is missing or short, or `to` would overflow or pass `max`. Nothing is written in the `null` case.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` is not a hash, an error when a field is not an integer.
+   *
+   * @example
+   * ```ts
+   * await client.hset('acct', { available: 50 });
+   * await client.htransfer('acct', 'available', 'held', 30); // [20, 30]
+   * ```
+   */
+  htransfer(key: Key, from: Key, to: Key, amount: number, max?: number): R<[number, number] | null> {
+    return max === undefined
+      ? this._4(T.balances, C.HTRANSFER, key, from, to, amount)
+      : this._v(T.balances, C.HTRANSFER, [key, from, to, amount, W.MAX, max]);
+  }
+  /**
    * Deletes a string only if it equals the given value (`DELEX key IFEQ value`, Ruvio extension). The safe way to release a lock you own.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).

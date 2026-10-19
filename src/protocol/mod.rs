@@ -601,6 +601,23 @@ pub enum Command<'a> {
         key: Bytes<'a>,
         count: i64,
     },
+    /// `TRANSFER source destination amount [MAX cap]`: moves `amount` between two integer
+    /// strings in one step. Nil when `source` is missing or short, or `destination` would
+    /// pass `max`.
+    Transfer {
+        source: Bytes<'a>,
+        destination: Bytes<'a>,
+        amount: i64,
+        max: Option<i64>,
+    },
+    /// `HTRANSFER key from to amount [MAX cap]`: `TRANSFER` between two fields of one hash.
+    HashTransfer {
+        key: Bytes<'a>,
+        from: Bytes<'a>,
+        to: Bytes<'a>,
+        amount: i64,
+        max: Option<i64>,
+    },
     /// `SET key value IFEQ expected [EX|PX|EXAT|PXAT|KEEPTTL]`: writes only when the
     /// string at `key` equals `expected`. Nil otherwise.
     SetIfEq {

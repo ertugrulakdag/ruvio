@@ -15,7 +15,7 @@ export const C = {
   ACL_WHOAMI: cmd('ACL', 'WHOAMI'), ACL_USERS: cmd('ACL', 'USERS'), ACL_LIST: cmd('ACL', 'LIST'),
   ACL_GETUSER: cmd('ACL', 'GETUSER'), ACL_CAT: cmd('ACL', 'CAT'), ACL_SETUSER: cmd('ACL', 'SETUSER'),
   ACL_LOAD: cmd('ACL', 'LOAD'), ACL_SAVE: cmd('ACL', 'SAVE'),
-  GET: cmd('GET'), SET: cmd('SET'), SETV: cmd('SETV'), TAKE: cmd('TAKE'), DELEX: cmd('DELEX'), GETEX: cmd('GETEX'),
+  GET: cmd('GET'), SET: cmd('SET'), SETV: cmd('SETV'), TAKE: cmd('TAKE'), TRANSFER: cmd('TRANSFER'), HTRANSFER: cmd('HTRANSFER'), DELEX: cmd('DELEX'), GETEX: cmd('GETEX'),
   MGET: cmd('MGET'), MSET: cmd('MSET'), MSETNX: cmd('MSETNX'), GETSET: cmd('GETSET'), APPEND: cmd('APPEND'),
   STRLEN: cmd('STRLEN'), INCR: cmd('INCR'), DECR: cmd('DECR'), INCRBY: cmd('INCRBY'), DECRBY: cmd('DECRBY'),
   SETEX: cmd('SETEX'), PSETEX: cmd('PSETEX'), SETNX: cmd('SETNX'), GETDEL: cmd('GETDEL'),

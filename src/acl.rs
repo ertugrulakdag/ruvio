@@ -1044,6 +1044,8 @@ pub fn command_acl_name(command: &Command<'_>) -> &'static str {
         Command::Once { .. } => "once",
         Command::IdempotencyBegin { .. } | Command::IdempotencyComplete { .. } => "idem",
         Command::Take { .. } => "take",
+        Command::Transfer { .. } => "transfer",
+        Command::HashTransfer { .. } => "htransfer",
         Command::SetIfEq { .. } => "set",
         Command::DelIfEq { .. } => "delex",
         Command::ListPushCapped { back: false, .. } => "lpushcap",

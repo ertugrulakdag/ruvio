@@ -227,6 +227,41 @@ public abstract class HashCommands<K, V> extends KeyCommands<K, V> {
     }
 
     /**
+     * Sends {@code HTRANSFER key from to amount}: moves {@code amount} between two integer fields of one hash
+     * in one step, only when {@code from} holds at least that much. A missing {@code to} field starts at 0 and
+     * field TTLs stay.
+     *
+     * @param key the hash key
+     * @param from the field to subtract from
+     * @param to the field to add to
+     * @param amount the amount to move; must be greater than zero
+     * @return {@code [fromAfter, toAfter]}, or {@code null} when the key or {@code from} is missing or short, or
+     * {@code to} would overflow (nothing is written)
+     * @throws RuvioServerException {@code ERR} when {@code amount} is not positive, the fields are the same or a
+     * field is not an integer; {@code WRONGTYPE} when the key holds a non-hash
+     */
+    public CompletableFuture<List<Long>> htransfer(K key, K from, K to, long amount) {
+        return send(args().w(Cmd.HTRANSFER).k(key).k(from).k(to).l(amount), Reply.LONG_PAIR);
+    }
+
+    /**
+     * Sends {@code HTRANSFER key from to amount MAX max}: {@link #htransfer(Object, Object, Object, long)} that
+     * also refuses when {@code to} would end above {@code max}.
+     *
+     * @param key the hash key
+     * @param from the field to subtract from
+     * @param to the field to add to
+     * @param amount the amount to move; must be greater than zero
+     * @param max the highest value {@code to} may reach
+     * @return {@code [fromAfter, toAfter]}, or {@code null} when nothing was moved
+     * @throws RuvioServerException {@code ERR} when {@code amount} is not positive, the fields are the same or a
+     * field is not an integer; {@code WRONGTYPE} when the key holds a non-hash
+     */
+    public CompletableFuture<List<Long>> htransfer(K key, K from, K to, long amount, long max) {
+        return send(args().w(Cmd.HTRANSFER).k(key).k(from).k(to).l(amount).w(Cmd.MAX).l(max), Reply.LONG_PAIR);
+    }
+
+    /**
      * Sends {@code HINCRBYFLOAT key field delta}: adds a floating-point number to a field. A missing key or field counts as 0.
      *
      * @param key the hash key

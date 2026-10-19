@@ -419,6 +419,25 @@ func (c *cmds) Take(ctx context.Context, key string, count int64) (remaining int
 	return c.intNil(ctx, newCmd(3, cTAKE).s(key).i(count))
 }
 
+// Transfer moves amount from the integer at source to the integer at destination in
+// one step, only when source holds at least that much (Ruvio TRANSFER source destination
+// amount). A missing destination starts at 0, and both keys are written as one WAL record.
+//
+// It returns the two values after the move and ok == true. When source is missing or
+// holds fewer than amount, or destination would overflow, nothing changes and ok is false.
+// amount must be > 0, source and destination must differ and, on a sharded server, share a
+// slot ("CROSSSLOT"; a hash tag such as {user:42} puts them together). A value that is not
+// an integer returns "ERR value is not an integer or out of range".
+func (c *cmds) Transfer(ctx context.Context, source, destination string, amount int64) (sourceAfter, destinationAfter int64, ok bool, err error) {
+	return c.pairNil(ctx, newCmd(4, cTRANSFER).s(source).s(destination).i(amount))
+}
+
+// TransferMax is Transfer that also refuses (ok == false, nothing written) when the
+// destination would end above max (TRANSFER source destination amount MAX max).
+func (c *cmds) TransferMax(ctx context.Context, source, destination string, amount, max int64) (sourceAfter, destinationAfter int64, ok bool, err error) {
+	return c.pairNil(ctx, newCmd(6, cTRANSFER).s(source).s(destination).i(amount).t(tMAX).i(max))
+}
+
 // DelIfEq deletes key only when its string equals expected (Ruvio DELEX key IFEQ
 // expected) and reports whether it deleted. It returns false when the key is missing or
 // holds a different value. It is the safe way to release a lock you hold. A non-string

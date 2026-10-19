@@ -413,6 +413,8 @@ fn methods_exist() {
     let _ = Client::sunsubscribe;
     let _ = Client::swapdb;
     let _ = Client::take;
+    let _ = Client::transfer;
+    let _ = Client::htransfer;
     let _ = Client::touch;
     let _ = Client::ttl;
     let _ = Client::unlink;

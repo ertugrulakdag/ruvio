@@ -229,6 +229,46 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
     }
 
     /**
+     * Sends the Ruvio command {@code TRANSFER source destination amount}: moves {@code amount} from the
+     * integer at {@code source} to the integer at {@code destination} in one step, only when {@code source}
+     * holds at least that much. A missing {@code destination} starts at 0. Both writes are one WAL record.
+     *
+     * <pre>{@code
+     * client.set("{u}:wallet", "50");
+     * List<Long> after = client.transfer("{u}:wallet", "{u}:escrow", 30); // [20, 30]
+     * List<Long> none = client.transfer("{u}:wallet", "{u}:escrow", 30);  // null, nothing changed
+     * }</pre>
+     *
+     * @param source the key to subtract from (a decimal integer string)
+     * @param destination the key to add to; in a cluster it must share a slot with {@code source}
+     * (use a hash tag such as {@code {user:42}})
+     * @param amount the amount to move; must be greater than zero
+     * @return {@code [sourceAfter, destinationAfter]}, or {@code null} when {@code source} is missing or
+     * short, or {@code destination} would overflow (nothing is written)
+     * @throws RuvioServerException {@code ERR} when {@code amount} is not positive, the keys are the same or a
+     * value is not an integer; {@code WRONGTYPE} for a non-string; {@code CROSSSLOT} when the keys are in different slots
+     */
+    public CompletableFuture<List<Long>> transfer(K source, K destination, long amount) {
+        return send(args().w(Cmd.TRANSFER).k(source).k(destination).l(amount), Reply.LONG_PAIR);
+    }
+
+    /**
+     * Sends the Ruvio command {@code TRANSFER source destination amount MAX max}: {@link #transfer(Object, Object, long)}
+     * that also refuses when {@code destination} would end above {@code max}.
+     *
+     * @param source the key to subtract from (a decimal integer string)
+     * @param destination the key to add to; in a cluster it must share a slot with {@code source}
+     * @param amount the amount to move; must be greater than zero
+     * @param max the highest value {@code destination} may reach
+     * @return {@code [sourceAfter, destinationAfter]}, or {@code null} when nothing was moved
+     * @throws RuvioServerException {@code ERR} when {@code amount} is not positive, the keys are the same or a
+     * value is not an integer; {@code WRONGTYPE} for a non-string; {@code CROSSSLOT} when the keys are in different slots
+     */
+    public CompletableFuture<List<Long>> transfer(K source, K destination, long amount, long max) {
+        return send(args().w(Cmd.TRANSFER).k(source).k(destination).l(amount).w(Cmd.MAX).l(max), Reply.LONG_PAIR);
+    }
+
+    /**
      * Sends the Ruvio command {@code DELEX key IFEQ expected}: deletes a string only when it equals
      * {@code expected}. The usual safe way to release a token-based lock.
      *

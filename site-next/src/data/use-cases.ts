@@ -67,6 +67,24 @@ INCR hits:user-7:2026-10-19 EX 86400
     refs: [{ label: "TAKE", href: commands }, { label: "INCRBY MAX", href: commands }, { label: "TTL on create", href: "/docs/data-types/" }],
   },
   {
+    id: "balances",
+    nav: "Credits and wallets",
+    title: "Credits, points and wallet moves",
+    problem: "Move an amount from one balance to another only when the first one has enough, with no script and no retry loop.",
+    code: `SET {user:42}:wallet 50
+TRANSFER {user:42}:wallet {user:42}:escrow 30
+# 1) 20  -> wallet after
+# 2) 30  -> escrow after
+# (nil)  -> not enough, nothing changed
+
+HTRANSFER account:7 available held 30 MAX 1000
+# 1) 20  -> available after
+# 2) 30  -> held after`,
+    body: "<code>TRANSFER</code> moves an amount between two integer keys, <code>HTRANSFER</code> between two fields of one hash. Both balances change in one WAL record, and a refusal (short source, or a destination past <code>MAX</code>) answers with a null bulk and writes nothing.",
+    note: "TRANSFER keys must share a slot; a hash tag such as {user:42} keeps them together.",
+    refs: [{ label: "TRANSFER", href: commands }, { label: "HTRANSFER", href: commands }],
+  },
+  {
     id: "idempotency",
     nav: "Idempotent APIs",
     title: "Idempotent APIs and payments",
