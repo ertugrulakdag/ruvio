@@ -303,7 +303,8 @@ Replication is an asynchronous WAL tail from one primary to up to 16 replicas.
 Each replica has its own stream and its own sequence. The primary does not
 wait for an acknowledgement, and a slow replica blocks only its own send. A
 new replica does not replace an existing one. Past 16, the primary closes the
-new connection. There is no automatic failover. An operator promotes a caught-up
+new connection. Automatic failover is `ruvio coordinator` ([COORDINATOR.md](COORDINATOR.md)), which
+also answers the Sentinel discovery commands clients use. Without it an operator promotes a caught-up
 replica with `REPLICAOF NO ONE` (or by restarting it as a writer) and points other
 servers at a new primary with `REPLICAOF host port`; `ROLE` answers as in Redis,
 listing each replica that announced its client address. Cluster clients can read from
