@@ -4,6 +4,7 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+- `HMSET` (issue #26): multi-field `HSET` that replies `OK`, as Redis does; PHP cache handlers such as CodeIgniter 4's send it through phpredis. New [docs/PHP.md](docs/PHP.md): phpredis and Predis, checked against Ruvio, with CodeIgniter 4 and Laravel cache and session notes. The six clients have a typed `HMSET` method.
 - Recovery memory (issue #71): after a crash the WAL records replayed since the last checkpoint were kept for the life of the shard, so a restart used 2-3x the memory of the same data and a memory-limited pod could crash-loop. Each record is now dropped once applied and the freed pages are returned. Measured with 1M keys of 64 B, `everysec`, SIGKILL and restart: RSS 286 MB before, 102 MB after (95 MB before the kill).
 - Docs (issue #52): `hot_keys` is the one exception to "checked, logged, then applied": a hot `SET`/`DEL` whose WAL append fails is already readable by other clients until a restart. CONFIGURATION.md and the README say so.
 - WAL (issue #32): a segment longer than `wal_segment_bytes` (written before the setting was lowered, or above `ruvio-ctl`'s 256 MiB default) is read with a warning instead of being reported as corrupt, so startup, `ruvio-ctl check/inspect/backup/restore` work on such a data directory.

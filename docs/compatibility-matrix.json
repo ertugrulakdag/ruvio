@@ -927,6 +927,17 @@
       ]
     },
     {
+      "name": "HMSET",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Same as multi-field HSET (Redis marks HMSET deprecated); replies OK instead of the count of new fields.",
+      "coverage": [
+        "scripts/resp_conformance.py",
+        "scripts/redis_differential.py"
+      ]
+    },
+    {
       "name": "HGET",
       "family": "hashes",
       "status": "supported",

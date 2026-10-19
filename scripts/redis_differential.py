@@ -687,6 +687,8 @@ DIRECTPARSE = [
     (b'HINCRBY', b'h', b'g', b'5'),
     (b'HSETNX', b'h', b'g', b'9'),
     (b'HSETNX', b'h', b'new', b'9'),
+    (b'HMSET', b'h', b'g', b'7', b'm', b'8'),
+    (b'HMGET', b'h', b'g', b'm'),
     (b'HGETALL', b'h'),
     (b'HKEYS', b'h'),
     (b'HVALS', b'h'),

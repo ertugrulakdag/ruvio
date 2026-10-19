@@ -300,3 +300,29 @@ fn info_fields_and_the_observability_table_agree() {
     );
     assert!(missing.is_empty(), "rows INFO does not write: {missing:?}");
 }
+
+/// `HMSET` writes like multi-field `HSET` and replies `OK`, as Redis does (CodeIgniter's
+/// and other PHP cache handlers send it through phpredis `hMSet`).
+#[test]
+fn hmset_writes_like_hset_and_replies_ok() {
+    let (address, stop, server) = serve_with(|_| {});
+
+    assert_eq!(
+        request(
+            address,
+            &resp(&[
+                &[b"HMSET", b"h", b"a", b"1", b"b", b"2"],
+                &[b"HMSET", b"h", b"a", b"3"],
+                &[b"HGET", b"h", b"a"],
+                &[b"HLEN", b"h"],
+                &[b"HMSET", b"h", b"a"],
+                &[b"SET", b"s", b"v"],
+                &[b"HMSET", b"s", b"a", b"1"],
+            ])
+        ),
+        b"+OK\r\n+OK\r\n$1\r\n3\r\n:2\r\n-ERR wrong number of arguments for 'hmset' command\r\n+OK\r\n\
+          -WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
+    );
+    stop.request();
+    join_within(server, PATIENCE).unwrap();
+}

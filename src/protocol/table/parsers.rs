@@ -1678,6 +1678,19 @@ pub(super) fn parse_hset<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, Protoco
     })
 }
 
+pub(super) fn parse_hmset<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    if args.len() < 3 || args.len().is_multiple_of(2) {
+        return Err(ProtocolError::Invalid(
+            "wrong number of arguments for 'hmset' command",
+        ));
+    }
+
+    match parse_hset(args)? {
+        Command::HashSet { key, pairs } => Ok(Command::HashMSet { key, pairs }),
+        _ => unreachable!("parse_hset returns HashSet"),
+    }
+}
+
 pub(super) fn parse_lpush<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
     if args.len() < 2 {
         return Err(ProtocolError::Invalid(

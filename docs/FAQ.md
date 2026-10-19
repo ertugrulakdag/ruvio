@@ -8,7 +8,8 @@ Short answers to what people ask first. Details are in the linked pages.
 
 A key-value server that speaks the Redis protocol (RESP2). `redis-cli` and
 the Redis clients of most languages connect to it, and there are
-[first-party clients](CLIENT_BEHAVIOR.md) for Rust, C#, Go, Java, Python and Node.js.
+[first-party clients](CLIENT_BEHAVIOR.md) for Rust, C#, Go, Java, Python and Node.js
+(PHP works through phpredis or Predis, see [PHP](PHP.md)).
 Data lives in memory and can be made durable with a write-ahead log.
 
 ### Is it a drop-in replacement for Redis?

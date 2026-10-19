@@ -693,6 +693,13 @@ public sealed partial class RuvioClient
     }
 
     /// <inheritdoc />
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+    public async ValueTask SetHashManyAsync(string key, params (string Field, string Value)[] fields)
+    {
+        await Ok(RespCommand.KeyedPairs("HMSET", key, fields));
+    }
+
+    /// <inheritdoc />
     public ValueTask<string?> GetHashFieldAsync(string key, string field, CancellationToken cancellationToken = default)
     {
         return BulkOrNull(new RespCommand("HGET", key, field), cancellationToken);

@@ -1632,6 +1632,14 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         parse_hset,
     ),
     CommandSpec::migrated(
+        "hmset",
+        -4,
+        WRITE | DENYOOM | FAST,
+        (1, 1, 1),
+        &["write", "hash", "fast"],
+        parse_hmset,
+    ),
+    CommandSpec::migrated(
         "hdel",
         -3,
         WRITE | FAST,

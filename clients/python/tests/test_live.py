@@ -428,6 +428,8 @@ async def test_hashes(c):
     assert await c.hincrbyfloat("h", "f3", 0.5) == 5.5
     assert await c.hsetnx("h", "f1", "x") is False
     assert await c.hsetnx("h", "f6", "x") is True
+    assert await c.hmset("hm", {"a": "1", "b": "2"}) is True
+    assert await c.hmget("hm", "a", "b") == ["1", "2"]
     assert await c.hstrlen("h", "f1") == 2
     assert await c.hdel("h", "f6", "nope") == 1
     cur, page = await c.hscan("h", 0, match="f*", count=100)

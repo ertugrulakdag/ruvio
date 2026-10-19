@@ -928,6 +928,17 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
             destination,
             member,
         } => set_move(shard, sink, &source, &destination, &member),
+        Command::HashMSet { key, pairs } => execute_in_database(
+            shard,
+            Command::HashSet { key, pairs },
+            sink,
+            waiters,
+            database,
+        )
+        .map(|response| match response {
+            Response::Integer(_) => Response::Simple(b"OK"),
+            response => response,
+        }),
         Command::HashSet { key, pairs } => {
             shard.expire_hash_fields(&key);
 
