@@ -4,6 +4,7 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+- The HTTP `/metrics` endpoint is not served by the server (the setting was accepted but nothing listened). It is removed from the docs, `deploy/kubernetes.yaml` and `deploy/ruvio.toml`; metrics are read with `INFO prometheus`. The server logs a warning at startup when `metrics_address` is set. An HTTP endpoint may come later.
 - `SCAN cursor … SLOT n` returns only the keys of hash slot `n`, from any port of a multi-shard server (it runs on the shard that owns the slot). `COUNT` still bounds each call. No memory is added per key.
 - New `ruvio coordinator`: automatic failover. Three or five coordinators (a separate mode of the same binary; no data, no data commands) agree through Raft on each replication group's primary, fail it over when a majority cannot reach it (`REPLICAOF NO ONE` on the replica holding the most history, the others pointed at it), and make an old primary a replica when it returns. They answer the Redis Sentinel API subset clients use (`SENTINEL get-master-addr-by-name`, `masters`, `replicas`, `+switch-master`), so clients with Sentinel support follow a failover. Shared `secret` for coordinator calls and `AUTH`. Built with the default `coordinator` Cargo feature (openraft 0.9.25). See docs/COORDINATOR.md and deploy/compose.failover.yml.
 - A replica that follows its primary by host name now tries every address the name resolves to; `localhost` resolving to ::1 first no longer keeps it from a primary listening on 127.0.0.1.
