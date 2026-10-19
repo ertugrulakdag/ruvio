@@ -25,11 +25,14 @@ internal sealed class CommandMultiplexer
     private int _scheduled;
     private TaskCompletionSource? _writerStopped;
     private Exception? _failure;
+    // RuvioClientOptions.CommandTimeout; zero means no limit.
+    private readonly TimeSpan _commandTimeout;
 
     // dedicatedReader: the stream blocks (BlockingSocketStream); replies are read by a thread of
     // this multiplexer's own, and writes complete in the caller.
-    internal CommandMultiplexer(Stream stream, RespReader reader, int capacity, bool coalesceWrites = true, bool dedicatedReader = false)
+    internal CommandMultiplexer(Stream stream, RespReader reader, int capacity, bool coalesceWrites = true, bool dedicatedReader = false, TimeSpan commandTimeout = default)
     {
+        _commandTimeout = commandTimeout;
         _stream = stream;
         _coalesceWrites = coalesceWrites;
         _reader = reader;
@@ -65,6 +68,12 @@ internal sealed class CommandMultiplexer
     internal bool IsBroken => Volatile.Read(ref _failure) is not null;
 
     internal ValueTask<IReadOnlyList<RespValue>> SendAsync(
+        IReadOnlyList<IReadOnlyList<string>> commands, CancellationToken token) =>
+        _commandTimeout > TimeSpan.Zero
+            ? Timed(t => SendCore(commands, t), token)
+            : SendCore(commands, token);
+
+    private ValueTask<IReadOnlyList<RespValue>> SendCore(
         IReadOnlyList<IReadOnlyList<string>> commands, CancellationToken token)
     {
         Request? request = Admit(commands.Count, token, out Exception? error);
@@ -80,6 +89,18 @@ internal sealed class CommandMultiplexer
 
     internal ValueTask<RespValue> SendCommandAsync(in RespCommand command, CancellationToken token)
     {
+        if (_commandTimeout > TimeSpan.Zero)
+        {
+            RespCommand copy = command;
+
+            return Timed(t => SendCommandCore(copy, t), token);
+        }
+
+        return SendCommandCore(command, token);
+    }
+
+    private ValueTask<RespValue> SendCommandCore(in RespCommand command, CancellationToken token)
+    {
         Request? request = Admit(1, token, out Exception? error);
 
         if (request is null)
@@ -91,7 +112,12 @@ internal sealed class CommandMultiplexer
         return LeadOrWait(lead, request, request.SubmitOne(this));
     }
 
-    internal ValueTask<RespValue> SendAsync(IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken token)
+    internal ValueTask<RespValue> SendAsync(IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken token) =>
+        _commandTimeout > TimeSpan.Zero
+            ? Timed(t => SendArgumentsCore(arguments, t), token)
+            : SendArgumentsCore(arguments, token);
+
+    private ValueTask<RespValue> SendArgumentsCore(IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken token)
     {
         Request? request = Admit(1, token, out Exception? error);
 
@@ -105,6 +131,12 @@ internal sealed class CommandMultiplexer
     }
 
     internal ValueTask<IReadOnlyList<RespValue>> SendAsync(
+        ReadOnlyMemory<byte> payload, int replies, CancellationToken token) =>
+        _commandTimeout > TimeSpan.Zero
+            ? Timed(t => SendPayloadCore(payload, replies, t), token)
+            : SendPayloadCore(payload, replies, token);
+
+    private ValueTask<IReadOnlyList<RespValue>> SendPayloadCore(
         ReadOnlyMemory<byte> payload, int replies, CancellationToken token)
     {
         Request? request = Admit(replies, token, out Exception? error);
@@ -116,6 +148,26 @@ internal sealed class CommandMultiplexer
         bool lead = CanLead(token);
 
         return LeadOrWait(lead, request, request.SubmitMany(this));
+    }
+
+    /// <summary>
+    /// Runs one send under <c>CommandTimeout</c>. The wait is abandoned when it expires, like any cancelled
+    /// wait (sent replies are still drained), and the caller gets a <see cref="TimeoutException"/>.
+    /// </summary>
+    private async ValueTask<T> Timed<T>(Func<CancellationToken, ValueTask<T>> send, CancellationToken token)
+    {
+        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+
+        timeout.CancelAfter(_commandTimeout);
+
+        try
+        {
+            return await send(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException($"ruvio: no reply within the command timeout of {_commandTimeout}");
+        }
     }
 
     /// <summary>

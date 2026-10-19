@@ -79,6 +79,16 @@ public sealed class RuvioClientOptions
     public TimeSpan ConnectTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// How long one command may wait for its reply when the call has no cancellation of its own.
+    /// On expiry the call throws <see cref="TimeoutException"/>; the connection stays in use and the late reply
+    /// is discarded. Zero (the default) means no limit, so a half-open peer blocks a call until the socket drops
+    /// or its token is cancelled. It also caps blocking commands (<c>BLPOP</c> and the like): set it above their own
+    /// timeout. Commands on the multiplexed path (every typed command) are covered; Pub/Sub and the initial
+    /// <c>AUTH</c>/<c>SELECT</c> are not.
+    /// </summary>
+    public TimeSpan CommandTimeout { get; set; } = TimeSpan.Zero;
+
+    /// <summary>
     /// Maximum admitted command groups per socket, including queued writes and pending replies.
     /// Each ExecuteManyAsync pipeline is one group. Defaults to 256; must be positive.
     /// </summary>

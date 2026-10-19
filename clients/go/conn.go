@@ -138,6 +138,7 @@ type conn struct {
 	onPush    func(Value)
 	addr      int32                     // index of the dialed address in Client.addrs
 	sink      atomic.Pointer[sinkFuncs] // Pub/Sub mode: every reply goes here
+	timeout   time.Duration             // Options.CommandTimeout; 0 means none
 
 	// read state, owned by the holder of the reading token
 	rbuf   []byte
@@ -478,6 +479,13 @@ func (c *conn) close() { c.fail(ErrClosed) }
 // is reading. A caller can lead when its context has no cancel channel or has a
 // deadline (enforced with the socket read deadline).
 func (c *conn) roundTrip(ctx context.Context, r *request) (bool, error) {
+	if c.timeout > 0 {
+		if _, has := ctx.Deadline(); !has {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, c.timeout)
+			defer cancel()
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		putReq(r)
 		return false, err

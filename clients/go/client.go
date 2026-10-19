@@ -48,6 +48,12 @@ type Options struct {
 	// DialTimeout bounds connecting and the handshake when the context has no
 	// deadline. Default 5 seconds.
 	DialTimeout time.Duration
+	// CommandTimeout bounds one command, from sending it to reading its reply, when its
+	// context has no deadline; the command then fails with context.DeadlineExceeded and
+	// the connection stays usable. Default 0: no limit, so a half-open peer blocks a
+	// call made with context.Background() until the connection drops. It also caps
+	// blocking commands (BLPop and the like): set it above their own timeout.
+	CommandTimeout time.Duration
 	// Dial overrides the dialer (for TLS, unix sockets, tests). The network argument
 	// is always "tcp" and addr is the address being tried: Options.Addr, the seed (with
 	// Seeds) or the node address in cluster mode. Return a *tls.Conn here when the server requires TLS.
@@ -306,6 +312,7 @@ func (c *Client) dialAddr(ctx context.Context, onPush func(Value), idx int, addr
 		tc.SetNoDelay(true)
 	}
 	cn := newConn(nc, onPush)
+	cn.timeout = c.opts.CommandTimeout
 	cn.addr = int32(idx)
 	if onPush != nil || c.opts.Protocol == 3 {
 		cn.keepReading() // push frames can arrive with no call pending
