@@ -110,6 +110,10 @@ public class LiveTests
         Assert.Equal(new byte[] { 1 }, await scope.Cache.GetAsync("slide"));
         Assert.InRange(await scope.Ttl("slide"), 50_000, 60_000);
         await scope.Client.ExecuteAsync("PEXPIRE", slide, "1");
+
+        // A read that lands while the entry is still alive renews it for the full window, so the
+        // entry must be past its deadline before the first read, not merely about to be.
+        await Task.Delay(100);
         await Eventually(async () => await scope.Cache.GetAsync("slide") is null, "the expired entry to read as missing");
 
         // 9 s absolute, 8 s sliding: from the second refresh on (1.4 s or more after the write)
