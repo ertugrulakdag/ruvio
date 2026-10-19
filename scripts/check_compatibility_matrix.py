@@ -38,7 +38,7 @@ COMPOSITE = {
         "CLUSTER MYID",
         "CLUSTER KEYSLOT",
     ),
-    "CONFIG": ("CONFIG GET",),
+    "CONFIG": ("CONFIG GET", "CONFIG SET", "CONFIG REWRITE"),
     "SCRIPT": (
         "SCRIPT LOAD",
         "SCRIPT EXISTS",

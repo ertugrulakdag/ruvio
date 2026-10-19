@@ -5,7 +5,8 @@
 #
 # Starts a standalone server on <base-port> and a 3-shard server (per-shard
 # ports <base-port>+10 .. +12), exports RUVIO_TEST_ADDR / RUVIO_ADDR /
-# RUVIO_CLUSTER_ADDR for the command, and stops both servers afterwards.
+# RUVIO_CLUSTER_ADDR (and RUVIO_TEST_CONFIG_REWRITE=1) for the command, and stops both
+# servers afterwards.
 # The repository ruvio.example.toml is copied, never edited.
 #
 # Each port must answer PING with PONG from the server this script started
@@ -84,4 +85,6 @@ ready "$((base + 10))" --pid "${pids[1]}" --cluster
 export RUVIO_ADDR="127.0.0.1:$base"
 export RUVIO_TEST_ADDR="127.0.0.1:$base"
 export RUVIO_CLUSTER_ADDR="127.0.0.1:$((base + 10))"
+# The servers run on throwaway copies of the config file, so live tests may rewrite it.
+export RUVIO_TEST_CONFIG_REWRITE=1
 "$@"

@@ -583,10 +583,24 @@ func (c *cmds) Wait(ctx context.Context, replicas int64, timeout time.Duration) 
 }
 
 // ConfigGet returns the settings whose names match the glob pattern (CONFIG GET pattern)
-// as a name-to-value map. requirepass is redacted. CONFIG SET is not supported by the
-// server, so there is no setter.
+// as a name-to-value map. requirepass is redacted.
 func (c *cmds) ConfigGet(ctx context.Context, pattern string) (map[string]string, error) {
 	return c.strMap(ctx, newCmd(3, cCONFIG).t(tGET).s(pattern))
+}
+
+// ConfigSet changes live settings (CONFIG SET name value ...): nameValues is name1, value1,
+// name2, value2 ..., with the names CONFIG GET shows. Every shard of the server applies
+// the change before it answers. All pairs apply or none: an unknown or restart-only name,
+// or an invalid value, returns an error and changes nothing. The change is not written to
+// the config file (see ConfigRewrite) and not replicated.
+func (c *cmds) ConfigSet(ctx context.Context, nameValues ...string) error {
+	return c.ok(ctx, newCmd(2+len(nameValues), cCONFIG).s("SET").ss(nameValues))
+}
+
+// ConfigRewrite writes the live settings into the config file the server started from
+// (CONFIG REWRITE).
+func (c *cmds) ConfigRewrite(ctx context.Context) error {
+	return c.ok(ctx, newCmd(2, cCONFIG).s("REWRITE"))
 }
 
 // Save runs a checkpoint in the server process and returns when it is written (SAVE). It

@@ -5392,7 +5392,6 @@ Sends ``XCLAIM key group consumer min_idle_ms id... [IDLE ms] [TIME ms] [RETRYCO
     def config_get(self, pattern: str = "*") -> Any:
         """``CONFIG GET pattern`` - server settings that match a glob.
 
-        ``CONFIG SET`` is not supported; change settings in the config file or environment.
         ``requirepass`` is redacted.
 
         Args:
@@ -5402,6 +5401,39 @@ Sends ``XCLAIM key group consumer min_idle_ms id... [IDLE ms] [TIME ms] [RETRYCO
             A dict of setting name to value (text).
         """
         return self._c(_pairs_text_keys, "CONFIG GET", pattern)
+
+    def config_set(self, settings: Union[Mapping[Any, Any], Iterable[Tuple[Any, Any]]]) -> Any:
+        """``CONFIG SET name value [name value ...]`` - changes live settings.
+
+        Names are the ones ``CONFIG GET`` shows. Every shard of the server applies the change
+        before it answers. All pairs apply or none: an unknown or restart-only name, or an
+        invalid value, raises and changes nothing. Not written to the config file (see
+        :meth:`config_rewrite`) and not replicated.
+
+        Args:
+            settings: A ``dict`` or an iterable of ``(name, value)`` pairs.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: An unknown, restart-only or invalid setting.
+
+        Example:
+            client.config_set({"maxmemory": 1073741824, "maxmemory-policy": "allkeys-lru"})
+        """
+        return self._c(_ok, "CONFIG SET", *_flat_pairs(settings))
+
+    def config_rewrite(self) -> Any:
+        """``CONFIG REWRITE`` - writes the live settings into the server's config file.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: The server runs without a config file.
+        """
+        return self._c(_ok, "CONFIG REWRITE")
 
     def save(self) -> Any:
         """``SAVE`` - writes an in-process checkpoint now (blocks the shard).

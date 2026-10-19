@@ -60,6 +60,13 @@ func TestLiveConnectionAndServer(t *testing.T) {
 	if len(must[map[string]string](t)(c.ConfigGet(ctx, "*"))) == 0 {
 		t.Fatal("config get")
 	}
+	if err := c.ConfigSet(ctx, "slowlog-max-len", "128"); err != nil {
+		t.Fatal(err)
+	}
+	eq(t, must[map[string]string](t)(c.ConfigGet(ctx, "slowlog-max-len"))["slowlog-max-len"], "128")
+	if err := c.ConfigSet(ctx, "shards", "2"); err == nil {
+		t.Fatal("CONFIG SET shards should be refused")
+	}
 	okOrServerErr(t, "SAVE", c.Save(ctx))
 	okOrServerErr(t, "BGSAVE", func() error { _, err := c.BgSave(ctx); return err }())
 	cmd := must[Value](t)(c.Command(ctx))

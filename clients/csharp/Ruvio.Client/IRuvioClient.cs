@@ -3381,13 +3381,33 @@ public partial interface IRuvioClient
     /// <param name="parameter">A setting name or glob, for example <c>databases</c> or <c>*</c>.</param>
     /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
     /// <returns>The raw reply: a flat list of name, value pairs. <c>requirepass</c> is redacted.</returns>
-    /// <remarks><c>CONFIG SET</c> is not supported; change settings in the configuration file or environment.</remarks>
     /// <example>
     /// <code>
     /// RespValue databases = await db.GetConfigAsync("databases");
     /// </code>
     /// </example>
     ValueTask<RespValue> GetConfigAsync(string parameter, CancellationToken cancellationToken = default);
+
+    /// <summary>Sends <c>CONFIG SET</c>: changes live settings on every shard of the server before it answers.</summary>
+    /// <param name="settings">Setting names, as <c>CONFIG GET</c> shows them, and their new values.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <remarks>All pairs apply or none: an unknown or restart-only name, or an invalid value, throws and changes nothing. The change is not written to the configuration file (see <see cref="RewriteConfigAsync"/>) and is not replicated.</remarks>
+    /// <example>
+    /// <code>
+    /// await db.SetConfigAsync([("maxmemory", "1073741824"), ("maxmemory-policy", "allkeys-lru")]);
+    /// </code>
+    /// </example>
+    ValueTask SetConfigAsync(IReadOnlyList<(string Name, string Value)> settings, CancellationToken cancellationToken = default);
+
+    /// <summary>Sends <c>CONFIG REWRITE</c>: writes the live settings into the configuration file the server started from.</summary>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <remarks>Fails when the server runs without a configuration file.</remarks>
+    /// <example>
+    /// <code>
+    /// await db.RewriteConfigAsync();
+    /// </code>
+    /// </example>
+    ValueTask RewriteConfigAsync(CancellationToken cancellationToken = default);
 
     /// <summary>Sends <c>FLUSHDB</c>: deletes every key of the selected database.</summary>
     /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>

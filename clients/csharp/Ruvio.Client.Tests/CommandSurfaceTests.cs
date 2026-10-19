@@ -1123,6 +1123,18 @@ public partial class CommandSurfaceTests
         await session.Expect("CONFIG", "GET", "requirepass");
         await session.Reply("*2\r\n$11\r\nrequirepass\r\n$0\r\n\r\n");
         Assert.Equal(RespKind.Array, (await config).Kind);
+
+        ValueTask setConfig = session.Client.SetConfigAsync([("maxmemory", "100"), ("slowlog-max-len", "5")]);
+
+        await session.Expect("CONFIG", "SET", "maxmemory", "100", "slowlog-max-len", "5");
+        await session.Reply("+OK\r\n");
+        await setConfig;
+
+        ValueTask rewrite = session.Client.RewriteConfigAsync();
+
+        await session.Expect("CONFIG", "REWRITE");
+        await session.Reply("+OK\r\n");
+        await rewrite;
     }
 
     [Fact(Timeout = 15000)]

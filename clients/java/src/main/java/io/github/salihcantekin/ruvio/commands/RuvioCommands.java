@@ -465,13 +465,42 @@ public abstract class RuvioCommands<K, V> extends ScriptingCommands<K, V> {
     }
 
     /**
-     * Sends {@code CONFIG GET pattern}: reads settings. {@code CONFIG SET} is not supported; change settings in the config file, environment or flags. The password ({@code requirepass}) is redacted.
+     * Sends {@code CONFIG GET pattern}: reads settings. The password ({@code requirepass}) is redacted.
      *
      * @param pattern a glob such as {@code max*} or {@code *}
      * @return setting name to value
      */
     public CompletableFuture<Map<String, String>> configGet(String pattern) {
         return send(args().w(Cmd.CONFIG).s("GET").s(pattern), Reply.STRING_MAP);
+    }
+
+    /**
+     * Sends {@code CONFIG SET name value ...}: changes live settings, named as {@code CONFIG GET} shows them. Every shard of the server applies the change before it answers. All pairs apply or none: an unknown or restart-only name, or an invalid value, fails the call and changes nothing. Not written to the config file (see {@link #configRewrite()}) and not replicated.
+     *
+     * <pre>{@code
+     * client.configSet(Map.of("maxmemory", "1073741824", "maxmemory-policy", "allkeys-lru"));
+     * }</pre>
+     *
+     * @param settings setting names and values; iteration order is the send order
+     * @throws RuvioServerException {@code ERR} for an unknown, restart-only or invalid setting
+     * @return a future that completes with no value once every shard has applied the change
+     */
+    public CompletableFuture<Void> configSet(Map<String, String> settings) {
+        Args a = args().w(Cmd.CONFIG).s("SET");
+        for (Map.Entry<String, String> e : settings.entrySet()) {
+            a.s(e.getKey()).s(e.getValue());
+        }
+        return send(a, Reply.OK);
+    }
+
+    /**
+     * Sends {@code CONFIG REWRITE}: writes the live settings into the config file the server started from.
+     *
+     * @throws RuvioServerException {@code ERR} when the server runs without a config file
+     * @return a future that completes with no value once the file is written
+     */
+    public CompletableFuture<Void> configRewrite() {
+        return send(args().w(Cmd.CONFIG).s("REWRITE"), Reply.OK);
     }
 
     /**

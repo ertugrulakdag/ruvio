@@ -45,11 +45,17 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         List<string> commands = matrix.RootElement.GetProperty("commands").EnumerateArray()
             .Select(command => command.GetProperty("name").GetString()!)
             .ToList();
-        List<string> unsent = commands.Where(command => !proxy.Seen.ContainsKey(command)).ToList();
+        List<string> unsent = commands
+            .Where(command => !proxy.Seen.ContainsKey(command))
+            .Where(command => RewritesConfig || command != "CONFIG REWRITE")
+            .ToList();
 
         output.WriteLine($"live: {commands.Count - unsent.Count}/{commands.Count} matrix commands sent and answered");
         Assert.True(unsent.Count == 0, "Matrix commands never sent live: " + string.Join(", ", unsent));
     }
+
+    /// <summary><c>scripts/run_with_servers.sh</c> runs the servers on throwaway config files.</summary>
+    private static bool RewritesConfig => Environment.GetEnvironmentVariable("RUVIO_TEST_CONFIG_REWRITE") == "1";
 
     private static async Task Strings(RuvioClient db)
     {
@@ -616,6 +622,15 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         Assert.Contains("# Server", await db.GetInfoAsync(), StringComparison.Ordinal);
         Assert.Contains("ruvio_", await db.GetInfoAsync("server"), StringComparison.Ordinal);
         Assert.Equal(RespKind.Array, (await db.GetConfigAsync("maxmemory")).Kind);
+        await db.SetConfigAsync([("slowlog-max-len", "128")]);
+        Assert.Equal("128", (await db.GetConfigAsync("slowlog-max-len")).Items![1].AsString());
+        await Assert.ThrowsAsync<RuvioException>(async () => await db.SetConfigAsync([("shards", "2")]));
+
+        // Only on a throwaway server: CONFIG REWRITE rewrites the server's config file.
+        if (RewritesConfig)
+        {
+            await db.RewriteConfigAsync();
+        }
         await db.SaveAsync();
         await db.SaveInBackgroundAsync();
         Assert.True(await db.GetSlowLogLengthAsync() >= 0);

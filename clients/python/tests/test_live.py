@@ -735,6 +735,10 @@ async def test_server(c):
     assert await c.wait(0, 10) == 0
     cfg = await c.config_get("databases")
     assert cfg["databases"] == "16"
+    assert await c.config_set({"slowlog-max-len": 128}) is True
+    assert (await c.config_get("slowlog-max-len"))["slowlog-max-len"] == "128"
+    with pytest.raises(ruvio.ResponseError):
+        await c.config_set({"shards": 2})
     assert await c.save() is True
     assert "saving" in (await c.bgsave()).lower() or await c.bgsave()
 

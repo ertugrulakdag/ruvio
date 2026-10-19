@@ -523,6 +523,15 @@ fn server_commands_and_pubsub() {
     assert!(db.info(None).unwrap().contains("ruvio"));
     assert!(!db.info(Some("server")).unwrap().is_empty());
     assert!(!db.config_get("databases").unwrap().is_empty());
+    db.config_set(&[("slowlog-max-len", "128")]).unwrap();
+    assert_eq!(
+        db.config_get("slowlog-max-len").unwrap(),
+        [("slowlog-max-len".to_owned(), "128".to_owned())]
+    );
+    assert!(matches!(
+        db.config_set(&[("shards", "2")]),
+        Err(ruvio_client::Error::Server(_))
+    ));
     assert_eq!(db.acl_whoami().unwrap(), "default");
     assert!(db.acl_users().unwrap().contains(&"default".to_owned()));
     assert!(!db.acl_list().unwrap().is_empty());

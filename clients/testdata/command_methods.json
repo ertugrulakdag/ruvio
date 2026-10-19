@@ -46,6 +46,8 @@
     "CLUSTER SLOTS": {"rust": "cluster_slots", "csharp": "GetClusterSlotsAsync", "go": "ClusterSlots", "java": "clusterSlots", "node": "clusterSlots", "python": "cluster_slots"},
     "COMMAND": {"rust": ["command_list", "command_count", "command_info", "command_docs"], "csharp": "GetCommandsAsync", "go": "Command", "java": "command", "node": "command", "python": "command"},
     "CONFIG GET": {"rust": "config_get", "csharp": "GetConfigAsync", "go": "ConfigGet", "java": "configGet", "node": "configGet", "python": "config_get"},
+    "CONFIG REWRITE": {"rust": "config_rewrite", "csharp": "RewriteConfigAsync", "go": "ConfigRewrite", "java": "configRewrite", "node": "configRewrite", "python": "config_rewrite"},
+    "CONFIG SET": {"rust": "config_set", "csharp": "SetConfigAsync", "go": "ConfigSet", "java": "configSet", "node": "configSet", "python": "config_set"},
     "COPY": {"rust": "copy", "csharp": "CopyAsync", "go": "Copy", "java": "copy", "node": "copy", "python": "copy"},
     "DBSIZE": {"rust": "dbsize", "csharp": "GetDatabaseSizeAsync", "go": "DBSize", "java": "dbsize", "node": "dbsize", "python": "dbsize"},
     "DECR": {"rust": "decr", "csharp": "DecrementAsync", "go": "Decr", "java": "decr", "node": "decr", "python": "decr"},

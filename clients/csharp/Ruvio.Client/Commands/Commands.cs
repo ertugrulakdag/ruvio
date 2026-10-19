@@ -2099,6 +2099,32 @@ public sealed partial class RuvioClient
     }
 
     /// <inheritdoc />
+    public ValueTask SetConfigAsync(IReadOnlyList<(string Name, string Value)> settings, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var arguments = new string[2 + settings.Count * 2];
+
+        arguments[0] = "CONFIG";
+        arguments[1] = "SET";
+        int index = 2;
+
+        foreach ((string name, string value) in settings)
+        {
+            arguments[index++] = name;
+            arguments[index++] = value;
+        }
+
+        return Ok(arguments, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public ValueTask RewriteConfigAsync(CancellationToken cancellationToken = default)
+    {
+        return Ok(new RespCommand("CONFIG", "REWRITE"), cancellationToken);
+    }
+
+    /// <inheritdoc />
     public ValueTask FlushDatabaseAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("FLUSHDB"), cancellationToken);

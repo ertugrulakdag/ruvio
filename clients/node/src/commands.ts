@@ -5557,7 +5557,7 @@ export abstract class Commands {
     return section === undefined ? this._0(T.lines, C.INFO) : this._1(T.lines, C.INFO, kw(KW_INFO_SECTION, section));
   }
   /**
-   * Reads server settings (`CONFIG GET pattern`). `requirepass` is redacted; `CONFIG SET` is not supported.
+   * Reads server settings (`CONFIG GET pattern`). `requirepass` is redacted.
    *
    * @param pattern Glob over setting names, e.g. `'max*'`.
    * @returns An object of setting name to value.
@@ -5569,6 +5569,36 @@ export abstract class Commands {
    */
   configGet(pattern: string): R<Record<string, string>> {
     return this._1(T.map, C.CONFIG_GET, pattern);
+  }
+  /**
+   * Changes live settings (`CONFIG SET name value ...`), named as `CONFIG GET` shows them.
+   * Every shard of the server applies the change before it answers. All pairs apply or
+   * none: an unknown or restart-only name, or an invalid value, rejects and changes
+   * nothing. Not written to the config file (see {@link configRewrite}) and not replicated.
+   *
+   * @param settings Setting names and values.
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.configSet({ maxmemory: '1073741824', 'maxmemory-policy': 'allkeys-lru' });
+   * ```
+   */
+  configSet(settings: Record<string, Value> | ReadonlyArray<readonly [Key, Value]>): R<'OK'> {
+    return this._v(null, C.CONFIG_SET, flatPairs([], settings));
+  }
+  /**
+   * Writes the live settings into the config file the server started from (`CONFIG REWRITE`).
+   *
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.configRewrite();
+   * ```
+   */
+  configRewrite(): R<'OK'> {
+    return this._0(null, C.CONFIG_REWRITE);
   }
   /**
    * Writes a checkpoint now (`SAVE`). In-process.

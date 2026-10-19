@@ -5651,13 +5651,32 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
-     * Sends {@code CONFIG GET pattern}: reads settings. {@code CONFIG SET} is not supported; change settings in the config file, environment or flags. The password ({@code requirepass}) is redacted.
+     * Sends {@code CONFIG GET pattern}: reads settings. The password ({@code requirepass}) is redacted.
      *
      * @param pattern a glob such as {@code max*} or {@code *}
      * @return setting name to value
      */
     public Map<String, String> configGet(String pattern) {
         return await(async.configGet(pattern));
+    }
+
+    /**
+     * Sends {@code CONFIG SET name value ...}: changes live settings on every shard. All pairs apply or none.
+     *
+     * @param settings setting names and values, named as {@code CONFIG GET} shows them
+     * @throws RuvioServerException {@code ERR} for an unknown, restart-only or invalid setting
+     */
+    public void configSet(Map<String, String> settings) {
+        await(async.configSet(settings));
+    }
+
+    /**
+     * Sends {@code CONFIG REWRITE}: writes the live settings into the server's config file.
+     *
+     * @throws RuvioServerException {@code ERR} when the server runs without a config file
+     */
+    public void configRewrite() {
+        await(async.configRewrite());
     }
 
     /**

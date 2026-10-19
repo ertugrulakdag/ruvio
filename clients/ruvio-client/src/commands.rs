@@ -2785,9 +2785,33 @@ impl Client {
     }
 
     /// Sends `CONFIG GET`: returns `(parameter, value)` pairs matching a name or glob. Ruvio
-    /// lists its own settings and redacts `requirepass`; `CONFIG SET` is not supported.
+    /// lists its own settings and redacts `requirepass`.
     pub fn config_get(&mut self, parameter: &str) -> Result<Vec<(String, String)>, Error> {
         pairs(&self.run(["CONFIG", "GET", parameter])?)
+    }
+
+    /// Sends `CONFIG SET`: changes live settings (names as `CONFIG GET` shows them) on every
+    /// shard of the server before it answers. All pairs apply or none: an unknown or
+    /// restart-only name, or an invalid value, fails the call and changes nothing. Not
+    /// written to the config file (see [`Client::config_rewrite`]) and not replicated.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// client.config_set(&[("maxmemory", "1073741824"), ("maxmemory-policy", "allkeys-lru")])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn config_set(&mut self, pairs: &[(&str, &str)]) -> Result<(), Error> {
+        self.ok(with_pairs(args!["CONFIG", "SET"], pairs))
+    }
+
+    /// Sends `CONFIG REWRITE`: writes the live settings into the config file the server
+    /// started from.
+    pub fn config_rewrite(&mut self) -> Result<(), Error> {
+        self.ok(["CONFIG", "REWRITE"])
     }
 
     /// Sends `SAVE`: writes a snapshot now and waits.

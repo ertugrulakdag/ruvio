@@ -182,6 +182,8 @@ fn methods_exist() {
     let _ = Client::command_info;
     let _ = Client::command_list;
     let _ = Client::config_get;
+    let _ = Client::config_rewrite;
+    let _ = Client::config_set;
     let _ = Client::copy;
     let _ = Client::dbsize;
     let _ = Client::decr;

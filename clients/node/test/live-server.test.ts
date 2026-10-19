@@ -95,6 +95,11 @@ test('introspection, persistence, replication', { skip: SKIP }, async () => {
     assert.match(await c.info('server'), /:/);
     const cfg = await c.configGet('*');
     assert.ok(Object.keys(cfg).length > 0);
+    assert.equal(await c.configSet({ 'slowlog-max-len': '128' }), 'OK');
+    assert.equal((await c.configGet('slowlog-max-len'))['slowlog-max-len'], '128');
+    assert.ok((await rejects(c.configSet({ shards: '2' }))) instanceof RuvioError);
+    // Only on a throwaway server: CONFIG REWRITE rewrites the server's config file.
+    if (process.env.RUVIO_TEST_CONFIG_REWRITE === '1') assert.equal(await c.configRewrite(), 'OK');
     assert.equal(await c.save(), 'OK');
     assert.ok(typeof (await c.bgsave()) === 'string');
     assert.equal(await c.wait(0, 10), 0);

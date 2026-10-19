@@ -140,6 +140,9 @@ class ServerLiveTest {
         assertTrue(c.info("prometheus").contains("ruvio"));
         Map<String, String> cfg = c.configGet("maxmemory*");
         assertTrue(cfg.containsKey("maxmemory"));
+        c.configSet(Map.of("slowlog-max-len", "128"));
+        assertEquals("128", c.configGet("slowlog-max-len").get("slowlog-max-len"));
+        assertThrows(RuvioServerException.class, () -> c.configSet(Map.of("shards", "2")));
         c.save();
         assertNotNull(c.bgsave());
         assertEquals(0L, c.waitReplicas(0, 10));
