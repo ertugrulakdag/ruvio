@@ -1088,7 +1088,9 @@ fn limit_sliding_and_tokens_modes() {
     let taken = db.limit_tokens_with_retry("rl:t", 5, 60_000, 3).unwrap();
     assert!(taken.allowed && taken.remaining == 0 && taken.retry_after_ms == 0);
     assert_eq!(db.limit_tokens("rl:t", 5, 60_000, 1).unwrap(), None);
+}
 
+#[test]
 fn transfer_and_htransfer_move_amounts_atomically() {
     let Some(mut db) = connect(6) else { return };
 
