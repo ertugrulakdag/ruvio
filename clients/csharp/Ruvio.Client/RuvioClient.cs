@@ -19,6 +19,7 @@ public sealed partial class RuvioClient : IRuvioClient
     private readonly Dictionary<string, List<object>> _handlers = new(StringComparer.Ordinal);
     private readonly int _database;
     private ClusterRouter? _cluster;
+    private readonly (string Host, int Port)[] _seeds;
     private bool _disposed;
 
     private RuvioClient(RuvioSocket seed, RuvioClientOptions options, ClusterRouter? cluster)
@@ -27,6 +28,7 @@ public sealed partial class RuvioClient : IRuvioClient
         _options = options;
         _database = options.Database;
         _cluster = cluster;
+        _seeds = SeedAddresses.Parse(options);
 
         cluster?.Bind(
             OpenWithRetryAsync,
@@ -42,6 +44,8 @@ public sealed partial class RuvioClient : IRuvioClient
 
     /// <summary>RESP port configured for this database client's command connection.</summary>
     public int Port => _options.Port;
+
+    internal ClusterRouter? Router => _cluster;
 
     internal bool IsCluster => _cluster is not null;
 
@@ -111,14 +115,19 @@ public sealed partial class RuvioClient : IRuvioClient
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        if (string.IsNullOrWhiteSpace(options.Host))
-        {
-            throw new ArgumentException("Host is required.", nameof(options));
-        }
+        (string Host, int Port)[] seeds = SeedAddresses.Parse(options);
 
-        if (options.Port is < 1 or > 65535)
+        if (seeds.Length == 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(options), "Port must be between 1 and 65535.");
+            if (string.IsNullOrWhiteSpace(options.Host))
+            {
+                throw new ArgumentException("Host is required.", nameof(options));
+            }
+
+            if (options.Port is < 1 or > 65535)
+            {
+                throw new ArgumentOutOfRangeException(nameof(options), "Port must be between 1 and 65535.");
+            }
         }
 
         if (options.Database < 0)
@@ -126,11 +135,9 @@ public sealed partial class RuvioClient : IRuvioClient
             throw new ArgumentOutOfRangeException(nameof(options), "Database must not be negative.");
         }
 
-        RuvioSocket seed = await RuvioSocket.OpenAsync(
-            options.Host,
-            options.Port,
-            options,
-            cancellationToken);
+        RuvioSocket seed = seeds.Length == 0
+            ? await RuvioSocket.OpenAsync(options.Host, options.Port, options, cancellationToken)
+            : await OpenFirstAsync(seeds, options, cancellationToken);
 
         if (!options.DiscoverCluster)
         {
@@ -180,6 +187,39 @@ public sealed partial class RuvioClient : IRuvioClient
             throw;
         }
     }
+
+    /// <summary>
+    /// Opens the first seed that answers, one connect attempt each. A seed that cannot be reached is
+    /// skipped; anything else (a refused <c>AUTH</c>) is thrown at once. When none answers, the last
+    /// connect error is thrown.
+    /// </summary>
+    private static async Task<RuvioSocket> OpenFirstAsync(
+        (string Host, int Port)[] seeds,
+        RuvioClientOptions options,
+        CancellationToken cancellationToken)
+    {
+        Exception? last = null;
+
+        foreach ((string host, int port) in seeds)
+        {
+            try
+            {
+                return await RuvioSocket.OpenAsync(host, port, options, cancellationToken);
+            }
+            catch (Exception error) when (IsUnreachable(error, cancellationToken))
+            {
+                last = error;
+            }
+        }
+
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(last!).Throw();
+
+        throw last!;
+    }
+
+    private static bool IsUnreachable(Exception error, CancellationToken cancellationToken) =>
+        error is System.Net.Sockets.SocketException or IOException
+        || (error is OperationCanceledException && !cancellationToken.IsCancellationRequested);
 
     private static async Task SelectIfNeededAsync(
         RuvioSocket connection,
@@ -743,7 +783,7 @@ public sealed partial class RuvioClient : IRuvioClient
         }
 
         (string host, int port) = _cluster is null
-            ? (_options.Host, _options.Port)
+            ? (_seed.Host, _seed.Port)
             : _cluster.SubscriptionEndpoint(command, arguments);
 
         string key = $"{host}:{port}";
@@ -846,7 +886,7 @@ public sealed partial class RuvioClient : IRuvioClient
         CancellationToken cancellationToken)
     {
         (string host, int port) = _cluster is null
-            ? (_options.Host, _options.Port)
+            ? (_seed.Host, _seed.Port)
             : _cluster.SubscriptionEndpoint(name, arguments);
         string key = $"{host}:{port}";
 
@@ -923,7 +963,7 @@ public sealed partial class RuvioClient : IRuvioClient
 
     private void FailSubscriber(Exception exception)
     {
-        NoteSocketLost(_options.Host, _options.Port, exception, subscriber: true);
+        NoteSocketLost(_seed.Host, _seed.Port, exception, subscriber: true);
 
         if (!_options.Reconnect || _disposed)
         {
@@ -957,7 +997,9 @@ public sealed partial class RuvioClient : IRuvioClient
             }
 
             NoteSocketLost(_seed.Host, _seed.Port, new RuvioException("connection is closed"), subscriber: false);
-            RuvioSocket opened = await OpenWithRetryAsync(_options.Host, _options.Port, cancellationToken);
+            RuvioSocket opened = _seeds.Length == 0
+                ? await OpenWithRetryAsync(_options.Host, _options.Port, cancellationToken)
+                : await OpenFromSeedsAsync(cancellationToken);
 
             try
             {
@@ -981,6 +1023,48 @@ public sealed partial class RuvioClient : IRuvioClient
         finally
         {
             _reconnectGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// One reconnect attempt tries every seed once, starting with the seed after the address that
+    /// dropped and ending with it; the reconnect delay runs between attempts. A refused <c>AUTH</c>
+    /// stops at once.
+    /// </summary>
+    private async Task<RuvioSocket> OpenFromSeedsAsync(CancellationToken cancellationToken)
+    {
+        int dropped = Array.FindIndex(
+            _seeds,
+            seed => seed.Port == _seed.Port && string.Equals(seed.Host, _seed.Host, StringComparison.OrdinalIgnoreCase));
+        int attempt = 0;
+
+        while (true)
+        {
+            attempt++;
+            Exception? last = null;
+
+            for (int step = 1; step <= _seeds.Length; step++)
+            {
+                (string host, int port) = _seeds[(dropped + step + _seeds.Length) % _seeds.Length];
+
+                try
+                {
+                    return await RuvioSocket.OpenAsync(host, port, _options, cancellationToken);
+                }
+                catch (Exception error) when (IsUnreachable(error, cancellationToken))
+                {
+                    last = error;
+                }
+            }
+
+            TimeSpan? delay = NextReconnectDelay(attempt);
+
+            if (delay is null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(last!).Throw();
+            }
+
+            await Task.Delay(delay!.Value, cancellationToken);
         }
     }
 

@@ -59,10 +59,18 @@ type cluster struct {
 
 	mu    sync.Mutex // guards nodes, refresh and slot patches
 	nodes map[string]*Client
+
+	// seeds are the configured Options.Seeds addresses, asked for the slot map when no
+	// known node answers. Empty without Options.Seeds.
+	seeds []string
 }
 
 func newCluster(seed *Client) *cluster {
-	return &cluster{seed: seed, nodes: map[string]*Client{seed.opts.Addr: seed}}
+	cl := &cluster{seed: seed, nodes: map[string]*Client{seed.opts.Addr: seed}}
+	if len(seed.addrs) > 1 {
+		cl.seeds = seed.addrs
+	}
+	return cl
 }
 
 // node returns the Client for addr, creating it (no connection yet). Caller holds cl.mu.
@@ -72,6 +80,7 @@ func (cl *cluster) node(addr string) *Client {
 	}
 	o := cl.seed.opts
 	o.Addr = addr
+	o.Seeds = nil
 	o.Cluster = false
 	n := NewClient(o)
 	cl.nodes[addr] = n
@@ -110,8 +119,19 @@ func isClusterDisabled(err error) bool {
 		strings.Contains(e.Msg, "unknown command") || strings.Contains(e.Msg, "unknown subcommand"))
 }
 
+// open reports whether the node has a connection that has not failed.
+func (c *Client) open() bool {
+	cn := c.cur.Load()
+	return cn != nil && !cn.dead.Load()
+}
+
 // refresh reloads the slot table with CLUSTER SLOTS. first is the discovery call: a
 // "cluster mode is disabled" reply switches the client to standalone for good.
+//
+// Nodes with an open socket are asked first. When none of them answers (the usual case after
+// a node went away), every other known node and then every seed is opened in turn, one
+// connect attempt each, until one returns a slot map. Seeds that were only added for this
+// call and are not in the new table are dropped again.
 func (cl *cluster) refresh(ctx context.Context, first bool) (*topology, error) {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
@@ -123,40 +143,78 @@ func (cl *cluster) refresh(ctx context.Context, first bool) (*topology, error) {
 			return nil, nil
 		}
 	}
-	candidates := []*Client{cl.seed}
+	known := []*Client{cl.seed}
 	if t := cl.t.Load(); t != nil {
 		for _, n := range t.nodes {
 			if n != cl.seed {
-				candidates = append(candidates, n)
+				known = append(known, n)
 			}
 		}
 	}
 	var lastErr error
-	for _, n := range candidates {
+	// ask returns done=true when the call is finished: t is the new table (nil when the
+	// server turned out to be standalone) or err the final error.
+	ask := func(n *Client) (t *topology, done bool, err error) {
 		v, err := n.execLocal(ctx, newCmd(2, cCLUSTER).t(tSLOTS))
 		if err != nil {
 			if first && isClusterDisabled(err) {
 				cl.standalone.Store(true)
-				return nil, nil
+				return nil, true, nil
 			}
 			lastErr = err
 			if ctx.Err() != nil {
-				break
+				return nil, true, err
 			}
-			continue
+			return nil, false, nil
 		}
-		t, err := cl.build(v)
+		t, err = cl.build(v, n.opts.Addr)
 		if err != nil {
-			return nil, err
+			return nil, true, err
 		}
 		cl.t.Store(t)
-		return t, nil
+		return t, true, nil
+	}
+	for _, n := range known {
+		if n.open() {
+			if t, done, err := ask(n); done {
+				return t, err
+			}
+		}
+	}
+	for _, n := range known {
+		if !n.open() {
+			if t, done, err := ask(n); done {
+				return t, err
+			}
+		}
+	}
+	var added []string
+	defer func() {
+		for _, addr := range added {
+			if t := cl.t.Load(); t != nil && t.indexOf(addr) >= 0 {
+				continue
+			}
+			if n := cl.nodes[addr]; n != nil {
+				delete(cl.nodes, addr)
+				n.Close()
+			}
+		}
+	}()
+	for _, addr := range cl.seeds {
+		if cl.nodes[addr] != nil {
+			continue
+		}
+		added = append(added, addr)
+		if t, done, err := ask(cl.node(addr)); done {
+			return t, err
+		}
 	}
 	return nil, lastErr
 }
 
-// build turns a CLUSTER SLOTS reply into a topology. Caller holds cl.mu.
-func (cl *cluster) build(v Value) (*topology, error) {
+// build turns a CLUSTER SLOTS reply from fromAddr into a topology; a node address the reply
+// leaves empty means fromAddr's host. Caller holds cl.mu.
+func (cl *cluster) build(v Value, fromAddr string) (*topology, error) {
 	if v.Kind != KindArray || len(v.Array) == 0 {
 		return nil, fmt.Errorf("ruvio: invalid CLUSTER SLOTS reply: %s", v.String())
 	}
@@ -166,7 +224,7 @@ func (cl *cluster) build(v Value) (*topology, error) {
 		b, _ := ranges[j].Array[0].AsInt64()
 		return a < b
 	})
-	seedHost, _, _ := net.SplitHostPort(cl.seed.opts.Addr)
+	seedHost, _, _ := net.SplitHostPort(fromAddr)
 	t := &topology{}
 	for i := range t.owner {
 		t.owner[i] = noOwner
@@ -253,19 +311,20 @@ func (cl *cluster) applyMoved(ctx context.Context, slot int, addr string, reload
 
 // rt sends r on c and waits. ok=false: r was handed back to the reader (or recycled); the
 // caller must not touch it. ok=true: r is the caller's, its reply is in r.val / r.err.
-func (c *Client) rt(ctx context.Context, r *request, blocking bool) (bool, error) {
+//
+// With keep set, a connection that could not be opened is reported as ok=true with the error
+// in r.err and r untouched, so the caller can send it elsewhere.
+func (c *Client) rt(ctx context.Context, r *request, blocking, keep bool) (bool, error) {
 	if !blocking {
 		cn, err := c.shared(ctx)
 		if err != nil {
-			putReq(r)
-			return false, err
+			return openFailed(r, err, keep)
 		}
 		return cn.roundTrip(ctx, r)
 	}
 	cn, err := c.acquire(ctx)
 	if err != nil {
-		putReq(r)
-		return false, err
+		return openFailed(r, err, keep)
 	}
 	ok, err := cn.roundTrip(ctx, r)
 	if !ok || r.err != nil {
@@ -274,6 +333,15 @@ func (c *Client) rt(ctx context.Context, r *request, blocking bool) (bool, error
 		c.release(cn)
 	}
 	return ok, err
+}
+
+func openFailed(r *request, err error, keep bool) (bool, error) {
+	if keep && isConnectError(err) {
+		r.err = err
+		return true, nil
+	}
+	putReq(r)
+	return false, err
 }
 
 // stats sums the counters of every node connection.

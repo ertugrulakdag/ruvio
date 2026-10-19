@@ -23,7 +23,7 @@ func (c *Client) execManyLocal(ctx context.Context, r *request, n int) ([]Value,
 func (c *Client) rtMany(ctx context.Context, r *request, n int) (bool, error) {
 	r.expect = n
 	r.vals = make([]Value, 0, n)
-	return c.rt(ctx, r, false)
+	return c.rt(ctx, r, false, false)
 }
 
 func (cl *cluster) execMany(ctx context.Context, r *request, n int) ([]Value, error) {

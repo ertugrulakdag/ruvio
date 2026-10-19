@@ -75,7 +75,9 @@ public final class ClusterRouter implements AutoCloseable {
             });
 
     private final RuvioOptions options;
-    private final ClusterNode seed;
+    private volatile ClusterNode seed;
+    /** The configured seed addresses, asked for the slot map when no known node answers. */
+    private final Address[] seedAddresses;
     private final ConcurrentHashMap<String, ClusterNode> nodes = new ConcurrentHashMap<>();
     private volatile ClusterNode[] table = new ClusterNode[SLOTS];
     private final AtomicInteger nextIndex = new AtomicInteger();
@@ -84,6 +86,7 @@ public final class ClusterRouter implements AutoCloseable {
 
     private ClusterRouter(RuvioOptions options, ClusterNode seed) {
         this.options = options;
+        this.seedAddresses = Address.parseAll(options.seeds).toArray(new Address[0]);
         this.seed = seed;
         seed.index = 0;
         nodes.put(seed.address, seed);
@@ -92,14 +95,16 @@ public final class ClusterRouter implements AutoCloseable {
     /**
      * Asks the seed for {@code CLUSTER SLOTS}. When the server is not in cluster mode (it answers with an error) the caller keeps using the plain standalone path.
      *
-     * @param seedLink the seed node's link
+     * @param seedLink the link to the seed node that answered (see {@link Link#openSeed})
      * @param options the client settings
      * @return the router, or null for a standalone server
      */
     public static ClusterRouter detect(Link seedLink, RuvioOptions options) {
-        ClusterRouter r = new ClusterRouter(options, new ClusterNode(options.host, options.port, seedLink));
+        Address at = seedLink.address();
+        ClusterRouter r = new ClusterRouter(options, new ClusterNode(at.host, at.port, seedLink));
         try {
-            r.refresh();
+            // Only the seed that answered is asked here: a standalone server must not send the client on to the other seeds.
+            r.apply(r.querySlots(r.seed), r.seed);
         } catch (RuvioServerException e) {
             return null;
         }
@@ -189,16 +194,33 @@ public final class ClusterRouter implements AutoCloseable {
         return owner(HashSlot.of(key));
     }
 
+    private ClusterNode newNode(String host, int port) {
+        RuvioOptions o = options.toBuilder().seeds().host(host).port(port).database(0).build();
+        return new ClusterNode(host, port, new Link(o, true));
+    }
+
     private ClusterNode addNode(String host, int port) {
         return nodes.computeIfAbsent(ClusterNode.address(host, port), a -> {
-            RuvioOptions o = options.toBuilder().host(host).port(port).database(0).build();
-            ClusterNode n = new ClusterNode(host, port, new Link(o, true));
+            ClusterNode n = newNode(host, port);
             n.index = nextIndex.incrementAndGet();
             return n;
         });
     }
 
-    /** Re-reads {@code CLUSTER SLOTS} from the first node that answers and swaps the slot table. */
+    /**
+     * Returns how many nodes are known.
+     *
+     * @return the node count
+     */
+    public int nodeCount() {
+        return nodes.size();
+    }
+
+    /**
+     * Re-reads {@code CLUSTER SLOTS} and swaps the slot table. Nodes with an open socket are asked first; when
+     * none answers (the usual case after a node went away), every other known node and then every seed is opened
+     * in turn, one connect attempt each, until one returns a slot map. A seed that cannot be opened is not kept.
+     */
     public void refresh() {
         synchronized (refreshLock) {
             RuntimeException last = null;
@@ -209,14 +231,53 @@ public final class ClusterRouter implements AutoCloseable {
                     candidates.add(n);
                 }
             }
+            List<ClusterNode> down = null;
             for (ClusterNode n : candidates) {
+                if (!n.link.isUp()) {
+                    if (down == null) {
+                        down = new ArrayList<>();
+                    }
+                    down.add(n);
+                    continue;
+                }
                 try {
                     apply(querySlots(n), n);
                     return;
-                } catch (RuvioConnectionException | RuvioServerException e) {
-                    last = e;
                 } catch (RuvioException e) {
-                    last = e; // timeout
+                    last = e;
+                }
+            }
+            if (down != null) {
+                for (ClusterNode n : down) {
+                    try {
+                        apply(querySlots(n), n);
+                        return;
+                    } catch (RuvioException e) {
+                        last = e;
+                    }
+                }
+            }
+            java.util.HashSet<String> seen = new java.util.HashSet<>();
+            for (Address a : seedAddresses) {
+                String key = ClusterNode.address(a.host, a.port);
+                if (nodes.containsKey(key) || !seen.add(key)) {
+                    continue;
+                }
+                ClusterNode n = newNode(a.host, a.port);
+                try {
+                    n.link.get();
+                } catch (RuvioException e) {
+                    last = e;
+                    n.close();
+                    continue;
+                }
+                n.index = nextIndex.incrementAndGet();
+                nodes.put(key, n);
+                try {
+                    apply(querySlots(n), n);
+                    return;
+                } catch (RuvioException e) {
+                    last = e;
                 }
             }
             throw last != null ? last : new RuvioException("no cluster node answered CLUSTER SLOTS");
@@ -314,8 +375,53 @@ public final class ClusterRouter implements AutoCloseable {
             off = 0;
         }
         r.setFrame(buf, off, total);
-        sink.send(slot < 0 ? anyNode() : owner(slot), buf, off, total, r);
+        route(sink, slot, buf, off, total, r);
     }
+
+    /** Sends a frame to the owner of {@code slot} (any node when the slot is -1). */
+    private void route(Sink sink, int slot, byte[] buf, int off, int len, RoutedRequest<?> r) {
+        ClusterNode node = slot < 0 ? anyNode() : owner(slot);
+        try {
+            sink.send(node, buf, off, len, r);
+        } catch (RuvioConnectionException e) {
+            sendAfterReload(sink, slot, buf, off, len, r, e);
+        }
+    }
+
+    /**
+     * The node could not be opened again: reload the slot map and send the command, which nothing was written
+     * for, to the owner the new map names. A keyless command goes to the first node of the new map that opens.
+     */
+    private void sendAfterReload(Sink sink, int slot, byte[] buf, int off, int len, RoutedRequest<?> r, RuvioConnectionException error) {
+        if (closed) {
+            throw error;
+        }
+        try {
+            refresh();
+        } catch (RuntimeException e) {
+            throw error;
+        }
+        ClusterNode target = null;
+        if (slot >= 0) {
+            target = owner(slot);
+        } else {
+            for (ClusterNode n : masters()) {
+                try {
+                    n.link.get();
+                    seed = n;
+                    target = n;
+                    break;
+                } catch (RuvioConnectionException ignored) {
+                    // try the next node of the new map
+                }
+            }
+            if (target == null) {
+                throw error;
+            }
+        }
+        sink.send(target, buf, off, len, r);
+    }
+
 
     /**
      * Computes the slot shared by the keys of the parsed frame.
@@ -415,7 +521,7 @@ public final class ClusterRouter implements AutoCloseable {
             part.router = this;
             part.setFrame(Arrays.copyOf(tmp.buf, tmp.pos), 0, tmp.pos);
             try {
-                sink.send(owner(groupSlot[g]), part.frame, 0, part.frameLen, part);
+                route(sink, groupSlot[g], part.frame, 0, part.frameLen, part);
             } catch (RuntimeException e) {
                 parent.fail(e);
                 return;

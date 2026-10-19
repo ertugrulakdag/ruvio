@@ -11,7 +11,7 @@
 // encodes straight into the one connection, exactly like RuvioClient.
 
 import { Helpers, RuvioClient, type BinaryCommands, type ClientOptions } from './client.js';
-import type { Connection, BatchSink, MovedHandler } from './connection.js';
+import { parseSeeds, type Connection, type BatchSink, type MovedHandler } from './connection.js';
 import { COMMAND_KEY_RULES, KeyRule, type CommandKeyRule } from './command-keys.js';
 import { Encoder } from './encoder.js';
 import { ConnectionError, RuvioError } from './errors.js';
@@ -352,15 +352,24 @@ class Router {
   refreshes = 0;
   /** Number of MOVED redirects followed. */
   redirects = 0;
+  /** Options of every node; the seeds are not part of them (a node is one address). */
   readonly base: ClientOptions;
   readonly strict: boolean;
+  /** The configured seed addresses, asked for the slot table when no known node answers. */
+  private readonly seeds: { host: string; port: number }[] = [];
 
   constructor(options: ClusterOptions) {
-    const { cluster, ...rest } = options;
+    const { cluster, seeds, ...rest } = options;
     this.strict = cluster === true;
     this.base = rest;
-    const host = rest.host ?? '127.0.0.1';
-    const port = rest.port ?? 6379;
+    let host = rest.host ?? '127.0.0.1';
+    let port = rest.port ?? 6379;
+    if (seeds !== undefined && seeds.length > 0) {
+      if (rest.path !== undefined) throw new TypeError('ruvio: seeds cannot be combined with path');
+      this.seeds = parseSeeds(seeds);
+      host = rest.host = this.seeds[0]!.host;
+      port = rest.port = this.seeds[0]!.port;
+    }
     this.home = this.track(new ClusterNode(host, port, rest));
     this.nodes.set(this.home.addr, this.home);
   }
@@ -428,28 +437,52 @@ class Router {
     ));
   }
 
+  /**
+   * Reads CLUSTER SLOTS. Nodes with an open socket are asked first, then the other known nodes
+   * (each one connect attempt), and when none of them answers every seed that is not a known
+   * node. A seed that cannot be opened is not kept in the node list.
+   */
   private async load(first: boolean): Promise<void> {
-    const tried: ClusterNode[] = [this.home];
-    for (const n of this.nodes.values()) if (n !== this.home) tried.push(n);
+    const queue: (ClusterNode | { host: string; port: number })[] = [];
+    for (const n of this.nodes.values()) if (n.conn.isConnected) queue.push(n);
+    if (!queue.includes(this.home)) queue.push(this.home);
+    for (const n of this.nodes.values()) if (!queue.includes(n)) queue.push(n);
+    for (const x of this.seeds) if (!this.nodes.has(x.host + ':' + x.port)) queue.push(x);
+    const spare = new Map<string, ClusterNode>();
     let last: unknown = null;
     let reply: unknown[] | null = null;
-    for (const n of tried) {
+    let answered: ClusterNode | null = null;
+    for (const item of queue) {
+      let n: ClusterNode;
+      if (item instanceof ClusterNode) n = item;
+      else {
+        n = this.makeNode(item.host, item.port);
+        spare.set(n.addr, n);
+      }
       try {
         reply = (await n.client.clusterSlots()) as unknown[];
+        answered = n;
         break;
       } catch (e) {
         if (e instanceof RuvioError && first && !this.strict) {
           // "cluster mode is disabled": plain standalone server.
-          this.standalone = true;
-          this.ready = true;
+          this.standaloneAt(n);
+          for (const x of spare.values()) if (x !== n) this.drop(x);
           return;
         }
         last = e;
+        if (spare.get(n.addr) === n) {
+          spare.delete(n.addr);
+          this.drop(n);
+        }
         if (e instanceof RuvioError) break;
       }
     }
-    if (reply === null) throw last;
-    const seedHost = this.base.host ?? '127.0.0.1';
+    if (reply === null || answered === null) {
+      for (const x of spare.values()) this.drop(x);
+      throw last ?? new ConnectionError('ruvio: no cluster topology source');
+    }
+    const seedHost = answered.host;
     const fresh = new Map<string, ClusterNode>();
     const slots: (ClusterNode | undefined)[] = new Array(SLOT_COUNT);
     for (const range of reply as unknown[][]) {
@@ -459,18 +492,41 @@ class Router {
       const host = typeof m[0] === 'string' && m[0] !== '' ? (m[0] as string) : seedHost;
       const port = Number(m[1]);
       const addr = host + ':' + port;
-      let node = fresh.get(addr) ?? this.nodes.get(addr);
+      let node = fresh.get(addr) ?? this.nodes.get(addr) ?? spare.get(addr);
       if (node === undefined) node = this.makeNode(host, port);
       fresh.set(addr, node);
       for (let s = from; s <= to; s++) slots[s] = node;
     }
-    if (fresh.size === 0) throw new RuvioError('CLUSTERDOWN CLUSTER SLOTS returned no ranges');
+    if (fresh.size === 0) {
+      for (const x of spare.values()) this.drop(x);
+      throw new RuvioError('CLUSTERDOWN CLUSTER SLOTS returned no ranges');
+    }
     const old = this.nodes;
     this.slots = slots;
     this.nodes = fresh;
     if (!fresh.has(this.home.addr)) this.home = fresh.values().next().value!;
     this.ready = true;
     for (const [addr, n] of old) if (!fresh.has(addr)) this.drop(n);
+    for (const [addr, n] of spare) if (!fresh.has(addr)) this.drop(n);
+  }
+
+  /** The answering address is a plain server: `n` becomes the one connection, with the other seeds as fallbacks. */
+  private standaloneAt(n: ClusterNode): void {
+    this.standalone = true;
+    this.ready = true;
+    if (this.seeds.length < 2) return;
+    const start = this.seeds.findIndex((x) => x.host === n.host && x.port === n.port);
+    const rotated: string[] = [];
+    for (let k = 0; k < this.seeds.length; k++) {
+      const x = this.seeds[(Math.max(start, 0) + k) % this.seeds.length]!;
+      rotated.push((x.host.includes(':') ? '[' + x.host + ']' : x.host) + ':' + x.port);
+    }
+    const home = this.track(new ClusterNode(n.host, n.port, { ...this.base, host: n.host, port: n.port, seeds: rotated }));
+    const old = this.nodes;
+    this.nodes = new Map([[home.addr, home]]);
+    this.home = home;
+    for (const x of old.values()) this.drop(x);
+    if (!old.has(n.addr)) this.drop(n);
   }
 
   private makeNode(host: string, port: number): ClusterNode {
@@ -481,7 +537,9 @@ class Router {
 
   /** Lets the node's connection hand `-MOVED` replies of single commands back to the router. */
   private track(n: ClusterNode): ClusterNode {
-    n.conn.keepFrames(this.onMoved);
+    n.conn.keepFrames(this.onMoved, (e, buf, off, len, tf, fl, res, rej) => {
+      this.lost(n, e, Buffer.from(buf.subarray(off, off + len)), tf, fl).then(res, rej);
+    });
     return n;
   }
 
@@ -574,6 +632,7 @@ class Router {
         resolve,
         (e) => {
           if (e instanceof RuvioError && e.code === 'MOVED') this.moved(e, frame, tf, fl).then(resolve, reject);
+          else if (e instanceof ConnectionError && e.unreachable) this.lost(node, e, frame, tf, fl).then(resolve, reject);
           else reject(e);
         },
         tf,
@@ -594,6 +653,7 @@ class Router {
       (e) => {
         if (e instanceof ConnectionError) c.disconnect();
         else this.release(node, c);
+        if (e instanceof ConnectionError && e.unreachable) return this.lost(node, e, frame, tf, fl);
         return this.onError(e, frame, tf, fl);
       },
     );
@@ -607,6 +667,47 @@ class Router {
   onError(e: unknown, frame: Buffer, tf: Tf | null, fl: number): Promise<any> {
     if (e instanceof RuvioError && e.code === 'MOVED') return this.moved(e, frame, tf, fl);
     return Promise.reject(e);
+  }
+
+  /**
+   * `node` could not be opened. The slot table is reloaded (from the other nodes, then the seeds)
+   * and the command goes once to the owner the new table names; a command without a key goes to
+   * the first node of the new table that can be opened. When nothing better is found the
+   * original error is returned.
+   */
+  async lost(node: ClusterNode, err: ConnectionError, frame: Buffer, tf: Tf | null, fl: number): Promise<any> {
+    if (this.standalone || !this.ready) throw err;
+    try {
+      await this.refresh();
+    } catch {
+      throw err;
+    }
+    const r = this.target(frame, 0);
+    if (typeof r === 'number') throw err;
+    let owner: ClusterNode | null = null;
+    if (LAST_SLOT >= 0) {
+      if (r !== node || node.conn.isConnected) owner = r;
+    } else {
+      for (const n of [r, ...this.nodes.values()]) {
+        if (n === node && !n.conn.isConnected) continue;
+        try {
+          await n.conn.connect();
+        } catch {
+          continue;
+        }
+        this.home = owner = n;
+        break;
+      }
+    }
+    if (owner === null) throw err;
+    const conn = owner.conn;
+    conn.writeFrames(frame);
+    try {
+      return await conn.track(tf, fl);
+    } catch (e2) {
+      if (e2 instanceof RuvioError && e2.code === 'MOVED') return this.moved(e2, frame, tf, fl, 2);
+      throw e2;
+    }
   }
 
   /**
@@ -1141,11 +1242,13 @@ export class ClusterClient extends Helpers {
    * Creates a {@link Subscriber} on the seed node. Any node serves `SUBSCRIBE`/`PSUBSCRIBE`, and `PUBLISH` reaches subscribers on every shard.
    * For sharded channels use {@link subscriberFor}.
    *
-   * @param opts {@link SubscriberOptions} (host, port and path are fixed by the cluster client).
+   * @param opts {@link SubscriberOptions} (host, port and path are fixed by the cluster client; with `seeds` on a standalone server the subscriber starts at the seed the commands use).
    */
   subscriber(opts: Omit<SubscriberOptions, 'host' | 'port' | 'path'> = {}): Subscriber {
     const h = this.r.home;
-    return new Subscriber({ ...this.r.base, host: h.host, port: h.port, ...opts });
+    // A standalone fallback with several seeds starts the subscriber at the seed the commands use.
+    const seeds = this.r.standalone ? h.conn.seedsFromCurrent() : undefined;
+    return new Subscriber(seeds === undefined ? { ...this.r.base, host: h.host, port: h.port, ...opts } : { ...this.r.base, seeds, ...opts });
   }
   /**
    * Creates a {@link Subscriber} on the node that owns `channel`'s slot, which is where `SSUBSCRIBE` and `SPUBLISH` for that channel work.

@@ -8,6 +8,8 @@ import io.github.salihcantekin.ruvio.RuvioOptions;
 import io.github.salihcantekin.ruvio.RuvioServerException;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -24,6 +26,10 @@ public final class Link implements AutoCloseable {
     /** The settings used for every (re)connect. */
     public final RuvioOptions options;
     private final String name;
+    /** The addresses tried in order: the seeds, or the single host and port. */
+    private final Address[] addresses;
+    /** Index of the address the connection is (or was last) on; written under the lock or before publication. */
+    private volatile int current;
     private volatile Connection connection;
     private volatile boolean closed;
     /** The database selected on (re)connect; follows {@code SELECT}. */
@@ -45,10 +51,76 @@ public final class Link implements AutoCloseable {
      * @param lazy {@code true} to open the socket on the first command (cluster nodes)
      */
     public Link(RuvioOptions options, boolean lazy) {
+        this(options, lazy, addressesOf(options));
+    }
+
+    private Link(RuvioOptions options, boolean lazy, Address[] addresses) {
         this.options = options;
+        this.addresses = addresses;
         this.database = options.database;
         this.name = "ruvio-" + IDS.incrementAndGet();
-        this.connection = lazy ? null : open();
+        this.connection = lazy ? null : open(0);
+    }
+
+    private static Address[] addressesOf(RuvioOptions options) {
+        if (options.seeds.isEmpty()) {
+            return new Address[] {new Address(options.host, options.port)};
+        }
+        return Address.parseAll(options.seeds).toArray(new Address[0]);
+    }
+
+    /**
+     * Opens a link to the first seed that can be reached, as a link that stays on that one address (a cluster
+     * node must not move to a different node after a drop). With no seeds it is the plain link.
+     *
+     * @param options the connection settings
+     * @return the link, connected
+     * @throws RuvioConnectionException when no seed can be reached (the last error)
+     */
+    public static Link openSeed(RuvioOptions options) {
+        if (options.seeds.isEmpty()) {
+            return new Link(options);
+        }
+        RuvioConnectionException last = null;
+        for (Address a : addressesOf(options)) {
+            try {
+                return new Link(options, false, new Address[] {a});
+            } catch (RuvioConnectionException e) {
+                last = e;
+            }
+        }
+        throw last;
+    }
+
+    /**
+     * Returns the address the connection is on (the last one it was on when it dropped).
+     *
+     * @return the address
+     */
+    public Address address() {
+        return addresses[current];
+    }
+
+    /**
+     * Returns settings for a connection opened next to this one (a subscriber): the same settings, with the seeds
+     * starting at the address this link is on. A link bound to one address returns settings that name only it.
+     *
+     * @return the settings
+     */
+    public RuvioOptions siblingOptions() {
+        if (options.seeds.isEmpty()) {
+            return options;
+        }
+        int n = addresses.length;
+        int start = current;
+        List<String> rotated = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            rotated.add(addresses[(start + i) % n].toString());
+        }
+        if (n == 1) {
+            return options.toBuilder().seeds().host(addresses[0].host).port(addresses[0].port).build();
+        }
+        return options.toBuilder().seeds(rotated).build();
     }
 
     /**
@@ -83,26 +155,48 @@ public final class Link implements AutoCloseable {
         if (c != null && c.isOpen()) {
             return c;
         }
-        c = open();
+        // Each attempt tries every address once, starting with the one after the address that dropped.
+        c = open(c == null ? 0 : (current + 1) % addresses.length);
         connection = c;
         return c;
     }
 
-    private Connection open() {
-        Connection c;
-        try {
-            c = new Connection(options.host, options.port, options.connectTimeoutMillis, options.maxInFlight, name);
-        } catch (IOException e) {
-            throw new RuvioConnectionException("cannot connect to " + options.host + ":" + options.port + ": " + e.getMessage(), e);
+    private Connection open(int start) {
+        return connectFrom(start, name, database, true);
+    }
+
+    /**
+     * Opens the first address that accepts a connection, starting at {@code start} and wrapping around, one
+     * attempt each. Only a failed connect moves on; a refused {@code AUTH} or {@code SELECT} is thrown at once.
+     */
+    private Connection connectFrom(int start, String threadName, int db, boolean remember) {
+        RuvioConnectionException last = null;
+        int n = addresses.length;
+        for (int step = 0; step < n; step++) {
+            int index = (start + step) % n;
+            Address a = addresses[index];
+            Connection c;
+            try {
+                c = new Connection(a.host, a.port, options.connectTimeoutMillis, options.maxInFlight, threadName);
+            } catch (IOException e) {
+                last = new RuvioConnectionException("cannot connect to " + a + ": " + e.getMessage(), e);
+                continue;
+            }
+            if (remember) {
+                c.setPushHandler(options.pushListener);
+            }
+            try {
+                handshake(c, options, db);
+            } catch (RuntimeException e) {
+                c.close();
+                throw e;
+            }
+            if (remember) {
+                current = index;
+            }
+            return c;
         }
-        c.setPushHandler(options.pushListener);
-        try {
-            handshake(c, options, database);
-        } catch (RuntimeException e) {
-            c.close();
-            throw e;
-        }
-        return c;
+        throw last;
     }
 
     /**
@@ -189,19 +283,7 @@ public final class Link implements AutoCloseable {
      * @throws RuvioConnectionException when it cannot be opened
      */
     public Connection openExtra(String suffix) {
-        Connection c;
-        try {
-            c = new Connection(options.host, options.port, options.connectTimeoutMillis, options.maxInFlight, name + "-" + suffix);
-        } catch (IOException e) {
-            throw new RuvioConnectionException("cannot connect to " + options.host + ":" + options.port + ": " + e.getMessage(), e);
-        }
-        try {
-            handshake(c, options, database);
-        } catch (RuntimeException e) {
-            c.close();
-            throw e;
-        }
-        return c;
+        return connectFrom(current, name + "-" + suffix, database, false);
     }
 
     @Override

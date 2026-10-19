@@ -845,7 +845,9 @@ export class RuvioClient extends Helpers {
    * ```
    */
   subscriber(opts: Omit<SubscriberOptions, keyof ConnectionOptions> = {}): Subscriber {
-    return new Subscriber({ ...this.options, ...opts });
+    // A subscriber starts at the seed the command connection is on.
+    const seeds = this.conn.seedsFromCurrent();
+    return new Subscriber(seeds === undefined ? { ...this.options, ...opts } : { ...this.options, seeds, ...opts });
   }
 }
 
