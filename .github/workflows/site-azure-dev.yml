@@ -36,6 +36,10 @@ jobs:
           npm ci
           npm run check
           npm run build
+      - name: Mark the dev site noindex
+        run: |
+          jq '.globalHeaders["X-Robots-Tag"] = "noindex, nofollow"' site-next/dist/staticwebapp.config.json > /tmp/swa.json
+          mv /tmp/swa.json site-next/dist/staticwebapp.config.json
       - name: Upload to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
         with:

@@ -9,7 +9,7 @@ No release runs on its own. Every workflow in `.github/workflows/` is started by
 | `release` | Publishes the packages below; choose one target or `all` |
 | `integration-packages` | Builds and optionally publishes the .NET integration packages |
 | `site-azure` | Builds `site-next/` and publishes it to Azure Static Web Apps (ruviodb.com) |
-| `site-azure-dev` | Same build from the `dev` branch, published to the Ruvio-Dev Static Web App (secret `AZURE_STATIC_WEB_APPS_API_TOKEN_DEV`) |
+| `site-azure-dev` | Same build from the `dev` branch with an `X-Robots-Tag: noindex` header, published to the Ruvio-Dev Static Web App (secret `AZURE_STATIC_WEB_APPS_API_TOKEN_DEV`) |
 
 ## What `release` publishes
 
