@@ -440,7 +440,7 @@ impl<'a> OpenWalGroup<'a> {
 
             return Ok(Some(DurabilityWait {
                 barrier,
-                write_timeout: self.state.live.with(|live| live.timeouts.write),
+                write_timeout: self.state.live.write_timeout.get(),
             }));
         }
         let (totals, sync_result) = {

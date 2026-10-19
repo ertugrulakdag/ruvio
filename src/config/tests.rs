@@ -1109,9 +1109,7 @@ fn every_live_setting_accepts_its_config_get_value() {
     let config = AppConfig::default();
 
     for (name, value) in config.introspect() {
-        if !super::LIVE_SETTINGS.contains(&name.as_str())
-            || matches!(name.as_str(), "requirepass" | "metrics-token")
-        {
+        if !super::LIVE_SETTINGS.contains(&name.as_str()) || name == "requirepass" {
             continue;
         }
 

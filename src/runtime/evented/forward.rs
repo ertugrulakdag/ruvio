@@ -1090,12 +1090,7 @@ async fn execute_request_in(
         rules: Arc::clone(&request.rules),
     };
     let mut rate = CommandRateLimiter::new(0);
-    let mut output = BoundedOutput::with_capacity(
-        0,
-        state
-            .live
-            .with(|live| live.requests.max_output_buffer_bytes),
-    );
+    let mut output = BoundedOutput::with_capacity(0, state.live.max_output_buffer_bytes.get());
     let mut lens = Vec::with_capacity(request.count as usize);
     let mut unlogged = Vec::new();
     let suspended = std::cell::Cell::new(false);

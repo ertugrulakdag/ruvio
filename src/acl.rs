@@ -1075,7 +1075,7 @@ pub fn command_acl_name(command: &Command<'_>) -> &'static str {
         | Command::ClusterKeySlot(_) => "cluster",
         Command::ReadOnly => "readonly",
         Command::ReadWrite => "readwrite",
-        Command::ConfigGet(_) => "config",
+        Command::ConfigGet(_) => "config|get",
         Command::ConfigSet(_) => "config|set",
         Command::ConfigRewrite => "config|rewrite",
         Command::Info(_) => "info",
@@ -1656,6 +1656,14 @@ mod tests {
             .authorize(&Command::ConfigGet(Cow::Borrowed(b"*")))
             .unwrap();
         user.rules.authorize(&Command::ConfigRewrite).unwrap();
+
+        let viewer = AclUser::parse("viewer", "on nopass ~* +config|get").unwrap();
+        viewer
+            .rules
+            .authorize(&Command::ConfigGet(Cow::Borrowed(b"*")))
+            .unwrap();
+        assert!(viewer.rules.authorize(&set).is_err());
+        assert!(viewer.rules.authorize(&Command::ConfigRewrite).is_err());
 
         let reader = AclUser::parse("reader", "on nopass ~* +@read").unwrap();
         assert!(reader.rules.authorize(&set).is_err());

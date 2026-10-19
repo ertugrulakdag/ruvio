@@ -17,6 +17,9 @@ pub(super) struct LiveConfig {
     pub(super) slowlog_threshold_micros: Cell<i64>,
     pub(super) key_stats: Cell<bool>,
     pub(super) latency_histograms: Cell<bool>,
+    /// Read for every forwarded request and every `always` durability wait.
+    pub(super) max_output_buffer_bytes: Cell<usize>,
+    pub(super) write_timeout: Cell<Duration>,
     /// The whole running configuration: what `CONFIG GET` shows, `CONFIG REWRITE` writes
     /// and new connections start with.
     current: RefCell<Arc<AppConfig>>,
@@ -29,6 +32,8 @@ impl LiveConfig {
             slowlog_threshold_micros: Cell::new(config.slowlog_threshold_micros),
             key_stats: Cell::new(config.key_stats),
             latency_histograms: Cell::new(config.latency_histograms),
+            max_output_buffer_bytes: Cell::new(config.requests.max_output_buffer_bytes),
+            write_timeout: Cell::new(config.timeouts.write),
             current: RefCell::new(Arc::new(config.clone())),
             version: Cell::new(0),
         }
@@ -86,6 +91,9 @@ fn apply(state: &ShardState, config: &Arc<AppConfig>, version: u64) {
         .set(config.slowlog_threshold_micros);
     live.key_stats.set(config.key_stats);
     live.latency_histograms.set(config.latency_histograms);
+    live.max_output_buffer_bytes
+        .set(config.requests.max_output_buffer_bytes);
+    live.write_timeout.set(config.timeouts.write);
     state
         .store
         .borrow_mut()

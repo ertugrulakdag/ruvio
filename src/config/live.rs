@@ -36,7 +36,6 @@ pub const LIVE_SETTINGS: &[&str] = &[
     "max-connections-per-user",
     "max-commands-per-second",
     "max-output-buffer-bytes",
-    "max-queued-requests",
     // Scripts
     "script-max-bytes",
     "script-max-cached",
@@ -45,7 +44,6 @@ pub const LIVE_SETTINGS: &[&str] = &[
     "script-max-time-ms",
     // Security
     "requirepass",
-    "metrics-token",
 ];
 
 /// `CONFIG GET` names that only change with a restart, or only report a value. `CONFIG SET`
@@ -70,8 +68,10 @@ pub const RESTART_ONLY_SETTINGS: &[&str] = &[
     "max-connection-buffer-bytes",
     "max-key-bytes",
     "max-pipeline-commands",
+    "max-queued-requests",
     "max-value-bytes",
     "metrics-address",
+    "metrics-token",
     "port-mode",
     "protected-mode",
     "replica-retain-max-bytes",
@@ -183,14 +183,12 @@ impl AppConfig {
                 self.connections.max_commands_per_second = unsigned(value)?;
             }
             "max-output-buffer-bytes" => self.requests.max_output_buffer_bytes = unsigned(value)?,
-            "max-queued-requests" => self.requests.max_queued_requests = unsigned(value)?,
             "script-max-bytes" => self.scripts.max_bytes = unsigned(value)?,
             "script-max-cached" => self.scripts.max_cached = unsigned(value)?,
             "script-max-calls" => self.scripts.max_calls = unsigned(value)?,
             "script-max-instructions" => self.scripts.max_instructions = unsigned(value)?,
             "script-max-time-ms" => self.scripts.max_time_ms = unsigned(value)?,
             "requirepass" => self.security.requirepass = value.to_owned(),
-            "metrics-token" => self.security.metrics_token = value.to_owned(),
             _ => return Err("not a live setting".into()),
         }
 
@@ -207,10 +205,9 @@ impl AppConfig {
         self.latency_histograms = live.latency_histograms;
         self.timeouts = live.timeouts;
         self.connections = live.connections;
-        self.requests = live.requests;
+        self.requests.max_output_buffer_bytes = live.requests.max_output_buffer_bytes;
         self.scripts = live.scripts;
         self.security.requirepass = live.security.requirepass.clone();
-        self.security.metrics_token = live.security.metrics_token.clone();
     }
 
     /// `CONFIG REWRITE`: writes the live settings of `self` into the config file the server

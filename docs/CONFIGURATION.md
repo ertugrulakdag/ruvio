@@ -141,21 +141,25 @@ CONFIG REWRITE
 - Slowlog, `key-stats` and `latency-histograms` apply to the next command.
   A shorter `slowlog-max-len` drops the oldest entries.
 - Connection settings (timeouts, `max-connections*`,
-  `max-commands-per-second`, `max-output-buffer-bytes`, `max-queued-requests`)
+  `max-commands-per-second`, `max-output-buffer-bytes`)
   apply to connections accepted afterwards; open connections keep theirs, as
   they keep their ACL rules.
 - Script limits apply to the next `EVAL`, `EVALSHA` or `FCALL`.
 - `requirepass` sets the default user's password in the live ACL directory,
   as `ACL SETUSER default resetpass >password` would; an empty value makes the
-  default user `nopass`. Clients already logged in stay logged in. The
-  replication handshake keeps the secret it started with. `metrics-token`
-  replaces the bearer token.
+  default user `nopass`. Clients already logged in stay logged in. When
+  `replication_password` is empty the replication port keeps the
+  `requirepass` it started with until a restart, so rotate a leaked password
+  there with a restart (or set `replication_password`).
 - A change is not written to the WAL and not replicated: each node, primary or
   replica, is configured on its own. It is lost on restart unless written to
   the file.
 - `CONFIG SET` and `CONFIG REWRITE` are refused inside `MULTI` and scripts and
   need the `config` command in the caller's ACL rules (`@admin`,
-  `@dangerous`); `-config|set` or `-config|rewrite` denies only that subcommand.
+  `@dangerous`), as in Redis: a user granted `+config` may run all three.
+  `-config|set` or `-config|rewrite` denies only that subcommand; a user that
+  should only read settings gets `+config|get` or `+config -config|set
+  -config|rewrite`.
 
 `CONFIG REWRITE` writes the live settings into the config file the server
 started from, through the same code as `--write-config`: other keys stay,
@@ -200,7 +204,7 @@ Each variable overrides one file setting, and a command-line flag, where there i
 | `RUVIO_MAX_CONNECTIONS_PER_IP` | `--max-connections-per-ip` | `connections.max_per_ip` | yes | |
 | `RUVIO_MAX_CONNECTIONS_PER_USER` | `--max-connections-per-user` | `connections.max_per_user` | yes | |
 | `RUVIO_MAX_COMMANDS_PER_SECOND` | `--max-commands-per-second` | `connections.max_commands_per_second` | yes | |
-| `RUVIO_MAX_QUEUED_REQUESTS` | `--max-queued-requests` | `requests.max_queued_requests` | yes | |
+| `RUVIO_MAX_QUEUED_REQUESTS` | `--max-queued-requests` | `requests.max_queued_requests` | | |
 | `RUVIO_MAX_OUTPUT_BUFFER_BYTES` | `--max-output-buffer-bytes` | `requests.max_output_buffer_bytes` | yes | |
 | `RUVIO_DURABILITY` | `--durability` | `persistence.profile` | | `memory`, `snapshot`, `everysec` or `always` |
 | `RUVIO_DATA_DIR` | `--data-dir` | `persistence.data_dir` | | |
@@ -223,7 +227,7 @@ Each variable overrides one file setting, and a command-line flag, where there i
 | `RUVIO_ACL_FILE` | | `security.acl_file` | | |
 | `RUVIO_PROTECTED_MODE` | `--protected-mode` | `security.protected_mode` | | |
 | `RUVIO_ALLOW_UNAUTHENTICATED` | | `security.allow_unauthenticated_public` | | |
-| `RUVIO_METRICS_TOKEN` | | `security.metrics_token` | yes | |
+| `RUVIO_METRICS_TOKEN` | | `security.metrics_token` | | |
 | `RUVIO_REPLICATION_PASSWORD` | | `security.replication_password` | | |
 | `RUVIO_MAXMEMORY` | `--maxmemory` | `memory.max_process_bytes` | yes | |
 | `RUVIO_MAX_SHARD_BYTES` | `--max-shard-bytes` | `memory.max_shard_bytes` | yes | |

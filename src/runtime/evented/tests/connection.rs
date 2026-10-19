@@ -354,7 +354,7 @@ fn evented_acl_named_user_limits_commands_and_keys() {
         "{text}"
     );
     assert!(text.contains("NOPERM this user has no permissions to access one or more keys"));
-    assert!(text.contains("NOPERM this user has no permissions to run the 'config' command"));
+    assert!(text.contains("NOPERM this user has no permissions to run the 'config|get' command"));
     stop.request();
     join_within(server, PATIENCE).unwrap();
 }
