@@ -5661,9 +5661,13 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
-     * Sends {@code CONFIG SET name value ...}: changes live settings on every shard. All pairs apply or none.
+     * Sends {@code CONFIG SET name value ...}: changes live settings, named as {@code CONFIG GET} shows them. Every shard of the server applies the change before it answers. All pairs apply or none: an unknown or restart-only name, or an invalid value, fails the call and changes nothing. Not written to the config file (see {@link #configRewrite()}) and not replicated.
      *
-     * @param settings setting names and values, named as {@code CONFIG GET} shows them
+     * <pre>{@code
+     * client.configSet(Map.of("maxmemory", "1073741824", "maxmemory-policy", "allkeys-lru"));
+     * }</pre>
+     *
+     * @param settings setting names and values; iteration order is the send order
      * @throws RuvioServerException {@code ERR} for an unknown, restart-only or invalid setting
      */
     public void configSet(Map<String, String> settings) {
@@ -5671,12 +5675,40 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
-     * Sends {@code CONFIG REWRITE}: writes the live settings into the server's config file.
+     * Sends {@code CONFIG REWRITE}: writes the live settings into the config file the server started from.
      *
      * @throws RuvioServerException {@code ERR} when the server runs without a config file
      */
     public void configRewrite() {
         await(async.configRewrite());
+    }
+
+    /**
+     * Sends {@code REPLICAOF host port}: every shard of the server follows the primary at {@code host:port} (shard {@code i} dials {@code port + i}). Writes are refused at once. A shard continues from its own log when the new primary's history allows it, otherwise it takes a full copy. Lasts until the server restarts.
+     *
+     * @param host the primary's host
+     * @param port the primary's base replication port
+     */
+    public void replicaOf(String host, int port) {
+        await(async.replicaOf(host, port));
+    }
+
+    /**
+     * Sends {@code REPLICAOF NO ONE}: promotes a replica in place, one epoch above its old primary.
+     *
+     * @param force adds {@code FORCE}: promote even when a shard has not finished copying its primary, which may lose writes
+     */
+    public void replicaOfNoOne(boolean force) {
+        await(async.replicaOfNoOne(force));
+    }
+
+    /**
+     * Sends {@code ROLE} for the shard this connection is on.
+     *
+     * @return {@code ["master", sequence, []]} on a primary; {@code ["slave", host, port, "connect"|"connected", sequence]} on a replica
+     */
+    public List<Object> role() {
+        return await(async.role());
     }
 
     /**

@@ -1035,6 +1035,7 @@ fn wait_counts_replicas_that_reached_every_shard() {
         password: Vec::new(),
         history: [0; crate::replication::HISTORY_LEN],
         shard_count: 2,
+        epoch: 0,
     })
     .unwrap();
 
@@ -1701,6 +1702,7 @@ fn per_shard_wait_counts_the_shards_a_connection_forwarded_to() {
         password: Vec::new(),
         history: [0; crate::replication::HISTORY_LEN],
         shard_count: 2,
+        epoch: 0,
     })
     .unwrap();
 

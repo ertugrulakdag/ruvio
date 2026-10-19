@@ -603,6 +603,31 @@ func (c *cmds) ConfigRewrite(ctx context.Context) error {
 	return c.ok(ctx, newCmd(2, cCONFIG).s("REWRITE"))
 }
 
+// ReplicaOf makes every shard of the server follow the primary at host:port (REPLICAOF host
+// port); shard i dials port + i. Writes are refused at once. A shard continues from its own
+// log when the new primary's history allows it, otherwise it takes a full copy. Lasts until
+// the server restarts.
+func (c *cmds) ReplicaOf(ctx context.Context, host string, port int) error {
+	return c.ok(ctx, newCmd(3, cREPLICAOF).s(host).i(int64(port)))
+}
+
+// ReplicaOfNoOne promotes a replica in place (REPLICAOF NO ONE), one epoch above its old
+// primary. force adds FORCE: promote even when a shard has not finished copying its
+// primary, which may lose writes.
+func (c *cmds) ReplicaOfNoOne(ctx context.Context, force bool) error {
+	if force {
+		return c.ok(ctx, newCmd(4, cREPLICAOF).s("NO").s("ONE").s("FORCE"))
+	}
+	return c.ok(ctx, newCmd(3, cREPLICAOF).s("NO").s("ONE"))
+}
+
+// Role returns the raw ROLE reply of the shard this connection is on: a primary answers
+// ["master", sequence, []]; a replica ["slave", host, port, "connect"|"connected",
+// sequence].
+func (c *cmds) Role(ctx context.Context) (Value, error) {
+	return c.value(ctx, newCmd(1, cROLE))
+}
+
 // Save runs a checkpoint in the server process and returns when it is written (SAVE). It
 // blocks the shard while it runs.
 func (c *cmds) Save(ctx context.Context) error { return c.ok(ctx, newCmd(1, cSAVE)) }

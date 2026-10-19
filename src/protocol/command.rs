@@ -106,6 +106,11 @@ impl<'a> Command<'a> {
                     .collect(),
             ),
             Self::ConfigRewrite => Command::ConfigRewrite,
+            Self::ReplicaOf { primary, force } => Command::ReplicaOf {
+                primary: primary.map(|(host, port)| (owned(host), owned(port))),
+                force,
+            },
+            Self::Role => Command::Role,
             Self::Info(message) => Command::Info(message.map(owned)),
             Self::Save => Command::Save,
             Self::Bgsave => Command::Bgsave,
@@ -1244,6 +1249,8 @@ pub(crate) fn command_mutates_store(command: &Command<'_>) -> bool {
             | Command::Save
             | Command::ConfigSet(_)
             | Command::ConfigRewrite
+            | Command::ReplicaOf { .. }
+            | Command::Role
             | Command::Bgsave
             | Command::Get(_)
             | Command::JsonGet { .. }

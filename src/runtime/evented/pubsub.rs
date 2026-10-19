@@ -2,7 +2,8 @@ use super::*;
 
 pub(super) fn publish_sharded(state: &ShardState, channel: &[u8], message: &[u8]) -> i64 {
     if state.pubsub.borrow().subscribers(channel).is_empty() {
-        if let Some(fanout) = &state.publish_fanout {
+        if state.role.get() == crate::config::ReplicationRole::Primary {
+            let fanout = &state.publish_fanout;
             fanout.send(crate::replication::encode_copied_publish(
                 true, channel, message,
             ));
@@ -51,7 +52,8 @@ pub(super) fn publish_sharded(state: &ShardState, channel: &[u8], message: &[u8]
         }
     }
 
-    if let Some(fanout) = &state.publish_fanout {
+    if state.role.get() == crate::config::ReplicationRole::Primary {
+        let fanout = &state.publish_fanout;
         fanout.send(crate::replication::encode_copied_publish(
             true, channel, message,
         ));
@@ -62,7 +64,8 @@ pub(super) fn publish_sharded(state: &ShardState, channel: &[u8], message: &[u8]
 
 pub(super) fn publish_classic(state: &ShardState, channel: &[u8], message: &[u8]) -> i64 {
     if state.pubsub.borrow().classic_unheard(channel) {
-        if let Some(fanout) = &state.publish_fanout {
+        if state.role.get() == crate::config::ReplicationRole::Primary {
+            let fanout = &state.publish_fanout;
             fanout.send(crate::replication::encode_copied_publish(
                 false, channel, message,
             ));
@@ -111,7 +114,8 @@ pub(super) fn publish_classic(state: &ShardState, channel: &[u8], message: &[u8]
         }
     }
 
-    if let Some(fanout) = &state.publish_fanout {
+    if state.role.get() == crate::config::ReplicationRole::Primary {
+        let fanout = &state.publish_fanout;
         fanout.send(crate::replication::encode_copied_publish(
             false, channel, message,
         ));

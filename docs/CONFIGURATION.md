@@ -68,6 +68,8 @@ replica_retain_max_bytes = 1073741824
 role = "off"                  # off, primary, or replica
 listen = "127.0.0.1:26379"    # primary base address; shard i uses port + i
 primary = "127.0.0.1:26379"   # replica dials this base address; a hostname is allowed
+min_replicas_to_write = 0     # a primary refuses writes with fewer good replicas; 0 = off
+min_replicas_max_lag = 10     # seconds since a replica's last acknowledgement
 
 [security]
 requirepass = ""
@@ -162,6 +164,8 @@ setting takes a restart.
 | `script-max-instructions` | `scripts.max_instructions` | next script |
 | `script-max-time-ms` | `scripts.max_time_ms` | next script |
 | `requirepass` | `security.requirepass` | next login |
+| `min-replicas-to-write` | `replication.min_replicas_to_write` | next replica check (100 ms) |
+| `min-replicas-max-lag` | `replication.min_replicas_max_lag` | next replica check (100 ms) |
 
 - One call changes all its pairs or none. An unknown name, a name given twice,
   a restart-only name, or a value that does not parse or validate fails the
@@ -292,6 +296,8 @@ Each variable overrides one file setting, and a command-line flag, where there i
 | `RUVIO_REPLICATION_ROLE` | no | | `replication.role` | |
 | `RUVIO_REPLICATION_LISTEN` | no | | `replication.listen` | |
 | `RUVIO_REPLICATION_PRIMARY` | no | | `replication.primary` | |
+| `RUVIO_MIN_REPLICAS_TO_WRITE` | `min-replicas-to-write` | | `replication.min_replicas_to_write` | |
+| `RUVIO_MIN_REPLICAS_MAX_LAG` | `min-replicas-max-lag` | | `replication.min_replicas_max_lag` | Seconds, as in Redis |
 
 Flags with no variable:
 
@@ -478,6 +484,18 @@ Shard `i` uses that base port plus `i`. Role `off` opens no replication port
 and dials nobody. A primary binds `replication.listen` (loopback in the sample
 above). A replica dials `replication.primary` and does not listen. A primary keeps
 each replica on its own stream, up to 16.
+
+`replication.min_replicas_to_write` / `min-replicas-to-write` (default `0`, off)
+and `replication.min_replicas_max_lag` / `min-replicas-max-lag` (seconds, default
+`10`) work as in Redis. A primary shard refuses writes with `NOREPLICAS Not enough
+good replicas to write.` while fewer connected replicas than the first value
+acknowledged within the second; reads go on. A replica acknowledges each synced
+sequence and repeats its last acknowledgement every second while idle. The shard
+checks this every 100 ms, so a lost replica is noticed up to that much after the
+lag runs out, and writes resume on the next check after enough replicas
+acknowledge. It bounds how long a primary cut off from its replicas keeps taking
+writes another primary will not have; it is not a synchronous write. Both change
+with `CONFIG SET`. Only role `primary` applies them.
 
 `INFO` reports `replication_role`, `wal_last_sequence`, and
 `wal_durable_sequence` on every shard. A primary also reports

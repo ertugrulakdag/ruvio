@@ -32,6 +32,7 @@ fn evented_skewed_replica_promotion_keeps_expired_deadlines_expired() {
             listen: Some(replication),
             primary: None,
             primary_name: None,
+            ..Default::default()
         };
     });
     let (replica_address, replica_stop, replica) = serve_with(|config| {
@@ -41,6 +42,7 @@ fn evented_skewed_replica_promotion_keeps_expired_deadlines_expired() {
             listen: None,
             primary: Some(replication),
             primary_name: None,
+            ..Default::default()
         };
     });
     // One batch reads the clock once: the GET sees the value however slow the runner is,
@@ -80,6 +82,7 @@ fn evented_skewed_replica_promotion_keeps_expired_deadlines_expired() {
             listen: Some(replication),
             primary: None,
             primary_name: None,
+            ..Default::default()
         };
     });
     assert_eq!(
@@ -111,6 +114,7 @@ fn evented_replica_installs_a_compacted_checkpoint() {
             listen: Some(replication),
             primary: None,
             primary_name: None,
+            ..Default::default()
         };
     });
 
@@ -159,6 +163,7 @@ fn evented_replica_installs_a_compacted_checkpoint() {
             listen: None,
             primary: Some(replication),
             primary_name: None,
+            ..Default::default()
         };
     });
 
@@ -202,6 +207,7 @@ fn replica_replays_json_root_then_path_and_ttl_in_one_transaction() {
             listen: Some(replication),
             primary: None,
             primary_name: None,
+            ..Default::default()
         };
     });
     let (replica_address, replica_stop, replica) = serve_with(|config| {
@@ -211,6 +217,7 @@ fn replica_replays_json_root_then_path_and_ttl_in_one_transaction() {
             listen: None,
             primary: Some(replication),
             primary_name: None,
+            ..Default::default()
         };
     });
     let document = serde_json::to_vec(&serde_json::json!({
@@ -566,6 +573,7 @@ fn resync_expired_json(compacted: bool, busy: bool) {
             listen: Some(replication),
             primary: None,
             primary_name: None,
+            ..Default::default()
         };
     });
     let original = serde_json::to_vec(&serde_json::json!({
@@ -655,7 +663,10 @@ fn resync_expired_json(compacted: bool, busy: bool) {
     crate::replication::record_upstream_history(
         replica_dir.path(),
         0,
-        &crate::replication::load_or_create_history(primary_dir.path()).unwrap(),
+        &crate::replication::Origin {
+            history: crate::replication::load_or_create_history(primary_dir.path()).unwrap(),
+            epoch: 0,
+        },
     )
     .unwrap();
     let writes = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -688,6 +699,7 @@ fn resync_expired_json(compacted: bool, busy: bool) {
             listen: None,
             primary: Some(replication),
             primary_name: None,
+            ..Default::default()
         };
     });
     wait_until("the snapshot resync", || {
@@ -753,6 +765,7 @@ fn an_idle_replica_applies_a_burst_without_waiting_for_its_timers() {
             listen: Some(replication),
             primary: None,
             primary_name: None,
+            ..Default::default()
         };
     });
     let (_replica_address, replica_stop, replica) = serve_with(|config| {
@@ -762,6 +775,7 @@ fn an_idle_replica_applies_a_burst_without_waiting_for_its_timers() {
             listen: None,
             primary: Some(replication),
             primary_name: None,
+            ..Default::default()
         };
     });
 
@@ -872,6 +886,7 @@ fn replica_whose_log_sync_failed_reports_the_link_down() {
             listen: Some(replication),
             primary: None,
             primary_name: None,
+            ..Default::default()
         };
     });
     let (replica_address, replica_stop, replica) = serve_with(|config| {
@@ -881,6 +896,7 @@ fn replica_whose_log_sync_failed_reports_the_link_down() {
             listen: None,
             primary: Some(replication),
             primary_name: None,
+            ..Default::default()
         };
     });
     let status = |address| {
@@ -952,7 +968,10 @@ fn replica_follows_a_new_link_that_resends_queued_frames_and_resyncs_on_a_gap() 
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let replication = listener.local_addr().unwrap();
-    let history = [5; crate::replication::HISTORY_LEN];
+    let history = crate::replication::Origin {
+        history: [5; crate::replication::HISTORY_LEN],
+        epoch: 0,
+    };
     let ok = |next| {
         crate::replication::encode_reply_with_history(
             crate::replication::HandshakeStatus::Ok,
@@ -971,6 +990,7 @@ fn replica_follows_a_new_link_that_resends_queued_frames_and_resyncs_on_a_gap() 
             listen: None,
             primary: Some(replication),
             primary_name: None,
+            ..Default::default()
         };
     });
     let applied = || info_field(replica_address, "wal_last_sequence").unwrap_or(0);

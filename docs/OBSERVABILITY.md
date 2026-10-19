@@ -77,6 +77,8 @@ fails when one is added without a row:
 | Replication | `replication_replica_sequence` | Oldest sequence written to a connected replica socket, otherwise 0 |
 | Replication | `replication_send_lag` | `wal_durable_sequence` minus that oldest send; 0 means the bytes left the primary |
 | Replication | `replica_retain_dropped` | WAL holds for slow replicas dropped |
+| Replication | `replication_epoch` | Epoch of the history this primary writes; grows with each promotion (0 on a replica and on a server that never replicated) |
+| Replication | `replication_fenced` | 1 when a replica showed this primary a newer epoch: another primary replaced it and writes are refused |
 | Replication | `master_link_status` | Replica only: `up` or `down` |
 | Replication | `master_last_io_seconds_ago` | Replica only: seconds since the last frame, `-1` before the first |
 | Replication | `slave_repl_offset` | Replica only: last applied WAL sequence |

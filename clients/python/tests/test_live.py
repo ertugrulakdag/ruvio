@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import uuid
 
@@ -739,6 +740,16 @@ async def test_server(c):
     assert (await c.config_get("slowlog-max-len"))["slowlog-max-len"] == "128"
     with pytest.raises(ruvio.ResponseError):
         await c.config_set({"shards": 2})
+    # Only on a throwaway server: CONFIG REWRITE rewrites the server's config file.
+    if os.environ.get("RUVIO_TEST_CONFIG_REWRITE") == "1":
+        assert await c.config_rewrite() is True
+    role = await c.role()
+    assert role[0] in ("master", b"master")
+    # The live server keeps no WAL, so it cannot replicate: both forms are refused unchanged.
+    with pytest.raises(ruvio.ResponseError, match="WAL-backed"):
+        await c.replicaof("127.0.0.1", 1)
+    with pytest.raises(ruvio.ResponseError, match="WAL-backed"):
+        await c.replicaof_no_one()
     assert await c.save() is True
     assert "saving" in (await c.bgsave()).lower() or await c.bgsave()
 

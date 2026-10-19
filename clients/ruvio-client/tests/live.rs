@@ -532,6 +532,21 @@ fn server_commands_and_pubsub() {
         db.config_set(&[("shards", "2")]),
         Err(ruvio_client::Error::Server(_))
     ));
+    match db.role().unwrap() {
+        ruvio_client::RespValue::Array(items) => {
+            assert_eq!(items[0], ruvio_client::RespValue::Bulk(b"master".to_vec()));
+        }
+        other => panic!("ROLE answered {other:?}"),
+    }
+    // The live server keeps no WAL, so it cannot replicate: both forms are refused unchanged.
+    assert!(matches!(
+        db.replicaof("127.0.0.1", 1),
+        Err(ruvio_client::Error::Server(_))
+    ));
+    assert!(matches!(
+        db.replicaof_no_one(false),
+        Err(ruvio_client::Error::Server(_))
+    ));
     assert_eq!(db.acl_whoami().unwrap(), "default");
     assert!(db.acl_users().unwrap().contains(&"default".to_owned()));
     assert!(!db.acl_list().unwrap().is_empty());

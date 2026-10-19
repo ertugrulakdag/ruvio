@@ -1,60 +1,31 @@
 use super::*;
 
+use std::{borrow::Cow, sync::atomic::AtomicBool};
+
 pub(super) fn attach_replication(
     state: &ShardState,
     shard_id: u32,
 ) -> io::Result<Option<crate::replication::ReplicationThread>> {
-    match state.published_config.replication.role {
-        crate::config::ReplicationRole::Off => Ok(None),
+    match state.role.get() {
+        crate::config::ReplicationRole::Off => {
+            // A standalone shard that never followed a primary has nothing to fork.
+            if state
+                .published_config
+                .persistence
+                .data_dir
+                .join(crate::replication::upstream_file_name(shard_id))
+                .exists()
+            {
+                writer_lineage(state, shard_id)?;
+            }
+
+            Ok(None)
+        }
         crate::config::ReplicationRole::Primary => {
-            let Some(listen) = state.published_config.replication.listen else {
-                return Ok(None);
-            };
+            let lineage = writer_lineage(state, shard_id)?;
 
-            let published = state
-                .persistence
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .durable();
-            let backlog_floor = state
-                .persistence
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .backlog_floor();
-            let replica_count = state
-                .persistence
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .replica_count();
-
-            Ok(Some(crate::replication::spawn_primary(
-                crate::replication::Shipment {
-                    listen: shard_port(listen, shard_id)?,
-                    shard_id,
-                    published,
-                    data_dir: state.published_config.persistence.data_dir.clone(),
-                    requirepass: state
-                        .published_config
-                        .security
-                        .replication_secret()
-                        .to_vec(),
-                    limits: state.published_config.protocol,
-                    max_replicas: crate::replication::MAX_REPLICAS,
-                    backlog_floor,
-                    replica_count,
-                    acks: Arc::clone(&state.durable_acks),
-                    fanout: state
-                        .publish_fanout
-                        .clone()
-                        .unwrap_or_else(|| Arc::new(crate::replication::PublishFanout::new())),
-                    snapshot_max_bytes: state.published_config.persistence.snapshot_max_bytes,
-                    shard_count: state.published_config.shards as u32,
-                    history: crate::replication::load_or_create_history(
-                        &state.published_config.persistence.data_dir,
-                    )?,
-                    snapshot_requests: Arc::clone(&state.snapshot_requests),
-                },
-            )?))
+            state.epoch.set(lineage.origin.epoch);
+            spawn_shipper(state, shard_id, lineage)
         }
 
         crate::config::ReplicationRole::Replica => {
@@ -69,38 +40,418 @@ pub(super) fn attach_replication(
                 return Ok(None);
             };
 
-            let primary_name = state.published_config.replication.primary_name.clone();
-
-            let (inbound, outbound) = mpsc::sync_channel(crate::replication::QUEUE_FRAMES);
-            let thread =
-                crate::replication::spawn_replica_reader(crate::replication::ReplicaLink {
-                    primary: shard_port(primary, shard_id)?,
-                    primary_name,
-                    shard_id,
-                    wal: Arc::clone(&state.persistence),
-                    inbound,
-                    password: state
-                        .published_config
-                        .security
-                        .replication_secret()
-                        .to_vec(),
-                    limits: state.published_config.protocol,
-                    snapshot_max_bytes: state.published_config.persistence.snapshot_max_bytes,
-                    resync_sequence: Arc::clone(&state.replica_resync_sequence),
-                    data_dir: state.published_config.persistence.data_dir.clone(),
-                    shard_count: state.published_config.shards as u32,
-                    status: Arc::clone(&state.replica_link),
-                    wake_shard: Arc::clone(&state.replica_wake),
-                });
-
-            *state.replica_frames.borrow_mut() = Some(outbound);
-            Ok(Some(thread))
+            spawn_reader(
+                state,
+                shard_id,
+                primary,
+                state.published_config.replication.primary_name.clone(),
+            )
+            .map(Some)
         }
     }
 }
 
+/// Starts shipping this primary shard's log to replicas on `replication.listen`; none when
+/// no listen address is configured.
+fn spawn_shipper(
+    state: &ShardState,
+    shard_id: u32,
+    lineage: crate::replication::Lineage,
+) -> io::Result<Option<crate::replication::ReplicationThread>> {
+    let Some(listen) = state.published_config.replication.listen else {
+        return Ok(None);
+    };
+    let (published, backlog_floor, replica_count) = {
+        let wal = state
+            .persistence
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+
+        (wal.durable(), wal.backlog_floor(), wal.replica_count())
+    };
+
+    crate::replication::spawn_primary(crate::replication::Shipment {
+        listen: shard_port(listen, shard_id)?,
+        shard_id,
+        published,
+        data_dir: state.published_config.persistence.data_dir.clone(),
+        requirepass: state
+            .published_config
+            .security
+            .replication_secret()
+            .to_vec(),
+        limits: state.published_config.protocol,
+        max_replicas: crate::replication::MAX_REPLICAS,
+        backlog_floor,
+        replica_count,
+        acks: Arc::clone(&state.durable_acks),
+        fanout: Arc::clone(&state.publish_fanout),
+        snapshot_max_bytes: state.published_config.persistence.snapshot_max_bytes,
+        shard_count: state.published_config.shards as u32,
+        lineage,
+        newer_epoch: Arc::clone(&state.newer_epoch),
+        snapshot_requests: Arc::clone(&state.snapshot_requests),
+    })
+    .map(Some)
+}
+
+/// Starts following `primary` (the base address; this shard dials its own port).
+fn spawn_reader(
+    state: &ShardState,
+    shard_id: u32,
+    primary: SocketAddr,
+    primary_name: Option<(String, u16)>,
+) -> io::Result<crate::replication::ReplicationThread> {
+    let (inbound, outbound) = mpsc::sync_channel(crate::replication::QUEUE_FRAMES);
+    let dialed = shard_port(primary, shard_id)?;
+
+    *state.followed.borrow_mut() = Some(match &primary_name {
+        Some((host, _)) => (host.clone(), dialed.port()),
+        None => (dialed.ip().to_string(), dialed.port()),
+    });
+    let thread = crate::replication::spawn_replica_reader(crate::replication::ReplicaLink {
+        primary: dialed,
+        primary_name,
+        shard_id,
+        wal: Arc::clone(&state.persistence),
+        inbound,
+        password: state
+            .published_config
+            .security
+            .replication_secret()
+            .to_vec(),
+        limits: state.published_config.protocol,
+        snapshot_max_bytes: state.published_config.persistence.snapshot_max_bytes,
+        resync_sequence: Arc::clone(&state.replica_resync_sequence),
+        data_dir: state.published_config.persistence.data_dir.clone(),
+        shard_count: state.published_config.shards as u32,
+        status: Arc::clone(&state.replica_link),
+        wake_shard: Arc::clone(&state.replica_wake),
+    });
+
+    *state.replica_frames.borrow_mut() = Some(outbound);
+    *state.replica_reader.borrow_mut() = thread.reader();
+    Ok(thread)
+}
+
+/// `REPLICAOF host port` or `REPLICAOF NO ONE [FORCE]` for the whole process: checked here,
+/// applied on this shard, then on every other shard on its own thread; `OK` once all have.
+pub(super) async fn replicaof(
+    state: &ShardState,
+    primary: Option<(&[u8], &[u8])>,
+    force: bool,
+) -> Response<'static> {
+    if !state.published_config.persistence.profile.uses_wal() {
+        return Response::Error(b"ERR replication requires a WAL-backed durability profile");
+    }
+
+    let target = match primary {
+        None => None,
+        Some((host, port)) => {
+            let text = format!(
+                "{}:{}",
+                String::from_utf8_lossy(host),
+                String::from_utf8_lossy(port)
+            );
+
+            match crate::config::parse_replication_primary(&text) {
+                Ok(parsed) => {
+                    let base = parsed.socket.unwrap_or_else(|| {
+                        let port = parsed.name.as_ref().map_or(0, |(_, port)| *port);
+
+                        SocketAddr::new(std::net::Ipv4Addr::UNSPECIFIED.into(), port)
+                    });
+
+                    Some((base, parsed.name))
+                }
+                Err(error) => return Response::OwnedError(format!("ERR {error}").into_bytes()),
+            }
+        }
+    };
+
+    if target.is_none() && !force {
+        let data_dir = &state.published_config.persistence.data_dir;
+
+        for shard in 0..state.published_config.shards as u32 {
+            if !matches!(replica_guard::read(data_dir, shard), Ok(None)) {
+                return Response::Error(PROMOTE_INCOMPLETE);
+            }
+        }
+    }
+
+    let change = RoleChange {
+        target,
+        force,
+        failed: AtomicBool::new(false),
+    };
+
+    change.apply(state);
+    let change = if let Some(forwarding) = state.forwarding.as_ref() {
+        let change = Arc::new(change);
+
+        forwarding
+            .apply_everywhere(Box::new(SharedRoleChange(Arc::clone(&change))))
+            .await;
+        change
+    } else {
+        Arc::new(change)
+    };
+
+    if change.failed.load(Ordering::Acquire) {
+        Response::Error(b"ERR REPLICAOF did not complete on every shard; see the server log")
+    } else {
+        Response::Simple(b"OK")
+    }
+}
+
+/// One `REPLICAOF` for every shard.
+struct RoleChange {
+    target: Option<(SocketAddr, Option<(String, u16)>)>,
+    force: bool,
+    failed: AtomicBool,
+}
+
+impl RoleChange {
+    fn apply(&self, state: &ShardState) {
+        let shard_id = state
+            .route
+            .as_ref()
+            .map_or(0, |route| route.shard_id as u32);
+        let result = match &self.target {
+            None => promote(state, shard_id, self.force),
+            Some((primary, name)) => demote(state, shard_id, *primary, name.clone()),
+        };
+
+        if let Err(error) = result {
+            warn!(shard_id, %error, "REPLICAOF failed on this shard");
+            self.failed.store(true, Ordering::Release);
+        }
+    }
+}
+
+struct SharedRoleChange(Arc<RoleChange>);
+
+impl super::forward::ShardChange for SharedRoleChange {
+    fn apply(&self, state: &ShardState) {
+        self.0.apply(state);
+    }
+}
+
+/// `ROLE`, as Redis answers it, for this shard: a primary (or a server that does not
+/// replicate) answers `master`, its log sequence and no replica list; a replica answers
+/// `slave`, the primary it dials, the link state and the sequence it has synced.
+pub(super) fn role_response(state: &ShardState) -> Response<'static> {
+    let (last, durable) = {
+        let wal = state
+            .persistence
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+
+        (wal.last_sequence(), wal.durable().load(Ordering::Acquire))
+    };
+    let bulk = |bytes: Vec<u8>| Response::Bulk(Some(Cow::Owned(bytes)));
+
+    if state.role.get() != crate::config::ReplicationRole::Replica {
+        return Response::Exec(vec![
+            bulk(b"master".to_vec()),
+            Response::Integer(last as i64),
+            Response::Exec(Vec::new()),
+        ]);
+    }
+
+    let (host, port) = state
+        .followed
+        .borrow()
+        .clone()
+        .unwrap_or_else(|| (String::new(), 0));
+    let link = if state.replica_link.is_up() {
+        &b"connected"[..]
+    } else {
+        &b"connect"[..]
+    };
+
+    Response::Exec(vec![
+        bulk(b"slave".to_vec()),
+        bulk(host.into_bytes()),
+        Response::Integer(i64::from(port)),
+        bulk(link.to_vec()),
+        Response::Integer(durable as i64),
+    ])
+}
+
+/// Why `REPLICAOF NO ONE` refuses a shard.
+pub(super) const PROMOTE_INCOMPLETE: &[u8] = b"ERR this replica has not finished copying its \
+    primary; REPLICAOF NO ONE FORCE serves it anyway and may lose writes";
+
+/// `REPLICAOF NO ONE` on this shard: stop following, apply what already arrived, fork a
+/// history of its own (see `writer_lineage`) and take writes; ship to replicas when
+/// `replication.listen` is set. A shard that is already a writer is left as it is.
+pub(super) fn promote(state: &ShardState, shard_id: u32, force: bool) -> io::Result<()> {
+    if state.role.get() != crate::config::ReplicationRole::Replica {
+        return Ok(());
+    }
+
+    // Dropping the reader joins its thread; frames it queued are applied before the fork.
+    drop(state.replication.borrow_mut().take());
+    *state.replica_reader.borrow_mut() = None;
+    while drain_replicated_budget(state, REPLICA_DRAIN_BUDGET) > 0 {}
+    *state.replica_frames.borrow_mut() = None;
+    state.replica_link.mark_down();
+
+    if state.replica_incomplete.get() {
+        if !force {
+            return Err(io::Error::other("incomplete replica"));
+        }
+        warn!(
+            shard_id,
+            "promoting an incomplete replica: writes it never received are lost"
+        );
+        state.replica_incomplete.set(false);
+    }
+
+    let lineage = writer_lineage(state, shard_id)?;
+    let uses_wal = state.published_config.persistence.profile.uses_wal();
+    {
+        let mut store = state.store.borrow_mut();
+
+        store.follow_primary(false);
+        store.log_removals(uses_wal);
+    }
+    if let Some(hot) = &state.hot_store {
+        hot.keep_expired_keys(false);
+    }
+
+    state.epoch.set(lineage.origin.epoch);
+    let shipper = spawn_shipper(state, shard_id, lineage)?;
+    state.role.set(if shipper.is_some() {
+        crate::config::ReplicationRole::Primary
+    } else {
+        crate::config::ReplicationRole::Off
+    });
+    *state.replication.borrow_mut() = shipper;
+    state.write_gate.set(crate::replication::WriteGate::Open);
+    warn!(
+        shard_id,
+        epoch = lineage.origin.epoch,
+        fork = lineage.fork_sequence,
+        "promoted to primary"
+    );
+    Ok(())
+}
+
+/// `REPLICAOF host port` on this shard: stop taking writes and shipping, give up the
+/// history it wrote and follow `primary`. The shard resumes from its own log when the new
+/// primary's history continues its own (it was promoted from this shard's replica and this
+/// shard wrote nothing past the fork); otherwise it takes a full copy.
+pub(super) fn demote(
+    state: &ShardState,
+    shard_id: u32,
+    primary: SocketAddr,
+    primary_name: Option<(String, u16)>,
+) -> io::Result<()> {
+    state.write_gate.set(crate::replication::WriteGate::Replica);
+    drop(state.replication.borrow_mut().take());
+    *state.replica_reader.borrow_mut() = None;
+    *state.replica_frames.borrow_mut() = None;
+
+    let data_dir = &state.published_config.persistence.data_dir;
+
+    // The history this shard wrote becomes the one it claims to follow: a primary forked
+    // from it lets the log resume. Recording it removes the shard's own lineage.
+    if state.role.get() != crate::config::ReplicationRole::Replica {
+        let own = writer_lineage(state, shard_id)?.origin;
+
+        crate::replication::record_upstream_history(data_dir, shard_id, &own)?;
+    }
+
+    {
+        let mut store = state.store.borrow_mut();
+
+        store.follow_primary(true);
+        store.log_removals(false);
+    }
+    if let Some(hot) = &state.hot_store {
+        hot.keep_expired_keys(true);
+    }
+
+    state.role.set(crate::config::ReplicationRole::Replica);
+    state.epoch.set(0);
+    *state.replication.borrow_mut() = Some(spawn_reader(state, shard_id, primary, primary_name)?);
+    warn!(shard_id, %primary, "following a new primary");
+    Ok(())
+}
+
 /// Shard `shard_id`'s replication address: `base`'s port plus the shard id. A port past
 /// 65535 is an error; wrapping around would bind or dial a port nobody configured.
+/// Stops a primary shard taking writes once a replica has shown it a newer epoch: another
+/// primary replaced this one. It stays fenced until the process restarts or changes role.
+pub(super) fn fence_if_replaced(state: &ShardState) {
+    if state.write_gate.get() == crate::replication::WriteGate::Open
+        && state.newer_epoch.load(Ordering::Acquire) > state.epoch.get()
+    {
+        warn!(
+            epoch = state.epoch.get(),
+            newer_epoch = state.newer_epoch.load(Ordering::Acquire),
+            "a newer primary replaced this one; refusing writes"
+        );
+        state.write_gate.set(crate::replication::WriteGate::Fenced);
+    }
+}
+
+/// `min-replicas-to-write`: a primary shard refuses writes while fewer replicas than that
+/// acknowledged within `min-replicas-max-lag`, and takes them again once enough do. Checked
+/// on the maintenance tick, so the write path reads only the gate.
+pub(super) fn gate_on_replicas(state: &ShardState) {
+    use crate::replication::WriteGate;
+
+    let gate = state.write_gate.get();
+
+    if !matches!(gate, WriteGate::Open | WriteGate::NoReplicas)
+        || state.role.get() != crate::config::ReplicationRole::Primary
+    {
+        return;
+    }
+
+    let (wanted, max_lag) = state.live.with(|live| {
+        (
+            live.replication.min_replicas_to_write,
+            live.replication.min_replicas_max_lag,
+        )
+    });
+    let next = if wanted == 0 || state.durable_acks.fresh(max_lag) >= wanted {
+        WriteGate::Open
+    } else {
+        WriteGate::NoReplicas
+    };
+
+    if next != gate {
+        warn!(
+            wanted,
+            max_lag_secs = max_lag.as_secs(),
+            "{}",
+            if next == WriteGate::Open {
+                "enough replicas acknowledge again; taking writes"
+            } else {
+                "too few replicas acknowledge; refusing writes (min-replicas-to-write)"
+            }
+        );
+        state.write_gate.set(next);
+    }
+}
+
+/// The lineage this shard writes as a writer, settled before it accepts its first write: a
+/// shard promoted from replica forks here, at its last logged sequence.
+fn writer_lineage(state: &ShardState, shard_id: u32) -> io::Result<crate::replication::Lineage> {
+    let data_dir = &state.published_config.persistence.data_dir;
+    let last_sequence = state
+        .persistence
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .last_sequence();
+
+    crate::replication::resolve_lineage(data_dir, shard_id, last_sequence)
+}
+
 pub(super) fn shard_port(base: SocketAddr, shard_id: u32) -> io::Result<SocketAddr> {
     u16::try_from(shard_id)
         .ok()
@@ -122,7 +473,7 @@ pub(super) fn install_replica_snapshot(
     shard: &[u8],
     hot: Option<&[u8]>,
     catchup_through: u64,
-    history: &crate::replication::HistoryId,
+    history: &crate::replication::Origin,
 ) -> bool {
     let limits = state.published_config.protocol;
     let maximum = state.published_config.persistence.snapshot_max_bytes;
@@ -610,7 +961,7 @@ pub(super) async fn wait_for_durable_replicas(
     timeout_ms: u64,
     shutdown: &ShutdownToken,
 ) -> u64 {
-    if state.published_config.replication.role != crate::config::ReplicationRole::Primary {
+    if state.role.get() != crate::config::ReplicationRole::Primary {
         return 0;
     }
 

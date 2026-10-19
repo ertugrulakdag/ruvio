@@ -513,6 +513,7 @@ fn server(db: &mut Client) -> Result<(), ruvio_client::Error> {
     println!("config_get {}", db.config_get("databases")?.len());
     db.config_set(&[("slowlog-max-len", "128")])?;
     println!("config_set slowlog-max-len 128");
+    println!("role {:?}", db.role()?);
     println!("whoami {}", db.acl_whoami()?);
     println!("acl_users {:?}", db.acl_users()?);
     println!("acl_list {}", db.acl_list()?.len());

@@ -20,7 +20,7 @@ pub(super) fn start(
     resp3: bool,
     shutdown: ShutdownToken,
 ) -> Result<ChangeCursor, &'static [u8]> {
-    if state.published_config.replication.role == crate::config::ReplicationRole::Replica {
+    if state.role.get() == crate::config::ReplicationRole::Replica {
         return Err(b"ERR CHANGES SUBSCRIBE is only available on a primary");
     }
 

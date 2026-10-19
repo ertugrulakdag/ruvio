@@ -110,6 +110,42 @@ pub(in crate::protocol) fn cmd_config<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
     ))
 }
 
+/// `REPLICAOF host port` or `REPLICAOF NO ONE`; `REPLICAOF NO ONE FORCE` promotes a replica
+/// that has not finished copying its primary.
+pub(in crate::protocol) fn cmd_replicaof<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    let no_one = args.len() >= 2
+        && args.bytes(0).eq_ignore_ascii_case(b"NO")
+        && args.bytes(1).eq_ignore_ascii_case(b"ONE");
+
+    match args.len() {
+        2 if no_one => Ok(Command::ReplicaOf {
+            primary: None,
+            force: false,
+        }),
+        3 if no_one && args.bytes(2).eq_ignore_ascii_case(b"FORCE") => Ok(Command::ReplicaOf {
+            primary: None,
+            force: true,
+        }),
+        2 => Ok(Command::ReplicaOf {
+            primary: Some((args.arg(0), args.arg(1))),
+            force: false,
+        }),
+        _ => Err(ProtocolError::Invalid(
+            "wrong number of arguments for 'replicaof' command",
+        )),
+    }
+}
+
+pub(in crate::protocol) fn cmd_role<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() != 0 {
+        return Err(ProtocolError::Invalid(
+            "wrong number of arguments for 'role' command",
+        ));
+    }
+
+    Ok(Command::Role)
+}
+
 pub(in crate::protocol) fn cmd_info<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
     match args.len() {
         0 => Ok(Command::Info(None)),

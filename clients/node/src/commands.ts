@@ -5601,6 +5601,49 @@ export abstract class Commands {
     return this._0(null, C.CONFIG_REWRITE);
   }
   /**
+   * Makes every shard of the server follow the primary at `host:port` (`REPLICAOF host port`);
+   * shard `i` dials `port + i`. Writes are refused at once. A shard continues from its own log
+   * when the new primary's history allows it, otherwise it takes a full copy. Lasts until the
+   * server restarts.
+   *
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.replicaOf('10.0.0.5', 26379);
+   * ```
+   */
+  replicaOf(host: string, port: number): R<'OK'> {
+    return this._2(null, C.REPLICAOF, host, port);
+  }
+  /**
+   * Promotes a replica in place (`REPLICAOF NO ONE`), one epoch above its old primary. `force`
+   * adds `FORCE`: promote even when a shard has not finished copying its primary, which may
+   * lose writes.
+   *
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.replicaOfNoOne();
+   * ```
+   */
+  replicaOfNoOne(force = false): R<'OK'> {
+    return force ? this._1(null, C.REPLICAOF_NO_ONE, 'FORCE') : this._0(null, C.REPLICAOF_NO_ONE);
+  }
+  /**
+   * `ROLE` for the shard this connection is on: a primary answers `['master', sequence, []]`; a
+   * replica `['slave', host, port, 'connect' | 'connected', sequence]`.
+   *
+   * @example
+   * ```ts
+   * const [role] = await client.role();
+   * ```
+   */
+  role(): R<unknown[]> {
+    return this._0(null, C.ROLE);
+  }
+  /**
    * Writes a checkpoint now (`SAVE`). In-process.
    *
    * @returns `'OK'`.

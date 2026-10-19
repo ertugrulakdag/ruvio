@@ -98,6 +98,10 @@ test('introspection, persistence, replication', { skip: SKIP }, async () => {
     assert.equal(await c.configSet({ 'slowlog-max-len': '128' }), 'OK');
     assert.equal((await c.configGet('slowlog-max-len'))['slowlog-max-len'], '128');
     assert.ok((await rejects(c.configSet({ shards: '2' }))) instanceof RuvioError);
+    assert.equal(String((await c.role())[0]), 'master');
+    // The live server keeps no WAL, so it cannot replicate: both forms are refused unchanged.
+    assert.ok((await rejects(c.replicaOf('127.0.0.1', 1))) instanceof RuvioError);
+    assert.ok((await rejects(c.replicaOfNoOne())) instanceof RuvioError);
     // Only on a throwaway server: CONFIG REWRITE rewrites the server's config file.
     if (process.env.RUVIO_TEST_CONFIG_REWRITE === '1') assert.equal(await c.configRewrite(), 'OK');
     assert.equal(await c.save(), 'OK');

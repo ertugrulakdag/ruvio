@@ -44,6 +44,9 @@ pub const LIVE_SETTINGS: &[&str] = &[
     "script-max-time-ms",
     // Security
     "requirepass",
+    // Replication
+    "min-replicas-to-write",
+    "min-replicas-max-lag",
 ];
 
 /// `CONFIG GET` names that only change with a restart, or only report a value. `CONFIG SET`
@@ -189,6 +192,10 @@ impl AppConfig {
             "script-max-instructions" => self.scripts.max_instructions = unsigned(value)?,
             "script-max-time-ms" => self.scripts.max_time_ms = unsigned(value)?,
             "requirepass" => self.security.requirepass = value.to_owned(),
+            "min-replicas-to-write" => self.replication.min_replicas_to_write = unsigned(value)?,
+            "min-replicas-max-lag" => {
+                self.replication.min_replicas_max_lag = Duration::from_secs(unsigned(value)?);
+            }
             _ => return Err("not a live setting".into()),
         }
 
@@ -208,6 +215,8 @@ impl AppConfig {
         self.requests.max_output_buffer_bytes = live.requests.max_output_buffer_bytes;
         self.scripts = live.scripts;
         self.security.requirepass = live.security.requirepass.clone();
+        self.replication.min_replicas_to_write = live.replication.min_replicas_to_write;
+        self.replication.min_replicas_max_lag = live.replication.min_replicas_max_lag;
     }
 
     /// `CONFIG REWRITE`: writes the live settings of `self` into the config file the server

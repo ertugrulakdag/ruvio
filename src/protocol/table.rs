@@ -775,6 +775,22 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         commands::cmd_config,
     ),
     CommandSpec::migrated(
+        "replicaof",
+        -3,
+        0,
+        (0, 0, 0),
+        &["admin", "slow", "dangerous"],
+        commands::cmd_replicaof,
+    ),
+    CommandSpec::migrated(
+        "role",
+        1,
+        FAST,
+        (0, 0, 0),
+        &["admin", "fast", "dangerous"],
+        commands::cmd_role,
+    ),
+    CommandSpec::migrated(
         "info",
         -1,
         0,

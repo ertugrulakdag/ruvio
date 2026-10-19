@@ -4,6 +4,7 @@ Notable changes to the Java client `io.github.salihcantekin:ruvio-client`. New e
 
 ## Unreleased
 
+- `replicaOf(host, port)`, `replicaOfNoOne(force)` and `role()` for `REPLICAOF` and `ROLE`, async and blocking.
 - `RuvioOptions.Builder.seeds(...)`: `host:port` seed addresses tried in order instead of host and port. A dropped connection reconnects starting with the next seed; a cluster reloads its slot map from the other known nodes and then the seeds when no open socket answers.
 - TTL on create: `Duration` overloads `incr`, `decr`, `incrby`, `decrby`, `incrbyMax`, `incrbyfloat`, `hincrby`, `zincrby`, `setbit` and `geoadd(key, nx, xx, ch, ttl, members)`, `jsonSet`/`jsonSetNx`/`jsonSetXx(key, path, json, ttl)`, and `ttl(Duration)` on `ZAddArgs`, `XAddArgs` and `BfInsertArgs`. The deadline is set only when the call creates the key; whole seconds are sent as `EX`, anything finer as `PX`.
 - `expire`, `pexpire`, `expireat` and `pexpireat` overloads take an `ExpireCondition` (`NX`, `XX`, `GT`, `LT`); `ExpireCondition` now also has `fragment()`, like the other keyword enums.

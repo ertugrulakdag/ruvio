@@ -4,6 +4,7 @@ Notable changes to the Go client `github.com/salihcantekin/ruvio/clients/go`. A 
 
 ## Unreleased
 
+- `ReplicaOf(ctx, host, port)`, `ReplicaOfNoOne(ctx, force)` and `Role(ctx)` for `REPLICAOF` and `ROLE`.
 - `Options.Seeds`: `host:port` seed addresses tried in order instead of `Addr`. A dropped connection reconnects starting with the next seed; a cluster reloads its slot map from the other known nodes and then the seeds when no open socket answers. A custom `Dial` receives the seed being tried.
 - TTL on create: `IncrWithTTL`, `DecrWithTTL`, `IncrByWithTTL`, `DecrByWithTTL`, `IncrByMaxWithTTL`, `IncrByFloatWithTTL`, `HIncrByWithTTL`, `ZIncrByWithTTL`, `SetBitWithTTL`, `JSONSetWithTTL` and `JSONSetModeWithTTL` send `EX` (whole seconds) or `PX` and set the deadline only when the call creates the key. New `TTL` field on `ZAddOptions`, `GeoAddOptions`, `XAddArgs` and `BFInsertOptions`. A zero or negative TTL returns the new `ErrInvalidTTL` without contacting the server.
 - Conditional expiry: typed `ExpireCondition` (`ExpireNx`, `ExpireXx`, `ExpireGt`, `ExpireLt`) and `ExpireIf`, `PExpireIf`, `ExpireAtIf`, `PExpireAtIf`.

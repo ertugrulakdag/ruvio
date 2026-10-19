@@ -67,6 +67,16 @@ func TestLiveConnectionAndServer(t *testing.T) {
 	if err := c.ConfigSet(ctx, "shards", "2"); err == nil {
 		t.Fatal("CONFIG SET shards should be refused")
 	}
+	if role, err := c.Role(ctx); err != nil || len(role.Array) == 0 || string(role.Array[0].Bytes) != "master" {
+		t.Fatalf("ROLE answered %+v, %v", role, err)
+	}
+	// The live server keeps no WAL, so it cannot replicate: both forms are refused unchanged.
+	if err := c.ReplicaOf(ctx, "127.0.0.1", 1); err == nil {
+		t.Fatal("REPLICAOF should be refused without a WAL")
+	}
+	if err := c.ReplicaOfNoOne(ctx, false); err == nil {
+		t.Fatal("REPLICAOF NO ONE should be refused without a WAL")
+	}
 	okOrServerErr(t, "SAVE", c.Save(ctx))
 	okOrServerErr(t, "BGSAVE", func() error { _, err := c.BgSave(ctx); return err }())
 	cmd := must[Value](t)(c.Command(ctx))

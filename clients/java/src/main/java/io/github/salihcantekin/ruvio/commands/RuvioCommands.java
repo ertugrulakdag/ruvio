@@ -504,6 +504,40 @@ public abstract class RuvioCommands<K, V> extends ScriptingCommands<K, V> {
     }
 
     /**
+     * Sends {@code REPLICAOF host port}: every shard of the server follows the primary at {@code host:port} (shard {@code i} dials {@code port + i}). Writes are refused at once. A shard continues from its own log when the new primary's history allows it, otherwise it takes a full copy. Lasts until the server restarts.
+     *
+     * @param host the primary's host
+     * @param port the primary's base replication port
+     * @return a future that completes with no value once every shard follows the primary
+     */
+    public CompletableFuture<Void> replicaOf(String host, int port) {
+        return send(args().w(Cmd.REPLICAOF).s(host).s(Integer.toString(port)), Reply.OK);
+    }
+
+    /**
+     * Sends {@code REPLICAOF NO ONE}: promotes a replica in place, one epoch above its old primary.
+     *
+     * @param force adds {@code FORCE}: promote even when a shard has not finished copying its primary, which may lose writes
+     * @return a future that completes with no value once every shard takes writes
+     */
+    public CompletableFuture<Void> replicaOfNoOne(boolean force) {
+        Args a = args().w(Cmd.REPLICAOF).s("NO").s("ONE");
+        if (force) {
+            a.s("FORCE");
+        }
+        return send(a, Reply.OK);
+    }
+
+    /**
+     * Sends {@code ROLE} for the shard this connection is on.
+     *
+     * @return {@code ["master", sequence, []]} on a primary; {@code ["slave", host, port, "connect"|"connected", sequence]} on a replica
+     */
+    public CompletableFuture<List<Object>> role() {
+        return send(args().w(Cmd.ROLE), TEXT_LIST);
+    }
+
+    /**
      * Sends {@code SAVE}: writes a snapshot now and waits for it.
      *
      * @throws RuvioServerException {@code ERR} when the server has no snapshot storage ({@code memory} profile) or the write fails

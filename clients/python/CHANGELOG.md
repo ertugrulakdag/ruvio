@@ -4,6 +4,7 @@ Notable changes to the Python client `ruvio-client` on PyPI. New entries go unde
 
 ## Unreleased
 
+- `replicaof(host, port)`, `replicaof_no_one(force=False)` and `role()` for `REPLICAOF` and `ROLE`, sync and asyncio.
 - Added `seeds=` (`"host:port"` strings or `(host, port)` tuples) to the sync and asyncio clients, `ClusterRuvio` and `from_url`: tried in order instead of `host`/`port`. A dropped connection reconnects starting with the next seed; a cluster reloads its slot map from the other known nodes and then the seeds when no open socket answers.
 - Added keyword-only `ttl=` (seconds as `int`/`float`, or `timedelta`) to `incr`, `decr`, `incrby`, `decrby`, `incrbyfloat`, `hincrby`, `zincrby`, `setbit`, `zadd`, `geoadd`, `xadd`, `json_set`, `json_set_obj` and `bf_insert`. The deadline is set only when the call creates the key; an existing key keeps its deadline. Whole seconds send `EX`, a sub-second part sends `PX`; zero or negative raises `ValueError`.
 - Added `ExpireCondition` (`NX`, `XX`, `GT`, `LT`) and the optional `condition=` argument on `expire`, `pexpire`, `expireat` and `pexpireat`. A key without a deadline counts as infinite; a failed condition returns `False`.

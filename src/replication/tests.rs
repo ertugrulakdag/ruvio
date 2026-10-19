@@ -125,6 +125,7 @@ fn encode_handshake_returns_an_error_when_the_password_does_not_fit() {
         history: [0; HISTORY_LEN],
         shard_count: 1,
         password: vec![b'a'; 65_536],
+        epoch: 0,
     };
 
     assert!(encode_handshake(&handshake).is_err());
@@ -139,6 +140,7 @@ fn handshake_round_trips_and_rejects_a_bad_checksum() {
         history: [0; HISTORY_LEN],
         shard_count: 1,
         password: b"secret".to_vec(),
+        epoch: 0,
     };
 
     let bytes = encode_handshake(&handshake).unwrap();
@@ -152,17 +154,17 @@ fn handshake_round_trips_and_rejects_a_bad_checksum() {
     let reply = encode_reply(HandshakeStatus::Gap, 0);
 
     assert_eq!(decode_reply(&reply), Ok((HandshakeStatus::Gap, 0)));
-    assert_eq!(reply.len(), 38);
+    assert_eq!(reply.len(), 46);
     let snapshot = encode_reply(HandshakeStatus::Snapshot, 41);
 
     assert_eq!(decode_reply(&snapshot), Ok((HandshakeStatus::Snapshot, 41)));
-    assert_eq!(snapshot.len(), 38);
+    assert_eq!(snapshot.len(), 46);
 }
 
 #[test]
 fn decode_handshake_rejects_a_short_buffer_bad_magic_and_length_mismatch() {
     assert!(decode_handshake(&[]).is_err());
-    assert!(decode_handshake(&[0; 47]).is_err());
+    assert!(decode_handshake(&[0; 55]).is_err());
 
     let empty = Handshake {
         version: VERSION_RESUME,
@@ -171,11 +173,12 @@ fn decode_handshake_rejects_a_short_buffer_bad_magic_and_length_mismatch() {
         history: [0; HISTORY_LEN],
         shard_count: 1,
         password: Vec::new(),
+        epoch: 0,
     };
 
     let empty_bytes = encode_handshake(&empty).unwrap();
 
-    assert_eq!(empty_bytes.len(), 48);
+    assert_eq!(empty_bytes.len(), 56);
     assert_eq!(decode_handshake(&empty_bytes), Ok(empty));
 
     let handshake = Handshake {
@@ -185,6 +188,7 @@ fn decode_handshake_rejects_a_short_buffer_bad_magic_and_length_mismatch() {
         history: [0; HISTORY_LEN],
         shard_count: 1,
         password: b"secret".to_vec(),
+        epoch: 0,
     };
 
     let mut bad_magic = encode_handshake(&handshake).unwrap();
@@ -261,7 +265,7 @@ fn handshake_status_codes_and_limits_match_the_contract() {
     assert_eq!(SHIPPER_POLL, Duration::from_millis(10));
     assert_eq!(
         (VERSION_RESUME, VERSION_RESYNC, VERSION_RESYNC_INCOMPLETE),
-        (6, 7, 8)
+        (9, 10, 11)
     );
 
     let handshake = Handshake {
@@ -271,29 +275,40 @@ fn handshake_status_codes_and_limits_match_the_contract() {
         history: [0; HISTORY_LEN],
         shard_count: 1,
         password: b"secret".to_vec(),
+        epoch: 3,
     };
 
     let bytes = encode_handshake(&handshake).unwrap();
 
-    assert_eq!(&bytes[8..10], &6u16.to_le_bytes());
+    assert_eq!(&bytes[8..10], &9u16.to_le_bytes());
     assert_eq!(&bytes[10..14], &2u32.to_le_bytes());
     assert_eq!(&bytes[14..22], &40u64.to_le_bytes());
     assert_eq!(&bytes[22..24], &6u16.to_le_bytes());
     assert_eq!(&bytes[24..30], b"secret");
     assert_eq!(&bytes[30..46], &[0; HISTORY_LEN]);
     assert_eq!(&bytes[46..50], &1u32.to_le_bytes());
+    assert_eq!(&bytes[50..58], &3u64.to_le_bytes());
     assert_eq!(
-        u32::from_le_bytes(bytes[50..54].try_into().unwrap()),
-        crc32c::crc32c(&bytes[..50])
+        u32::from_le_bytes(bytes[58..62].try_into().unwrap()),
+        crc32c::crc32c(&bytes[..58])
     );
 
-    let reply = encode_reply(HandshakeStatus::Gap, 0);
+    let reply = encode_reply_with_history(
+        HandshakeStatus::Gap,
+        0,
+        &Origin {
+            history: [7; HISTORY_LEN],
+            epoch: 4,
+        },
+    );
 
     assert_eq!(&reply[8..10], &2u16.to_le_bytes());
     assert_eq!(&reply[10..18], &0u64.to_le_bytes());
+    assert_eq!(&reply[18..34], &[7; HISTORY_LEN]);
+    assert_eq!(&reply[34..42], &4u64.to_le_bytes());
     assert_eq!(
-        u32::from_le_bytes(reply[34..38].try_into().unwrap()),
-        crc32c::crc32c(&reply[..34])
+        u32::from_le_bytes(reply[42..46].try_into().unwrap()),
+        crc32c::crc32c(&reply[..42])
     );
 
     let statuses = [
@@ -304,6 +319,9 @@ fn handshake_status_codes_and_limits_match_the_contract() {
         (HandshakeStatus::Version, 5),
         (HandshakeStatus::Ahead, 6),
         (HandshakeStatus::Local, 7),
+        (HandshakeStatus::Snapshot, 8),
+        (HandshakeStatus::History, 9),
+        (HandshakeStatus::Stale, 10),
     ];
 
     for (status, code) in statuses {
@@ -919,7 +937,8 @@ fn gap_handshake_leaves_the_live_generation() {
             fanout: Arc::new(PublishFanout::new()),
             snapshot_max_bytes: 1024 * 1024 * 1024,
             shard_count: 1,
-            history: [0; HISTORY_LEN],
+            lineage: Lineage::root([0; HISTORY_LEN]),
+            newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
         },
     )
@@ -933,6 +952,7 @@ fn gap_handshake_leaves_the_live_generation() {
         history: [0; HISTORY_LEN],
         shard_count: 1,
         password: Vec::new(),
+        epoch: 0,
     })
     .unwrap();
 
@@ -952,6 +972,7 @@ fn gap_handshake_leaves_the_live_generation() {
         history: [0; HISTORY_LEN],
         shard_count: 1,
         password: Vec::new(),
+        epoch: 0,
     })
     .unwrap();
 
@@ -1018,7 +1039,8 @@ fn two_replicas_receive_the_same_appended_frame() {
             fanout: Arc::new(PublishFanout::new()),
             snapshot_max_bytes: 1024 * 1024 * 1024,
             shard_count: 1,
-            history: [0; HISTORY_LEN],
+            lineage: Lineage::root([0; HISTORY_LEN]),
+            newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
         },
     )
@@ -1078,7 +1100,8 @@ fn closing_one_replica_leaves_the_other_streaming() {
             fanout: Arc::new(PublishFanout::new()),
             snapshot_max_bytes: 1024 * 1024 * 1024,
             shard_count: 1,
-            history: [0; HISTORY_LEN],
+            lineage: Lineage::root([0; HISTORY_LEN]),
+            newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
         },
     )
@@ -1136,7 +1159,8 @@ fn replica_limit_closes_the_extra_connection() {
             fanout: Arc::new(PublishFanout::new()),
             snapshot_max_bytes: 1024 * 1024 * 1024,
             shard_count: 1,
-            history: [0; HISTORY_LEN],
+            lineage: Lineage::root([0; HISTORY_LEN]),
+            newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
         },
     )
@@ -1150,6 +1174,7 @@ fn replica_limit_closes_the_extra_connection() {
         history: [0; HISTORY_LEN],
         shard_count: 1,
         password: Vec::new(),
+        epoch: 0,
     })
     .unwrap();
     let wrote = extra.write_all(&handshake);
@@ -1205,7 +1230,8 @@ fn a_replica_that_hangs_up_on_an_idle_primary_frees_its_slot() {
             fanout: Arc::new(PublishFanout::new()),
             snapshot_max_bytes: 1024 * 1024 * 1024,
             shard_count: 1,
-            history: [0; HISTORY_LEN],
+            lineage: Lineage::root([0; HISTORY_LEN]),
+            newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
         },
     )
@@ -1217,6 +1243,7 @@ fn a_replica_that_hangs_up_on_an_idle_primary_frees_its_slot() {
         history: [0; HISTORY_LEN],
         shard_count: 1,
         password: Vec::new(),
+        epoch: 0,
     })
     .unwrap();
 
@@ -1282,7 +1309,8 @@ fn primary_refuses_a_replica_from_another_history_or_shard_layout() {
             fanout: Arc::new(PublishFanout::new()),
             snapshot_max_bytes: 1024 * 1024 * 1024,
             shard_count: 2,
-            history: [7; HISTORY_LEN],
+            lineage: Lineage::root([7; HISTORY_LEN]),
+            newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
         },
     )
@@ -1296,6 +1324,7 @@ fn primary_refuses_a_replica_from_another_history_or_shard_layout() {
             history,
             shard_count,
             password: Vec::new(),
+            epoch: 0,
         })
         .unwrap();
 
@@ -1337,6 +1366,7 @@ fn open_ok_replica(address: SocketAddr, after_sequence: u64) -> TcpStream {
         history: [0; HISTORY_LEN],
         shard_count: 1,
         password: Vec::new(),
+        epoch: 0,
     })
     .unwrap();
 
@@ -1441,7 +1471,8 @@ fn idle_shipment(data_dir: &Path, history: HistoryId) -> Shipment {
         fanout: Arc::new(PublishFanout::new()),
         snapshot_max_bytes: 1024 * 1024,
         shard_count: 1,
-        history,
+        lineage: Lineage::root(history),
+        newer_epoch: Arc::new(AtomicU64::new(0)),
         snapshot_requests: Arc::new(AtomicU64::new(0)),
     }
 }
@@ -1455,8 +1486,24 @@ fn upstream_history_is_kept_per_shard_and_ignores_the_shared_legacy_file() {
     std::fs::write(path.join("HISTORY"), [3; HISTORY_LEN]).unwrap();
     assert_eq!(upstream_history(path, 0), [3; HISTORY_LEN]);
 
-    record_upstream_history(path, 0, &[1; HISTORY_LEN]).unwrap();
-    record_upstream_history(path, 1, &[2; HISTORY_LEN]).unwrap();
+    record_upstream_history(
+        path,
+        0,
+        &Origin {
+            history: [1; HISTORY_LEN],
+            epoch: 0,
+        },
+    )
+    .unwrap();
+    record_upstream_history(
+        path,
+        1,
+        &Origin {
+            history: [2; HISTORY_LEN],
+            epoch: 0,
+        },
+    )
+    .unwrap();
     assert_eq!(upstream_history(path, 0), [1; HISTORY_LEN]);
     assert_eq!(upstream_history(path, 1), [2; HISTORY_LEN]);
     assert_eq!(upstream_history(path, 2), [3; HISTORY_LEN]);
@@ -1552,14 +1599,25 @@ fn answer_once(reply: Vec<u8>) -> (SocketAddr, JoinHandle<Handshake>) {
 fn snapshot_reply_leaves_the_upstream_record_until_the_snapshot_is_installed() {
     let directory = tempfile::tempdir().unwrap();
 
-    record_upstream_history(directory.path(), 0, &[1; HISTORY_LEN]).unwrap();
+    record_upstream_history(
+        directory.path(),
+        0,
+        &Origin {
+            history: [1; HISTORY_LEN],
+            epoch: 0,
+        },
+    )
+    .unwrap();
 
     // The primary answers with a snapshot of another history, then the link breaks before
     // the snapshot arrives (as a crash during the download would).
     let (address, server) = answer_once(encode_reply_with_history(
         HandshakeStatus::Snapshot,
         10,
-        &[9; HISTORY_LEN],
+        &Origin {
+            history: [9; HISTORY_LEN],
+            epoch: 0,
+        },
     ));
     let (link, _deliveries) = link_to(address, directory.path());
     let mut stream = connect_replication(address);
@@ -1578,7 +1636,10 @@ fn snapshot_reply_leaves_the_upstream_record_until_the_snapshot_is_installed() {
     let (address, server) = answer_once(encode_reply_with_history(
         HandshakeStatus::Ok,
         1,
-        &[9; HISTORY_LEN],
+        &Origin {
+            history: [9; HISTORY_LEN],
+            epoch: 0,
+        },
     ));
     let (link, _deliveries) = link_to(address, directory.path());
     let mut stream = connect_replication(address);
@@ -1632,6 +1693,32 @@ fn primary_refuses_older_and_newer_handshake_versions_at_once() {
         assert!(checksum_matches(&reply));
     }
 
+    // A build with a history id but no epoch: its handshake ends with the history id and
+    // shard count, and it reads a reply without the epoch.
+    for history_only in [6u16, 8] {
+        let mut bytes = HANDSHAKE_MAGIC.to_vec();
+
+        put_u16(&mut bytes, history_only);
+        put_u32(&mut bytes, 0);
+        put_u64(&mut bytes, 7);
+        put_u16(&mut bytes, 0);
+        bytes.extend_from_slice(&[0; HISTORY_LEN]);
+        put_u32(&mut bytes, 1);
+        append_checksum(&mut bytes);
+        let mut stream = connect_replication(address);
+        let started = std::time::Instant::now();
+
+        stream.write_all(&bytes).unwrap();
+        let reply = read_socket(&mut stream, HISTORY_ONLY_REPLY_LEN);
+
+        assert!(
+            started.elapsed() < Duration::from_millis(2500),
+            "refusal waited for a timeout"
+        );
+        assert_eq!(read_u16(&reply, 8), HandshakeStatus::Version as u16);
+        assert!(checksum_matches(&reply));
+    }
+
     // A newer build gets a refusal in this build's reply format.
     let mut stream = connect_replication(address);
 
@@ -1644,6 +1731,7 @@ fn primary_refuses_older_and_newer_handshake_versions_at_once() {
                 password: Vec::new(),
                 history: [0; HISTORY_LEN],
                 shard_count: 1,
+                epoch: 0,
             })
             .unwrap(),
         )
@@ -1698,6 +1786,7 @@ fn replica_accept_loop_survives_accept_errors() {
                 password: Vec::new(),
                 history: [0; HISTORY_LEN],
                 shard_count: 1,
+                epoch: 0,
             })
             .unwrap(),
         )
@@ -2003,4 +2092,161 @@ fn a_replica_checkpoint_holds_its_snapshot_point_while_frames_keep_arriving() {
         sorted(restarted.snapshot_entries()),
         sorted(replica.snapshot_entries())
     );
+}
+
+#[test]
+fn a_promoted_shard_forks_from_the_history_it_followed() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path();
+    let followed = Origin {
+        history: [4; HISTORY_LEN],
+        epoch: 2,
+    };
+
+    record_upstream_history(path, 0, &followed).unwrap();
+    let lineage = resolve_lineage(path, 0, 120).unwrap();
+
+    assert_eq!(lineage.origin.epoch, 3);
+    assert_ne!(lineage.origin.history, followed.history);
+    assert_eq!(lineage.parent, followed.history);
+    assert_eq!(lineage.fork_sequence, 120);
+    // Settled once: a restart after more writes keeps the fork where it was.
+    assert_eq!(resolve_lineage(path, 0, 500).unwrap(), lineage);
+
+    // Siblings that stopped at or before the fork continue; one past it holds writes this
+    // primary never saw, and an unrelated history continues nothing.
+    assert!(lineage.continues(&followed.history, 1));
+    assert!(lineage.continues(&followed.history, 120));
+    assert!(!lineage.continues(&followed.history, 121));
+    assert!(lineage.continues(&lineage.origin.history, 900));
+    assert!(!lineage.continues(&[9; HISTORY_LEN], 1));
+
+    // Following a primary again gives the lineage up; the next promotion forks anew.
+    let newer = Origin {
+        history: [5; HISTORY_LEN],
+        epoch: 7,
+    };
+
+    record_upstream_history(path, 0, &newer).unwrap();
+    assert!(!path.join(lineage_file_name(0)).exists());
+    let again = resolve_lineage(path, 0, 300).unwrap();
+
+    assert_eq!(
+        (again.origin.epoch, again.parent, again.fork_sequence),
+        (8, newer.history, 300)
+    );
+}
+
+#[test]
+fn a_shard_that_never_followed_continues_the_directory_history() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path();
+    let history = load_or_create_history(path).unwrap();
+    let lineage = resolve_lineage(path, 1, 40).unwrap();
+
+    assert_eq!(lineage, Lineage::root(history));
+    assert!(!lineage.continues(&[0; HISTORY_LEN], 1));
+    // Upstream records of older builds carry no epoch.
+    std::fs::write(path.join(upstream_file_name(2)), [3; HISTORY_LEN]).unwrap();
+    assert_eq!(
+        upstream_origin(path, 2),
+        Origin {
+            history: [3; HISTORY_LEN],
+            epoch: 0
+        }
+    );
+}
+
+#[test]
+fn a_primary_refuses_a_replica_that_followed_a_newer_epoch() {
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+
+    listener.set_nonblocking(true).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut shipment = idle_shipment(directory.path(), [7; HISTORY_LEN]);
+
+    shipment.lineage.origin.epoch = 2;
+    let newer_epoch = Arc::clone(&shipment.newer_epoch);
+    let shipment = Arc::new(shipment);
+    let accept_stop = Arc::clone(&stop);
+    let primary = thread::spawn(move || accept_replicas(listener, shipment, accept_stop));
+    let handshake = |epoch| Handshake {
+        version: VERSION_RESYNC,
+        shard_id: 0,
+        after_sequence: 0,
+        password: Vec::new(),
+        history: [7; HISTORY_LEN],
+        shard_count: 1,
+        epoch,
+    };
+
+    // A replica that followed the primary which replaced this one.
+    let mut stream = connect_replication(address);
+
+    stream
+        .write_all(&encode_handshake(&handshake(3)).unwrap())
+        .unwrap();
+    assert_eq!(
+        decode_reply(&read_socket(&mut stream, REPLY_LEN))
+            .unwrap()
+            .0,
+        HandshakeStatus::Stale
+    );
+    // The shard reads it on its next maintenance tick and stops taking writes.
+    assert_eq!(newer_epoch.load(Ordering::Acquire), 3);
+
+    stop.store(true, Ordering::Release);
+    join_within(primary).unwrap();
+}
+
+#[test]
+fn a_replica_does_not_follow_a_primary_below_the_epoch_it_followed() {
+    let directory = tempfile::tempdir().unwrap();
+    let followed = Origin {
+        history: [1; HISTORY_LEN],
+        epoch: 5,
+    };
+
+    record_upstream_history(directory.path(), 0, &followed).unwrap();
+
+    // A replaced primary (epoch 3) accepts the resume; the replica still does not follow it.
+    let (address, server) = answer_once(encode_reply_with_history(
+        HandshakeStatus::Ok,
+        1,
+        &Origin {
+            history: [9; HISTORY_LEN],
+            epoch: 3,
+        },
+    ));
+    let (link, _deliveries) = link_to(address, directory.path());
+    let mut stream = connect_replication(address);
+    let (retry, _) = read_primary(
+        &mut stream,
+        &link,
+        &mut VecDeque::new(),
+        &AtomicBool::new(false),
+    );
+    let sent = join_within(server).unwrap();
+
+    assert!(retry);
+    assert_eq!((sent.history, sent.epoch), (followed.history, 5));
+    assert_eq!(upstream_origin(directory.path(), 0), followed);
+}
+
+#[test]
+fn fresh_counts_connected_replicas_that_acknowledged_within_the_lag() {
+    let acks = DurableAcks::new();
+
+    assert_eq!(acks.fresh(Duration::from_secs(10)), 0);
+    acks.reserve(0);
+    acks.reserve(1);
+    // A repeated acknowledgement of the same sequence still counts as a sign of life.
+    acks.observe(1, 0);
+    assert_eq!(acks.fresh(Duration::from_secs(10)), 2);
+    assert_eq!(acks.fresh(Duration::ZERO), 0);
+    acks.clear(0);
+    assert_eq!(acks.fresh(Duration::from_secs(10)), 1);
+    assert_eq!(acks.reached(1), 0);
 }

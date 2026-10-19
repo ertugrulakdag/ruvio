@@ -98,6 +98,9 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
         Command::ConfigSet(_) | Command::ConfigRewrite => {
             Ok(Response::Error(b"ERR CONFIG SET is handled by the server"))
         }
+        Command::ReplicaOf { .. } | Command::Role => Ok(Response::Error(
+            b"ERR REPLICAOF and ROLE are handled by the server",
+        )),
 
         Command::Multi
         | Command::Exec

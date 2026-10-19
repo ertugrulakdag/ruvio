@@ -39,6 +39,8 @@ const KEYLESS_REFUSED_IN_SCRIPTS: &[&str] = &[
     "ConfigGet",
     "ConfigRewrite",
     "ConfigSet",
+    "ReplicaOf",
+    "Role",
     "Discard",
     "Eval",
     "EvalSha",
