@@ -5,6 +5,7 @@ import io.github.salihcantekin.ruvio.args.RestoreArgs;
 import io.github.salihcantekin.ruvio.args.ScanArgs;
 import io.github.salihcantekin.ruvio.model.ChangeNote;
 import io.github.salihcantekin.ruvio.model.IdemResult;
+import io.github.salihcantekin.ruvio.model.LimitOutcome;
 import io.github.salihcantekin.ruvio.model.RateLimitResult;
 import io.github.salihcantekin.ruvio.model.ScanResult;
 
@@ -142,6 +143,14 @@ class KeysLiveTest {
         RateLimitResult r = c.rateLimit("k:lim2", 1, 10_000);
         assertTrue(r.allowed());
         assertFalse(c.rateLimit("k:lim2", 1, 10_000).allowed());
+        assertEquals(1L, c.limitSliding("k:slide", 2, 60_000));
+        assertEquals(0L, c.limitSliding("k:slide", 2, 60_000));
+        LimitOutcome refused = c.limitSlidingWithRetry("k:slide", 2, 60_000);
+        assertFalse(refused.allowed());
+        assertTrue(refused.retryAfterMillis() > 0);
+        assertEquals(3L, c.limitTokens("k:bucket", 5, 60_000, 2));
+        assertEquals(new LimitOutcome(true, 0, 0), c.limitTokensWithRetry("k:bucket", 5, 60_000, 3));
+        assertNull(c.limitTokens("k:bucket", 5, 60_000, 1));
         // ONCE
         assertTrue(c.once("k:once", 10_000));
         assertFalse(c.once("k:once", 10_000));

@@ -615,3 +615,13 @@ export type BitfieldType = `i${number}` | `u${number}`;
 export type BitfieldOverflow = 'WRAP' | 'SAT' | 'FAIL';
 /** Named {@link BitfieldOverflow} values, e.g. `BitfieldOp.overflow(BitfieldOverflow.Sat)`. */
 export const BitfieldOverflow = { Wrap: 'WRAP', Sat: 'SAT', Fail: 'FAIL' } as const;
+
+/** The answer of {@link Commands.limitSlidingWithRetry} and {@link Commands.limitTokensWithRetry}. */
+export interface LimitOutcome {
+  /** `true` when this call was let through. */
+  allowed: boolean;
+  /** Allowance left after this call (`0` when refused). */
+  remaining: number;
+  /** Milliseconds until the same call would pass (`0` when it was let through). Fit for a `Retry-After` header. */
+  retryAfterMs: number;
+}

@@ -72,6 +72,8 @@ public final class Cmd {
     public static final byte[] CONFIG = RespOut.fragment("CONFIG");
     /** The word {@code COPY}, pre-encoded as a RESP bulk string. */
     public static final byte[] COPY = RespOut.fragment("COPY");
+    /** The word {@code COST}, pre-encoded as a RESP bulk string. */
+    public static final byte[] COST = RespOut.fragment("COST");
     /** The word {@code COUNT}, pre-encoded as a RESP bulk string. */
     public static final byte[] COUNT = RespOut.fragment("COUNT");
     /** The word {@code DBSIZE}, pre-encoded as a RESP bulk string. */
@@ -406,6 +408,8 @@ public final class Cmd {
     public static final byte[] SINTERSTORE = RespOut.fragment("SINTERSTORE");
     /** The word {@code SISMEMBER}, pre-encoded as a RESP bulk string. */
     public static final byte[] SISMEMBER = RespOut.fragment("SISMEMBER");
+    /** The word {@code SLIDING}, pre-encoded as a RESP bulk string. */
+    public static final byte[] SLIDING = RespOut.fragment("SLIDING");
     /** The word {@code SLOWLOG}, pre-encoded as a RESP bulk string. */
     public static final byte[] SLOWLOG = RespOut.fragment("SLOWLOG");
     /** The word {@code SMEMBERS}, pre-encoded as a RESP bulk string. */
@@ -442,6 +446,8 @@ public final class Cmd {
     public static final byte[] SWR = RespOut.fragment("SWR");
     /** The word {@code TAKE}, pre-encoded as a RESP bulk string. */
     public static final byte[] TAKE = RespOut.fragment("TAKE");
+    /** The word {@code TOKENS}, pre-encoded as a RESP bulk string. */
+    public static final byte[] TOKENS = RespOut.fragment("TOKENS");
     /** The word {@code TOUCH}, pre-encoded as a RESP bulk string. */
     public static final byte[] TOUCH = RespOut.fragment("TOUCH");
     /** The word {@code TRANSFER}, pre-encoded as a RESP bulk string. */
@@ -456,6 +462,8 @@ public final class Cmd {
     public static final byte[] WAIT = RespOut.fragment("WAIT");
     /** The word {@code WATCH}, pre-encoded as a RESP bulk string. */
     public static final byte[] WATCH = RespOut.fragment("WATCH");
+    /** The word {@code WITHRETRY}, pre-encoded as a RESP bulk string. */
+    public static final byte[] WITHRETRY = RespOut.fragment("WITHRETRY");
     /** The word {@code WITHSCORES}, pre-encoded as a RESP bulk string. */
     public static final byte[] WITHSCORES = RespOut.fragment("WITHSCORES");
     /** The word {@code XACK}, pre-encoded as a RESP bulk string. */

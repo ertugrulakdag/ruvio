@@ -165,6 +165,13 @@ test('LIMIT, ONCE, LEASE, SEMAPHORE, RELEASE, IDEM, CHANGES and their helpers', 
     assert.equal(await c.limit('lim', 2, 5000), null);
     assert.deepEqual(await c.rateLimit('rl', 1, 5000), { allowed: true, remaining: 0 });
     assert.deepEqual(await c.rateLimit('rl', 1, 5000), { allowed: false, remaining: 0 });
+    assert.equal(await c.limitSliding('sl', 2, 60000), 1);
+    assert.equal(await c.limitSliding('sl', 2, 60000), 0);
+    const refused = await c.limitSlidingWithRetry('sl', 2, 60000);
+    assert.ok(!refused.allowed && refused.remaining === 0 && refused.retryAfterMs > 0);
+    assert.equal(await c.limitTokens('tk', 5, 60000, 2), 3);
+    assert.deepEqual(await c.limitTokensWithRetry('tk', 5, 60000, 3), { allowed: true, remaining: 0, retryAfterMs: 0 });
+    assert.equal(await c.limitTokens('tk', 5, 60000), null);
 
     assert.equal(await c.once('o', 5000), true);
     assert.equal(await c.once('o', 5000), false);

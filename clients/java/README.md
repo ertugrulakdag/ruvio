@@ -142,6 +142,8 @@ Also: `incr`, `decr`, `incrby`, `decrby`, `incrbyfloat` take a trailing `Duratio
 | `tryLock` / `lock(key, ttl, wait)` -> `RuvioLock` (`renew`, `isHeld`, `close`) | `SET NX PX`, `SET IFEQ PX`, `DELEX IFEQ` (never deletes another owner's lock) |
 | `tryLease` -> `RuvioToken` (fencing `token()`), `tryAcquirePermit` | `LEASE`/`SEMAPHORE` + `RELEASE` |
 | `rateLimit(key, max, window)` -> `RateLimitResult(allowed, remaining)` | `LIMIT` |
+| `limitSliding(key, max, windowMs)`, `limitTokens(key, capacity, refillMs, cost)` -> remaining or `null` | `LIMIT ... SLIDING`, `LIMIT ... TOKENS` |
+| `limitSlidingWithRetry(...)`, `limitTokensWithRetry(...)` -> `LimitOutcome(allowed, remaining, retryAfterMillis)` | `LIMIT ... WITHRETRY` |
 | `getOrCreate(key, ttl, factory)` (+ stale-while-revalidate form) | `FILLGET`/`FILLSET`; losers poll plain `FILLGET` with backoff (WAIT would park the shared socket) |
 | `idempotent(key, fingerprint, ttl, wait, action)` | `IDEM BEGIN/COMPLETE` |
 | `scanIterable/scanStream`, `hscan*`, `sscan*`, `zscan*` | lazy cursor-driven pages |

@@ -150,6 +150,8 @@ let permit = db.semaphore_permit("downloads", 4, Duration::from_secs(60))?;
 
 // Rate limit: LIMIT key max window -> RateLimit { allowed, remaining }.
 let verdict = db.rate_limit("login:ada", 5, Duration::from_secs(60))?;
+// Smoother: sliding window, or a token bucket that says how long to wait.
+let bucket = db.limit_tokens_with_retry("api:key-7", 10, 1_000, 2)?; // LimitOutcome { allowed, remaining, retry_after_ms }
 
 // Cache-aside with stampede protection on FILLGET / FILLSET.
 let page = db.get_or_create("page:home", Duration::from_secs(60), || {

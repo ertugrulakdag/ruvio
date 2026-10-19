@@ -128,6 +128,7 @@ fn commands_logging_their_own_transaction_still_run_inside_multi() {
             key: owned(b"{t}rate"),
             max: 5,
             window_ms: 60_000,
+            mode: crate::protocol::LimitMode::Fixed,
         },
         Command::Copy {
             source: owned(b"{t}src"),

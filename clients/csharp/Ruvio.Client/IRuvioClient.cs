@@ -353,6 +353,56 @@ public partial interface IRuvioClient
     /// </example>
     ValueTask<long?> LimitAsync(string key, long max, long windowMs, CancellationToken cancellationToken = default);
 
+    /// <summary>Sends <c>LIMIT key max windowMs SLIDING</c>, a sliding-window rate limiter on a single key.</summary>
+    /// <param name="key">The key.</param>
+    /// <param name="max">Calls allowed per window, from 1 to 2147483647.</param>
+    /// <param name="windowMs">Window length in milliseconds. Must be positive.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>The allowance left after this call, or <see langword="null"/> when it does not fit. A refused call is not counted.</returns>
+    /// <exception cref="RuvioException">The key holds another type (<c>WRONGTYPE</c>), the key was created by another <c>LIMIT</c> mode, or an argument is out of range.</exception>
+    /// <remarks>The previous window counts for the part of it that still overlaps the last <paramref name="windowMs"/>, so a burst at a window edge is not doubled. The key keeps two counters, not one entry per call.</remarks>
+    /// <example>
+    /// <code>
+    /// long? left = await db.LimitSlidingAsync("rate:user:42", 100, 60_000);
+    /// </code>
+    /// </example>
+    ValueTask<long?> LimitSlidingAsync(string key, long max, long windowMs, CancellationToken cancellationToken = default);
+
+    /// <summary>Sends <c>LIMIT key capacity refillMs TOKENS COST cost</c>, a token bucket on a single key.</summary>
+    /// <param name="key">The key.</param>
+    /// <param name="capacity">Bucket size, from 1 to 1000000.</param>
+    /// <param name="refillMs">Time to refill an empty bucket in milliseconds, up to 4294967295.</param>
+    /// <param name="cost">Tokens this call takes, from 1 to <paramref name="capacity"/>.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>The tokens left after this call, or <see langword="null"/> when the bucket holds too few. Nothing is taken then.</returns>
+    /// <exception cref="RuvioException">The key holds another type (<c>WRONGTYPE</c>), the key was created by another <c>LIMIT</c> mode, or an argument is out of range.</exception>
+    /// <remarks>The key keeps one timestamp and disappears when the bucket is full again.</remarks>
+    /// <example>
+    /// <code>
+    /// long? left = await db.LimitTokensAsync("rate:api:7", 10, 1_000, 2); // 10 per second, this call takes 2
+    /// </code>
+    /// </example>
+    ValueTask<long?> LimitTokensAsync(string key, long capacity, long refillMs, long cost = 1, CancellationToken cancellationToken = default);
+
+    /// <summary>Sends <c>LIMIT key max windowMs SLIDING WITHRETRY</c>: <see cref="LimitSlidingAsync"/> that also says how long to wait.</summary>
+    /// <param name="key">The key.</param>
+    /// <param name="max">Calls allowed per window, from 1 to 2147483647.</param>
+    /// <param name="windowMs">Window length in milliseconds. Must be positive.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>A <see cref="LimitOutcome"/> with the wait until the same call would pass.</returns>
+    /// <exception cref="RuvioException">As <see cref="LimitSlidingAsync"/>.</exception>
+    ValueTask<LimitOutcome> LimitSlidingWithRetryAsync(string key, long max, long windowMs, CancellationToken cancellationToken = default);
+
+    /// <summary>Sends <c>LIMIT key capacity refillMs TOKENS COST cost WITHRETRY</c>: <see cref="LimitTokensAsync"/> that also says how long to wait.</summary>
+    /// <param name="key">The key.</param>
+    /// <param name="capacity">Bucket size, from 1 to 1000000.</param>
+    /// <param name="refillMs">Time to refill an empty bucket in milliseconds, up to 4294967295.</param>
+    /// <param name="cost">Tokens this call takes, from 1 to <paramref name="capacity"/>.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>A <see cref="LimitOutcome"/> with the wait until the same call would pass.</returns>
+    /// <exception cref="RuvioException">As <see cref="LimitTokensAsync"/>.</exception>
+    ValueTask<LimitOutcome> LimitTokensWithRetryAsync(string key, long capacity, long refillMs, long cost = 1, CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Sends <c>ONCE key ttlMs</c>, Ruvio's "first caller wins" marker with an expiry. Use it to run something at most once per period.
     /// </summary>

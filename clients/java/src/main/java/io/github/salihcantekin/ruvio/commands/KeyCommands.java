@@ -2,6 +2,7 @@
 package io.github.salihcantekin.ruvio.commands;
 
 import io.github.salihcantekin.ruvio.RuvioCodec;
+import io.github.salihcantekin.ruvio.RuvioException;
 import io.github.salihcantekin.ruvio.RuvioServerException;
 import io.github.salihcantekin.ruvio.args.ExpireCondition;
 import io.github.salihcantekin.ruvio.args.KeyType;
@@ -12,6 +13,7 @@ import io.github.salihcantekin.ruvio.internal.Cmd;
 import io.github.salihcantekin.ruvio.internal.Reply;
 import io.github.salihcantekin.ruvio.model.ChangeNote;
 import io.github.salihcantekin.ruvio.model.IdemResult;
+import io.github.salihcantekin.ruvio.model.LimitOutcome;
 import io.github.salihcantekin.ruvio.model.ScanResult;
 
 import java.time.Duration;
@@ -83,6 +85,83 @@ public abstract class KeyCommands<K, V> extends StringCommands<K, V> {
      */
     public CompletableFuture<Long> limit(K key, long max, long windowMillis) {
         return kll(Cmd.LIMIT, key, max, windowMillis, Reply.LONG);
+    }
+
+    /**
+     * Sends the Ruvio command {@code LIMIT key max window_ms SLIDING}: a sliding-window rate limiter.
+     * The previous window counts for the part of it that still overlaps the last {@code windowMillis}, so a burst
+     * at a window edge is not doubled. The key keeps two counters, not one entry per call. A key keeps the mode it
+     * was created with.
+     *
+     * <pre>{@code
+     * Long left = client.limitSliding("rl:user:1", 100, 60_000); // null when the call does not fit
+     * }</pre>
+     *
+     * @param key the limiter key
+     * @param max calls per window; from 1 to 2147483647
+     * @param windowMillis window length in milliseconds; must be greater than zero
+     * @return the calls left after this one, or {@code null} when it does not fit (nothing is counted)
+     * @throws RuvioServerException {@code ERR} when an argument is out of range or the key was created by another {@code LIMIT} mode; {@code WRONGTYPE} when the key holds another type
+     */
+    public CompletableFuture<Long> limitSliding(K key, long max, long windowMillis) {
+        return send(args().w(Cmd.LIMIT).k(key).l(max).l(windowMillis).w(Cmd.SLIDING), Reply.LONG);
+    }
+
+    /**
+     * Sends the Ruvio command {@code LIMIT key capacity refill_ms TOKENS COST cost}: a token bucket.
+     * The bucket holds {@code capacity} tokens and refills completely over {@code refillMillis}; a call takes
+     * {@code cost} tokens. The key keeps one timestamp and disappears when the bucket is full again.
+     *
+     * <pre>{@code
+     * Long left = client.limitTokens("rl:api:7", 10, 1_000, 2); // 10 tokens per second, this call takes 2
+     * }</pre>
+     *
+     * @param key the limiter key
+     * @param capacity bucket size; from 1 to 1000000
+     * @param refillMillis time to refill an empty bucket in milliseconds; up to 4294967295
+     * @param cost tokens this call takes; from 1 to {@code capacity}
+     * @return the tokens left after this call, or {@code null} when the bucket holds too few (nothing is taken)
+     * @throws RuvioServerException {@code ERR} when an argument is out of range or the key was created by another {@code LIMIT} mode; {@code WRONGTYPE} when the key holds another type
+     */
+    public CompletableFuture<Long> limitTokens(K key, long capacity, long refillMillis, long cost) {
+        return send(args().w(Cmd.LIMIT).k(key).l(capacity).l(refillMillis).w(Cmd.TOKENS).w(Cmd.COST).l(cost), Reply.LONG);
+    }
+
+    /**
+     * Sends {@code LIMIT key max window_ms SLIDING WITHRETRY}: {@link #limitSliding} that also says how long to wait.
+     *
+     * @param key the limiter key
+     * @param max calls per window; from 1 to 2147483647
+     * @param windowMillis window length in milliseconds; must be greater than zero
+     * @return the outcome; {@code retryAfterMillis} is the wait until the same call would pass
+     * @throws RuvioServerException as {@link #limitSliding}
+     */
+    public CompletableFuture<LimitOutcome> limitSlidingWithRetry(K key, long max, long windowMillis) {
+        return send(args().w(Cmd.LIMIT).k(key).l(max).l(windowMillis).w(Cmd.SLIDING).w(Cmd.WITHRETRY), Reply.LONG_LIST)
+                .thenApply(KeyCommands::limitOutcome);
+    }
+
+    /**
+     * Sends {@code LIMIT key capacity refill_ms TOKENS COST cost WITHRETRY}: {@link #limitTokens} that also says how long to wait.
+     *
+     * @param key the limiter key
+     * @param capacity bucket size; from 1 to 1000000
+     * @param refillMillis time to refill an empty bucket in milliseconds; up to 4294967295
+     * @param cost tokens this call takes; from 1 to {@code capacity}
+     * @return the outcome; {@code retryAfterMillis} is the wait until the same call would pass
+     * @throws RuvioServerException as {@link #limitTokens}
+     */
+    public CompletableFuture<LimitOutcome> limitTokensWithRetry(K key, long capacity, long refillMillis, long cost) {
+        return send(args().w(Cmd.LIMIT).k(key).l(capacity).l(refillMillis).w(Cmd.TOKENS).w(Cmd.COST).l(cost).w(Cmd.WITHRETRY),
+                Reply.LONG_LIST).thenApply(KeyCommands::limitOutcome);
+    }
+
+    private static LimitOutcome limitOutcome(List<Long> reply) {
+        if (reply == null || reply.size() != 2) {
+            throw new RuvioException("LIMIT WITHRETRY expects two integers, got " + reply);
+        }
+        long remaining = reply.get(0);
+        return new LimitOutcome(remaining >= 0, Math.max(remaining, 0), Math.max(reply.get(1), 0));
     }
 
     /**

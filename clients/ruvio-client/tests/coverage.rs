@@ -296,6 +296,10 @@ fn methods_exist() {
     let _ = Client::lease;
     let _ = Client::lease_guard;
     let _ = Client::limit;
+    let _ = Client::limit_sliding;
+    let _ = Client::limit_sliding_with_retry;
+    let _ = Client::limit_tokens;
+    let _ = Client::limit_tokens_with_retry;
     let _ = Client::lindex;
     let _ = Client::linsert;
     let _ = Client::llen;

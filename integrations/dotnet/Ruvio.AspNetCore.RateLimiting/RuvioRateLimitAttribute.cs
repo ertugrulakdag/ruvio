@@ -1,6 +1,19 @@
 namespace Ruvio.AspNetCore.RateLimiting;
 
-/// <summary>A shared fixed-window budget. Endpoints with the same policy share its budget.</summary>
+/// <summary>How a policy counts requests.</summary>
+public enum RuvioRateLimitAlgorithm
+{
+    /// <summary>A counter that resets after each window (<c>LIMIT</c>). The default.</summary>
+    FixedWindow = 0,
+
+    /// <summary>Weighs the previous window by how much of it still overlaps, so a burst at a window edge is not doubled (<c>LIMIT ... SLIDING</c>).</summary>
+    SlidingWindow = 1,
+
+    /// <summary>A bucket of <c>Permits</c> tokens that refills over the window (<c>LIMIT ... TOKENS</c>).</summary>
+    TokenBucket = 2,
+}
+
+/// <summary>A shared budget. Endpoints with the same policy share it. Fixed window unless <see cref="Algorithm"/> says otherwise.</summary>
 [AttributeUsage(AttributeTargets.Method | AttributeTargets.Class)]
 public sealed class RuvioRateLimitAttribute : Attribute
 {
@@ -39,4 +52,11 @@ public sealed class RuvioRateLimitAttribute : Attribute
     /// Gets the duration of the fixed window in seconds.
     /// </summary>
     public int WindowSeconds { get; }
+
+    /// <summary>
+    /// Gets or sets how requests are counted. For <see cref="RuvioRateLimitAlgorithm.TokenBucket"/>, <see cref="Permits"/>
+    /// is the bucket size and <see cref="WindowSeconds"/> the time to refill an empty bucket. A policy keeps the algorithm
+    /// it was first used with; changing it needs a new policy name.
+    /// </summary>
+    public RuvioRateLimitAlgorithm Algorithm { get; init; }
 }

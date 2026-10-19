@@ -83,6 +83,35 @@ public class MiddlewareTests
             Assert.Equal("60", context.Response.Headers.RetryAfter.ToString());
     }
 
+    [Theory]
+    [InlineData(RuvioRateLimitAlgorithm.SlidingWindow, nameof(IRuvioClient.LimitSlidingWithRetryAsync))]
+    [InlineData(RuvioRateLimitAlgorithm.TokenBucket, nameof(IRuvioClient.LimitTokensWithRetryAsync))]
+    public async Task OtherAlgorithmsUseTheirModeAndExactRetryAfter(RuvioRateLimitAlgorithm algorithm, string method)
+    {
+        var client = DispatchProxy.Create<IRuvioClient, Stub>();
+        var stub = (Stub)client;
+
+        using var services = Services(client);
+        int calls = 0;
+        var middleware = new RuvioRateLimitingMiddleware(_ => { calls++; return Task.CompletedTask; });
+
+        stub.Outcome = new LimitOutcome(true, 3, 0);
+        var allowed = Context(services, "tenant", algorithm);
+        await middleware.InvokeAsync(allowed);
+        Assert.Equal(200, allowed.Response.StatusCode);
+        Assert.Equal(1, calls);
+
+        stub.Outcome = new LimitOutcome(false, -1, 1500);
+        var refused = Context(services, "tenant", algorithm);
+        await middleware.InvokeAsync(refused);
+        Assert.Equal(429, refused.Response.StatusCode);
+        Assert.Equal("2", refused.Response.Headers.RetryAfter.ToString());
+        Assert.Equal(1, calls);
+        Assert.Equal(method, stub.Method);
+        Assert.Equal(5, stub.Permits);
+        Assert.Equal(60_000, stub.Window);
+    }
+
     [Fact]
     public async Task FailuresPropagateWithoutRetryOrExecution()
     {
@@ -166,13 +195,14 @@ public class MiddlewareTests
         return services.BuildServiceProvider();
     }
 
-    private static DefaultHttpContext Context(IServiceProvider services, string tenant)
+    private static DefaultHttpContext Context(
+        IServiceProvider services, string tenant, RuvioRateLimitAlgorithm algorithm = RuvioRateLimitAlgorithm.FixedWindow)
     {
         var context = new DefaultHttpContext { RequestServices = services };
 
         context.Items["tenant"] = tenant;
         context.SetEndpoint(new Endpoint(_ => Task.CompletedTask,
-            new EndpointMetadataCollection(new RuvioRateLimitAttribute("test", 5, 60)), "test"));
+            new EndpointMetadataCollection(new RuvioRateLimitAttribute("test", 5, 60) { Algorithm = algorithm }), "test"));
 
         return context;
     }
@@ -180,6 +210,8 @@ public class MiddlewareTests
     public class Stub : DispatchProxy
     {
         public Task<long?> Result = Task.FromResult<long?>(4);
+        public LimitOutcome Outcome;
+        public string? Method;
         public int Calls;
         public string? Key;
         public long Permits;
@@ -188,10 +220,22 @@ public class MiddlewareTests
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
+            if (targetMethod?.Name is nameof(IRuvioClient.LimitSlidingWithRetryAsync) or nameof(IRuvioClient.LimitTokensWithRetryAsync))
+            {
+                Calls++;
+                Method = targetMethod.Name;
+                Key = (string)args![0]!;
+                Permits = (long)args[1]!;
+                Window = (long)args[2]!;
+
+                return new ValueTask<LimitOutcome>(Outcome);
+            }
+
             if (targetMethod?.Name != nameof(IRuvioClient.LimitAsync))
                 throw new NotSupportedException();
 
             Calls++;
+            Method = targetMethod.Name;
             Key = (string)args![0]!;
             Permits = (long)args[1]!;
             Window = (long)args[2]!;

@@ -7,7 +7,7 @@ import json as _json
 from datetime import timedelta
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, Union
 
-from ._models import AutoClaimResult, FillResult, GeoResult, IdemResult, PendingEntry, PendingSummary, StreamEntry
+from ._models import AutoClaimResult, FillResult, GeoResult, IdemResult, LimitOutcome, PendingEntry, PendingSummary, StreamEntry
 
 KeyT = Union[str, bytes]
 Conv = Optional[Callable[[Any], Any]]
@@ -235,6 +235,11 @@ def _hello(r: Any) -> Dict[str, Any]:
 
 def _limit(r: Any) -> Tuple[bool, int]:
     return (False, 0) if r is None else (True, int(r))
+
+
+def _limit_outcome(r: Any) -> LimitOutcome:
+    remaining, retry_after_ms = int(r[0]), int(r[1])
+    return LimitOutcome(remaining >= 0, max(remaining, 0), max(retry_after_ms, 0))
 
 
 def _bloom_seen(r: Any) -> List[bool]:

@@ -58,7 +58,43 @@ export const families = [
     label: "Rate limiting",
     description: "Control requests in a fixed time window.",
     commands: [
-      { name: "LIMIT", blurb: "Consume an allowance", help: "Returns the allowance remaining after this request, or nil when full. Rejected calls do not increment the counter.", fields: [key("Limit key"), { name: "max", label: "Maximum requests", inputmode: "numeric" }, millis("Window (milliseconds)")], build: (f) => ["LIMIT", f.key, f.max, f.ms] },
+      {
+        name: "LIMIT",
+        blurb: "Consume an allowance",
+        help: "Returns the allowance remaining after this request, or nil when full. Rejected calls do not count. Fixed counts per window, Sliding weighs the previous window so a burst at the edge is not doubled, Token bucket refills continuously and takes Cost tokens. With the retry hint the reply is [remaining, retry_after_ms], remaining -1 when refused. A key keeps the mode it was created with.",
+        fields: [
+          key("Limit key"),
+          { name: "max", label: "Maximum requests (or bucket size)", inputmode: "numeric" },
+          millis("Window (or refill time, milliseconds)"),
+          {
+            name: "mode",
+            label: "Mode",
+            choices: [
+              { value: "", label: "Fixed window" },
+              { value: "SLIDING", label: "Sliding window" },
+              { value: "TOKENS", label: "Token bucket" },
+            ],
+          },
+          { name: "cost", label: "Cost (token bucket)", inputmode: "numeric", placeholder: "1" },
+          {
+            name: "retry",
+            label: "Retry hint",
+            choices: [
+              { value: "", label: "Plain reply" },
+              { value: "WITHRETRY", label: "Also return retry_after_ms (sliding or token bucket)" },
+            ],
+          },
+        ],
+        build: (f) => [
+          "LIMIT",
+          f.key,
+          f.max,
+          f.ms,
+          ...(f.mode ? [f.mode] : []),
+          ...(f.mode === "TOKENS" && f.cost ? ["COST", f.cost] : []),
+          ...(f.retry ? [f.retry] : []),
+        ],
+      },
     ],
   },
   {

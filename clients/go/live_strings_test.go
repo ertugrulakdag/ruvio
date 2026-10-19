@@ -162,6 +162,18 @@ func TestLiveRuvioExtensions(t *testing.T) {
 	noErr(t, err)
 	eq(t, []any{r1, a1, r2, a2, a3}, []any{int64(1), true, int64(0), true, false})
 
+	s1, sa1, _ := c.LimitSliding(ctx, "slide", 2, time.Minute)
+	s2, sa2, _ := c.LimitSliding(ctx, "slide", 2, time.Minute)
+	refused, err := c.LimitSlidingWithRetry(ctx, "slide", 2, time.Minute)
+	noErr(t, err)
+	eq(t, []any{s1, sa1, s2, sa2, refused.Allowed, refused.Remaining, refused.RetryAfter > 0}, []any{int64(1), true, int64(0), true, false, int64(0), true})
+	k1, ka1, _ := c.LimitTokens(ctx, "bucket", 5, time.Minute, 2)
+	taken, err := c.LimitTokensWithRetry(ctx, "bucket", 5, time.Minute, 3)
+	noErr(t, err)
+	_, ka3, err := c.LimitTokens(ctx, "bucket", 5, time.Minute, 1)
+	noErr(t, err)
+	eq(t, []any{k1, ka1, taken, ka3}, []any{int64(3), true, LimitOutcome{Allowed: true}, false})
+
 	eq(t, mb(c.Once(ctx, "once", time.Minute)), true)
 	eq(t, mb(c.Once(ctx, "once", time.Minute)), false)
 

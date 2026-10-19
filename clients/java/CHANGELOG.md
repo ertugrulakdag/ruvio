@@ -9,6 +9,8 @@ Notable changes to the Java client `io.github.salihcantekin:ruvio-client`. New e
 - `zpopbyscore` and `zmovedue` (async and blocking) send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call.
 - New `transfer(source, destination, amount[, max])` and `htransfer(key, from, to, amount[, max])` for the server's `TRANSFER` and `HTRANSFER`: they return the two balances after the move, or `null` when nothing moved.
 
+- `limitSliding`, `limitTokens`, `limitSlidingWithRetry` and `limitTokensWithRetry` for the `SLIDING` and `TOKENS` modes of `LIMIT`, and the `LimitOutcome` record (needs a server that has them).
+
 ## 0.1.2 - 2026-10-17
 
 - Typed keyword constants: new enums `InsertPosition` (`linsert`), `BitUnit` (`bitcount`), `GeoOrder` (`GeoSearchArgs.order`) and `KeyType` (`ScanArgs.type`), and `BitFieldArgs.Type.signed(n)` / `unsigned(n)` for BITFIELD types. The existing boolean and string overloads still work. Every enum, including `GeoUnit`, `ListDirection`, `BitOp`, `Overflow` and `Aggregate`, writes a pre-encoded constant, so the keyword costs no per-call encoding.

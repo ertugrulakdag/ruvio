@@ -815,14 +815,14 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
         key: &[u8],
         max: u64,
         window_ms: u64,
-    ) -> Result<LimitDecision, WrongType> {
+    ) -> Result<LimitDecision, LimitError> {
         self.remove_expired(key);
 
         let now = self.now_unix_millis().get();
         let kind = self.value_kind(key);
 
         if kind.is_some_and(|kind| kind != ValueKind::Limit) {
-            return Err(WrongType);
+            return Err(LimitError::WrongType);
         }
 
         if kind.is_none() {
@@ -830,13 +830,11 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
                 used: 1,
                 window_end: Some(now.saturating_add(window_ms)),
                 remaining: max.saturating_sub(1),
+                fresh: true,
             });
         }
 
-        let used = match self.object_value(key).ok().flatten() {
-            Some(Value::Limit(limit)) => limit.used,
-            _ => return Err(WrongType),
-        };
+        let used = self.limit_state(key)?;
 
         if used >= max {
             return Ok(LimitDecision::Reject);
@@ -848,6 +846,7 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
             used,
             window_end: None,
             remaining: max.saturating_sub(used),
+            fresh: false,
         })
     }
 
