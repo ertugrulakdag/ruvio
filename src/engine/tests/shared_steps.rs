@@ -336,6 +336,7 @@ const CASES: &[(&str, &[&[&str]])] = &[
     ("hincrby", &[&["HINCRBY", "h", "f", "2"]]),
     ("hsetnx", &[&["HSETNX", "h", "n", "1"]]),
     ("hset", &[&["HSET", "h", "f", "x"]]),
+    ("hmset", &[&["HMSET", "h", "f", "x", "g", "y"]]),
     ("hdel", &[&["HDEL", "h", "f"]]),
     ("hexpire", &[&["HEXPIRE", "h", "100", "FIELDS", "1", "f"]]),
     (

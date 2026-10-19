@@ -861,7 +861,10 @@ fn apply_command(user: &mut AclUser, name: &str, enable: bool) -> Result<(), Str
             return Err(format!("unknown ACL command `{name}`"));
         }
 
-        apply_named_command(user, leak_command_name(&name), enable);
+        let known =
+            known_subcommand(&name).ok_or_else(|| format!("unknown ACL subcommand `{name}`"))?;
+
+        apply_named_command(user, known, enable);
 
         return Ok(());
     }
@@ -919,34 +922,28 @@ fn apply_named_command(user: &mut AclUser, name: &'static str, enable: bool) {
     }
 }
 
-fn leak_command_name(name: &str) -> &'static str {
-    if let Some((known, _)) = SUBCOMMAND_CATEGORIES
-        .iter()
-        .find(|(known, _)| *known == name)
-    {
-        return known;
-    }
+/// Every `parent|sub` name [`command_acl_name`] can return. A rule on any other subcommand
+/// could never match a command, so it is refused rather than stored.
+const ACL_SUBCOMMANDS: &[&str] = &[
+    "acl|cat",
+    "acl|getuser",
+    "acl|list",
+    "acl|load",
+    "acl|save",
+    "acl|setuser",
+    "acl|users",
+    "acl|whoami",
+    "client|kill",
+    "client|list",
+    "config|get",
+    "config|rewrite",
+    "config|set",
+    "ruvio|bigkeys",
+    "ruvio|hotkeys",
+];
 
-    if let Some(spec) = crate::protocol::command_spec(name.as_bytes()) {
-        return spec.name;
-    }
-
-    // Other `parent|sub` names live as long as the process. One set holds them, so a name is
-    // allocated once however often ACL rules repeat it, and stays reachable (no leak report).
-    static NAMES: std::sync::Mutex<BTreeSet<&'static str>> = std::sync::Mutex::new(BTreeSet::new());
-
-    let mut names = NAMES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    if let Some(known) = names.get(name) {
-        return known;
-    }
-
-    let leaked: &'static str = Box::leak(name.into());
-
-    names.insert(leaked);
-    leaked
+fn known_subcommand(name: &str) -> Option<&'static str> {
+    ACL_SUBCOMMANDS.iter().copied().find(|known| *known == name)
 }
 
 fn all_command_names() -> BTreeSet<&'static str> {
@@ -1232,6 +1229,7 @@ pub fn command_acl_name(command: &Command<'_>) -> &'static str {
             ..
         } => "zdiffstore",
         Command::HashSet { .. } => "hset",
+        Command::HashMSet { .. } => "hmset",
         Command::HashDelete { .. } => "hdel",
         Command::HashGet { .. } => "hget",
         Command::HashMGet { .. } => "hmget",
@@ -1447,12 +1445,11 @@ mod tests {
         assert_eq!(user.rules.authorize(&by_member), Ok(()));
     }
 
-    /// ACL rules name subcommands outside the command table; each name is allocated once,
-    /// however many rules repeat it.
+    /// A subcommand rule stores the name from the static list: nothing is allocated per rule.
     #[test]
-    fn a_subcommand_name_is_allocated_once() {
-        let first = leak_command_name("acl|setuser");
-        let again = leak_command_name(&String::from("acl|setuser"));
+    fn a_subcommand_name_is_not_allocated() {
+        let first = known_subcommand("acl|setuser").unwrap();
+        let again = known_subcommand(&String::from("acl|setuser")).unwrap();
 
         assert!(std::ptr::eq(first, again));
         assert_eq!(first, "acl|setuser");
@@ -1670,6 +1667,38 @@ mod tests {
         let reader = AclUser::parse("reader", "on nopass ~* +@read").unwrap();
         assert!(reader.rules.authorize(&set).is_err());
         assert!(reader.rules.authorize(&Command::ConfigRewrite).is_err());
+    }
+
+    /// A rule on a subcommand no command maps to is refused: it could never match, and each
+    /// distinct name used to be kept for the life of the process (issue #38).
+    #[test]
+    fn unknown_subcommand_rules_are_refused() {
+        let error = AclUser::parse("u", "on nopass ~* +get|anything").unwrap_err();
+
+        assert!(
+            error.contains("unknown ACL subcommand `get|anything`"),
+            "{error}"
+        );
+        assert!(AclUser::parse("u", "on nopass ~* -config|nosuch").is_err());
+        AclUser::parse("u", "on nopass ~* +config|get -client|kill").unwrap();
+    }
+
+    /// `ACL_SUBCOMMANDS` lists exactly the `parent|sub` names `command_acl_name` returns.
+    #[test]
+    fn the_subcommand_list_matches_command_acl_name() {
+        let source = include_str!("acl.rs");
+        let start = source.find("pub fn command_acl_name").unwrap();
+        let body = &source[start..start + source[start..].find("\n}\n").unwrap()];
+        let mut named: Vec<&str> = body
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .filter(|literal| literal.contains('|'))
+            .collect();
+
+        named.sort_unstable();
+        named.dedup();
+        assert_eq!(named, ACL_SUBCOMMANDS);
     }
 
     #[test]

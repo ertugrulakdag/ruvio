@@ -112,6 +112,8 @@ fn lists_sets_and_hashes() {
     assert_eq!(db.hget("h", "f2").unwrap().as_deref(), Some("two"));
     assert_eq!(db.hincr_by("h", "f1", 4).unwrap(), 5);
     assert!(!db.hsetnx("h", "f1", "9").unwrap());
+    db.hmset("hm", &[("a", "1"), ("b", "2")]).unwrap();
+    assert_eq!(db.hget("hm", "b").unwrap().as_deref(), Some("2"));
     assert_eq!(db.hstrlen("h", "f2").unwrap(), 3);
     assert_eq!(db.hlen("h").unwrap(), 2);
     assert!(db.hexists("h", "f1").unwrap());

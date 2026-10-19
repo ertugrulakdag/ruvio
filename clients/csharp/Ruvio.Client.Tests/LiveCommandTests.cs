@@ -310,6 +310,8 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         Assert.Equal(3, await db.IncrementHashFieldAsync("h", "f", 2));
         Assert.Equal(3.5, await db.IncrementHashFieldByFloatAsync("h", "f", 0.5));
         Assert.False(await db.SetHashFieldIfAbsentAsync("h", "f", "x"));
+        await db.SetHashManyAsync("hm", ("a", "1"), ("b", "2"));
+        Assert.Equal(new string?[] { "1", "2" }, await db.GetHashFieldsAsync("hm", "a", "b"));
         Assert.Equal(3, await db.GetHashFieldLengthAsync("h", "f"));
         Assert.Contains(await db.GetHashRandomFieldAsync("h"), new[] { "f", "g" });
         Assert.Equal(2, (await db.GetHashRandomFieldsAsync("h", 2)).Count);

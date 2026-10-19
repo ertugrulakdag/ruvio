@@ -172,6 +172,8 @@ public final class Cmd {
     public static final byte[] HLEN = RespOut.fragment("HLEN");
     /** The word {@code HMGET}, pre-encoded as a RESP bulk string. */
     public static final byte[] HMGET = RespOut.fragment("HMGET");
+    /** The word {@code HMSET}, pre-encoded as a RESP bulk string. */
+    public static final byte[] HMSET = RespOut.fragment("HMSET");
     /** The word {@code HPERSIST}, pre-encoded as a RESP bulk string. */
     public static final byte[] HPERSIST = RespOut.fragment("HPERSIST");
     /** The word {@code HPEXPIRE}, pre-encoded as a RESP bulk string. */

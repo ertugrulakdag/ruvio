@@ -99,6 +99,7 @@ var commandKeyRules = map[string]commandKeyRule{
 	"HKEYS":             {1, 1, 1, 1, nil, 2},
 	"HLEN":              {1, 1, 1, 1, nil, 6},
 	"HMGET":             {1, 1, 1, 1, nil, 6},
+	"HMSET":             {1, 1, 1, 1, nil, 13},
 	"HPERSIST":          {1, 1, 1, 1, nil, 5},
 	"HPEXPIRE":          {1, 1, 1, 1, nil, 13},
 	"HPEXPIREAT":        {1, 1, 1, 1, nil, 13},

@@ -1643,6 +1643,23 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Sends {@code HMSET key field value [field value ...]}: sets several fields like {@link #hset(Object, Map)} but
+     * the server replies {@code OK} instead of the count of new fields. Redis marks {@code HMSET} deprecated; prefer
+     * {@code hset} in new code.
+     *
+     * <pre>{@code
+     * client.hmset("user:1", Map.of("name", "Ada", "city", "London"));
+     * }</pre>
+     *
+     * @param key the hash key
+     * @param fields the field names and values to set; must not be empty
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
+    public void hmset(K key, Map<K, V> fields) {
+        await(async.hmset(key, fields));
+    }
+
+    /**
      * Sends {@code HGET key field}.
      *
      * @param key the hash key

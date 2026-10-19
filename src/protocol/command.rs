@@ -590,6 +590,13 @@ impl<'a> Command<'a> {
                     .map(|(field, value)| (owned(field), owned(value)))
                     .collect(),
             },
+            Self::HashMSet { key, pairs } => Command::HashMSet {
+                key: owned(key),
+                pairs: pairs
+                    .into_iter()
+                    .map(|(field, value)| (owned(field), owned(value)))
+                    .collect(),
+            },
             Self::HashDelete { key, fields } => Command::HashDelete {
                 key: owned(key),
                 fields: owned_vec(fields),

@@ -118,6 +118,8 @@ test('hashes', { skip: SKIP }, async () => {
     assert.equal(await c.hincrbyfloat('h', 'f3', 0.5), 7.5);
     assert.equal(await c.hsetnx('h', 'f1', 'x'), false);
     assert.equal(await c.hsetnx('h', 'f9', 'x'), true);
+    assert.equal(await c.hmset('hm', { a: '1', b: '2' }), 'OK');
+    assert.deepEqual(await c.hmget('hm', 'a', 'b'), ['1', '2']);
     assert.equal(await c.hstrlen('h', 'f1'), 2);
     assert.equal(await c.hdel('h', 'f9', 'none'), 1);
     const page = await c.hscan('h', 0, { match: 'f*', count: 10 });

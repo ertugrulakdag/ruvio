@@ -1491,6 +1491,18 @@ impl Client {
         self.integer(args!["HINCRBY", key, field, delta])
     }
 
+    /// Sends `HMSET`: sets fields like [`Client::hset`] but replies `OK` instead of the
+    /// count of new fields. Redis marks it deprecated; it is here for code that still uses it.
+    ///
+    /// # Arguments
+    /// * `fields` - `(field, value)` pairs, at least one.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` for a non-hash.
+    pub fn hmset(&mut self, key: &str, fields: &[(&str, &str)]) -> Result<(), Error> {
+        self.ok(with_pairs(args!["HMSET", key], fields))
+    }
+
     /// Sends `HSETNX`: sets `field` only if it does not exist. `false` when it already existed.
     pub fn hsetnx(&mut self, key: &str, field: &str, value: &str) -> Result<bool, Error> {
         self.flag(["HSETNX", key, field, value])

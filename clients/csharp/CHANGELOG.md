@@ -5,6 +5,7 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 ## Unreleased
 
 - **Behavior change:** `RuvioClientOptions.CommandTimeout` is now 30 seconds by default (was no limit); `TimeSpan.Zero` turns it off. A blocking command gets its own wait on top (`BLPOP k 5` may take 5 s plus the timeout; a wait of 0, or one the client cannot parse, has no deadline; a pipeline takes its largest wait), and a Pub/Sub or `MONITOR` connection never times out while it waits for messages (issue #48 follow-up).
+- `SetHashManyAsync(key, fields)` sends `HMSET` (multi-field `HSET` that replies `OK`; Redis marks it deprecated) (issue #26).
 - `RuvioClientOptions.CommandTimeout`: a command throws `TimeoutException` when its reply takes longer; the connection stays in use (issue #48).
 - `RuvioClientOptions.ReadPolicy` (`ReadPolicy.Primary` by default, `PreferReplica`, `Replica`): a cluster client sends reads (commands the server flags `readonly` and not blocking) to one replica per shard, picked when the slot map loads. Pipelines go to replicas only when every command reads. A replica that cannot be opened or answers `LOADING` is skipped until the next load. `Ruvio.Client.AspNetCore` is unchanged.
 - `ReplicaOfAsync(host, port)`, `ReplicaOfNoOneAsync(force)` and `GetRoleAsync()` for `REPLICAOF` and `ROLE`.

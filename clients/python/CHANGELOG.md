@@ -5,6 +5,7 @@ Notable changes to the Python client `ruvio-client` on PyPI. New entries go unde
 ## Unreleased
 
 - **Behavior change:** `socket_timeout` of the sync client is now 30.0 seconds by default (was `None`, no limit); `None` turns it off. A blocking command gets its own wait on top (`BLPOP k 5` may take 5 s plus the timeout; a wait of 0, or one the client cannot parse, has no deadline; a pipeline takes its largest wait), and a Pub/Sub or `MONITOR` connection never times out while it waits for messages (issue #48 follow-up). The asyncio client still has no per-command timeout.
+- `hmset(key, mapping)` sends `HMSET` (multi-field `HSET` that replies `OK`; Redis marks it deprecated) (issue #26).
 - Docs: `socket_timeout` is the command timeout; the README timeout table lists the matching option of every client (issue #48).
 - Added `read_policy=` (`ReadPolicy.PRIMARY`, `PREFER_REPLICA`, `REPLICA`, or the strings `"primary"`, `"prefer-replica"`, `"replica"`) to the sync and asyncio cluster clients: commands the server flags read-only and not blocking go to one replica of the key's shard, picked when the slot table loads; a pipeline goes to replicas only when every command in it reads. A replica that cannot be connected or answers `LOADING` is skipped until the next load. Reads may miss recent writes (replication is asynchronous). The default keeps today's routing.
 - `replicaof(host, port)`, `replicaof_no_one(force=False)` and `role()` for `REPLICAOF` and `ROLE`, sync and asyncio.
