@@ -250,8 +250,13 @@ async fn objectively_down(
             group: group.name.clone(),
         };
 
-        if let Ok(RpcResponse::Observe(ages)) =
-            super::raft::call(&address.to_string(), &request, CALL_TIMEOUT).await
+        if let Ok(RpcResponse::Observe(ages)) = super::raft::call(
+            &address.to_string(),
+            config.secret.as_deref().unwrap_or(""),
+            request,
+            CALL_TIMEOUT,
+        )
+        .await
             && ages
                 .get(primary)
                 .copied()

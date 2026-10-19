@@ -19,6 +19,7 @@ use std::io::{BufRead, BufReader, Write};
 use common::test_ports;
 
 const PATIENCE: Duration = Duration::from_secs(30);
+const SECRET: &str = "coordinator-test-secret";
 
 struct Process(Child);
 
@@ -118,7 +119,7 @@ impl Group {
         std::fs::write(
             &config,
             format!(
-                "id = {}\nlisten = \"{}\"\ndata_dir = \"{}\"\npeers = [{peers}]\n\
+                "id = {}\nlisten = \"{}\"\ndata_dir = \"{}\"\npeers = [{peers}]\nsecret = \"{SECRET}\"\n\
                  ping_interval_ms = 200\ndown_after_ms = 1000\n\n[[groups]]\nname = \"main\"\n\
                  members = [\n{members}\n]\n",
                 index + 1,
@@ -142,7 +143,7 @@ impl Group {
 
     /// The primary coordinator `index` names, as an index into the data nodes.
     fn primary_by(&self, index: usize) -> Option<usize> {
-        let reply = call(
+        let reply = call_with_secret(
             &self.coordinators[index].to_string(),
             &["SENTINEL", "get-master-addr-by-name", "main"],
         )?;
@@ -166,6 +167,30 @@ fn call(address: &str, args: &[&str]) -> Option<String> {
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
     stream.write_all(frame.as_bytes()).ok()?;
     read_reply(&mut BufReader::new(stream))
+}
+
+/// `AUTH` with the coordinators' secret, then `args`, on one connection.
+fn call_with_secret(address: &str, args: &[&str]) -> Option<String> {
+    let mut stream =
+        std::net::TcpStream::connect_timeout(&address.parse().ok()?, Duration::from_millis(300))
+            .ok()?;
+    let frame = |args: &[&str]| {
+        let mut frame = format!("*{}\r\n", args.len());
+
+        for arg in args {
+            frame.push_str(&format!("${}\r\n{arg}\r\n", arg.len()));
+        }
+        frame
+    };
+
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    stream
+        .write_all((frame(&["AUTH", SECRET]) + &frame(args)).as_bytes())
+        .ok()?;
+    let mut reader = BufReader::new(stream);
+
+    (read_reply(&mut reader)? == "OK").then_some(())?;
+    read_reply(&mut reader)
 }
 
 fn read_reply(reader: &mut impl BufRead) -> Option<String> {
@@ -238,6 +263,19 @@ fn coordinators_fail_over_a_dead_primary_and_bring_it_back_as_a_replica() {
     wait_until("the coordinators to agree on the primary", || {
         (0..3).all(|index| group.primary_by(index) == Some(0))
     });
+    // The Sentinel API needs the secret.
+    let coordinator = group.coordinators[0].to_string();
+
+    assert!(
+        call(&coordinator, &["SENTINEL", "masters"])
+            .unwrap()
+            .starts_with("NOAUTH")
+    );
+    assert!(
+        call(&coordinator, &["AUTH", "wrong"])
+            .unwrap()
+            .starts_with("WRONGPASS")
+    );
 
     // The primary dies: a replica takes over and the other follows it.
     nodes[0].kill();

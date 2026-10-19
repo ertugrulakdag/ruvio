@@ -93,6 +93,11 @@ struct FileConfig {
     /// Password (or `username password`) the coordinator logs in to data nodes with.
     #[serde(default)]
     auth: Option<String>,
+    /// Shared by every coordinator: required on coordinator-to-coordinator calls and, with
+    /// `AUTH`, from clients of the Sentinel API. Without it anyone who reaches the port can
+    /// read the topology and take part in the coordinators' votes.
+    #[serde(default)]
+    secret: Option<String>,
     #[serde(default)]
     groups: Vec<Group>,
 }
@@ -114,6 +119,7 @@ pub struct CoordinatorConfig {
     pub ping_interval: Duration,
     pub down_after: Duration,
     pub auth: Option<String>,
+    pub secret: Option<String>,
     pub groups: Vec<Group>,
 }
 
@@ -172,6 +178,10 @@ impl CoordinatorConfig {
             ping_interval: Duration::from_millis(file.ping_interval_ms),
             down_after: Duration::from_millis(file.down_after_ms),
             auth: file.auth.filter(|auth| !auth.is_empty()),
+            secret: std::env::var("RUVIO_COORDINATOR_SECRET")
+                .ok()
+                .or(file.secret)
+                .filter(|secret| !secret.is_empty()),
             groups: file.groups,
         })
     }

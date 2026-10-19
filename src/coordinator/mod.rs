@@ -15,7 +15,7 @@ use tokio::{
     io::{AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
 };
-use tracing::info;
+use tracing::{info, warn};
 
 pub use config::CoordinatorConfig;
 use monitor::{Sightings, Switches};
@@ -51,7 +51,10 @@ async fn serve(
     );
     let log = raft::LogStore::open(&config.data_dir)?;
     let machine = StateMachine::open(&config.data_dir)?;
-    let raft = Raft::new(config.id, raft_config, Network, log, machine.clone())
+    let network = Network {
+        secret: config.secret.clone().unwrap_or_default().into(),
+    };
+    let raft = Raft::new(config.id, raft_config, network, log, machine.clone())
         .await
         .map_err(io::Error::other)?;
 
@@ -144,20 +147,52 @@ impl Api {
             let mut magic = [0; 1];
 
             tokio::io::AsyncReadExt::read_exact(&mut stream, &mut magic).await?;
-            let request: RpcRequest = raft::read_frame(&mut stream).await?;
-            let response = self.rpc(request).await;
+            let envelope: raft::Envelope = raft::read_frame(&mut stream).await?;
+            let secret = self.config.secret.as_deref().unwrap_or("");
+
+            if !crate::security::constant_time_eq(envelope.secret.as_bytes(), secret.as_bytes()) {
+                warn!("a coordinator call with a wrong secret was refused");
+                return Ok(());
+            }
+            let response = self.rpc(envelope.request).await;
 
             return raft::write_frame(&mut stream, &response).await;
         }
 
         let (read, mut write) = stream.into_split();
         let mut reader = BufReader::new(read);
+        let mut authenticated = self.config.secret.is_none();
 
         while let Some(args) = resp::read_command(&mut reader).await? {
             let words: Vec<String> = args
                 .iter()
                 .map(|arg| String::from_utf8_lossy(arg).to_ascii_lowercase())
                 .collect();
+
+            if words.first().map(String::as_str) == Some("auth") {
+                // `AUTH secret` or `AUTH user secret`: only the secret is checked.
+                let given = args.last().map(Vec::as_slice).unwrap_or_default();
+                let secret = self.config.secret.as_deref().unwrap_or("");
+                let reply = if args.len() >= 2
+                    && crate::security::constant_time_eq(given, secret.as_bytes())
+                {
+                    authenticated = true;
+                    Value::Simple("OK".into())
+                } else {
+                    Value::Error("WRONGPASS invalid secret".into())
+                };
+                let mut out = Vec::new();
+
+                reply.encode(&mut out);
+                write.write_all(&out).await?;
+                continue;
+            }
+            if !authenticated {
+                write
+                    .write_all(b"-NOAUTH Authentication required.\r\n")
+                    .await?;
+                continue;
+            }
 
             if matches!(
                 words.first().map(String::as_str),

@@ -493,6 +493,13 @@ pub enum RpcResponse {
     Observe(Vec<Option<u64>>),
 }
 
+/// What a coordinator sends on a call: the shared secret, then the request.
+#[derive(Serialize, Deserialize)]
+pub struct Envelope {
+    pub secret: String,
+    pub request: RpcRequest,
+}
+
 pub async fn write_frame<T: Serialize>(stream: &mut TcpStream, value: &T) -> io::Result<()> {
     let body = serde_json::to_vec(value).map_err(io_error)?;
     let length = u32::try_from(body.len()).map_err(io_error)?;
@@ -523,7 +530,8 @@ pub async fn read_frame<T: for<'de> Deserialize<'de>>(stream: &mut TcpStream) ->
 /// One call to the coordinator at `address`.
 pub async fn call(
     address: &str,
-    request: &RpcRequest,
+    secret: &str,
+    request: RpcRequest,
     wait: std::time::Duration,
 ) -> io::Result<RpcResponse> {
     tokio::time::timeout(wait, async {
@@ -531,18 +539,29 @@ pub async fn call(
 
         stream.set_nodelay(true)?;
         stream.write_all(&[RPC_MAGIC]).await?;
-        write_frame(&mut stream, request).await?;
+        write_frame(
+            &mut stream,
+            &Envelope {
+                secret: secret.to_owned(),
+                request,
+            },
+        )
+        .await?;
         read_frame(&mut stream).await
     })
     .await
     .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))?
 }
 
-pub struct Network;
+/// Opens clients to the other coordinators; `secret` goes with every call.
+pub struct Network {
+    pub secret: Arc<str>,
+}
 
 pub struct PeerClient {
     target: NodeId,
     address: String,
+    secret: Arc<str>,
 }
 
 impl RaftNetworkFactory<TypeConfig> for Network {
@@ -552,6 +571,7 @@ impl RaftNetworkFactory<TypeConfig> for Network {
         PeerClient {
             target,
             address: node.addr.clone(),
+            secret: Arc::clone(&self.secret),
         }
     }
 }
@@ -565,7 +585,7 @@ impl PeerClient {
         request: RpcRequest,
         option: &RPCOption,
     ) -> Result<RpcResponse, Unreachable> {
-        call(&self.address, &request, option.hard_ttl())
+        call(&self.address, &self.secret, request, option.hard_ttl())
             .await
             .map_err(|error| Unreachable::new(&error))
     }
