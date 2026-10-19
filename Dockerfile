@@ -26,7 +26,6 @@ COPY --from=builder /src/target/release/ruvio /usr/local/bin/ruvio
 COPY --from=builder /src/target/release/ruvio-ctl /usr/local/bin/ruvio-ctl
 COPY LICENSE /usr/local/share/ruvio/LICENSE
 COPY licenses/THIRD_PARTY_NOTICES /usr/local/share/ruvio/THIRD_PARTY_NOTICES
-COPY ruvio.example.toml /etc/ruvio/ruvio.toml
 
 USER ruvio
 # Public bind with protected mode off refuses to start until RUVIO_REQUIREPASS
