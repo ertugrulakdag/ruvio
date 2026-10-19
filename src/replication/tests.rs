@@ -1,5 +1,6 @@
 use super::*;
 use crate::persistence::read_bounded_history;
+use std::io::{Read, Write};
 
 #[test]
 fn a_deadline_or_persist_for_a_key_the_replica_lacks_is_a_divergence() {
@@ -948,6 +949,7 @@ fn gap_handshake_leaves_the_live_generation() {
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
             announce: None,
+            tls: None,
         },
     )
     .unwrap();
@@ -1053,6 +1055,7 @@ fn two_replicas_receive_the_same_appended_frame() {
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
             announce: None,
+            tls: None,
         },
     )
     .unwrap();
@@ -1115,6 +1118,7 @@ fn closing_one_replica_leaves_the_other_streaming() {
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
             announce: None,
+            tls: None,
         },
     )
     .unwrap();
@@ -1175,6 +1179,7 @@ fn replica_limit_closes_the_extra_connection() {
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
             announce: None,
+            tls: None,
         },
     )
     .unwrap();
@@ -1248,6 +1253,7 @@ fn a_replica_that_hangs_up_on_an_idle_primary_frees_its_slot() {
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
             announce: None,
+            tls: None,
         },
     )
     .unwrap();
@@ -1328,6 +1334,7 @@ fn primary_refuses_a_replica_from_another_history_or_shard_layout() {
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
             announce: None,
+            tls: None,
         },
     )
     .unwrap();
@@ -1514,6 +1521,7 @@ fn idle_shipment(data_dir: &Path, history: HistoryId) -> Shipment {
         newer_epoch: Arc::new(AtomicU64::new(0)),
         snapshot_requests: Arc::new(AtomicU64::new(0)),
         announce: None,
+        tls: None,
     }
 }
 
@@ -1586,6 +1594,7 @@ fn link_to(
             wake_shard: Arc::new(tokio::sync::Notify::new()),
             announce: None,
             peers: Arc::new(DurableAcks::new()),
+            tls: None,
         },
         outbound,
     )
@@ -2423,14 +2432,34 @@ fn dial_address_adds_the_shard_id_to_the_port_and_refuses_an_overflow() {
 
     link.primary_name = Some(("127.0.0.1".to_owned(), 7000));
     link.shard_id = 3;
-    assert_eq!(dial_address(&link).unwrap().port(), 7003);
+    assert_eq!(dial_addresses(&link).unwrap()[0].port(), 7003);
 
     link.primary_name = Some(("127.0.0.1".to_owned(), 65_535));
-    assert!(dial_address(&link).is_err());
+    assert!(dial_addresses(&link).is_err());
 
     link.primary_name = Some(("127.0.0.1".to_owned(), 7000));
     link.shard_id = 70_000;
-    assert!(dial_address(&link).is_err());
+    assert!(dial_addresses(&link).is_err());
+}
+
+#[test]
+fn a_primary_named_by_host_is_dialed_at_every_address_the_name_resolves_to() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut link, _deliveries) = link_to("127.0.0.1:1".parse().unwrap(), directory.path());
+
+    link.primary_name = Some(("localhost".into(), 7000));
+    let addresses = dial_addresses(&link).unwrap();
+
+    // `localhost` usually resolves to ::1 first; a primary listening on 127.0.0.1 only must
+    // still be reached, so the IPv4 address is among those tried.
+    assert!(
+        addresses
+            .iter()
+            .any(|address| address.ip().is_loopback() && address.port() == 7000),
+        "{addresses:?}"
+    );
+    link.primary_name = None;
+    assert_eq!(dial_addresses(&link).unwrap(), vec![link.primary]);
 }
 
 #[test]

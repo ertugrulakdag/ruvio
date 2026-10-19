@@ -71,6 +71,7 @@ primary = "127.0.0.1:26379"   # replica dials this base address; a hostname is a
 min_replicas_to_write = 0     # a primary refuses writes with fewer good replicas; 0 = off
 min_replicas_max_lag = 10     # seconds since a replica's last acknowledgement
 announced = true              # a replica tells its primary where clients reach it
+tls = false                   # encrypt the replication link; see Replication TLS
 
 [security]
 requirepass = ""
@@ -526,6 +527,24 @@ of these answers; it still replicates. Node ids are the SHA-1 of the announced
 `host:port`, so they differ between processes and stay the same across restarts
 on the same address. Clients choose whether to read from replicas; see
 [CLIENT_BEHAVIOR.md](CLIENT_BEHAVIOR.md#reads-from-replicas).
+Replication TLS (`replication.tls`, default `false`, restart-only, TOML only)
+wraps each replication connection in TLS. A primary presents the certificate in
+`tls_cert`/`tls_key` (required; the same files and reload as client TLS), so
+the certificate must cover the name or address replicas dial. A replica verifies
+it against `replication.tls_ca` (PEM issuer, required on a replica) and, when
+the primary asks for one (`tls_client_ca`/`tls_client_auth` apply to replicas
+too), presents `replication.tls_client_cert` and `replication.tls_client_key`
+(both or neither). Both ends of a link must agree: a TLS replica cannot follow a
+cleartext primary or the reverse. Off, nothing is loaded and the stream is
+exactly as before.
+
+```toml
+[replication]
+tls = true
+tls_ca = "/etc/ruvio/ca.pem"                 # replica: issuer of the primary's certificate
+tls_client_cert = "/etc/ruvio/replica.pem"   # replica, optional
+tls_client_key = "/etc/ruvio/replica.key"
+```
 
 `INFO` reports `replication_role`, `wal_last_sequence`, and
 `wal_durable_sequence` on every shard. A primary also reports
@@ -547,8 +566,8 @@ whose clock runs ahead can drop a key early; if the primary then extends that
 key's TTL, the replica no longer has it and requests a full copy of the shard.
 A TTL change whose new deadline has already passed is applied without a resync.
 
-Changing `replication.role` from `replica` to `off` or `primary` is a **manual
-promotion**, not an automatic failover. If any shard still has a catch-up
+Changing `replication.role` from `replica` to `off` or `primary` (or `REPLICAOF NO ONE`) is a
+**manual promotion**; for automatic failover run `ruvio coordinator` ([COORDINATOR.md](COORDINATOR.md)). If any shard still has a catch-up
 marker, normal writer startup refuses it. `ruvio --config ./ruvio.toml
 --force-promote-incomplete` allows a recoverable but possibly incomplete
 replica to start as a writer **only for that invocation**; it is a CLI flag,
@@ -613,11 +632,11 @@ to it. `tls_client_auth` / `RUVIO_TLS_CLIENT_AUTH` / `--tls-client-auth`
 rejects a handshake that does not present one. Neither setting is consulted
 on a plaintext connection.
 
-TLS covers client connections only. The replication port (WAL and snapshot
-stream, and the replication password in its handshake) is not encrypted, even
-when `tls_cert` is set. Keep it on a private network, a VPN or a tunnel; with
-TLS on and a replication listener or primary on another machine, the server logs
-a warning at startup. TLS on the replication port is tracked in issue #37.
+`tls_cert` covers client connections only. The replication port (WAL and snapshot
+stream, and the replication password in its handshake) is encrypted only when
+`replication.tls = true` (see below); otherwise keep it on a private network, a
+VPN or a tunnel. With TLS on and a replication listener or primary on another
+machine and `replication.tls` off, the server logs a warning at startup.
 
 ACL users are configured in `[[security.users]]` with Redis-style rule tokens:
 `on`/`off`, `>password`, `nopass`, `~pattern`, `+@category`, `-@category`,

@@ -15,6 +15,8 @@ pub(crate) mod arena;
 pub mod changes;
 mod chunked;
 pub mod config;
+#[cfg(feature = "coordinator")]
+pub mod coordinator;
 mod database;
 mod dump;
 pub mod engine;
