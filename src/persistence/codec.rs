@@ -74,20 +74,22 @@ const FORMAT_MAJOR: u16 = 1;
 /// Minor 1 adds SetRange (58) and ListSet/ListInsert/ListRemove (59-61). A minor-0
 /// reader refuses these files instead of misreading them. Minor 2 adds BloomReserve with an
 /// explicit expansion (62) and BloomAddMany (63); a reserve with the default expansion still
-/// uses record 9. Minor 3 adds SetBytesExpiring (64).
-pub(crate) const FORMAT_MINOR: u16 = 3;
+/// uses record 9. Minor 3 adds SetBytesExpiring (64). Minor 4 adds SlotCopy (65) and
+/// SlotsMoved (66), written only by a slot move.
+pub(crate) const FORMAT_MINOR: u16 = 4;
 /// The first record type of each minor. A new record type goes in a new last row with the
 /// next minor, and `FORMAT_MINOR` follows it; the codec tests refuse a decoder that knows a
 /// record type this table does not.
 #[cfg(test)]
-const RECORD_MINORS: [(u16, u16); 4] = [
+const RECORD_MINORS: [(u16, u16); 5] = [
     (record::SET_BYTES, 0),
     (record::SET_RANGE, 1),
     (record::BLOOM_RESERVE, 2),
     (record::SET_BYTES_EXPIRING, 3),
+    (record::SLOT_COPY, 4),
 ];
 #[cfg(test)]
-const LAST_RECORD_TYPE: u16 = record::SET_BYTES_EXPIRING;
+const LAST_RECORD_TYPE: u16 = record::SLOTS_MOVED;
 
 /// WAL record type numbers. Logs on disk and replicas depend on them, so a number is
 /// never reused or changed; a new record type takes the next number and a `RECORD_MINORS`
@@ -157,6 +159,8 @@ mod record {
     pub(super) const BLOOM_RESERVE: u16 = 62;
     pub(super) const BLOOM_ADD_MANY: u16 = 63;
     pub(super) const SET_BYTES_EXPIRING: u16 = 64;
+    pub(super) const SLOT_COPY: u16 = 65;
+    pub(super) const SLOTS_MOVED: u16 = 66;
 }
 
 pub(crate) struct SegmentHeader {
@@ -1135,6 +1139,31 @@ fn encode_payload(
             record::MOVE_KEY
         }
 
+        OwnedMutation::SlotCopy { key, entry } => {
+            put_bytes(payload, key)?;
+            match entry {
+                Some(entry) => {
+                    payload.push(1);
+                    put_bytes(payload, entry)?;
+                }
+                None => payload.push(0),
+            }
+            record::SLOT_COPY
+        }
+
+        OwnedMutation::SlotsMoved {
+            first,
+            last,
+            to,
+            position,
+        } => {
+            payload.extend_from_slice(&first.to_le_bytes());
+            payload.extend_from_slice(&last.to_le_bytes());
+            payload.extend_from_slice(&to.to_le_bytes());
+            put_u64(payload, *position);
+            record::SLOTS_MOVED
+        }
+
         OwnedMutation::Transaction { mutations } => encode_transaction(mutations, payload)?,
     };
 
@@ -1471,6 +1500,26 @@ fn decode_payload(
         record::MOVE_KEY => OwnedMutation::MoveKey {
             key: decoder.key(limits)?,
             destination: decoder.u8()?,
+        },
+        // Minor 4: written only by a slot move. The entry is a checkpoint entry frame, as
+        // large as one there may be.
+        record::SLOT_COPY => OwnedMutation::SlotCopy {
+            key: decoder.key(limits)?,
+            entry: match decoder.u8()? {
+                0 => None,
+                1 => Some(decoder.bytes(limits.max_command_bytes)?),
+                _ => {
+                    return Err(PersistenceError::Corruption(
+                        "invalid slot copy presence flag".into(),
+                    ));
+                }
+            },
+        },
+        record::SLOTS_MOVED => OwnedMutation::SlotsMoved {
+            first: decoder.u16()?,
+            last: decoder.u16()?,
+            to: decoder.u16()?,
+            position: decoder.u64()?,
         },
         record::LIST_PUSH_BACK => OwnedMutation::ListPushBack {
             key: decoder.key(limits)?,

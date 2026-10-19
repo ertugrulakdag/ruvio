@@ -87,6 +87,10 @@ pub(super) struct MoveSession {
     applied: AtomicU64,
     keys: AtomicU64,
     rounds: AtomicU64,
+    /// The source's first log sequence after the hand-over (0 without a log).
+    until: AtomicU64,
+    /// The target's last log sequence at the hand-over: where a change stream continues.
+    position: AtomicU64,
     progress: tokio::sync::Notify,
     outcome: Mutex<Outcome>,
     handed_over: Condvar,
@@ -220,14 +224,15 @@ fn start(
     if state.role.get() != crate::config::ReplicationRole::Off {
         return Err(b"ERR RUVIO MOVESLOTS is not supported while replication is on");
     }
+    // Without a log a restart would load the last checkpoint with the formula's owners.
     if state
         .persistence
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .profile()
-        .uses_wal()
+        == crate::DurabilityProfile::Snapshot
     {
-        return Err(b"ERR RUVIO MOVESLOTS does not yet support a durability profile with a log");
+        return Err(b"ERR RUVIO MOVESLOTS needs durability memory, everysec or always");
     }
 
     let from = fabric.slot_owner(target.first);
@@ -249,6 +254,8 @@ fn start(
         applied: AtomicU64::new(0),
         keys: AtomicU64::new(0),
         rounds: AtomicU64::new(0),
+        until: AtomicU64::new(0),
+        position: AtomicU64::new(0),
         progress: tokio::sync::Notify::new(),
         outcome: Mutex::new(Outcome::Copying),
         handed_over: Condvar::new(),
@@ -331,7 +338,12 @@ pub(super) fn on_message(state: &Rc<ShardState>, message: MoveMessage) {
         MoveMessage::Start(session) => {
             tokio::task::spawn_local(run_source(Rc::clone(state), session));
         }
-        MoveMessage::Open(session) => applied(&session),
+        MoveMessage::Open(session) => {
+            if let Err(reason) = record_begin(state, &session) {
+                session.fail(reason);
+            }
+            applied(&session);
+        }
         MoveMessage::Copy(session, keys) => {
             if session.outcome() == Outcome::Copying {
                 apply_copies(state, &session, keys);
@@ -350,11 +362,43 @@ fn applied(session: &MoveSession) {
     session.progress.notify_one();
 }
 
-/// Target: replaces each key with the source's values.
+/// Target, before the first copy: records the move as begun at its next log sequence, so a
+/// restart before the hand-over skips the copies.
+fn record_begin(state: &ShardState, session: &MoveSession) -> Result<(), String> {
+    let Some(forwarding) = state.forwarding.as_ref() else {
+        return Ok(());
+    };
+    let since = state
+        .persistence
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .last_sequence()
+        + 1;
+    let mut mover = forwarding.fabric.mover.lock();
+    let Some((history, data_dir)) = mover.durable.as_mut() else {
+        return Ok(());
+    };
+
+    history
+        .begin(session.first, session.last, session.to as u16, since)
+        .map_err(|error| format!("slot table refused the move: {error}"))?;
+    history
+        .save(data_dir)
+        .map_err(|error| format!("could not write the slot table: {error}"))
+}
+
+/// Target: logs and applies each key as the source holds it. A key absent from a database
+/// there is removed here too.
 fn apply_copies(state: &ShardState, session: &MoveSession, keys: Vec<MovedKey>) {
     let mut store = state.store.borrow_mut();
     let databases = store.database_ids();
     let count = keys.len() as u64;
+
+    if let Err(error) = log_copies(state, &store, &databases, &keys) {
+        drop(store);
+        session.fail(format!("target could not log the copy: {error}"));
+        return;
+    }
 
     for MovedKey { key, entries } in keys {
         for database in &databases {
@@ -378,6 +422,56 @@ fn apply_copies(state: &ShardState, session: &MoveSession, keys: Vec<MovedKey>) 
     session.keys.fetch_add(count, Ordering::AcqRel);
 }
 
+/// One `SlotCopy` record per database that holds the key on either side, in one group.
+fn log_copies(
+    state: &ShardState,
+    store: &KvShard,
+    databases: &[u8],
+    keys: &[MovedKey],
+) -> Result<(), crate::PersistenceError> {
+    use crate::mutation::{Mutation, MutationSink};
+
+    let mut persistence = state
+        .persistence
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
+    if !persistence.persists() {
+        return Ok(());
+    }
+
+    let active = store.active_database();
+    let mut frame = Vec::new();
+
+    persistence.begin_group();
+    let logged = (|| {
+        for MovedKey { key, entries } in keys {
+            for entry in entries {
+                frame.clear();
+                crate::persistence::encode_entry(&mut frame, entry)?;
+                persistence.select_database(entry.database);
+                persistence.record(Mutation::SlotCopy {
+                    key,
+                    entry: Some(&frame),
+                })?;
+            }
+            // Held here, gone there: replay removes it as the apply does.
+            for database in databases {
+                if entries.iter().all(|entry| entry.database != *database)
+                    && store.holds_key_in(*database, key)
+                {
+                    persistence.select_database(*database);
+                    persistence.record(Mutation::SlotCopy { key, entry: None })?;
+                }
+            }
+        }
+        Ok(())
+    })();
+
+    persistence.select_database(active);
+    persistence.end_group().and(logged)
+}
+
 /// Target, in the hand-over: takes the range unless the source gave up meanwhile.
 fn take_over(state: &Rc<ShardState>, session: &Arc<MoveSession>) {
     let Some(forwarding) = state.forwarding.as_ref() else {
@@ -392,6 +486,41 @@ fn take_over(state: &Rc<ShardState>, session: &Arc<MoveSession>) {
         // The source timed out or the copy failed: the source sends the cancel.
         return;
     }
+
+    // The copy on disk, then the move recorded: the one point a restart sees it happen.
+    let position = {
+        let mut persistence = state
+            .persistence
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+
+        if let Err(error) = persistence.flush() {
+            *outcome = Outcome::Failed(format!("target could not sync the copy: {error}"));
+            drop(outcome);
+            session.handed_over.notify_all();
+            return;
+        }
+        persistence.last_sequence()
+    };
+    {
+        let mut mover = forwarding.fabric.mover.lock();
+
+        if let Some((history, data_dir)) = mover.durable.as_mut() {
+            let saved = history
+                .complete(session.until.load(Ordering::Acquire))
+                .map_err(str::to_string)
+                .and_then(|()| history.save(data_dir).map_err(|error| error.to_string()));
+
+            if let Err(error) = saved {
+                drop(mover);
+                *outcome = Outcome::Failed(format!("could not record the move: {error}"));
+                drop(outcome);
+                session.handed_over.notify_all();
+                return;
+            }
+        }
+    }
+    session.position.store(position, Ordering::Release);
 
     let table = forwarding.fabric.slot_table();
 
@@ -424,6 +553,7 @@ async fn run_source(state: Rc<ShardState>, session: Arc<MoveSession>) {
 
     match result {
         Ok(()) => {
+            log_moved(&state, &session);
             release_range_clients(&state, &session);
             forget_range(state, session, "done").await;
         }
@@ -545,6 +675,16 @@ fn hand_over(
             MoveMessage::Copy(Arc::clone(session), copies),
         );
     }
+    // Nothing runs on this shard until the wait below ends, so its next record is the
+    // first after the hand-over.
+    let until = state
+        .persistence
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .last_sequence()
+        + 1;
+
+    session.until.store(until, Ordering::Release);
     fabric.send(
         session.from,
         session.to,
@@ -612,6 +752,36 @@ async fn settle(session: &MoveSession, behind: u64) -> Result<(), String> {
             return Ok(());
         }
         notified.await;
+    }
+}
+
+/// Source, after the hand-over: one `SlotsMoved` record, so a change stream that follows this
+/// shard learns where the range continues. A failure only loses that event.
+fn log_moved(state: &ShardState, session: &MoveSession) {
+    use crate::mutation::{Mutation, MutationSink};
+
+    let mut persistence = state
+        .persistence
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
+    if !persistence.persists() {
+        return;
+    }
+
+    persistence.begin_group();
+    let logged = persistence
+        .record(Mutation::SlotsMoved {
+            first: session.first,
+            last: session.last,
+            to: session.to as u16,
+            position: session.position.load(Ordering::Acquire),
+        })
+        .and(persistence.end_group())
+        .and_then(|()| persistence.flush());
+
+    if let Err(error) = logged {
+        warn!(%error, "the slot move was not logged for change streams");
     }
 }
 

@@ -575,9 +575,20 @@ fn run_cluster(config: &AppConfig, shutdown: ShutdownToken, force: bool) -> io::
     // to the owner directly and never sends `MOVED`.
     let fabric = Some(Fabric::new(config.shards));
 
-    // Before any shard serves: every route reads the table the moves left.
-    if let (Some(moves), Some(fabric)) = (load_slot_moves(config, config.shards)?, &fabric) {
-        moves.apply(&fabric.slot_table());
+    // Before any shard serves: every route reads the table the moves left, and new moves
+    // are recorded next to the log.
+    if let Some(fabric) = &fabric {
+        let moves = load_slot_moves(config, config.shards)?;
+
+        if let Some(moves) = &moves {
+            moves.apply(&fabric.slot_table());
+        }
+        if config.persistence.profile.uses_wal() {
+            fabric.mover.set_durable(
+                moves.unwrap_or_else(|| crate::slot_moves::SlotMoves::new(config.shards)),
+                config.persistence.data_dir.clone(),
+            );
+        }
     }
 
     // One acceptor hands each std TcpStream to a shard. SO_REUSEPORT does not balance

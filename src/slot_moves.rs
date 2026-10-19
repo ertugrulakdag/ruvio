@@ -98,15 +98,6 @@ impl SlotMoves {
         crate::replication::write_durably(&data_dir.join(FILE_NAME), &self.encode())
     }
 
-    pub(crate) fn moves(&self) -> &[SlotMove] {
-        &self.moves
-    }
-
-    /// Number of completed moves; it grows with every hand-over.
-    pub(crate) fn epoch(&self) -> u64 {
-        self.moves.iter().filter(|entry| entry.completed()).count() as u64
-    }
-
     /// The owner of every slot after the completed moves.
     pub(crate) fn owners(&self) -> Vec<u16> {
         let count = usize::from(self.shard_count);

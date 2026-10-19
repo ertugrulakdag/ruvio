@@ -940,8 +940,11 @@ fn transaction_needs_snapshot(shard: &mut KvShard, db: u8, mutations: &[OwnedMut
             | OwnedMutation::StreamGroupCreateConsumer { .. }
             | OwnedMutation::StreamHold { .. }
             | OwnedMutation::StreamGroupAdvance { .. } => {}
-            // A transaction record never nests another one.
-            OwnedMutation::Transaction { .. } => {}
+            // A transaction record never nests another one, nor a slot move's records
+            // (written on their own, and never while replication is on).
+            OwnedMutation::Transaction { .. }
+            | OwnedMutation::SlotCopy { .. }
+            | OwnedMutation::SlotsMoved { .. } => {}
         }
         if missing {
             break;
@@ -1028,6 +1031,8 @@ fn needs_snapshot(shard: &mut KvShard, mutation: &OwnedMutation) -> bool {
         | OwnedMutation::SetVersioned { .. }
         | OwnedMutation::LimitPut { .. }
         | OwnedMutation::OncePut { .. }
+        | OwnedMutation::SlotCopy { .. }
+        | OwnedMutation::SlotsMoved { .. }
         | OwnedMutation::Transaction { .. } => false,
     }
 }

@@ -74,16 +74,14 @@ fn a_missing_file_means_the_formula_and_a_leftover_temporary_file_is_ignored() {
 }
 
 #[test]
-fn only_completed_moves_change_owners_and_the_epoch() {
+fn only_completed_moves_change_owners() {
     let mut moves = SlotMoves::new(2);
     let table = SlotTable::from_formula(2);
 
     moves.begin(100, 199, 1, 10).unwrap();
-    assert_eq!(moves.epoch(), 0);
     assert_eq!(moves.owners()[150], 0);
 
     moves.complete(20).unwrap();
-    assert_eq!(moves.epoch(), 1);
     moves.apply(&table);
     assert_eq!(
         table.ranges()[..3],

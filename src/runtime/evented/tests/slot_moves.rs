@@ -692,3 +692,123 @@ fn every_kind_of_write_during_a_move_lands_on_the_new_owner() {
 
     stop_pair(shutdown, server);
 }
+
+#[test]
+fn a_durable_move_survives_a_restart_on_its_new_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let (left, right, shutdown, server) = serve_durable_pair(dir.path(), |_| {});
+
+    wait_until_listening(left, &server);
+    wait_until_listening(right, &server);
+    let mut client = Client::connect(left);
+    let mut moved = Vec::new();
+
+    for n in 0..300 {
+        let key = key_in_slots(&format!("d{n}"), 0, 2047);
+
+        client.call(&[b"SET", key.as_bytes(), key.as_bytes()]);
+        moved.push(key);
+    }
+    let stream = key_in_slots("stream", 0, 2047);
+    let bloom = key_in_slots("bloom", 0, 2047);
+    let expiring = key_in_slots("ttl", 0, 2047);
+    let outside = key_in_slots("outside", 3000, 8191);
+
+    client.call(&[b"XADD", stream.as_bytes(), b"1-1", b"f", b"v"]);
+    client.call(&[b"BF.ADD", bloom.as_bytes(), b"alpha"]);
+    client.call(&[b"SET", expiring.as_bytes(), b"v", b"EX", b"1000"]);
+    client.call(&[b"SET", outside.as_bytes(), b"stays"]);
+
+    assert_eq!(
+        client.call(&[b"RUVIO", b"MOVESLOTS", b"0-2047", b"1"]),
+        Value::Simple("OK".into())
+    );
+    assert_eq!(wait_for_move(&mut client)["state"], "done");
+    // Written after the hand-over: only the new owner's log has it.
+    client.call(&[b"SET", moved[0].as_bytes(), b"after"]);
+    stop_pair(shutdown, server);
+
+    let saved = SlotMoves::load(dir.path(), 2).unwrap().unwrap();
+
+    assert_eq!(saved.owners()[0], 1);
+
+    let (left, right, shutdown, server) = serve_durable_pair(dir.path(), |_| {});
+
+    wait_until_listening(left, &server);
+    wait_until_listening(right, &server);
+    for port in [left, right] {
+        let mut client = Client::connect(port);
+
+        assert_eq!(
+            client.call(&[b"GET", moved[0].as_bytes()]),
+            Value::Bulk(Some(b"after".to_vec()))
+        );
+        for key in &moved[1..] {
+            assert_eq!(
+                client.call(&[b"GET", key.as_bytes()]),
+                Value::Bulk(Some(key.as_bytes().to_vec()))
+            );
+        }
+        assert_eq!(
+            client.call(&[b"XLEN", stream.as_bytes()]),
+            Value::Integer(1)
+        );
+        assert_eq!(
+            client.call(&[b"BF.EXISTS", bloom.as_bytes(), b"alpha"]),
+            Value::Integer(1)
+        );
+        assert!(
+            matches!(client.call(&[b"TTL", expiring.as_bytes()]), Value::Integer(ttl) if ttl > 900)
+        );
+    }
+    // Each key once: the old owner dropped its copy, the new one holds every key.
+    assert_eq!(Client::connect(left).call(&[b"DBSIZE"]), Value::Integer(1));
+    assert_eq!(
+        Client::connect(right).call(&[b"DBSIZE"]),
+        Value::Integer(303)
+    );
+
+    stop_pair(shutdown, server);
+}
+
+#[test]
+fn the_old_owner_change_stream_reports_where_a_moved_range_continues() {
+    let dir = tempfile::tempdir().unwrap();
+    let (left, right, shutdown, server) = serve_durable_pair(dir.path(), |_| {});
+
+    wait_until_listening(left, &server);
+    wait_until_listening(right, &server);
+    let mut client = Client::connect(left);
+    let key = key_in_slots("fed", 0, 99);
+
+    client.call(&[b"SET", key.as_bytes(), b"1"]);
+    client.call(&[b"RUVIO", b"MOVESLOTS", b"0-99", b"1"]);
+    assert_eq!(wait_for_move(&mut client)["state"], "done");
+
+    let mut feed = Client::connect(left);
+
+    feed.0
+        .get_mut()
+        .write_all(&resp(&[&[
+            b"CHANGES",
+            b"SUBSCRIBE",
+            b"FROM",
+            b"0:0",
+            b"MATCH",
+            b"nothing:*",
+        ]]))
+        .unwrap();
+    // The MATCH drops the SET; the move passes every filter.
+    let event = loop {
+        match feed.read() {
+            Value::Array(items) if text(&items[0]) == "change" => break items,
+            _ => {}
+        }
+    };
+
+    assert_eq!(text(&event[3]), "moved");
+    assert_eq!(text(&event[4]), "0-99");
+    assert!(text(&event[5]).starts_with("1:"), "{event:?}");
+
+    stop_pair(shutdown, server);
+}

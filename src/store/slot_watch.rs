@@ -132,6 +132,12 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
         )
     }
 
+    /// Whether `database` holds `key`, expired or not.
+    pub(crate) fn holds_key_in(&self, database: u8, key: &[u8]) -> bool {
+        self.map_of(database)
+            .is_some_and(|map| map.lookup(key).is_some())
+    }
+
     /// Removes `key` from `database` without logging it, notifying anyone or counting it as
     /// expired: the key now lives on another shard.
     pub(crate) fn forget_key(&mut self, database: u8, key: &[u8]) -> bool {

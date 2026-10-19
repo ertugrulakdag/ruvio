@@ -167,7 +167,10 @@ async fn stream(
 
             changes::describe(&record.mutation, &mut |event| {
                 if subscription.accepts(event.kind, event.key) {
-                    let value = subscription.values.then_some(event.value).flatten();
+                    // A move's value is the cursor to continue from, never optional.
+                    let value = (subscription.values || event.kind == changes::ChangeKind::Moved)
+                        .then_some(event.value)
+                        .flatten();
 
                     changes::encode_event(
                         &mut batch,
