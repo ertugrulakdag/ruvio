@@ -26,6 +26,9 @@ pub struct TxSession {
     refused: Vec<(usize, &'static [u8])>,
     queued_bytes: usize,
     watch_slot: Option<u16>,
+    /// The shard holding this connection's watches; another one owns the slot after a
+    /// slot move, and EXEC then fails as for a changed key.
+    watch_shard: usize,
     watched_count: usize,
     /// The last command parked and was then served by another client's write: `Some` with
     /// that write's last WAL record, if it wrote one (see `take_served_after_park`).
@@ -60,6 +63,7 @@ impl TxSession {
             refused: Vec::new(),
             queued_bytes: 0,
             watch_slot: None,
+            watch_shard: 0,
             watched_count: 0,
             served_after_park: None,
             forwarded_shards: 0,
@@ -85,12 +89,18 @@ impl TxSession {
         self.watch_slot
     }
 
+    /// The shard that holds this connection's watches, when it has any.
+    pub fn watch_shard(&self) -> Option<usize> {
+        self.watch_slot.map(|_| self.watch_shard)
+    }
+
     pub fn queued(&self) -> &[Command<'static>] {
         &self.queue
     }
 
-    pub fn accept_watch(&mut self, slot: u16, count: usize) {
+    pub fn accept_watch(&mut self, slot: u16, count: usize, shard: usize) {
         self.watch_slot = Some(slot);
+        self.watch_shard = shard;
         self.watched_count = self.watched_count.saturating_add(count);
     }
 
@@ -376,7 +386,7 @@ mod tests {
         let mut session = TxSession::new(1);
         let payload = vec![b'x'; 4096];
 
-        session.accept_watch(42, 1);
+        session.accept_watch(42, 1, 0);
         session.prepare(Command::Multi);
         session.prepare(Command::set(owned(b"key"), Cow::Owned(payload)));
         let queued_payload = match &session.queued()[0] {
@@ -408,7 +418,7 @@ mod tests {
     fn discard_clears_the_queue_without_unwatch() {
         let mut session = TxSession::new(1);
 
-        session.accept_watch(1, 1);
+        session.accept_watch(1, 1, 0);
         session.prepare(Command::Multi);
         session.prepare(Command::set(owned(b"a"), owned(b"1")));
         assert!(matches!(

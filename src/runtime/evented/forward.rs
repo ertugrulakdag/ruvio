@@ -1783,6 +1783,18 @@ pub(super) async fn forward_special(
                     return Ok(true);
                 }
 
+                // The watched keys moved to another shard since WATCH: they count as changed.
+                if session.watch_shard().is_some_and(|watches| watches != dst) {
+                    unwatch_remote(forwarding, session, conn);
+                    state.store.borrow_mut().unwatch(conn);
+                    session.finish_exec();
+                    session.clear_watches();
+                    log.clear();
+                    output.write_all(session.resp.null_aggregate())?;
+
+                    return Ok(true);
+                }
+
                 if dst == forwarding.me {
                     log.clear();
 
@@ -1864,7 +1876,7 @@ pub(super) async fn forward_special(
                 .await;
 
             if reply.data == b"+OK\r\n" {
-                session.accept_watch(slot, keys.len());
+                session.accept_watch(slot, keys.len(), *dst);
                 entry.remote_state.set(true);
             }
 

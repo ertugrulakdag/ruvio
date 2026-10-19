@@ -228,7 +228,7 @@ fn wait_for_move(client: &mut Client) -> HashMap<String, String> {
     loop {
         let status = move_status(client);
 
-        if status["state"] != "copying" && status["state"] != "cleaning" {
+        if !["copying", "cleaning", "cancelling"].contains(&status["state"].as_str()) {
             return status;
         }
         assert!(Instant::now() < deadline, "move did not end: {status:?}");
@@ -426,6 +426,120 @@ fn moveslots_refuses_bad_requests_and_reports_none() {
         };
         assert!(error.contains(expected), "{error}");
     }
+
+    stop_pair(shutdown, server);
+}
+
+#[test]
+fn a_hand_over_releases_blocked_clients_and_fails_watches_on_the_range() {
+    let (left, right, shutdown, server) = serve_memory_pair();
+
+    wait_until_listening(left, &server);
+    wait_until_listening(right, &server);
+    let queue = key_in_slots("queue", 0, 99);
+    let watched = key_in_slots("watched", 0, 99);
+    let mut client = Client::connect(left);
+
+    client.call(&[b"SET", watched.as_bytes(), b"1"]);
+
+    let mut blocked = Client::connect(left);
+
+    blocked
+        .0
+        .get_mut()
+        .write_all(&resp(&[&[b"BLPOP", queue.as_bytes(), b"0"]]))
+        .unwrap();
+    let mut watcher = Client::connect(left);
+
+    assert_eq!(
+        watcher.call(&[b"WATCH", watched.as_bytes()]),
+        Value::Simple("OK".into())
+    );
+    assert_eq!(watcher.call(&[b"MULTI"]), Value::Simple("OK".into()));
+    assert_eq!(
+        watcher.call(&[b"SET", watched.as_bytes(), b"2"]),
+        Value::Simple("QUEUED".into())
+    );
+    wait_for_parked(left, 1);
+
+    client.call(&[b"RUVIO", b"MOVESLOTS", b"0-99", b"1"]);
+    assert_eq!(wait_for_move(&mut client)["state"], "done");
+
+    let Value::Error(error) = blocked.read() else {
+        panic!("BLPOP was not released");
+    };
+    assert!(error.starts_with("UNBLOCKED"), "{error}");
+    // The watched key moved: EXEC runs nothing, as when a watched key changes.
+    assert_eq!(watcher.call(&[b"EXEC"]), Value::Array(Vec::new()));
+    assert!(matches!(watcher.call(&[b"PING"]), Value::Simple(_)));
+    assert_eq!(
+        client.call(&[b"GET", watched.as_bytes()]),
+        Value::Bulk(Some(b"1".to_vec()))
+    );
+    // Blocking on the new owner works as before.
+    let mut pusher = Client::connect(right);
+
+    pusher.call(&[b"RPUSH", queue.as_bytes(), b"x"]);
+    assert_eq!(
+        Client::connect(left).call(&[b"LPOP", queue.as_bytes()]),
+        Value::Bulk(Some(b"x".to_vec()))
+    );
+
+    stop_pair(shutdown, server);
+}
+
+#[test]
+fn a_range_that_does_not_fit_on_the_target_is_cancelled_and_stays() {
+    let dir = std::env::temp_dir();
+    let (left, right, shutdown, server) = serve_durable_pair(&dir, |config| {
+        config.persistence.profile = crate::DurabilityProfile::Memory;
+        config.memory.max_shard_bytes = 4 << 20;
+        config.memory.reserved_headroom_bytes = 0;
+    });
+
+    wait_until_listening(left, &server);
+    wait_until_listening(right, &server);
+    let mut client = Client::connect(left);
+    let value = vec![b'v'; 1024];
+    let mut moving = Vec::new();
+
+    for n in 0..2400 {
+        let key = key_in_slots(&format!("m{n}"), 0, 4095);
+
+        assert_eq!(
+            client.call(&[b"SET", key.as_bytes(), &value]),
+            Value::Simple("OK".into())
+        );
+        moving.push(key);
+    }
+    for n in 0..2400 {
+        let key = key_in_slots(&format!("t{n}"), 8192, 16383);
+
+        assert_eq!(
+            client.call(&[b"SET", key.as_bytes(), &value]),
+            Value::Simple("OK".into())
+        );
+    }
+
+    client.call(&[b"RUVIO", b"MOVESLOTS", b"0-4095", b"1"]);
+    let status = wait_for_move(&mut client);
+
+    assert_eq!(status["state"], "cancelled", "{status:?}");
+    assert!(status["error"].contains("memory limit"), "{status:?}");
+    for key in moving.iter().step_by(101) {
+        assert_eq!(
+            client.call(&[b"GET", key.as_bytes()]),
+            Value::Bulk(Some(value.clone()))
+        );
+    }
+    assert_eq!(
+        Client::connect(right).call(&[b"DBSIZE"]),
+        Value::Integer(2400)
+    );
+    let Value::Array(slots) = client.call(&[b"CLUSTER", b"SLOTS"]) else {
+        panic!("CLUSTER SLOTS");
+    };
+    assert_eq!(slots.len(), 2, "{slots:?}");
 
     stop_pair(shutdown, server);
 }

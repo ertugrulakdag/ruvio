@@ -2308,7 +2308,14 @@ async fn dispatch_inner<'s>(
                         .store
                         .borrow_mut()
                         .watch(conn, session.database, &keys);
-                    session.accept_watch(slot, keys.len());
+                    session.accept_watch(
+                        slot,
+                        keys.len(),
+                        state
+                            .forwarding
+                            .as_ref()
+                            .map_or(0, |forwarding| forwarding.me),
+                    );
                     write_response(output, Response::Simple(b"OK"))?;
                 }
 
