@@ -4,6 +4,7 @@ Notable changes to the Go client `github.com/salihcantekin/ruvio/clients/go`. A 
 
 ## Unreleased
 
+- `MoveSlots(ctx, first, last, shard)` and `MoveSlotsStatus(ctx)` for `RUVIO MOVESLOTS`, which moves a slot range to another shard of the same server.
 - `Options.ReadPolicy` (`ReadPrimary` by default, `ReadPreferReplica`, `ReadReplica`): a cluster client sends reads (commands the server flags readonly and not blocking) to one replica per shard, found in `CLUSTER SLOTS` and picked when the slot map loads. Pipelines go to replicas only when every command is a read; a replica that cannot be connected or answers `LOADING` is skipped until the next load. Replication is asynchronous, so reads can miss recent writes. With the default policy nothing changes.
 - `ReplicaOf(ctx, host, port)`, `ReplicaOfNoOne(ctx, force)` and `Role(ctx)` for `REPLICAOF` and `ROLE`.
 - `Options.Seeds`: `host:port` seed addresses tried in order instead of `Addr`. A dropped connection reconnects starting with the next seed; a cluster reloads its slot map from the other known nodes and then the seeds when no open socket answers. A custom `Dial` receives the seed being tried.

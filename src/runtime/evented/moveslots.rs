@@ -189,7 +189,10 @@ pub(super) enum MoveMessage {
 /// `RUVIO MOVESLOTS ...` on any shard of a multi-shard process.
 pub(super) fn command(state: &Rc<ShardState>, target: Option<SlotRangeMove>) -> Response<'static> {
     let Some(forwarding) = state.forwarding.as_ref() else {
-        return Response::Error(b"ERR RUVIO MOVESLOTS needs more than one shard");
+        return match target {
+            Some(_) => Response::Error(b"ERR RUVIO MOVESLOTS needs more than one shard"),
+            None => status(&SlotMover::default()),
+        };
     };
     let fabric = &forwarding.fabric;
 
@@ -290,29 +293,34 @@ fn status(mover: &SlotMover) -> Response<'static> {
             Response::Bulk(Some(std::borrow::Cow::Borrowed(b"none"))),
         )]);
     };
-    let text = |value: String| Response::Bulk(Some(std::borrow::Cow::Owned(value.into_bytes())));
+    // Every value is a string, as `CONFIG GET` answers, so a client reads one map type.
     let mut pairs = vec![
-        ("state", text(report.state.to_string())),
-        ("first", Response::Integer(i64::from(report.first))),
-        ("last", Response::Integer(i64::from(report.last))),
-        ("from", Response::Integer(report.from as i64)),
-        ("to", Response::Integer(report.to as i64)),
-        ("keys", Response::Integer(report.keys as i64)),
-        ("rounds", Response::Integer(report.rounds as i64)),
-        ("elapsed_ms", text(format!("{:.3}", report.elapsed_ms))),
+        ("state", report.state.to_string()),
+        ("first", report.first.to_string()),
+        ("last", report.last.to_string()),
+        ("from", report.from.to_string()),
+        ("to", report.to.to_string()),
+        ("keys", report.keys.to_string()),
+        ("rounds", report.rounds.to_string()),
+        ("elapsed_ms", format!("{:.3}", report.elapsed_ms)),
     ];
 
     if let Some(freeze) = report.freeze_ms {
-        pairs.push(("freeze_ms", text(format!("{freeze:.3}"))));
+        pairs.push(("freeze_ms", format!("{freeze:.3}")));
     }
     if let Some(error) = report.error {
-        pairs.push(("error", text(error)));
+        pairs.push(("error", error));
     }
 
     Response::Map(
         pairs
             .into_iter()
-            .map(|(name, value)| (std::borrow::Cow::Borrowed(name.as_bytes()), value))
+            .map(|(name, value)| {
+                (
+                    std::borrow::Cow::Borrowed(name.as_bytes()),
+                    Response::Bulk(Some(std::borrow::Cow::Owned(value.into_bytes()))),
+                )
+            })
             .collect(),
     )
 }

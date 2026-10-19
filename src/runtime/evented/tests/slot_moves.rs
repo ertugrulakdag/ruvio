@@ -566,9 +566,15 @@ fn every_kind_of_write_during_a_move_lands_on_the_new_owner() {
         client.call(&[b"SET", key.as_bytes(), b"x"]);
     }
 
-    let strings: Vec<String> = (0..16).map(|n| key_in_slots(&format!("str{n}"), 0, 4095)).collect();
-    let lists: Vec<String> = (0..8).map(|n| key_in_slots(&format!("list{n}"), 0, 4095)).collect();
-    let hashes: Vec<String> = (0..8).map(|n| key_in_slots(&format!("hash{n}"), 0, 4095)).collect();
+    let strings: Vec<String> = (0..16)
+        .map(|n| key_in_slots(&format!("str{n}"), 0, 4095))
+        .collect();
+    let lists: Vec<String> = (0..8)
+        .map(|n| key_in_slots(&format!("list{n}"), 0, 4095))
+        .collect();
+    let hashes: Vec<String> = (0..8)
+        .map(|n| key_in_slots(&format!("hash{n}"), 0, 4095))
+        .collect();
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let writer = {
         let (strings, lists, hashes) = (strings.clone(), lists.clone(), hashes.clone());
@@ -592,7 +598,9 @@ fn every_kind_of_write_during_a_move_lands_on_the_new_owner() {
                     2 => client.call(&[b"DEL", string.as_bytes()]),
                     3 => client.call(&[b"RPUSH", list.as_bytes(), value.as_bytes()]),
                     4 => client.call(&[b"LPOP", list.as_bytes()]),
-                    5 => client.call(&[b"HSET", hash.as_bytes(), field.as_bytes(), value.as_bytes()]),
+                    5 => {
+                        client.call(&[b"HSET", hash.as_bytes(), field.as_bytes(), value.as_bytes()])
+                    }
                     _ => client.call(&[b"HDEL", hash.as_bytes(), field.as_bytes()]),
                 };
 
@@ -613,12 +621,20 @@ fn every_kind_of_write_during_a_move_lands_on_the_new_owner() {
                     2 => {
                         model.strings.insert(string.clone(), None);
                     }
-                    3 => model.lists.entry(list.clone()).or_default().push_back(value),
+                    3 => model
+                        .lists
+                        .entry(list.clone())
+                        .or_default()
+                        .push_back(value),
                     4 => {
                         model.lists.entry(list.clone()).or_default().pop_front();
                     }
                     5 => {
-                        model.hashes.entry(hash.clone()).or_default().insert(field, value);
+                        model
+                            .hashes
+                            .entry(hash.clone())
+                            .or_default()
+                            .insert(field, value);
                     }
                     _ => {
                         model.hashes.entry(hash.clone()).or_default().remove(&field);
@@ -653,7 +669,11 @@ fn every_kind_of_write_during_a_move_lands_on_the_new_owner() {
             .map(|value| Value::Bulk(Some(value.as_bytes().to_vec())))
             .collect();
 
-        assert_eq!(check.call(&[b"LRANGE", key.as_bytes(), b"0", b"-1"]), Value::Array(expected), "{key}");
+        assert_eq!(
+            check.call(&[b"LRANGE", key.as_bytes(), b"0", b"-1"]),
+            Value::Array(expected),
+            "{key}"
+        );
     }
     for (key, fields) in &model.hashes {
         assert_eq!(

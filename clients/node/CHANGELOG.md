@@ -4,6 +4,7 @@ Notable changes to the Node.js client `ruvio-client` on npm. New entries go unde
 
 ## Unreleased
 
+- `moveSlots(first, last, shard)` and `moveSlotsStatus()` for `RUVIO MOVESLOTS`, which moves a slot range to another shard of the same server.
 - `readPolicy` option on `ClusterClient` (`'primary'` by default, `'prefer-replica'`, `'replica'`; new `ReadPolicy` type): reads go to one replica per shard, picked when the slot map loads. A pipeline goes to replicas only when every command in it is a read. A replica that cannot be opened or answers `LOADING` is skipped until the next load.
 - `replicaOf(host, port)`, `replicaOfNoOne(force)` and `role()` for `REPLICAOF` and `ROLE`.
 - `seeds` option (`host:port` strings) on every client: tried in order instead of `host`/`port`. A dropped connection reconnects starting with the next seed; a cluster reloads its slot map from the other known nodes and then the seeds when no open socket answers. `seeds` with `path` throws `TypeError`.

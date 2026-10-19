@@ -2076,7 +2076,7 @@
       "family": "cluster",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Static topology of the shards in one process. Hosts and ports come from advertised_host and advertised_port. Each range lists the primary shard, then its replicas that announced an address and finished copying; a replica lists the primary it follows first and itself second. Node ids are the SHA-1 of the announced host:port.",
+      "limitations": "Topology of the shards in one process, including ranges moved with RUVIO MOVESLOTS. Hosts and ports come from advertised_host and advertised_port. Each range lists the primary shard, then its replicas that announced an address and finished copying; a replica lists the primary it follows first and itself second. Node ids are the SHA-1 of the announced host:port.",
       "coverage": [
         "scripts/cluster_smoke.py"
       ]
@@ -2129,6 +2129,16 @@
       "limitations": "Also available with one shard.",
       "coverage": [
         "scripts/cluster_smoke.py"
+      ]
+    },
+    {
+      "name": "RUVIO MOVESLOTS",
+      "family": "cluster",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Ruvio only. RUVIO MOVESLOTS first-last shard (or one slot) moves a slot range to another shard of the same server while it keeps serving it, and answers OK once the move has started; RUVIO MOVESLOTS STATUS reports the running or last move as a map of strings (state none, copying, cleaning, cancelling, done or cancelled, and first, last, from, to, keys, rounds, elapsed_ms, freeze_ms, error). One move at a time; every slot of the range must be on one shard. Refused while replication is on and inside MULTI and scripts. No MOVED: clients that still route to the old shard are forwarded. A client blocked on a moved key gets UNBLOCKED, an EXEC whose watched keys moved runs nothing, and a pipelined command routed to the old shard at the hand-over may get TRYAGAIN.",
+      "coverage": [
+        "src/runtime/evented/tests/slot_moves.rs"
       ]
     },
     {

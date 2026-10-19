@@ -196,6 +196,7 @@
     "RPUSHCAP": {"rust": "rpushcap", "csharp": "PushListRightCappedAsync", "go": "RPushCap", "java": "rpushcap", "node": "rpushcap", "python": "rpushcap"},
     "RPUSHX": {"rust": "rpushx", "csharp": "PushListRightIfExistsAsync", "go": "RPushX", "java": "rpushx", "node": "rpushx", "python": "rpushx"},
     "RUVIO": {"rust": "ruvio", "csharp": "RuvioAsync", "go": "Ruvio", "java": "ruvio", "node": "ruvio", "python": "ruvio"},
+    "RUVIO MOVESLOTS": {"rust": ["move_slots", "move_slots_status"], "csharp": ["MoveSlotsAsync", "GetMoveSlotsStatusAsync"], "go": ["MoveSlots", "MoveSlotsStatus"], "java": ["moveSlots", "moveSlotsStatus"], "node": ["moveSlots", "moveSlotsStatus"], "python": ["move_slots", "move_slots_status"]},
     "SADD": {"rust": "sadd", "csharp": "AddSetMembersAsync", "go": "SAdd", "java": "sadd", "node": "sadd", "python": "sadd"},
     "SAVE": {"rust": "save", "csharp": "SaveAsync", "go": "Save", "java": "save", "node": "save", "python": "save"},
     "SCAN": {"rust": ["scan", "scan_iter"], "csharp": "ScanAsync", "go": "Scan", "java": "scan", "node": "scan", "python": "scan"},
