@@ -620,7 +620,7 @@ fn read_history_file(path: &Path) -> Option<HistoryId> {
     <HistoryId>::try_from(bytes.as_slice()).ok()
 }
 
-fn write_durably(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_durably(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temporary = path.with_extension("tmp");
 
     std::fs::write(&temporary, bytes)?;

@@ -1344,6 +1344,32 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
         }
     }
 
+    /// Removes every key, in every database, whose hash slot is set in `slots` (indexed by
+    /// slot), without logging it. Recovery uses it for keys of slots another shard owns.
+    pub(crate) fn drop_slots(&mut self, slots: &[bool]) -> usize {
+        let active = self.active;
+        let mut dropped = 0;
+
+        for database in self.database_ids() {
+            self.enter(database);
+            let keys: Vec<Box<[u8]>> = self
+                .entries
+                .entries()
+                .filter(|(key, _)| slots[usize::from(crate::routing::hash_slot(key))])
+                .map(|(key, _)| key.into())
+                .collect();
+
+            // An expired key is removed as expired; either way it is gone.
+            for key in &keys {
+                self.delete_internal(key, true, crate::notify::KeyEvent::Del);
+            }
+            dropped += keys.len();
+        }
+
+        self.enter(active);
+        dropped
+    }
+
     /// Moves `key` from the active database to `target`. False when the key is missing
     /// or `target` already has it.
     pub(crate) fn move_key(&mut self, key: &[u8], target: u8) -> bool {

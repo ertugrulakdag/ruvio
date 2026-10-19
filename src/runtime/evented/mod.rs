@@ -574,6 +574,11 @@ fn run_cluster(config: &AppConfig, shutdown: ShutdownToken, force: bool) -> io::
     // to the owner directly and never sends `MOVED`.
     let fabric = Some(Fabric::new(config.shards));
 
+    // Before any shard serves: every route reads the table the moves left.
+    if let (Some(moves), Some(fabric)) = (load_slot_moves(config, config.shards)?, &fabric) {
+        moves.apply(&fabric.slot_table());
+    }
+
     // One acceptor hands each std TcpStream to a shard. SO_REUSEPORT does not balance
     // connections on macOS and needs socket2.
     if single && let Some(fabric) = &fabric {
@@ -744,6 +749,29 @@ pub fn serve(
     )
 }
 
+/// The slot moves saved in the data directory. Replicas follow each shard's log and the
+/// formula's ownership, so a moved table is refused while replication is on.
+fn load_slot_moves(
+    config: &AppConfig,
+    shard_count: usize,
+) -> io::Result<Option<crate::slot_moves::SlotMoves>> {
+    if config.persistence.profile == crate::DurabilityProfile::Memory {
+        return Ok(None);
+    }
+
+    let moves = crate::slot_moves::SlotMoves::load(&config.persistence.data_dir, shard_count)?;
+
+    if moves.is_some() && config.replication.role != crate::config::ReplicationRole::Off {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "slot ranges were moved between shards (SLOTS file); replication is not supported \
+             with moved slots",
+        ));
+    }
+
+    Ok(moves)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn serve_unlocked(
     std_listener: Option<std::net::TcpListener>,
@@ -858,6 +886,14 @@ async fn serve_async(
         snapshot_sequence = plan.last_sequence(shard_id).unwrap_or(0);
     }
 
+    let slot_moves = match &route {
+        Some(route) => load_slot_moves(&config, route.shard_count)?,
+        None => None,
+    };
+    let mut slot_filter = slot_moves
+        .as_ref()
+        .and_then(|moves| moves.replay_filter(shard_id as usize, snapshot_sequence));
+
     let (mut sink, mutations, report) = WalSink::open_after(
         config.persistence.clone(),
         shard_id,
@@ -887,6 +923,13 @@ async fn serve_async(
     // shard's file and its store, not a second copy of the data.
     if let Some(plan) = &plan {
         plan.stream_shard(shard_id, |entry| {
+            if slot_filter
+                .as_mut()
+                .is_some_and(|filter| !filter.keeps_entry(&entry.key))
+            {
+                return Ok(());
+            }
+
             store
                 .restore_snapshot_entry(entry)
                 .map_err(|error| crate::persistence::PersistenceError::Corruption(error.into()))
@@ -915,10 +958,20 @@ async fn serve_async(
     // copy: a record that does not replay must not keep it from starting.
     let resync_pending = config.replication.role == crate::config::ReplicationRole::Replica
         && marker == Some(CatchupMarker::Preparing);
+    // Records are contiguous: the first replayed one follows the checkpoint.
+    let first_replayed = report.last_sequence + 1 - report.records_replayed;
     for (index, (database, mutation)) in mutations.iter().enumerate() {
         if *database == 0
             && hot_store.as_ref().is_some_and(|store| {
                 crate::hot_store::apply_owned(store, &config.hot_keys, mutation)
+            })
+        {
+            continue;
+        }
+
+        if let Some(filter) = slot_filter.as_mut()
+            && !filter.keeps_record(first_replayed + index as u64, mutation, &mut |slots| {
+                store.drop_slots(slots);
             })
         {
             continue;
@@ -942,6 +995,14 @@ async fn serve_async(
             .map_err(|error| io::Error::other(error.to_string()))?;
         replica_guard::clear(&config.persistence.data_dir, shard_id)?;
         incomplete = false;
+    }
+    if let Some(stale) = slot_filter.and_then(crate::slot_moves::ReplayFilter::stale_slots) {
+        let dropped = store.drop_slots(&stale);
+
+        info!(
+            shard_id,
+            dropped, "dropped keys of slots another shard owns"
+        );
     }
     store.resume_expiration_after_replay(replay_clock);
     store.json_index_load_definitions();
