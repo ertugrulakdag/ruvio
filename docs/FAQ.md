@@ -71,3 +71,34 @@ commands, including `EVAL`, fail with `CROSSSLOT` before anything is sent. See
 Only the keys declared with `EVAL`, `EVALSHA` or `FCALL`, and those keys must
 be in one slot. A script that declares no keys runs on the shard of the
 connection that sent it.
+
+## Examples
+
+Slots below are for a server with 2 shards (first shard 0-8191, second
+8192-16383). `CLUSTER KEYSLOT` returns the slot number for any key.
+
+| Key | Part that is hashed | Slot | Shard |
+| --- | --- | --- | --- |
+| `user:1` | `user:1` | 10778 | second |
+| `user:2` | `user:2` | 6777 | first |
+| `{user:1}:profile` | `user:1` | 10778 | second |
+| `{user:1}:cart` | `user:1` | 10778 | second |
+| `{user:2}:profile` | `user:2` | 6777 | first |
+| `order:7:items` | whole key | 11097 | second |
+| `{order:7}:items` | `order:7` | 6368 | first |
+| `{order:7}:total` | `order:7` | 6368 | first |
+
+- `user:1` and `user:2` are on different shards, so `MGET user:1 user:2`
+  returns `CROSSSLOT`. `MGET {user:1}:profile {user:1}:cart` works.
+- Only the first non-empty `{...}` counts: `a{b}c` hashes `b`, and
+  `foo{}{bar}` hashes the whole key because the first braces are empty.
+- Without a tag, related keys such as `order:7:items` and `order:7:total` are
+  spread over the slots independently. Write them as `{order:7}:items` and
+  `{order:7}:total` when a command or script needs both.
+
+```
+SET {order:7}:items 3
+SET {order:7}:total 120
+MGET {order:7}:items {order:7}:total
+EVAL "return ruvio.call('GET', KEYS[1])" 1 {order:7}:total
+```
