@@ -456,11 +456,13 @@ impl<'a> Command<'a> {
                 pattern,
                 count,
                 type_name,
+                slot,
             } => Command::Scan {
                 cursor,
                 pattern: pattern.map(owned),
                 count,
                 type_name: type_name.map(owned),
+                slot,
             },
             Self::DbSize => Command::DbSize,
             Self::Del(keys) => Command::Del(owned_vec(keys.into_vec()).into()),

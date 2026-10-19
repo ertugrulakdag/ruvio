@@ -100,6 +100,10 @@ pub fn slot_range_for_shard(shard_id: usize, shard_count: usize) -> (u16, u16) {
 
 pub fn command_slot(command: &Command<'_>) -> Result<Option<u16>, CrossSlot> {
     match command {
+        // `SCAN … SLOT n` runs where slot `n` lives; a plain `SCAN` is keyless.
+        Command::Scan {
+            slot: Some(slot), ..
+        } => Ok(Some(*slot)),
         Command::CreateTtl { inner, .. } => command_slot(inner),
         Command::ShardUnsubscribe(channels) if channels.is_empty() => Ok(None),
         Command::ShardPublish { channel, .. } => Ok(Some(hash_slot(channel))),
