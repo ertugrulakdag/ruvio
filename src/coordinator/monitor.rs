@@ -4,7 +4,6 @@
 
 use std::{
     collections::HashMap,
-    net::SocketAddr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -34,8 +33,8 @@ pub struct Sighting {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Role {
     Master,
-    /// Following the primary whose replication address is this.
-    Replica(Option<SocketAddr>),
+    /// Following the primary whose replication address (`host:port`) is this.
+    Replica(Option<String>),
 }
 
 /// Every member's latest sighting, by group and member index.
@@ -80,7 +79,7 @@ const CALL_TIMEOUT: Duration = Duration::from_millis(1000);
 
 /// Pings one member and reads its role and synced sequence.
 async fn look(member: &Member, auth: Option<&str>) -> Option<Sighting> {
-    let mut client = NodeClient::connect(member.address, auth, CALL_TIMEOUT)
+    let mut client = NodeClient::connect(&member.address, auth, CALL_TIMEOUT)
         .await
         .ok()?;
     let role = client.call(&[b"ROLE"], CALL_TIMEOUT).await.ok()?;
@@ -100,9 +99,13 @@ async fn look(member: &Member, auth: Option<&str>) -> Option<Sighting> {
                 Some("master") => Some(Role::Master),
                 Some("slave") => Some(Role::Replica(
                     match (items.get(1).and_then(Value::text), items.get(2)) {
-                        (Some(host), Some(Value::Integer(port))) => {
-                            format!("{host}:{port}").parse().ok()
-                        }
+                        (Some(host), Some(Value::Integer(port))) => Some(
+                            super::config::Endpoint {
+                                host,
+                                port: u16::try_from(*port).unwrap_or(0),
+                            }
+                            .to_string(),
+                        ),
                         _ => None,
                     },
                 )),
@@ -127,14 +130,14 @@ async fn look(member: &Member, auth: Option<&str>) -> Option<Sighting> {
     };
 
     for shard in 0..shards {
-        let address = SocketAddr::new(member.address.ip(), member.address.port() + shard);
+        let address = member.address.plus(shard);
         let info = if shard == 0 {
             client
                 .call(&[b"INFO", b"replication"], CALL_TIMEOUT)
                 .await
                 .ok()
         } else {
-            match NodeClient::connect(address, auth, CALL_TIMEOUT).await {
+            match NodeClient::connect(&address, auth, CALL_TIMEOUT).await {
                 Ok(mut other) => other
                     .call(&[b"INFO", b"replication"], CALL_TIMEOUT)
                     .await
@@ -159,7 +162,7 @@ async fn look(member: &Member, auth: Option<&str>) -> Option<Sighting> {
 
 /// Sends one command to a member; `Ok` when it answers `OK`.
 async fn command(member: &Member, auth: Option<&str>, args: &[&[u8]]) -> Result<(), String> {
-    let mut client = NodeClient::connect(member.address, auth, CALL_TIMEOUT)
+    let mut client = NodeClient::connect(&member.address, auth, CALL_TIMEOUT)
         .await
         .map_err(|error| error.to_string())?;
 
@@ -373,11 +376,7 @@ async fn failover(
     let new = &promoted.address;
     let _ = switches.send(format!(
         "{} {} {} {} {}",
-        group.name,
-        old.ip(),
-        old.port(),
-        new.ip(),
-        new.port()
+        group.name, old.host, old.port, new.host, new.port
     ));
     info!(group = %group.name, primary = %new, "failover done");
     reconcile(
@@ -419,11 +418,11 @@ async fn reconcile(config: &CoordinatorConfig, group: &Group, primary: Primary, 
             )
             .await
         } else {
-            if sighting.role == Some(Role::Replica(Some(target.replication))) {
+            if sighting.role == Some(Role::Replica(Some(target.replication.to_string()))) {
                 continue;
             }
-            let host = target.replication.ip().to_string();
-            let port = target.replication.port().to_string();
+            let host = target.replication.host.clone();
+            let port = target.replication.port.to_string();
 
             command(
                 member,
@@ -453,8 +452,16 @@ mod tests {
             name: "main".into(),
             members: (0..count)
                 .map(|index| Member {
-                    address: format!("127.0.0.1:{}", 6379 + index).parse().unwrap(),
-                    replication: format!("127.0.0.1:{}", 26379 + index).parse().unwrap(),
+                    address: super::super::config::Endpoint::parse(&format!(
+                        "127.0.0.1:{}",
+                        6379 + index
+                    ))
+                    .unwrap(),
+                    replication: super::super::config::Endpoint::parse(&format!(
+                        "127.0.0.1:{}",
+                        26379 + index
+                    ))
+                    .unwrap(),
                 })
                 .collect(),
         }

@@ -1,7 +1,7 @@
 //! The small RESP2 subset the coordinator speaks: commands to data nodes, and the Sentinel
 //! API clients call.
 
-use std::{io, net::SocketAddr, time::Duration};
+use std::{io, time::Duration};
 
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -166,13 +166,16 @@ pub struct NodeClient {
 
 impl NodeClient {
     pub async fn connect(
-        address: SocketAddr,
+        address: &super::config::Endpoint,
         auth: Option<&str>,
         wait: Duration,
     ) -> io::Result<Self> {
-        let stream = timeout(wait, TcpStream::connect(address))
-            .await
-            .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
+        let stream = timeout(
+            wait,
+            TcpStream::connect((address.host.as_str(), address.port)),
+        )
+        .await
+        .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
 
         stream.set_nodelay(true)?;
         let mut client = Self {

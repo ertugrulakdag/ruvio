@@ -208,6 +208,29 @@ impl Api {
 
         match (word(0), word(1)) {
             (Some("ping"), _) => Value::Simple("PONG".into()),
+            (Some("info"), _) => {
+                let leader = self.raft.metrics().borrow().current_leader;
+                let mut text = format!(
+                    "# Coordinator\r\ncoordinator_id:{}\r\nleader_id:{}\r\nis_leader:{}\r\n",
+                    self.config.id,
+                    leader.map_or(-1, |id| id as i64),
+                    u8::from(leader == Some(self.config.id)),
+                );
+                let primaries = self.machine.primaries();
+
+                for group in &self.config.groups {
+                    match primaries.get(&group.name) {
+                        Some(primary) => {
+                            text += &format!(
+                                "group_{}:primary={},epoch={}\r\n",
+                                group.name, group.members[primary.member].address, primary.epoch
+                            )
+                        }
+                        None => text += &format!("group_{}:primary=,epoch=0\r\n", group.name),
+                    }
+                }
+                Value::bulk(text)
+            }
             (Some("role"), _) => Value::array(vec![
                 Value::bulk("sentinel"),
                 Value::array(
@@ -220,11 +243,11 @@ impl Api {
             ]),
             (Some("sentinel"), Some("get-master-addr-by-name")) => match self.primary(&name()) {
                 Some((group, primary)) => {
-                    let address = group.members[primary].address;
+                    let address = &group.members[primary].address;
 
                     Value::array(vec![
-                        Value::bulk(address.ip().to_string()),
-                        Value::bulk(address.port().to_string()),
+                        Value::bulk(&address.host),
+                        Value::bulk(address.port.to_string()),
                     ])
                 }
                 None => Value::Array(None),
@@ -260,9 +283,9 @@ impl Api {
                             Value::bulk("name"),
                             Value::bulk(id.to_string()),
                             Value::bulk("ip"),
-                            Value::bulk(address.ip().to_string()),
+                            Value::bulk(&address.host),
                             Value::bulk("port"),
-                            Value::bulk(address.port().to_string()),
+                            Value::bulk(address.port.to_string()),
                         ])
                     })
                     .collect(),
@@ -276,7 +299,7 @@ impl Api {
 
     /// One member as `SENTINEL masters` / `replicas` list it: a flat field-value array.
     fn describe(&self, group: &config::Group, member: usize, primary: bool) -> Value {
-        let address = group.members[member].address;
+        let address = &group.members[member].address;
         let sighting = self.sightings.get(&group.name, member);
         let down = sighting
             .last_ok
@@ -296,8 +319,8 @@ impl Api {
                     address.to_string()
                 },
             ),
-            ("ip", address.ip().to_string()),
-            ("port", address.port().to_string()),
+            ("ip", address.host.clone()),
+            ("port", address.port.to_string()),
             ("flags", flags.to_owned()),
             (
                 "last-ok-ping-reply",

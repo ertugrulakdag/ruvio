@@ -235,9 +235,8 @@ fn run() -> io::Result<()> {
 
 #[cfg(feature = "coordinator")]
 fn run_coordinator(path: &std::path::Path) -> io::Result<()> {
-    let text = std::fs::read_to_string(path).map_err(|error| {
-        invalid_config(format!("failed to read {}: {error}", path.display()))
-    })?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| invalid_config(format!("failed to read {}: {error}", path.display())))?;
     let config = ruvio::coordinator::CoordinatorConfig::parse(&text).map_err(invalid_config)?;
     let shutdown = ruvio::ShutdownToken::default();
     let signal_token = shutdown.clone();
