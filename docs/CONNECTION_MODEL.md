@@ -37,6 +37,17 @@ The application's only part is key design. Commands that touch several keys
 need those keys in one slot, which a hash tag does: `{user:1}:profile` and
 `{user:1}:cart` hash on `user:1`.
 
+### Which shard holds a key
+
+- `CLUSTER KEYSLOT key` returns the key's hash slot (CRC16 of the key, or of the part inside the first `{...}` hash tag, modulo 16,384).
+- `CLUSTER SLOTS` lists every shard with its slot range, host and port. The shard that owns the slot is the one whose range contains it. With 2 shards, slots 0-8191 belong to the first and 8192-16383 to the second.
+- Clients do this lookup themselves and send each key to its owner; the application normally never needs to know.
+- Keys with the same hash tag always share a slot, so they share a shard: `{order:7}:items` and `{order:7}:total`.
+
+### Commands that take several keys
+
+`MGET`, `MSET`, `DEL`, `EXISTS`, `UNLINK`, `TOUCH`, `EVAL`, `EVALSHA`, `FCALL`, `MULTI`/`EXEC` and similar commands need all their keys in one slot, as in Redis Cluster. Otherwise the server answers `CROSSSLOT Keys in request do not hash to the same slot` and does nothing; keys that merely sit on one shard but in different slots are refused too. Put a hash tag in the keys that belong together. The first-party clients split `MGET`, `MSET`, `DEL`, `EXISTS`, `UNLINK` and `TOUCH` per slot for you (not atomic, see [CLIENT_BEHAVIOR.md](CLIENT_BEHAVIOR.md)); `EVAL` and the other commands are refused by the client before sending. A script may only use the keys it declared (`ruvio.call` on an undeclared key fails), and a script with no declared keys runs on the connection's shard.
+
 ## Logical databases
 
 With `shards = 1`, the server has `databases` numbered key spaces (16 by
