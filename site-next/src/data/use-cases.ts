@@ -173,10 +173,16 @@ FILLSET product:42 "{...}" 60000 <token> SWR 30000
 XADD jobs DELAY 30000 * kind send-reminder user 42
 XREADGROUP GROUP workers w1 COUNT 10 BLOCK 5000 STREAMS jobs >
 # nil until the 30 s delay has passed; the worker keeps reading in a loop
-XACK jobs workers <id>`,
-    body: "The entry is stored right away. <code>XREADGROUP</code> skips it until the delay passes, and <code>XREAD</code> can still see it. Pending entries, <code>XCLAIM</code> and <code>XAUTOCLAIM</code> work as in Redis streams.",
+XACK jobs workers <id>
+
+ZADD due:jobs 1700000300 job:9 1700000360 job:10
+ZPOPBYSCORE due:jobs 1700000330 COUNT 10
+# job:9 -> due and removed in the same call
+ZMOVEDUE due:jobs queue:ready 1700000400 COUNT 100
+# 1     -> moved to the tail of the list queue:ready`,
+    body: "The entry is stored right away. <code>XREADGROUP</code> skips it until the delay passes, and <code>XREAD</code> can still see it. Pending entries, <code>XCLAIM</code> and <code>XAUTOCLAIM</code> work as in Redis streams. For a plain schedule keep the run time as the score of a sorted set: <code>ZPOPBYSCORE</code> returns the members that are due and removes them, and <code>ZMOVEDUE</code> moves them to a list in one recorded step, up to 10000 per call.",
     note: "The hold is a WAL record and is written only when a delay is set.",
-    refs: [{ label: "XADD DELAY", href: commands }],
+    refs: [{ label: "XADD DELAY", href: commands }, { label: "ZPOPBYSCORE and ZMOVEDUE", href: commands }],
   },
   {
     id: "changes",

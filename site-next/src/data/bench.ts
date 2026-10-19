@@ -175,3 +175,30 @@ function loadScale(file: string): Scale {
 export const scale = loadScale("benchmark/records/x86-azure-2026-10-16-8-shards-final.json");
 export const scaleDeep = loadScale("benchmark/records/x86-azure-2026-10-16-8-shards-p64-after.json");
 export const scaleEverysec = loadScale("benchmark/records/x86-azure-2026-10-16-8-shards-everysec-after.json");
+
+// One Ruvio command against the Lua script that does the same on Redis (scripts/bench_scripted_equivalents.py).
+export type ScriptedRow = { label: string; ruvio: number; redis: number; ratio: number; ruvioP50: number; redisP50: number; ruvioP99: number; redisP99: number };
+export type ScriptedMem = { label: string; ruvioBytes: number; redisBytes: number; ratio: number };
+const scriptedFile = "benchmark/records/mac-scripted-2026-10-19.json";
+const scriptedRaw = readJson(scriptedFile);
+export const scripted = {
+  file: scriptedFile,
+  date: scriptedRaw.date as string,
+  machine: `${scriptedRaw.host.cpu}, ${scriptedRaw.host.cores} cores`,
+  commit: scriptedRaw.build.commit as string,
+  clients: scriptedRaw.config.clients as number,
+  pipeline: scriptedRaw.config.pipeline as number,
+  rounds: scriptedRaw.config.rounds as number,
+  redisVersion: ((String(scriptedRaw.redis_version).match(/v=([\d.]+)/) || [])[1] ?? "") as string,
+  rows: scriptedRaw.rows
+    .filter((r: any) => !r.skipped && !/for scale/.test(r.label))
+    .map((r: any) => ({
+      label: r.label.replace(/\s*\(\d+ due\)/, ""), ruvio: r.ruvio, redis: r.redis, ratio: r.ruvio / r.redis,
+      ruvioP50: r.ruvio_p50, redisP50: r.redis_p50, ruvioP99: r.ruvio_p99, redisP99: r.redis_p99,
+    })) as ScriptedRow[],
+  memory: scriptedRaw.memory.map((m: any) => ({
+    label: m.label,
+    ruvioBytes: (m.ruvio.delta_kib * 1024) / m.keys, redisBytes: (m.redis.delta_kib * 1024) / m.keys,
+    ratio: m.ruvio.delta_kib / m.redis.delta_kib,
+  })) as ScriptedMem[],
+};

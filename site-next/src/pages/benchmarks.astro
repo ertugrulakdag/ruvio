@@ -7,7 +7,7 @@ import RatioSwarm from "../components/charts/RatioSwarm.astro";
 import LoadArrows from "../components/charts/LoadArrows.astro";
 import MemoryDumbbell from "../components/charts/MemoryDumbbell.astro";
 import ScaleBars from "../components/charts/ScaleBars.astro";
-import { platforms, loadRun, fmtOps, fmtX, fmtMiB, pct, scale, scaleDeep, scaleEverysec } from "../data/bench";
+import { platforms, loadRun, scripted, fmtOps, fmtX, fmtMiB, pct, scale, scaleDeep, scaleEverysec } from "../data/bench";
 import { site } from "../config/site";
 import { clamp } from "../lib/geom";
 
@@ -231,6 +231,51 @@ const one = at(1);
       </div>
     </section>
   </div>
+
+  <section class="section" id="scripted">
+    <div class="wrap">
+      <div class="head-row">
+        <div>
+          <p class="kicker">One command instead of a script</p>
+          <h2 class="title">{fmtX(Math.min(...scripted.rows.map((r) => r.ratio)))} to {fmtX(Math.max(...scripted.rows.map((r) => r.ratio)))} the throughput of the same job written as a Lua script</h2>
+          <p class="lede">Moving a balance, popping due jobs, a sliding-window limiter or a counter that gets a deadline when it is created are one command in Ruvio. On Redis the usual answer is a Lua script. Each row runs the Ruvio command against that script (<code>EVALSHA</code>) on the same machine. The table compares the two ways of doing the job, not the servers in general.</p>
+        </div>
+      </div>
+      <div class="scroll-x">
+        <table class="res">
+          <thead><tr><th>Ruvio command</th><th class="num">Ruvio ops/s</th><th class="num">Redis Lua ops/s</th><th class="num">Ratio</th><th class="num">p50 ms</th><th class="num">p99 ms</th></tr></thead>
+          <tbody>
+            {scripted.rows.map((r) => (
+              <tr>
+                <td>{r.label}</td>
+                <td class="num">{fmtOps(r.ruvio)}</td>
+                <td class="num dim">{fmtOps(r.redis)}</td>
+                <td class="num">{fmtX(r.ratio)}</td>
+                <td class="num dim">{r.ruvioP50.toFixed(2)} / {r.redisP50.toFixed(2)}</td>
+                <td class="num dim">{r.ruvioP99.toFixed(2)} / {r.redisP99.toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div class="scroll-x scale-table">
+        <table class="res">
+          <thead><tr><th>Memory per key</th><th class="num">Ruvio</th><th class="num">Redis</th><th class="num">Ratio</th></tr></thead>
+          <tbody>
+            {scripted.memory.map((m) => (
+              <tr>
+                <td>{m.label}</td>
+                <td class="num">{Math.round(m.ruvioBytes)} B</td>
+                <td class="num dim">{Math.round(m.redisBytes)} B</td>
+                <td class="num">{fmtX(m.ratio)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class="source">Source: <a href={blob(scripted.file)}>{scripted.file}</a> · {scripted.machine}, {scripted.date}, commit {scripted.commit} · Redis {scripted.redisVersion} · {scripted.clients} clients, pipeline {scripted.pipeline}, {scripted.rounds} alternating rounds, median · p50 and p99 are Ruvio / Redis with one request in flight per connection · in-memory, 1 shard · macOS only, not yet measured on Linux or x86 · semaphore memory is compared with a one-member sorted set, Redis's most compact structure for the job.</p>
+    </div>
+  </section>
 
   <section class="section band" id="method">
     <div class="wrap">
