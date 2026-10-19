@@ -101,6 +101,30 @@ pub struct ClientOptions {
     pub reconnect_base_delay: Duration,
     /// Ceiling for the doubling reconnect wait. Defaults to 2 seconds.
     pub reconnect_max_delay: Duration,
+    /// Where a cluster client sends read-only commands; see [`ReadPolicy`]. Ignored by a
+    /// standalone connection. Defaults to [`ReadPolicy::Primary`].
+    pub read_policy: ReadPolicy,
+}
+
+/// Where a cluster client sends read-only commands (those the server flags `readonly`, such as
+/// `GET`, `HGETALL` or `ZRANGE`). Replicas are found in `CLUSTER SLOTS`, which lists each
+/// shard's replicas after its primary.
+///
+/// Replication is asynchronous: a read from a replica may miss recent writes, including the
+/// caller's own. Writes, transactions, blocking commands, scripts not flagged `readonly`,
+/// Pub/Sub, and any pipeline that holds a write always go to the primaries.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReadPolicy {
+    /// Every command goes to the slot's primary, as before replicas were listed.
+    #[default]
+    Primary,
+    /// Reads go to one replica of the slot's shard when one is known and reachable, otherwise
+    /// to the primary. A replica that cannot be opened, or answers `LOADING`, is skipped until
+    /// the slot map is reloaded.
+    PreferReplica,
+    /// Reads go to a replica of the slot's shard; with none known or reachable they fail with
+    /// [`Error::Protocol`].
+    Replica,
 }
 
 impl ClientOptions {
@@ -153,6 +177,7 @@ impl Default for ClientOptions {
             max_reconnect_attempts: 8,
             reconnect_base_delay: Duration::from_millis(100),
             reconnect_max_delay: Duration::from_secs(2),
+            read_policy: ReadPolicy::Primary,
         }
     }
 }
