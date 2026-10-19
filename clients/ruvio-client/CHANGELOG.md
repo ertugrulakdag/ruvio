@@ -4,6 +4,8 @@ Notable changes to the Rust client crate `ruvio-client`. New entries go under "U
 
 ## Unreleased
 
+- New `transfer` and `htransfer` for the server's `TRANSFER` and `HTRANSFER`: they return `Some((a, b))` after the move, or `None` when nothing moved.
+
 ## 0.4.0 - 2026-10-17
 
 - New typed trim, `INFO`, `CLIENT LIST` and change-feed keywords (all constant strings, nothing formatted per call).

@@ -55,10 +55,10 @@ await c.quit();
 
 ## API
 
-Typed methods for every command in `docs/compatibility-matrix.json` (287/287, enforced by `test/coverage.test.ts`),
+Typed methods for every command in `docs/compatibility-matrix.json` (289/289, enforced by `test/coverage.test.ts`),
 including the Ruvio options: `set(k, v, { ifEq })`, `incrbyMax`, `fillget`/`fillset` (`WAIT`, `SWR`), `getex(k, ms)`,
 `delex(k, ifEq)`, `lpushcap`/`rpushcap`, `bf*`, `json*` (incl. `jsonIndexCreate`, `jsonFind`), `idemBegin`/`idemComplete`,
-`lease`/`semaphore`/`release`, `once`, `take`, `setv`, `changes*`, `limit`. Anything else: `c.call('CMD', ...args)`.
+`lease`/`semaphore`/`release`, `once`, `take`, `transfer`, `htransfer`, `setv`, `changes*`, `limit`. Anything else: `c.call('CMD', ...args)`.
 
 - **Pipeline:** `await c.pipeline().set('a', 1).get('a').exec()` (one write; per-command errors stay in their slot, `execStrict()` rejects).
 - **Transaction:** `await c.multi().incr('{k}a').incr('{k}b').exec()`: `MULTI`..`EXEC` in one contiguous write; `null` if a WATCH failed.

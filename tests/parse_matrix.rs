@@ -202,6 +202,23 @@ const STRUCTURED: &[&[&str]] = &[
     &["OBJECT", "IDLETIME", "k"],
     &["MEMORY", "USAGE", "k", "SAMPLES", "5"],
     &["LATENCY", "LATEST"],
+    &["LIMIT", "k", "5", "60000"],
+    &["SEMAPHORE", "k", "2", "5000"],
+    &["LTRIM", "l", "0", "-1"],
+    &["ZRANGE", "z", "0", "-1"],
+    &["ZREVRANGE", "z", "0", "-1"],
+    &["ZRANGEBYLEX", "z", "[a", "[b"],
+    &["ZREMRANGEBYRANK", "z", "0", "1"],
+    &["ZREMRANGEBYLEX", "z", "[a", "[b"],
+    &["GEOADD", "g", "13.36", "38.11", "m"],
+    &["XRANGE", "x", "-", "+"],
+    &["XAUTOCLAIM", "x", "g", "c", "0", "0-0"],
+    &["SETBIT", "k", "1", "0"],
+    &["FILLSET", "k", "v", "60000", "1"],
+    &["GETRANGE", "k", "0", "-1"],
+    &["SINTERCARD", "1", "a"],
+    &["TRANSFER", "a", "b", "4", "MAX", "9"],
+    &["HTRANSFER", "h", "f", "g", "1", "MAX", "5"],
 ];
 
 #[test]
@@ -233,8 +250,6 @@ fn every_matrix_command_is_recognised_and_no_argument_mix_breaks_the_parser() {
     let mut unrecognised = Vec::new();
     let structured: std::collections::HashSet<String> =
         STRUCTURED.iter().map(|words| words[0].to_owned()).collect();
-    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
-
     assert!(
         commands.len() > 250,
         "matrix looks truncated: {}",
@@ -244,6 +259,12 @@ fn every_matrix_command_is_recognised_and_no_argument_mix_breaks_the_parser() {
     for name in &commands {
         let mut head: Vec<&str> = name.split(' ').collect();
         let mut recognised = false;
+
+        // One generator per command, so adding a command to the matrix does not change the
+        // argument mixes tried for the others.
+        let mut rng = Rng(name.bytes().fold(0x9e37_79b9_7f4a_7c15, |hash: u64, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        }));
 
         // Whole-frame truncations never panic and report "incomplete" or an error, never a short read.
         let full = frame(&head);

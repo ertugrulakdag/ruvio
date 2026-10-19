@@ -49,6 +49,7 @@ KeyTypeT = Union[
 from ._converters import (  # noqa: F401
     Conv,
     KeyT,
+    _balances,
     _bf_info,
     _bloom_seen,
     _bool,
@@ -776,6 +777,38 @@ class Commands:
             client.take("stock", 9)   # -> None, stock stays 3
         """
         return self._c(None, "TAKE", key, count)
+
+    def transfer(self, source: KeyT, destination: KeyT, amount: int, max: Optional[int] = None) -> Any:
+        """``TRANSFER source destination amount [MAX max]`` - moves an amount between two integer keys. Ruvio extension.
+
+        The check and both writes are one atomic step (one WAL record): ``source`` loses ``amount`` only
+        when it holds at least that much, ``destination`` gains it (a missing ``destination`` starts at 0).
+        Handy for wallets, credits and inventory.
+
+        Args:
+            source: A key holding a decimal integer.
+            destination: Another integer key. On a cluster both keys must share a slot (use a hash tag
+                such as ``{user:42}``).
+            amount: A positive integer to move.
+            max: Optional ceiling for ``destination`` after the move.
+
+        Returns:
+            ``(source_after, destination_after)``, or ``None`` when ``source`` is missing or short, or
+            ``destination`` would overflow or pass ``max`` (nothing is written then).
+
+        Raises:
+            ResponseError: ``amount`` is not positive, the two keys are the same, or a value is not an integer.
+            WrongTypeError: A key holds a non-string type.
+            CrossSlotError: Cluster client only, when the keys are in different slots.
+
+        Example:
+            client.set("{u}:wallet", 50)
+            client.transfer("{u}:wallet", "{u}:escrow", 30)   # -> (20, 30)
+            client.transfer("{u}:wallet", "{u}:escrow", 30)   # -> None, nothing changes
+        """
+        if max is None:
+            return self._c(_balances, "TRANSFER", source, destination, amount)
+        return self._c(_balances, "TRANSFER", source, destination, amount, "MAX", max)
 
     def delex(self, key: KeyT, ifeq: Arg) -> Any:
         """``DELEX key IFEQ value`` - deletes a string only when it equals ``value``. Ruvio extension.
@@ -2723,6 +2756,30 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
             WrongTypeError: The key holds a non-hash type.
         """
         return self._c(None, "HINCRBY", key, field, amount)
+
+    def htransfer(self, key: KeyT, from_field: Arg, to_field: Arg, amount: int, max: Optional[int] = None) -> Any:
+        """``HTRANSFER key from to amount [MAX max]`` - :meth:`transfer` between two integer fields of one hash. Ruvio extension.
+
+        A missing ``to_field`` starts at 0 and field TTLs stay.
+
+        Args:
+            key: The hash key.
+            from_field: Field to subtract from.
+            to_field: Field to add to.
+            amount: A positive integer to move.
+            max: Optional ceiling for ``to_field`` after the move.
+
+        Returns:
+            ``(from_after, to_after)``, or ``None`` when the key or ``from_field`` is missing or short, or
+            ``to_field`` would overflow or pass ``max`` (nothing is written then).
+
+        Raises:
+            ResponseError: ``amount`` is not positive, the fields are the same, or a field is not an integer.
+            WrongTypeError: The key holds a non-hash type.
+        """
+        if max is None:
+            return self._c(_balances, "HTRANSFER", key, from_field, to_field, amount)
+        return self._c(_balances, "HTRANSFER", key, from_field, to_field, amount, "MAX", max)
 
     def hincrbyfloat(self, key: KeyT, field: Arg, amount: float) -> Any:
         """``HINCRBYFLOAT key field amount`` - adds a float to a field (15 significant digits). Keeps a field TTL.

@@ -58,6 +58,34 @@ public sealed partial class RuvioClient
     }
 
     /// <inheritdoc />
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    public async ValueTask<(long Source, long Destination)?> TransferAsync(string source, string destination, long amount, long? max = null, CancellationToken cancellationToken = default)
+    {
+        var command = new RespCommand("TRANSFER", source, destination, amount);
+
+        if (max is { } cap)
+        {
+            command = command.With("MAX").With(cap);
+        }
+
+        return BalancePair("TRANSFER", await ExecuteCommandAsync(command, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    public async ValueTask<(long From, long To)?> TransferHashFieldAsync(string key, string from, string to, long amount, long? max = null, CancellationToken cancellationToken = default)
+    {
+        var command = new RespCommand("HTRANSFER", key, from, to, amount);
+
+        if (max is { } cap)
+        {
+            command = command.With("MAX").With(cap);
+        }
+
+        return BalancePair("HTRANSFER", await ExecuteCommandAsync(command, cancellationToken));
+    }
+
+    /// <inheritdoc />
     public ValueTask<string?> GetExpireAsync(string key, long ttlMs, CancellationToken cancellationToken = default)
     {
         return BulkOrNull(new RespCommand("GETEX", key, ttlMs), cancellationToken);
@@ -2416,6 +2444,22 @@ public sealed partial class RuvioClient
         return (
             items[0].AsString() ?? "",
             new SortedSetEntry(items[1].AsString() ?? "", ParseDouble(items[2].AsString() ?? "0")));
+    }
+
+    /// <summary>The two balances of a <c>TRANSFER</c> or <c>HTRANSFER</c> reply; a null reply means nothing moved.</summary>
+    private static (long, long)? BalancePair(string name, RespValue reply)
+    {
+        if (reply.Kind == RespKind.Null)
+        {
+            return null;
+        }
+
+        if (reply.Items is not { Count: 2 } items || items[0].Kind is not RespKind.Integer || items[1].Kind is not RespKind.Integer)
+        {
+            throw new RuvioException($"{name} returned {reply.Kind}");
+        }
+
+        return (items[0].Integer, items[1].Integer);
     }
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]

@@ -117,6 +117,28 @@ func TestLiveRuvioExtensions(t *testing.T) {
 	_, ok, _ = c.Take(ctx, "stock", 30)
 	eq(t, ok, false)
 
+	noErr(t, c.Set(ctx, "{w}a", "10"))
+	sa, da, ok, err := c.Transfer(ctx, "{w}a", "{w}b", 4)
+	noErr(t, err)
+	eq(t, []any{sa, da, ok}, []any{int64(6), int64(4), true})
+	_, _, ok, err = c.Transfer(ctx, "{w}a", "{w}b", 7)
+	noErr(t, err)
+	eq(t, ok, false)
+	_, _, ok, _ = c.TransferMax(ctx, "{w}a", "{w}b", 3, 6)
+	eq(t, ok, false)
+	sa, da, ok, _ = c.TransferMax(ctx, "{w}a", "{w}b", 2, 6)
+	eq(t, []any{sa, da, ok}, []any{int64(4), int64(6), true})
+	if _, _, _, err = c.Transfer(ctx, "{w}a", "{w}a", 1); err == nil {
+		t.Fatal("same key must fail")
+	}
+	_, err = c.HSet(ctx, "th", "f", "10")
+	noErr(t, err)
+	sa, da, ok, err = c.HTransfer(ctx, "th", "f", "g", 4)
+	noErr(t, err)
+	eq(t, []any{sa, da, ok}, []any{int64(6), int64(4), true})
+	_, _, ok, _ = c.HTransferMax(ctx, "th", "f", "g", 3, 5)
+	eq(t, ok, false)
+
 	noErr(t, c.Set(ctx, "d", "x"))
 	eq(t, mb(c.DelIfEq(ctx, "d", "y")), false)
 	eq(t, mb(c.DelIfEq(ctx, "d", "x")), true)

@@ -266,4 +266,5 @@ mod shared_steps;
 mod stream;
 mod strings;
 mod transaction;
+mod transfer;
 mod zset;

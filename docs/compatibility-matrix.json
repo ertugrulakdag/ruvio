@@ -196,6 +196,28 @@
       ]
     },
     {
+      "name": "TRANSFER",
+      "family": "strings",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "TRANSFER source destination amount [MAX cap] subtracts a positive amount from the integer at source when it holds at least that much and adds it to destination, creating destination at amount when it is missing. Returns [source after, destination after]. A missing or short source, an addition that overflows, or a destination that would pass MAX returns a null bulk and writes nothing. Source and destination must differ and share a slot. Both keys are written as one WAL record. A non-integer is an error and a key of another type is WRONGTYPE.",
+      "coverage": [
+        "src/protocol/",
+        "src/engine/"
+      ]
+    },
+    {
+      "name": "HTRANSFER",
+      "family": "hashes",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "HTRANSFER key from to amount [MAX cap] is TRANSFER between two fields of one hash. Returns [from after, to after], or a null bulk when the key or the from field is missing or short, the addition overflows, or to would pass MAX; nothing is written then. A missing to field is created at amount. Field TTLs stay. Both fields are written as one WAL record. A field that is not an integer is an error.",
+      "coverage": [
+        "src/protocol/",
+        "src/engine/"
+      ]
+    },
+    {
       "name": "DELEX",
       "family": "strings",
       "status": "supported",

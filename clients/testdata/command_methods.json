@@ -230,6 +230,8 @@
     "SUNSUBSCRIBE": {"rust": "sunsubscribe", "csharp": "UnsubscribeShardedAsync", "go": "PubSub.SUnsubscribe", "java": "RuvioPubSub#sunsubscribe", "node": "Subscriber.sunsubscribe", "python": "PubSub.sunsubscribe"},
     "SWAPDB": {"rust": "swapdb", "csharp": "SwapDatabasesAsync", "go": "SwapDB", "java": "swapdb", "node": "swapdb", "python": "swapdb"},
     "TAKE": {"rust": "take", "csharp": "TakeAsync", "go": "Take", "java": "take", "node": "take", "python": "take"},
+    "TRANSFER": {"rust": "transfer", "csharp": "TransferAsync", "go": ["Transfer", "TransferMax"], "java": "transfer", "node": "transfer", "python": "transfer"},
+    "HTRANSFER": {"rust": "htransfer", "csharp": "TransferHashFieldAsync", "go": ["HTransfer", "HTransferMax"], "java": "htransfer", "node": "htransfer", "python": "htransfer"},
     "TOUCH": {"rust": "touch", "csharp": "TouchAsync", "go": "Touch", "java": "touch", "node": "touch", "python": "touch"},
     "TTL": {"rust": "ttl", "csharp": "GetTimeToLiveAsync", "go": "TTL", "java": "ttl", "node": "ttl", "python": "ttl"},
     "TYPE": {"rust": "key_type", "csharp": "GetKeyTypeAsync", "go": "Type", "java": "type", "node": "type", "python": "type"},
