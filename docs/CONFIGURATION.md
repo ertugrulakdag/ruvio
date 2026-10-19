@@ -475,6 +475,14 @@ before publishing `CURRENT`. `SAVE` on a primary with `hot_keys` writes the hot
 partition into the same checkpoint. A replica behind a deleted WAL prefix
 receives that checkpoint.
 
+One durability exception: a hot `SET` or `DEL` is applied to the shared store
+first and logged right after, because other shards read that store without the
+shard's lock. If that one append fails (a disk error), the writer gets `MISCONF`
+but other clients can already read the new value until a restart, which drops it.
+Later writes are refused before they touch the store, so only the write that met
+the failure is exposed. Keys outside `hot_keys` keep the usual order (checked,
+logged, then applied).
+
 `replication.role` / `RUVIO_REPLICATION_ROLE` is `off` (default), `primary`, or
 `replica`. `replication.listen` / `RUVIO_REPLICATION_LISTEN` is the primary's
 base address. `replication.primary` / `RUVIO_REPLICATION_PRIMARY` is the
