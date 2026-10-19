@@ -683,14 +683,10 @@ pub(super) async fn handle_client(
                         continue;
                     }
 
-                    if state.published_config.replication.role
-                        == crate::config::ReplicationRole::Replica
+                    if let Some(refusal) = state.write_gate.get().refusal()
                         && hot_command_mutates_store(&command)
                     {
-                        write_response(
-                            &mut output,
-                            Response::Error(crate::replication::READONLY_LINE),
-                        )?;
+                        write_response(&mut output, Response::Error(refusal))?;
                         continue;
                     }
 
@@ -1631,8 +1627,7 @@ async fn dispatch_inner<'s>(
             rate,
             security: &state.security,
             cluster: state.cluster_view().is_some(),
-            replica: state.published_config.replication.role
-                == crate::config::ReplicationRole::Replica,
+            write_refusal: state.write_gate.get().refusal(),
             replication: state.published_config.replication.role
                 != crate::config::ReplicationRole::Off,
             databases: state.published_config.protocol.databases,

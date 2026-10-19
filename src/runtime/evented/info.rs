@@ -151,7 +151,9 @@ pub(super) fn evented_info(state: &ShardState, section: Option<&[u8]>) -> io::Re
 
     write!(
         info,
-        "# Replication\r\nreplication_role:{role}\r\nwal_durable_sequence:{durable_sequence}\r\nreplication_replicas:{replica_count}\r\nreplication_replica_sequence:{replica_sequence}\r\nreplication_send_lag:{send_lag}\r\nreplica_retain_dropped:{dropped}\r\n"
+        "# Replication\r\nreplication_role:{role}\r\nwal_durable_sequence:{durable_sequence}\r\nreplication_replicas:{replica_count}\r\nreplication_replica_sequence:{replica_sequence}\r\nreplication_send_lag:{send_lag}\r\nreplica_retain_dropped:{dropped}\r\nreplication_epoch:{epoch}\r\nreplication_fenced:{fenced}\r\n",
+        epoch = state.epoch.get(),
+        fenced = u8::from(state.write_gate.get() == crate::replication::WriteGate::Fenced),
     )?;
     if state.published_config.replication.role == crate::config::ReplicationRole::Replica {
         let link = &state.replica_link;

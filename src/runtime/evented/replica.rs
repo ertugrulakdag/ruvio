@@ -21,6 +21,7 @@ pub(super) fn attach_replication(
         }
         crate::config::ReplicationRole::Primary => {
             let lineage = writer_lineage(state, shard_id)?;
+            state.epoch.set(lineage.origin.epoch);
             let Some(listen) = state.published_config.replication.listen else {
                 return Ok(None);
             };
@@ -64,6 +65,7 @@ pub(super) fn attach_replication(
                     snapshot_max_bytes: state.published_config.persistence.snapshot_max_bytes,
                     shard_count: state.published_config.shards as u32,
                     lineage,
+                    newer_epoch: Arc::clone(&state.newer_epoch),
                     snapshot_requests: Arc::clone(&state.snapshot_requests),
                 },
             )?))
@@ -113,6 +115,21 @@ pub(super) fn attach_replication(
 
 /// Shard `shard_id`'s replication address: `base`'s port plus the shard id. A port past
 /// 65535 is an error; wrapping around would bind or dial a port nobody configured.
+/// Stops a primary shard taking writes once a replica has shown it a newer epoch: another
+/// primary replaced this one. It stays fenced until the process restarts or changes role.
+pub(super) fn fence_if_replaced(state: &ShardState) {
+    if state.write_gate.get() == crate::replication::WriteGate::Open
+        && state.newer_epoch.load(Ordering::Acquire) > state.epoch.get()
+    {
+        warn!(
+            epoch = state.epoch.get(),
+            newer_epoch = state.newer_epoch.load(Ordering::Acquire),
+            "a newer primary replaced this one; refusing writes"
+        );
+        state.write_gate.set(crate::replication::WriteGate::Fenced);
+    }
+}
+
 /// The lineage this shard writes as a writer, settled before it accepts its first write: a
 /// shard promoted from replica forks here, at its last logged sequence.
 fn writer_lineage(state: &ShardState, shard_id: u32) -> io::Result<crate::replication::Lineage> {

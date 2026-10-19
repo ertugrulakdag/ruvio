@@ -103,6 +103,13 @@ struct ShardState {
     /// Signalled by that thread for every delivery, and by a drain that ran out of budget.
     replica_wake: Arc<tokio::sync::Notify>,
     replica_resync_sequence: Arc<AtomicU64>,
+    /// Whether this shard takes writes; read for every write.
+    write_gate: Cell<crate::replication::WriteGate>,
+    /// Epoch of the history this shard writes as a primary (0 otherwise).
+    epoch: Cell<u64>,
+    /// Highest epoch a refused replica followed, set by the replication thread; checked on
+    /// the maintenance tick, which fences the shard once it passes `epoch`.
+    newer_epoch: Arc<AtomicU64>,
     replica_link: Arc<crate::replication::LinkStatus>,
     /// When a replica last warned that its log refuses the primary's frames.
     replica_persist_warned: Cell<Option<Instant>>,
@@ -953,6 +960,15 @@ async fn serve_async(
         replica_wake: Arc::new(tokio::sync::Notify::new()),
         replica_link: Arc::new(crate::replication::LinkStatus::default()),
         replica_persist_warned: Cell::new(None),
+        write_gate: Cell::new(
+            if config.replication.role == crate::config::ReplicationRole::Replica {
+                crate::replication::WriteGate::Replica
+            } else {
+                crate::replication::WriteGate::Open
+            },
+        ),
+        epoch: Cell::new(0),
+        newer_epoch: Arc::new(AtomicU64::new(0)),
         replica_resync_sequence: Arc::new(AtomicU64::new(if incomplete && !force {
             u64::MAX
         } else {
@@ -1193,6 +1209,7 @@ async fn serve_async(
                 checkpoint_slice(&state);
             },
             _ = maintenance.tick() => {
+                fence_if_replaced(&state);
                 let mut store = state.store.borrow_mut();
 
                 if !state.replica_incomplete.get() {

@@ -43,6 +43,30 @@ const HISTORY_ONLY_REPLY_LEN: usize = 8 + 2 + 8 + HISTORY_LEN + CHECKSUM_LEN;
 const VERSION_MISMATCH: &str =
     "primary and replicas must run the same Ruvio version (replication handshake version mismatch)";
 pub const READONLY_LINE: &[u8] = b"READONLY You can't write against a read only replica.";
+pub const FENCED_LINE: &[u8] =
+    b"READONLY This primary was replaced: a replica has followed a newer epoch.";
+
+/// Whether a shard takes writes, and the error it answers when it does not. Read for every
+/// write command as one byte, like the role check it replaced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteGate {
+    Open,
+    /// A replica: writes come only from its primary.
+    Replica,
+    /// A primary that learned a newer epoch exists: another primary replaced it.
+    Fenced,
+}
+
+impl WriteGate {
+    /// The error a write gets, or `None` while writes are taken.
+    pub fn refusal(self) -> Option<&'static [u8]> {
+        match self {
+            Self::Open => None,
+            Self::Replica => Some(READONLY_LINE),
+            Self::Fenced => Some(FENCED_LINE),
+        }
+    }
+}
 pub const UNCOPIED_LINE: &[u8] = b"ERR replication does not copy this command";
 pub const RETRY_BACKOFF_MAX: Duration = Duration::from_secs(30);
 pub const QUEUE_FRAMES: usize = 1024;
@@ -1162,6 +1186,9 @@ pub struct Shipment {
     pub snapshot_max_bytes: u64,
     pub shard_count: u32,
     pub lineage: Lineage,
+    /// Highest epoch a refused replica has followed; above `lineage`'s, this primary was
+    /// replaced and its shard stops taking writes.
+    pub newer_epoch: Arc<AtomicU64>,
     /// Request a coordinated checkpoint after a rejected delta; never used by ordinary streams.
     pub snapshot_requests: Arc<AtomicU64>,
 }
@@ -1619,6 +1646,9 @@ fn serve_replica(
             replica_epoch = handshake.epoch,
             "a replica has seen a newer primary; this one was replaced"
         );
+        shipment
+            .newer_epoch
+            .fetch_max(handshake.epoch, Ordering::AcqRel);
         refuse_handshake(&mut stream, HandshakeStatus::Stale)?;
 
         return Ok(());

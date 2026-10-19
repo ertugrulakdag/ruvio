@@ -938,6 +938,7 @@ fn gap_handshake_leaves_the_live_generation() {
             snapshot_max_bytes: 1024 * 1024 * 1024,
             shard_count: 1,
             lineage: Lineage::root([0; HISTORY_LEN]),
+            newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
         },
     )
@@ -1039,6 +1040,7 @@ fn two_replicas_receive_the_same_appended_frame() {
             snapshot_max_bytes: 1024 * 1024 * 1024,
             shard_count: 1,
             lineage: Lineage::root([0; HISTORY_LEN]),
+            newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
         },
     )
@@ -1099,6 +1101,7 @@ fn closing_one_replica_leaves_the_other_streaming() {
             snapshot_max_bytes: 1024 * 1024 * 1024,
             shard_count: 1,
             lineage: Lineage::root([0; HISTORY_LEN]),
+            newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
         },
     )
@@ -1157,6 +1160,7 @@ fn replica_limit_closes_the_extra_connection() {
             snapshot_max_bytes: 1024 * 1024 * 1024,
             shard_count: 1,
             lineage: Lineage::root([0; HISTORY_LEN]),
+            newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
         },
     )
@@ -1227,6 +1231,7 @@ fn a_replica_that_hangs_up_on_an_idle_primary_frees_its_slot() {
             snapshot_max_bytes: 1024 * 1024 * 1024,
             shard_count: 1,
             lineage: Lineage::root([0; HISTORY_LEN]),
+            newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
         },
     )
@@ -1305,6 +1310,7 @@ fn primary_refuses_a_replica_from_another_history_or_shard_layout() {
             snapshot_max_bytes: 1024 * 1024 * 1024,
             shard_count: 2,
             lineage: Lineage::root([7; HISTORY_LEN]),
+            newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
         },
     )
@@ -1466,6 +1472,7 @@ fn idle_shipment(data_dir: &Path, history: HistoryId) -> Shipment {
         snapshot_max_bytes: 1024 * 1024,
         shard_count: 1,
         lineage: Lineage::root(history),
+        newer_epoch: Arc::new(AtomicU64::new(0)),
         snapshot_requests: Arc::new(AtomicU64::new(0)),
     }
 }
@@ -2161,6 +2168,7 @@ fn a_primary_refuses_a_replica_that_followed_a_newer_epoch() {
     let mut shipment = idle_shipment(directory.path(), [7; HISTORY_LEN]);
 
     shipment.lineage.origin.epoch = 2;
+    let newer_epoch = Arc::clone(&shipment.newer_epoch);
     let shipment = Arc::new(shipment);
     let accept_stop = Arc::clone(&stop);
     let primary = thread::spawn(move || accept_replicas(listener, shipment, accept_stop));
@@ -2186,6 +2194,8 @@ fn a_primary_refuses_a_replica_that_followed_a_newer_epoch() {
             .0,
         HandshakeStatus::Stale
     );
+    // The shard reads it on its next maintenance tick and stops taking writes.
+    assert_eq!(newer_epoch.load(Ordering::Acquire), 3);
 
     stop.store(true, Ordering::Release);
     join_within(primary).unwrap();
