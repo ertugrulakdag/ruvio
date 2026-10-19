@@ -1,6 +1,6 @@
 //! Live tests for the commands and helpers added for full matrix coverage. Runs only when
 //! `RUVIO_TEST_ADDR` is set (e.g. `RUVIO_TEST_ADDR=127.0.0.1:17101 cargo test`). Each test
-//! owns one logical database (8 to 14, and 0 for `JSON.INDEX`, which is database-0 only) and
+//! owns one logical database (6 to 15, and 0 for `JSON.INDEX`, which is database-0 only) and
 //! flushes it first.
 
 mod common;
@@ -1075,7 +1075,7 @@ fn helpers_cache_idempotency_recent() {
 
 #[test]
 fn limit_sliding_and_tokens_modes() {
-    let Some(mut db) = connect(14) else { return };
+    let Some(mut db) = connect(7) else { return };
 
     assert_eq!(db.limit_sliding("rl:s", 2, 60_000).unwrap(), Some(1));
     assert_eq!(db.limit_sliding("rl:s", 2, 60_000).unwrap(), Some(0));
