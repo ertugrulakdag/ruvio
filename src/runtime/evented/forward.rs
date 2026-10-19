@@ -1862,6 +1862,7 @@ pub(super) async fn forward_special(
             pattern,
             count,
             type_name,
+            slot: None,
         } if state.single_port => {
             scan_all(
                 state,
@@ -1989,6 +1990,7 @@ async fn scan_all(
             pattern: pattern.map(std::borrow::Cow::Borrowed),
             count,
             type_name: type_name.map(std::borrow::Cow::Borrowed),
+            slot: None,
         };
         let mut local_out = BoundedOutput::with_capacity(0, usize::MAX);
 

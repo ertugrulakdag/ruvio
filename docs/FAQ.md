@@ -112,6 +112,12 @@ and the `SlotTable` filled from it). Every client library has its own copy of
 reaches the wrong shard anyway, the server forwards it to the owner and answers
 on the same connection.
 
+### How do I list the keys of one slot?
+
+`SCAN 0 SLOT <slot> COUNT 1000`, then again with the returned cursor until it is `0`. Send it to any
+port: it runs on the shard that owns the slot. There is no per-slot key index (it would cost memory
+for every key), so the walk visits the whole shard in steps and a page may be empty before the end.
+
 ### How do I find out which shard holds a key?
 
 Ask the server for the slot, then look it up in the slot ranges:
