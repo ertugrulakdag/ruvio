@@ -50,6 +50,17 @@ let top = db.zrevrange_with_scores("leaderboard", 0, 9)?;
 | `execute_many` (a pipeline) | Commands are grouped per node and replies come back in command order. A cross-slot split command is split as above and its merged reply sits at its index; any other cross-slot command gets the `CROSSSLOT` error at its index and the rest of the pipeline still runs. A pipeline holding `MULTI` goes to one node and must stay in one slot. |
 | `execute_binary` | Routed by the second argument; no splitting or cross-slot check. |
 
+### Seed addresses
+
+`ClientOptions::seeds` lists `(host, port)` pairs to use instead of `host` and `port`. Connecting tries them in order and keeps the first that answers; a seed that cannot be reached is skipped, a refused `AUTH` stops at once. After a dropped connection each reconnect attempt tries every seed once, starting with the one after the address that dropped, so a client follows a primary that was moved by hand. In cluster mode the slot map comes from the first reachable seed; when a node is gone and no open socket answers `CLUSTER SLOTS`, the other known nodes and then the seeds are asked. The command that hits the drop still fails. The same rules hold in every client ([docs/CLIENT_BEHAVIOR.md](../../docs/CLIENT_BEHAVIOR.md)).
+
+```rust
+let mut client = Client::connect_with(ClientOptions {
+    seeds: vec![("10.0.0.5".into(), 6379), ("10.0.0.6".into(), 6379)],
+    ..ClientOptions::default()
+})?;
+```
+
 A standalone client is bound to one logical database. Database 0 sends nothing after discovery. Any other index sends `SELECT` before the connect call returns. Cluster mode has only database 0.
 
 ```rust

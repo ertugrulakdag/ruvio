@@ -22,6 +22,16 @@ public sealed class RuvioClientOptions
     /// <summary>RESP port. Defaults to 6379.</summary>
     public int Port { get; set; } = 6379;
 
+    /// <summary>
+    /// Seed addresses as <c>host:port</c> strings (an IPv6 host in brackets, <c>[::1]:6379</c>). Empty by
+    /// default. When it is not empty it replaces <see cref="Host"/> and <see cref="Port"/>: connect tries the
+    /// seeds in order, one attempt each, and keeps the first that answers; a seed that cannot be reached is
+    /// skipped, while a refused <c>AUTH</c> or <c>SELECT</c> stops at once. A standalone reconnect tries every
+    /// seed once per attempt, starting with the one after the address that dropped. In a cluster the seeds are
+    /// asked for the slot map when no known node answers.
+    /// </summary>
+    public List<string> Seeds { get; set; } = [];
+
     /// <summary>ACL user. When set together with <see cref="Password"/>, the client sends <c>AUTH user password</c>.</summary>
     public string? Username { get; set; }
 
@@ -87,6 +97,61 @@ public sealed class RuvioClientOptions
     /// Return null to stop. When this is set, <see cref="MaxReconnectAttempts"/> is not applied.
     /// </summary>
     public Func<int, TimeSpan?>? ReconnectDelay { get; set; }
+}
+
+/// <summary>Reads and checks the <c>host:port</c> entries of <see cref="RuvioClientOptions.Seeds"/>.</summary>
+internal static class SeedAddresses
+{
+    /// <summary>The parsed seeds; empty when none are configured.</summary>
+    public static (string Host, int Port)[] Parse(RuvioClientOptions options)
+    {
+        List<string>? seeds = options.Seeds;
+
+        if (seeds is not { Count: > 0 })
+        {
+            return [];
+        }
+
+        var parsed = new (string Host, int Port)[seeds.Count];
+
+        for (int index = 0; index < parsed.Length; index++)
+        {
+            parsed[index] = ParseOne(seeds[index]);
+        }
+
+        return parsed;
+    }
+
+    private static (string Host, int Port) ParseOne(string? entry)
+    {
+        string text = entry?.Trim() ?? "";
+        int colon = text.LastIndexOf(':');
+
+        if (colon < 0)
+        {
+            throw new ArgumentException($"Seed \"{text}\" must be host:port.", nameof(RuvioClientOptions.Seeds));
+        }
+
+        string host = text[..colon];
+
+        if (host.Length > 1 && host[0] == '[' && host[^1] == ']')
+        {
+            host = host[1..^1];
+        }
+
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            throw new ArgumentException($"Seed \"{text}\" has an empty host.", nameof(RuvioClientOptions.Seeds));
+        }
+
+        if (!int.TryParse(text[(colon + 1)..], System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out int port) || port is < 1 or > 65535)
+        {
+            throw new ArgumentOutOfRangeException(nameof(RuvioClientOptions.Seeds), $"Seed \"{text}\" must have a port between 1 and 65535.");
+        }
+
+        return (host, port);
+    }
 }
 
 /// <summary>A command or subscriber socket dropped, or came back.</summary>

@@ -37,6 +37,8 @@ export class RuvioError extends Error {
  * its own. The low-level cause, if any, is in `cause`.
  */
 export class ConnectionError extends Error {
+  /** @internal Set when opening the connection failed (as opposed to an established connection dropping). */
+  unreachable = false;
   override get name(): string {
     return 'ConnectionError';
   }

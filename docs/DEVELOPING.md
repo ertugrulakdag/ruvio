@@ -16,7 +16,7 @@ Where the code lives, how to check a change quickly, and every place a new comma
 | `Directory.Build.props`, `Directory.Packages.props` | Settings and package metadata shared by every .NET project, and the one version of each NuGet dependency (a `PackageReference` has no `Version`) |
 | `docs/` | Reference docs and `compatibility-matrix.json`, the list of supported commands |
 | `scripts/` | Local gates, release helpers, fault and benchmark harnesses ([scripts/README.md](../scripts/README.md)) |
-| `site-next/` | The website ([ruviodb.com](https://ruviodb.com)): Astro, docs generated from `docs/`, `clients/` and `integrations/` by `scripts/sync-docs.mjs`; published by the manual `site-azure` workflow. Measurement records it charts are in `benchmark/records/` |
+| `site-next/` | The website ([ruviodb.com](https://ruviodb.com)): Astro, docs generated from `docs/`, `clients/` and `integrations/` by `scripts/sync-docs.mjs`; the `/changelog/` page shows the newest sections of the server's `CHANGELOG.md` and is built from the first-parent history of `main` and `dev` and the release tags by `scripts/changelog.mjs`, 100 entries per page, with a search that fetches `/changelog/entries.json` on first use (a shallow clone gets a page that links to GitHub instead); published by the manual `site-azure` workflow. Measurement records it charts are in `benchmark/records/` |
 | `.github/workflows/` | `pr-gate` runs on pull requests and pushes to `main`; every other workflow is started by hand |
 
 ## Server module map

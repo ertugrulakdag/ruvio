@@ -4,6 +4,7 @@ Notable changes to the Node.js client `ruvio-client` on npm. New entries go unde
 
 ## Unreleased
 
+- `seeds` option (`host:port` strings) on every client: tried in order instead of `host`/`port`. A dropped connection reconnects starting with the next seed; a cluster reloads its slot map from the other known nodes and then the seeds when no open socket answers. `seeds` with `path` throws `TypeError`.
 - TTL on create: an optional `ttl` (seconds; whole numbers send `EX`, fractions send `PX`) on `incr`, `decr`, `incrby`, `decrby`, `incrbyMax`, `incrbyfloat`, `hincrby`, `zincrby`, `setbit`, `jsonSet`, `jsonSetAs`, and in `ZAddOptions`, `GeoAddOptions` (new type), `XAddOptions` and `BfInsertOptions`. The deadline is set only when the call creates the key. A `ttl` that is not positive and finite rejects with `RangeError` before anything is sent. New `TtlOptions` type.
 - `expire`, `pexpire`, `expireat` and `pexpireat` take an optional trailing `ExpireCondition` (`NX`, `XX`, `GT`, `LT`).
 - `zpopbyscore` and `zmovedue` send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call.

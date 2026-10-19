@@ -187,6 +187,7 @@ class ClusterRuvio(Ruvio):
         o = _Options(**self._st.opts.as_dict())
         o.host = host
         o.port = port
+        o.seeds = None
         return _Node(host, port, o)
 
     async def _discover(self) -> None:
@@ -203,15 +204,40 @@ class ClusterRuvio(Ruvio):
             except ResponseError:
                 c.mode = 2
                 return
+            self._follow_seed()
             topo = cl.parse_slots(reply, c.seed.host)
             if topo is None or len(topo.nodes) < 2:
                 c.mode = 2
                 return
+            self._detach_seed_list()
             proto = self._st.proto
             if proto is not None:
                 self._adopt_seed(proto)
             self._apply(topo)
             c.mode = 1
+
+    def _follow_seed(self) -> None:
+        """Points the seed node at the address of the seed the base connection is on."""
+        st = self._st
+        seeds = st.opts.seeds
+        if not seeds or st.cur.at < 0:
+            return
+        host, port = seeds[st.cur.at]
+        seed = self._cl.seed
+        if (host, port) != (seed.host, seed.port):
+            by = self._cl.by_addr
+            if by.get((seed.host, seed.port)) is seed:
+                del by[(seed.host, seed.port)]
+            seed.host, seed.port = host, port
+            by[(host, port)] = seed
+
+    def _detach_seed_list(self) -> None:
+        """In cluster mode the seed node reconnects to its own address, not through the seed list."""
+        seed = self._cl.seed
+        if seed.opts.seeds:
+            o = _Options(**seed.opts.as_dict())
+            o.host, o.port, o.seeds = seed.host, seed.port, None
+            seed.opts = o
 
     def _adopt_seed(self, proto: Any) -> None:
         seed = self._cl.seed
@@ -254,21 +280,47 @@ class ClusterRuvio(Ruvio):
         c.targets = [*nodes, c.seed]
 
     async def _refresh(self) -> bool:
+        """Reloads the slot table. Nodes with an open connection are asked first; when none answers,
+        every other known node and then every seed is opened (one connect attempt each) until one
+        returns a slot table. A seed that was only opened for this reload does not stay in the node list."""
         c = self._cl
+        known: List[_Node] = []
         seen = set()
-        for node in [c.seed, *c.nodes]:
-            if id(node) in seen:
-                continue
-            seen.add(id(node))
-            try:
-                reply = await self._send(node, cl.CLUSTER_SLOTS, None, True)
-            except (ConnectionError, OSError, ResponseError):
-                continue
-            topo = cl.parse_slots(reply, c.seed.host)
-            if topo is not None:
-                self._apply(topo)
+        for node in [c.seed, *c.nodes, *c.by_addr.values()]:
+            if id(node) not in seen:
+                seen.add(id(node))
+                known.append(node)
+        for node in known:
+            if node.proto is not None and not node.proto.closed and await self._ask_slots(node):
                 return True
+        for node in known:
+            if (node.proto is None or node.proto.closed) and await self._ask_slots(node):
+                return True
+        for host, port in self._st.opts.seeds or ():
+            if (host, port) in c.by_addr:
+                continue
+            node = self._new_node(host, port)
+            c.by_addr[(host, port)] = node
+            if await self._ask_slots(node):
+                return True
+            proto, node.proto = node.proto, None
+            if proto is not None and proto.transport is not None:
+                proto.on_lost = None
+                proto.transport.close()
+            if c.by_addr.get((host, port)) is node:
+                del c.by_addr[(host, port)]
         return False
+
+    async def _ask_slots(self, node: _Node) -> bool:
+        try:
+            reply = await self._send(node, cl.CLUSTER_SLOTS, None, True)
+        except (ConnectionError, OSError, ResponseError):
+            return False
+        topo = cl.parse_slots(reply, node.host)
+        if topo is None:
+            return False
+        self._apply(topo)
+        return True
 
     async def refresh_slots(self) -> None:
         """Re-reads ``CLUSTER SLOTS`` and rebuilds the slot table.
@@ -355,7 +407,7 @@ class ClusterRuvio(Ruvio):
             node = c.targets[ni]
             proto = node.proto
             if proto is None or proto.closed:
-                proto = await self._open_node(node)
+                proto = await self._open_target(ni, data)
             fut = proto.loop.create_future()
             proto.pending.append((fut, conv, dec))
             proto.send(data)
@@ -365,6 +417,53 @@ class ClusterRuvio(Ruvio):
                 return await self._redirect(err, data, conv, dec, False)
         name, _ = _frame_head(data)
         return await self._special(name.upper(), data, conv, dec)
+
+    async def _open_target(self, ni: int, data: bytes) -> Any:
+        """Opens the connection of target ``ni`` for an ordinary command. When the node cannot be
+        reached the slot table is reloaded and the command goes to the owner the new table names (a
+        keyless one to the first reachable node)."""
+        c = self._cl
+        try:
+            return await self._open_node(c.targets[ni])
+        except ConnectionError as exc:
+            error = exc
+        if not await self._refresh():
+            raise error
+        ni2 = cl.node_index(data, c.slots)
+        if ni2 is None or ni2 < 0:
+            return await self._first_reachable(error)
+        return await self._open_node(c.targets[ni2])
+
+    async def _open_owner(self, slot: Optional[int]) -> _Node:
+        """Like :meth:`_open_target` for a slot (``None`` = keyless); returns the node that is open."""
+        c = self._cl
+        node = self._owner(slot)
+        try:
+            await self._open_node(node)
+            return node
+        except ConnectionError as exc:
+            error = exc
+        if not await self._refresh():
+            raise error
+        if slot is None or c.slots[slot] < 0:
+            await self._first_reachable(error)
+            return c.seed
+        node = self._owner(slot)
+        await self._open_node(node)
+        return node
+
+    async def _first_reachable(self, error: BaseException) -> Any:
+        """The first node of the reloaded table that opens becomes the keyless-command node."""
+        c = self._cl
+        for node in c.nodes:
+            try:
+                proto = await self._open_node(node)
+            except (ConnectionError, ResponseError):
+                continue
+            c.seed = node
+            c.targets[-1] = node
+            return proto
+        raise error
 
     async def _redirect(self, err: MovedError, data: bytes, conv: Conv, dec: bool, blocking: bool) -> Any:
         """``-MOVED``: re-sends the command to the node the reply names, at most
@@ -404,6 +503,8 @@ class ClusterRuvio(Ruvio):
         try:
             if blocking:
                 return await self._send_blocking(node, data, conv, dec)
+            if node.proto is None or node.proto.closed:
+                node = await self._open_owner(slot)
             return await self._send(node, data, conv, dec)
         except MovedError as err:
             return await self._redirect(err, data, conv, dec, blocking)
@@ -712,7 +813,11 @@ Classic subscriptions live on the owner of slot 0, sharded ones on the channel's
         node = client._owner(0) if c.mode == 1 else c.seed
         opts = _Options(**client._st.opts.as_dict())
         opts.host, opts.port = node.host, node.port
+        if c.mode == 1:
+            opts.seeds = None
         super().__init__(opts, client._decode, ignore_subscribe_messages)
+        if c.mode != 1:
+            self._cur.pos = client._st.cur.resume()
         self._client = client
 
     async def ssubscribe(self, *channels: Any) -> None:

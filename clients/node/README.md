@@ -152,6 +152,20 @@ only for a possible `MOVED` retry.
 - Introspection: `c.isCluster`, `c.nodes`, `c.nodeFor(key)` (a node with its own `RuvioClient`), `c.slotOf(key)`, `c.refreshSlots()`, `c.redirectCount`, `c.refreshCount`.
 - `hashSlot(key)` is exported and is checked against `CLUSTER KEYSLOT` in the live tests. Cluster mode has database 0 only (`SELECT` is not routed).
 
+## Seed addresses
+
+`seeds` lists addresses (`host:port`, IPv6 as `[::1]:6379`) in place of `host` and `port`. Without it nothing changes.
+
+```ts
+const client = createClient({ seeds: ['10.0.0.1:6379', '10.0.0.2:6379'] });
+const cluster = createClusterClient({ seeds: ['10.0.0.1:7000', '10.0.0.2:7000', '10.0.0.3:7000'] });
+```
+
+- Connecting tries the seeds in order, one connect attempt each, and keeps the first that answers. A seed that cannot be reached is skipped; a refused `AUTH` stops at once. When none answers, the last connect error is returned.
+- After a dropped connection the next connect starts with the seed after the one that dropped and goes round the whole list. The command that hit the drop still rejects, and a `subscriber()` starts at the seed the command connection is on.
+- `ClusterClient` reads the slot table from the first reachable seed. A reload asks the open node connections first; when none answers it opens the other known nodes and then the seeds, and a command whose node cannot be opened goes to the owner the new table names. Seeds that cannot be opened do not stay in `c.nodes`.
+- `seeds` cannot be combined with `path`; an empty host or an invalid port throws a `TypeError` when the client is created.
+
 ## Tests and benchmark
 
 ```sh

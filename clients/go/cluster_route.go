@@ -75,13 +75,25 @@ func (cl *cluster) run(ctx context.Context, t *topology, slot int, r *request, b
 // redirect patches the slot and goes to the node the MOVED named; from the second
 // on it also reloads the table. It recycles r.
 func (cl *cluster) send(ctx context.Context, node *Client, r *request, blocking bool, redirects int) (Value, error) {
+	reloaded := false
 	for {
-		ok, err := node.rt(ctx, r, blocking)
+		ok, err := node.rt(ctx, r, blocking, !reloaded)
 		if !ok {
 			return Value{}, err
 		}
 		if r.err != nil {
 			err := r.err
+			if !reloaded && isConnectError(err) {
+				// The node cannot be opened: reload the slot map from the other nodes and
+				// the seeds, and send the command to the node the new map names.
+				reloaded = true
+				if nn := cl.reloadNode(ctx, r); nn != nil {
+					node = nn
+					r.val, r.vals, r.err = Value{}, nil, nil
+					r.state.Store(stateWaiting)
+					continue
+				}
+			}
 			putReq(r)
 			return Value{}, err
 		}
@@ -107,6 +119,32 @@ func (cl *cluster) send(ctx context.Context, node *Client, r *request, blocking 
 		putReq(r)
 		return v, nil
 	}
+}
+
+// reloadNode reloads the slot table after a node could not be opened and returns the node
+// that should now get r: the owner of its slot, or for a keyless command the first node of
+// the new table that can be opened. It returns nil when the table cannot be reloaded.
+func (cl *cluster) reloadNode(ctx context.Context, r *request) *Client {
+	_, slot, _, err := routeFrame(r.buf)
+	if err != nil {
+		return nil
+	}
+	if _, err := cl.refresh(ctx, false); err != nil {
+		return nil
+	}
+	t := cl.t.Load()
+	if t == nil {
+		return nil
+	}
+	if slot >= 0 {
+		return t.nodeAt(slot, cl.seed)
+	}
+	for _, n := range t.nodes {
+		if _, err := n.shared(ctx); err == nil {
+			return n
+		}
+	}
+	return nil
 }
 
 // redirect resends the command in r after its first -MOVED reply mv (from a pipelined

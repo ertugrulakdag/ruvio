@@ -136,6 +136,7 @@ type conn struct {
 	rwake     chan struct{}
 	quit      chan struct{}
 	onPush    func(Value)
+	addr      int32                     // index of the dialed address in Client.addrs
 	sink      atomic.Pointer[sinkFuncs] // Pub/Sub mode: every reply goes here
 
 	// read state, owned by the holder of the reading token
