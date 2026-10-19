@@ -42,6 +42,18 @@ func TestLiveStrings(t *testing.T) {
 	v, _, _ = c.Get(ctx, "a")
 	eq(t, v, "5")
 
+	// SET ... IFGT / IFLT
+	eq(t, mb(c.SetIfGreater(ctx, "wm", 10, SetOptions{})), true)
+	eq(t, mb(c.SetIfGreater(ctx, "wm", 10, SetOptions{})), false)
+	eq(t, mb(c.SetIfGreater(ctx, "wm", 11, SetOptions{TTL: time.Minute})), true)
+	if mi(c.TTL(ctx, "wm")) <= 0 {
+		t.Fatal("IFGT lost ttl")
+	}
+	eq(t, mb(c.SetIfLess(ctx, "wm", 12, SetOptions{})), false)
+	eq(t, mb(c.SetIfLess(ctx, "wm", -1, SetOptions{})), true)
+	v, _, _ = c.Get(ctx, "wm")
+	eq(t, v, "-1")
+
 	noErr(t, c.SetEX(ctx, "ex", "v", 100*time.Second))
 	if n := mi(c.TTL(ctx, "ex")); n < 99 || n > 100 {
 		t.Fatalf("setex ttl %d", n)
@@ -115,6 +127,28 @@ func TestLiveRuvioExtensions(t *testing.T) {
 	noErr(t, err)
 	eq(t, []any{rem, ok}, []any{int64(7), true})
 	_, ok, _ = c.Take(ctx, "stock", 30)
+	eq(t, ok, false)
+
+	noErr(t, c.Set(ctx, "{w}a", "10"))
+	sa, da, ok, err := c.Transfer(ctx, "{w}a", "{w}b", 4)
+	noErr(t, err)
+	eq(t, []any{sa, da, ok}, []any{int64(6), int64(4), true})
+	_, _, ok, err = c.Transfer(ctx, "{w}a", "{w}b", 7)
+	noErr(t, err)
+	eq(t, ok, false)
+	_, _, ok, _ = c.TransferMax(ctx, "{w}a", "{w}b", 3, 6)
+	eq(t, ok, false)
+	sa, da, ok, _ = c.TransferMax(ctx, "{w}a", "{w}b", 2, 6)
+	eq(t, []any{sa, da, ok}, []any{int64(4), int64(6), true})
+	if _, _, _, err = c.Transfer(ctx, "{w}a", "{w}a", 1); err == nil {
+		t.Fatal("same key must fail")
+	}
+	_, err = c.HSet(ctx, "th", "f", "10")
+	noErr(t, err)
+	sa, da, ok, err = c.HTransfer(ctx, "th", "f", "g", 4)
+	noErr(t, err)
+	eq(t, []any{sa, da, ok}, []any{int64(6), int64(4), true})
+	_, _, ok, _ = c.HTransferMax(ctx, "th", "f", "g", 3, 5)
 	eq(t, ok, false)
 
 	noErr(t, c.Set(ctx, "d", "x"))

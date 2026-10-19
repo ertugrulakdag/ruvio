@@ -10,6 +10,14 @@ public sealed partial class RuvioClient
         => RespRead.NotNull(ExecuteCommandAsync(CoverageCommands.SetIfEqual(key, value, expected, expiry), cancellationToken));
 
     /// <inheritdoc />
+    public ValueTask<bool> SetIfGreaterAsync(string key, long value, TimeSpan? expiry = null, CancellationToken cancellationToken = default)
+        => RespRead.NotNull(ExecuteCommandAsync(CoverageCommands.SetIfGreater(key, value, expiry), cancellationToken));
+
+    /// <inheritdoc />
+    public ValueTask<bool> SetIfLessAsync(string key, long value, TimeSpan? expiry = null, CancellationToken cancellationToken = default)
+        => RespRead.NotNull(ExecuteCommandAsync(CoverageCommands.SetIfLess(key, value, expiry), cancellationToken));
+
+    /// <inheritdoc />
     public ValueTask<bool> SetIfEqualKeepingTimeToLiveAsync(string key, string value, string expected, CancellationToken cancellationToken = default)
         => RespRead.NotNull(ExecuteCommandAsync(CoverageCommands.SetIfEqualKeepingTimeToLive(key, value, expected), cancellationToken));
 

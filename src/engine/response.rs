@@ -89,6 +89,8 @@ pub enum Response<'a> {
     /// What a sorted-set pop took, each member followed by its score, after the key when
     /// one is given (`BZPOPMIN`). Written as `Scored(_, true)` is.
     Popped(Option<crate::protocol::Bytes<'a>>, PoppedEntries),
+    /// What `ZPOPBYSCORE` took: members, each followed by its score when the flag is set.
+    PoppedByScore(PoppedEntries, bool),
     /// A hash written straight from the store: pairs as a map, or only fields or values.
     HashEntries(crate::store::HashStream<'a>, crate::store::HashStreamKind),
     Double(f64),
@@ -189,6 +191,9 @@ impl Response<'_> {
             }
             Self::Popped(key, entries) => {
                 Response::Popped(key.map(|key| Cow::Owned(key.into_owned())), entries)
+            }
+            Self::PoppedByScore(entries, with_scores) => {
+                Response::PoppedByScore(entries, with_scores)
             }
             Self::HashEntries(stream, kind) => {
                 use crate::store::HashStreamKind;
@@ -347,6 +352,18 @@ pub fn write_response_in(
             for (member, score) in entries.iter() {
                 write_bulk(writer, member)?;
                 write_score_bulk(writer, score)?;
+            }
+        }
+
+        Response::PoppedByScore(entries, with_scores) => {
+            write_header(writer, b'*', entries.len() * (1 + usize::from(with_scores)))?;
+
+            for (member, score) in entries.iter() {
+                write_bulk(writer, member)?;
+
+                if with_scores {
+                    write_score_bulk(writer, score)?;
+                }
             }
         }
 

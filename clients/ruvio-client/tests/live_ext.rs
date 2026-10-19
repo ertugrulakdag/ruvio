@@ -60,6 +60,17 @@ fn ruvio_extension_strings_and_set_ifeq() {
     assert!(db.set_if_eq_keep_ttl("k", "v3", "v2").unwrap());
     assert!(db.pttl("k").unwrap() > 0);
     assert!(!db.set_if_eq("missing", "x", "y", None).unwrap());
+
+    assert!(db.set_if_greater("wm", 10, None).unwrap());
+    assert!(!db.set_if_greater("wm", 10, None).unwrap());
+    assert!(
+        db.set_if_greater("wm", 11, Some(Duration::from_secs(60)))
+            .unwrap()
+    );
+    assert!(db.pttl("wm").unwrap() > 0);
+    assert!(!db.set_if_less("wm", 12, None).unwrap());
+    assert!(db.set_if_less("wm", -1, None).unwrap());
+    assert_eq!(db.get("wm").unwrap(), Some(b"-1".to_vec()));
     assert!(!db.delex("k", "v2").unwrap());
     assert!(db.delex("k", "v3").unwrap());
     assert_eq!(db.exists_key("k").unwrap(), 0);
@@ -1077,4 +1088,29 @@ fn limit_sliding_and_tokens_modes() {
     let taken = db.limit_tokens_with_retry("rl:t", 5, 60_000, 3).unwrap();
     assert!(taken.allowed && taken.remaining == 0 && taken.retry_after_ms == 0);
     assert_eq!(db.limit_tokens("rl:t", 5, 60_000, 1).unwrap(), None);
+
+fn transfer_and_htransfer_move_amounts_atomically() {
+    let Some(mut db) = connect(6) else { return };
+
+    db.set("{w}:a", "10").unwrap();
+    assert_eq!(
+        db.transfer("{w}:a", "{w}:b", 4, None).unwrap(),
+        Some((6, 4))
+    );
+    assert_eq!(db.transfer("{w}:a", "{w}:b", 7, None).unwrap(), None);
+    assert_eq!(db.transfer("{w}:a", "{w}:b", 3, Some(6)).unwrap(), None);
+    assert_eq!(
+        db.transfer("{w}:a", "{w}:b", 2, Some(6)).unwrap(),
+        Some((4, 6))
+    );
+    assert_eq!(db.transfer("{w}:none", "{w}:b", 1, None).unwrap(), None);
+    assert_eq!(db.get("{w}:a").unwrap().as_deref(), Some(&b"4"[..]));
+    assert!(db.transfer("{w}:a", "{w}:a", 1, None).is_err());
+    assert!(db.transfer("{w}:a", "{w}:b", 0, None).is_err());
+
+    db.hset("h", &[("f", "10")]).unwrap();
+    assert_eq!(db.htransfer("h", "f", "g", 4, None).unwrap(), Some((6, 4)));
+    assert_eq!(db.htransfer("h", "f", "g", 7, None).unwrap(), None);
+    assert_eq!(db.htransfer("h", "f", "g", 2, Some(5)).unwrap(), None);
+    assert_eq!(db.hget("h", "g").unwrap().as_deref(), Some("4"));
 }

@@ -170,6 +170,68 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
     }
 
     /**
+     * Sends the Ruvio command {@code SET key value IFGT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is greater than the stored integer (a watermark, a version, the highest bid).
+     * Any TTL is cleared; use the overload with {@code SetOptions} to set one.
+     *
+     * <pre>{@code
+     * boolean advanced = client.setIfGreater("watermark", 1_700_000_000L);
+     * }</pre>
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @return {@code true} when the value was written, {@code false} when the stored number is greater or equal
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-string; an error when the stored string is not an integer
+     */
+    public CompletableFuture<Boolean> setIfGreater(K key, long value) {
+        return send(args().w(Cmd.SET).k(key).l(value).w(Cmd.IFGT), Reply.OK_BOOL);
+    }
+
+    /**
+     * Sends the Ruvio command {@code SET key value IFGT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is greater than the stored integer (a watermark, a version, the highest bid).
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @param expiry the expiry to apply
+     * @return {@code true} when written, {@code false} when refused
+     */
+    public CompletableFuture<Boolean> setIfGreater(K key, long value, SetOptions expiry) {
+        Args a = args().w(Cmd.SET).k(key).l(value).w(Cmd.IFGT);
+        expiry.writeExpiry(a);
+        return send(a, Reply.OK_BOOL);
+    }
+
+    /**
+     * Sends the Ruvio command {@code SET key value IFLT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is smaller than the stored integer (the lowest price, the earliest deadline).
+     * Any TTL is cleared; use the overload with {@code SetOptions} to set one.
+     *
+     * <pre>{@code
+     * boolean lowered = client.setIfLess("best:price", 4_99L);
+     * }</pre>
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @return {@code true} when the value was written, {@code false} when the stored number is smaller or equal
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-string; an error when the stored string is not an integer
+     */
+    public CompletableFuture<Boolean> setIfLess(K key, long value) {
+        return send(args().w(Cmd.SET).k(key).l(value).w(Cmd.IFLT), Reply.OK_BOOL);
+    }
+
+    /**
+     * Sends the Ruvio command {@code SET key value IFLT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is smaller than the stored integer (the lowest price, the earliest deadline).
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @param expiry the expiry to apply
+     * @return {@code true} when written, {@code false} when refused
+     */
+    public CompletableFuture<Boolean> setIfLess(K key, long value, SetOptions expiry) {
+        Args a = args().w(Cmd.SET).k(key).l(value).w(Cmd.IFLT);
+        expiry.writeExpiry(a);
+        return send(a, Reply.OK_BOOL);
+    }
+
+    /**
      * Sends the Ruvio command {@code SETV key value}: starts a versioned string and returns its version.
      * It works on a missing key or a plain string (the key becomes versioned, version 1). Once a key is
      * versioned, later writes must use {@link #setv(Object, Object, long)} with the current version.
@@ -225,6 +287,46 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
      */
     public CompletableFuture<Long> take(K key, long count) {
         return kl(Cmd.TAKE, key, count, Reply.LONG);
+    }
+
+    /**
+     * Sends the Ruvio command {@code TRANSFER source destination amount}: moves {@code amount} from the
+     * integer at {@code source} to the integer at {@code destination} in one step, only when {@code source}
+     * holds at least that much. A missing {@code destination} starts at 0. Both writes are one WAL record.
+     *
+     * <pre>{@code
+     * client.set("{u}:wallet", "50");
+     * List<Long> after = client.transfer("{u}:wallet", "{u}:escrow", 30); // [20, 30]
+     * List<Long> none = client.transfer("{u}:wallet", "{u}:escrow", 30);  // null, nothing changed
+     * }</pre>
+     *
+     * @param source the key to subtract from (a decimal integer string)
+     * @param destination the key to add to; in a cluster it must share a slot with {@code source}
+     * (use a hash tag such as {@code {user:42}})
+     * @param amount the amount to move; must be greater than zero
+     * @return {@code [sourceAfter, destinationAfter]}, or {@code null} when {@code source} is missing or
+     * short, or {@code destination} would overflow (nothing is written)
+     * @throws RuvioServerException {@code ERR} when {@code amount} is not positive, the keys are the same or a
+     * value is not an integer; {@code WRONGTYPE} for a non-string; {@code CROSSSLOT} when the keys are in different slots
+     */
+    public CompletableFuture<List<Long>> transfer(K source, K destination, long amount) {
+        return send(args().w(Cmd.TRANSFER).k(source).k(destination).l(amount), Reply.LONG_PAIR);
+    }
+
+    /**
+     * Sends the Ruvio command {@code TRANSFER source destination amount MAX max}: {@link #transfer(Object, Object, long)}
+     * that also refuses when {@code destination} would end above {@code max}.
+     *
+     * @param source the key to subtract from (a decimal integer string)
+     * @param destination the key to add to; in a cluster it must share a slot with {@code source}
+     * @param amount the amount to move; must be greater than zero
+     * @param max the highest value {@code destination} may reach
+     * @return {@code [sourceAfter, destinationAfter]}, or {@code null} when nothing was moved
+     * @throws RuvioServerException {@code ERR} when {@code amount} is not positive, the keys are the same or a
+     * value is not an integer; {@code WRONGTYPE} for a non-string; {@code CROSSSLOT} when the keys are in different slots
+     */
+    public CompletableFuture<List<Long>> transfer(K source, K destination, long amount, long max) {
+        return send(args().w(Cmd.TRANSFER).k(source).k(destination).l(amount).w(Cmd.MAX).l(max), Reply.LONG_PAIR);
     }
 
     /**

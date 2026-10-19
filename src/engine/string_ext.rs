@@ -262,3 +262,59 @@ mod tests {
         }
     }
 }
+
+pub(super) fn transfer<'a, C: Clock, I: StorageIndex, S: MutationSink>(
+    shard: &'a mut KvShard<C, I>,
+    sink: &mut S,
+    source: crate::protocol::Bytes<'a>,
+    destination: crate::protocol::Bytes<'a>,
+    amount: i64,
+    max: Option<i64>,
+) -> Result<Response<'a>, S::Error> {
+    let (from, to) = match shard.preview_transfer(&source, &destination, amount, max) {
+        Ok(Some(balances)) => balances,
+        Ok(None) => return Ok(Response::Bulk(None)),
+        Err(error) => return Ok(increment_error(error)),
+    };
+
+    let extra = if shard.contains_key(&destination) {
+        0
+    } else {
+        destination.len() + ADMISSION_OVERHEAD_BYTES
+    };
+
+    if let Some(rejected) =
+        before_mutation(shard, sink, [source.as_ref(), destination.as_ref()], extra)?
+    {
+        return Ok(rejected);
+    }
+
+    // Both balances go out as one record: a torn WAL tail or a replica never sees one
+    // side without the other.
+    sink.record(Mutation::Transaction {
+        mutations: &[
+            Mutation::SetInteger {
+                key: &source,
+                value: from,
+            }
+            .to_owned(),
+            Mutation::SetInteger {
+                key: &destination,
+                value: to,
+            }
+            .to_owned(),
+        ],
+    })?;
+
+    shard
+        .set_integer(&source, from)
+        .expect("transfer type was validated before recording");
+    shard
+        .set_integer(&destination, to)
+        .expect("transfer type was validated before recording");
+
+    Ok(Response::Exec(vec![
+        Response::Integer(from),
+        Response::Integer(to),
+    ]))
+}

@@ -4,6 +4,10 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+- New `ZPOPBYSCORE key max [MIN min] [COUNT n] [WITHSCORES]` and `ZMOVEDUE source destination max [COUNT n]`: take the due members of a sorted set (score up to `max`) and return them, or move them to the tail of a list, in one command. At most 10000 members per call.
+- New: `SET key value IFGT|IFLT [EX|PX|EXAT|PXAT|KEEPTTL]` writes an integer only when the key is missing or the number is greater (`IFGT`) or smaller (`IFLT`) than the stored one, so a watermark, version or best price needs no script. It answers `OK` or a null bulk; a non-integer argument or stored string is an error and writes nothing. Typed options in all six clients.
+- New `TRANSFER source destination amount [MAX cap]` and `HTRANSFER key from to amount [MAX cap]`: move an integer amount between two keys (same slot) or two fields of a hash only when the source holds enough, in one WAL record. Reply `[source, destination]` after, or a null bulk and no write.
+
 - `LIMIT key max window_ms SLIDING` counts with a weighted two-window estimate, and `LIMIT key capacity refill_ms TOKENS [COST n]` is a token bucket. Both keep a few bytes per key, write nothing when they refuse, and take `WITHRETRY` to reply `[remaining, retry_after_ms]`. Plain `LIMIT key max window_ms` is unchanged, and the new modes use the existing limit records, so the WAL and snapshot formats do not change.
 
 ## 0.3.4 - 2026-10-17

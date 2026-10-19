@@ -22,6 +22,13 @@ test('strings', { skip: SKIP }, async () => {
     // SET IFEQ
     assert.equal(await c.set('s', 'z', { ifEq: 'nope' }), null);
     assert.equal(await c.set('s', 'z', { ifEq: 'y', px: 5000 }), 'OK');
+    // SET IFGT / IFLT
+    assert.equal(await c.set('wm', 10, { ifGt: true }), 'OK');
+    assert.equal(await c.set('wm', 10, { ifGt: true }), null);
+    assert.equal(await c.set('wm', 11, { ifGt: true, px: 5000 }), 'OK');
+    assert.equal(await c.set('wm', 12, { ifLt: true }), null);
+    assert.equal(await c.set('wm', -1, { ifLt: true }), 'OK');
+    assert.equal(await c.get('wm'), '-1');
     assert.equal(await c.get('s'), 'z');
     // binary safety
     const bin = Buffer.from([0, 1, 2, 255, 13, 10]);
@@ -80,6 +87,16 @@ test('strings', { skip: SKIP }, async () => {
     assert.equal(await c.take('stock', 3), 7);
     assert.equal(await c.take('stock', 30), null);
     assert.equal(await c.take('nostock', 1), null);
+
+    await c.set('{w}a', 10);
+    assert.deepEqual(await c.transfer('{w}a', '{w}b', 4), [6, 4]);
+    assert.equal(await c.transfer('{w}a', '{w}b', 7), null);
+    assert.equal(await c.transfer('{w}a', '{w}b', 3, 6), null);
+    assert.deepEqual(await c.transfer('{w}a', '{w}b', 2, 6), [4, 6]);
+    await assert.rejects(c.transfer('{w}a', '{w}a', 1));
+    await c.hset('th', { f: 10 });
+    assert.deepEqual(await c.htransfer('th', 'f', 'g', 4), [6, 4]);
+    assert.equal(await c.htransfer('th', 'f', 'g', 3, 5), null);
     // errors
     await c.hset('h', 'f', 'v');
     const e = await rejects(c.get('h'));

@@ -714,6 +714,24 @@ public partial class CommandSurfaceTests
         await session.Reply(":4\r\n");
         Assert.Equal(4, await taken);
 
+        ValueTask<(long Source, long Destination)?> moved = session.Client.TransferAsync("a", "b", 4);
+
+        await session.Expect("TRANSFER", "a", "b", "4");
+        await session.Reply("*2\r\n:6\r\n:4\r\n");
+        Assert.Equal((6L, 4L), await moved);
+
+        ValueTask<(long Source, long Destination)?> capped = session.Client.TransferAsync("a", "b", 4, 9);
+
+        await session.Expect("TRANSFER", "a", "b", "4", "MAX", "9");
+        await session.Reply("$-1\r\n");
+        Assert.Null(await capped);
+
+        ValueTask<(long From, long To)?> fields = session.Client.TransferHashFieldAsync("h", "f", "g", 1, 5);
+
+        await session.Expect("HTRANSFER", "h", "f", "g", "1", "MAX", "5");
+        await session.Reply("*2\r\n:1\r\n:2\r\n");
+        Assert.Equal((1L, 2L), await fields);
+
         ValueTask<string?> slid = session.Client.GetExpireAsync("session", 5000);
 
         await session.Expect("GETEX", "session", "5000");
@@ -1512,6 +1530,24 @@ public partial class CommandSurfaceTests
         await session.Expect("HPERSIST", "h", "FIELDS", "2", "a", "x");
         await session.Reply("*2\r\n:1\r\n:-2\r\n");
         Assert.Equal([1L, -2L], await persist);
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task DueSortedSetCommandsSendTheirOptions()
+    {
+        await using ScriptedSession session = await ScriptedSession.Open();
+
+        ValueTask<IReadOnlyList<SortedSetEntry>> due = session.Client.PopSortedSetByScoreAsync("z", "-inf", "(5", 3);
+
+        await session.Expect("ZPOPBYSCORE", "z", "(5", "MIN", "-inf", "COUNT", "3", "WITHSCORES");
+        await session.Reply("*2\r\n$1\r\nm\r\n$1\r\n2\r\n");
+        Assert.Equal("m", (await due)[0].Member);
+
+        ValueTask<long> moved = session.Client.MoveDueSortedSetAsync("{t}z", "{t}l", "+inf", 4);
+
+        await session.Expect("ZMOVEDUE", "{t}z", "{t}l", "+inf", "COUNT", "4");
+        await session.Reply(":2\r\n");
+        Assert.Equal(2, await moved);
     }
 
     [Fact(Timeout = 15000)]

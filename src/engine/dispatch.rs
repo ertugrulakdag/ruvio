@@ -507,6 +507,13 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
             expected,
             options,
         } => set_if_eq_key(shard, sink, key, value, &expected, options),
+        Command::SetIfCmp {
+            key,
+            value,
+            number,
+            greater,
+            options,
+        } => set_if_cmp_key(shard, sink, key, value, number, greater, options),
         Command::DelIfEq { key, expected } => del_if_eq_key(shard, sink, key, &expected),
         Command::ListPushCapped {
             key,
@@ -533,6 +540,25 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
                 .expect("take type was validated before recording");
 
             Ok(Response::Integer(updated))
+        }
+
+        Command::Transfer {
+            source,
+            destination,
+            amount,
+            max,
+        } => transfer(shard, sink, source, destination, amount, max),
+
+        Command::HashTransfer {
+            key,
+            from,
+            to,
+            amount,
+            max,
+        } => {
+            shard.expire_hash_fields(&key);
+
+            hash_transfer(shard, sink, key, from, to, amount, max)
         }
 
         Command::GetEx { key, ttl_ms } => {
@@ -1135,6 +1161,19 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
             Err(_) => Ok(wrong_type()),
         },
         Command::SortedSetPop { key, count, max } => pop_sorted(shard, sink, key, count, max),
+        Command::SortedSetPopByScore {
+            key,
+            min,
+            max,
+            count,
+            with_scores,
+        } => pop_sorted_by_score(shard, sink, key, min, max, count, with_scores),
+        Command::SortedSetMoveDue {
+            source,
+            destination,
+            max,
+            count,
+        } => move_due_sorted(shard, sink, waiters, source, destination, max, count),
         Command::SortedSetBlockPop {
             keys,
             timeout_ms,

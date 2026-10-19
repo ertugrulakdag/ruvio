@@ -168,6 +168,8 @@ fn eligible_outside_multi(command: WalGroupCommand<'_, '_>) -> bool {
                 | Command::SortedSetScore { .. }
                 | Command::SortedSetRank { .. }
                 | Command::SortedSetPop { .. }
+                | Command::SortedSetPopByScore { .. }
+                | Command::SortedSetMoveDue { .. }
                 | Command::SortedSetRemoveRange { .. }
                 | Command::GeoAdd { .. }
                 | Command::GeoDist { .. }
@@ -182,6 +184,7 @@ fn eligible_outside_multi(command: WalGroupCommand<'_, '_>) -> bool {
                 | Command::BloomInfo { .. }
                 | Command::BloomCard { .. }
                 | Command::SetIfEq { .. }
+                | Command::SetIfCmp { .. }
                 | Command::DelIfEq { .. }
                 | Command::ListPushCapped { .. }
                 | Command::JsonGet { .. }

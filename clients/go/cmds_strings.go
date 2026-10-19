@@ -153,6 +153,34 @@ func (c *cmds) SetIfEq(ctx context.Context, key, value, expected string, o SetOp
 	return err == nil && v.Kind != KindNil, err
 }
 
+// SetIfGreater writes value (Ruvio extension, SET key value IFGT) when the key is missing or
+// value is greater than the stored integer, and reports whether it wrote. Use it to keep a
+// watermark, a version or the highest bid.
+//
+// The result is false, with a nil error, when the stored number is greater or equal. TTL,
+// ExpireAt and KeepTTL in o apply to the write; NX and XX are ignored because IFGT cannot be
+// combined with them. A stored string that is not an integer returns an error and writes
+// nothing; a key that holds another type returns WRONGTYPE.
+//
+//	advanced, err := c.SetIfGreater(ctx, "watermark", 1700000000, ruvio.SetOptions{})
+func (c *cmds) SetIfGreater(ctx context.Context, key string, value int64, o SetOptions) (bool, error) {
+	return c.setIfCompare(ctx, key, value, tIFGT, o)
+}
+
+// SetIfLess is SetIfGreater for a smaller number (SET key value IFLT): lowest price,
+// earliest deadline.
+func (c *cmds) SetIfLess(ctx context.Context, key string, value int64, o SetOptions) (bool, error) {
+	return c.setIfCompare(ctx, key, value, tIFLT, o)
+}
+
+func (c *cmds) setIfCompare(ctx context.Context, key string, value int64, condition []byte, o SetOptions) (bool, error) {
+	o.NX, o.XX = false, false
+	r := newCmd(4+o.count(), cSET).s(key).i(value).t(condition)
+	o.append(r)
+	v, err := c.value(ctx, r)
+	return err == nil && v.Kind != KindNil, err
+}
+
 // SetEX stores value with a TTL given in whole seconds (SETEX key seconds value). The
 // duration is truncated to seconds, so a ttl below one second becomes 0 and the server
 // returns "ERR invalid expire time in 'setex' command". Use PSetEX or SetArgs for
@@ -348,6 +376,25 @@ func (c *cmds) SetV(ctx context.Context, key, value string, version int64) (int6
 // that is not an integer returns "ERR value is not an integer or out of range".
 func (c *cmds) Take(ctx context.Context, key string, count int64) (remaining int64, ok bool, err error) {
 	return c.intNil(ctx, newCmd(3, cTAKE).s(key).i(count))
+}
+
+// Transfer moves amount from the integer at source to the integer at destination in
+// one step, only when source holds at least that much (Ruvio TRANSFER source destination
+// amount). A missing destination starts at 0, and both keys are written as one WAL record.
+//
+// It returns the two values after the move and ok == true. When source is missing or
+// holds fewer than amount, or destination would overflow, nothing changes and ok is false.
+// amount must be > 0, source and destination must differ and, on a sharded server, share a
+// slot ("CROSSSLOT"; a hash tag such as {user:42} puts them together). A value that is not
+// an integer returns "ERR value is not an integer or out of range".
+func (c *cmds) Transfer(ctx context.Context, source, destination string, amount int64) (sourceAfter, destinationAfter int64, ok bool, err error) {
+	return c.pairNil(ctx, newCmd(4, cTRANSFER).s(source).s(destination).i(amount))
+}
+
+// TransferMax is Transfer that also refuses (ok == false, nothing written) when the
+// destination would end above max (TRANSFER source destination amount MAX max).
+func (c *cmds) TransferMax(ctx context.Context, source, destination string, amount, max int64) (sourceAfter, destinationAfter int64, ok bool, err error) {
+	return c.pairNil(ctx, newCmd(6, cTRANSFER).s(source).s(destination).i(amount).t(tMAX).i(max))
 }
 
 // DelIfEq deletes key only when its string equals expected (Ruvio DELEX key IFEQ

@@ -472,6 +472,43 @@ public partial interface IRuvioClient
     /// </example>
     ValueTask<long?> TakeAsync(string key, long count, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Sends <c>TRANSFER source destination amount [MAX max]</c>: moves an amount between two integer keys in one step, only when <paramref name="source"/> holds at least that much. A missing <paramref name="destination"/> starts at 0. Both writes are one WAL record.
+    /// </summary>
+    /// <param name="source">The key to subtract from.</param>
+    /// <param name="destination">The key to add to. On a sharded server it must share a slot with <paramref name="source"/>; a hash tag such as <c>{user:42}</c> puts them together.</param>
+    /// <param name="amount">Amount to move. Must be positive.</param>
+    /// <param name="max">Optional ceiling for <paramref name="destination"/> after the move.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>The balances after the move, or <see langword="null"/> when <paramref name="source"/> is missing or short, or <paramref name="destination"/> would overflow or pass <paramref name="max"/> (nothing is written).</returns>
+    /// <exception cref="RuvioException">A key holds a value of another type (<c>WRONGTYPE</c>); a value is not an integer; <paramref name="amount"/> is not positive; the two keys are the same; the keys are in different slots (<c>CROSSSLOT</c>).</exception>
+    /// <remarks>Native Ruvio command. The check and both writes are atomic, so concurrent callers cannot overdraw.</remarks>
+    /// <example>
+    /// <code>
+    /// var moved = await db.TransferAsync("{user:42}:wallet", "{user:42}:escrow", 30);
+    /// if (moved is null) { /* not enough balance */ }
+    /// </code>
+    /// </example>
+    ValueTask<(long Source, long Destination)?> TransferAsync(string source, string destination, long amount, long? max = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sends <c>HTRANSFER key from to amount [MAX max]</c>: <see cref="TransferAsync"/> between two integer fields of one hash. A missing <paramref name="to"/> field starts at 0 and field TTLs stay.
+    /// </summary>
+    /// <param name="key">The hash key.</param>
+    /// <param name="from">The field to subtract from.</param>
+    /// <param name="to">The field to add to.</param>
+    /// <param name="amount">Amount to move. Must be positive.</param>
+    /// <param name="max">Optional ceiling for the <paramref name="to"/> field after the move.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>The balances after the move, or <see langword="null"/> when the key or <paramref name="from"/> is missing or short, or <paramref name="to"/> would overflow or pass <paramref name="max"/> (nothing is written).</returns>
+    /// <exception cref="RuvioException">The key holds a value of another type (<c>WRONGTYPE</c>); a field is not an integer; <paramref name="amount"/> is not positive; the two fields are the same.</exception>
+    /// <example>
+    /// <code>
+    /// var moved = await db.TransferHashFieldAsync("account:7", "available", "held", 30);
+    /// </code>
+    /// </example>
+    ValueTask<(long From, long To)?> TransferHashFieldAsync(string key, string from, string to, long amount, long? max = null, CancellationToken cancellationToken = default);
+
     /// <summary>Sends <c>GETEX key ttlMs</c>: reads a string and sets its expiry in one step ("sliding" expiry).</summary>
     /// <param name="key">The key.</param>
     /// <param name="ttlMs">New time to live from now, in milliseconds. Must be positive. (Ruvio takes milliseconds here, not Redis's <c>EX</c>/<c>PX</c> options.)</param>
@@ -1992,6 +2029,36 @@ public partial interface IRuvioClient
     /// </code>
     /// </example>
     ValueTask<IReadOnlyList<SortedSetEntry>> PopSortedSetMinAsync(string key, long count = 1, CancellationToken cancellationToken = default);
+
+    /// <summary>Sends <c>ZPOPBYSCORE</c>: removes and returns the members that are due, lowest score first. With scores set to due times this takes the jobs that are ready.</summary>
+    /// <param name="key">The key.</param>
+    /// <param name="min">Lowest score: a number, <c>-inf</c>, or <c>(5</c> for exclusive.</param>
+    /// <param name="max">Highest score: a number, <c>+inf</c>, or <c>(5</c> for exclusive.</param>
+    /// <param name="count">How many to pop, 1 to 10000.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>The removed members with scores, lowest first. Empty when nothing is due.</returns>
+    /// <exception cref="RuvioException">The key holds a value of another type (<c>WRONGTYPE</c>), or the server refuses the command.</exception>
+    /// <example>
+    /// <code>
+    /// var jobs = await db.PopSortedSetByScoreAsync("scheduled", "-inf", nowUnixSeconds.ToString(), 100);
+    /// </code>
+    /// </example>
+    ValueTask<IReadOnlyList<SortedSetEntry>> PopSortedSetByScoreAsync(string key, string min, string max, long count = 1, CancellationToken cancellationToken = default);
+
+    /// <summary>Sends <c>ZMOVEDUE</c>: moves the members that are due from a sorted set to the tail of a list, lowest score first. Clients blocked on the list are served first. Both keys must hash to the same slot on a sharded server.</summary>
+    /// <param name="source">The sorted set to take members from.</param>
+    /// <param name="destination">The list that receives them.</param>
+    /// <param name="max">Highest score: a number, <c>+inf</c>, or <c>(5</c> for exclusive.</param>
+    /// <param name="count">How many to move, 1 to 10000.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>How many members were moved.</returns>
+    /// <exception cref="RuvioException">A key holds a value of another type (<c>WRONGTYPE</c>), the keys are in different slots (<c>CROSSSLOT</c>), or the server refuses the command.</exception>
+    /// <example>
+    /// <code>
+    /// long moved = await db.MoveDueSortedSetAsync("{q}scheduled", "{q}ready", nowUnixSeconds.ToString(), 100);
+    /// </code>
+    /// </example>
+    ValueTask<long> MoveDueSortedSetAsync(string source, string destination, string max, long count = 1, CancellationToken cancellationToken = default);
 
     /// <summary>Sends <c>ZPOPMAX</c>: removes and returns the highest-scored members.</summary>
     /// <param name="key">The key.</param>
@@ -3890,7 +3957,7 @@ public partial interface IRuvioClient
         => RespRead.RequiredText(ExecuteAsync(new string[] { "CLIENT", "LIST", "TYPE", Keywords.Word(type) }, cancellationToken), "CLIENT LIST");
 
     /// <summary>Sends <c>CLIENT KILL ID id</c>.</summary>
-    /// <param name="id">The connection id from <see cref="GetClientIdAsync"/> or <see cref="GetClientListAsync"/>.</param>
+    /// <param name="id">The connection id from <see cref="GetClientIdAsync"/> or <see cref="GetClientListAsync(CancellationToken)"/>.</param>
     /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
     /// <returns>The number of connections closed (0 or 1).</returns>
     /// <remarks>Reaches only the shard that got the command.</remarks>

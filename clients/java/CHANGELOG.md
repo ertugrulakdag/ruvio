@@ -4,6 +4,9 @@ Notable changes to the Java client `io.github.salihcantekin:ruvio-client`. New e
 
 ## Unreleased
 
+- `zpopbyscore` and `zmovedue` (async and blocking) send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call.
+- New `transfer(source, destination, amount[, max])` and `htransfer(key, from, to, amount[, max])` for the server's `TRANSFER` and `HTRANSFER`: they return the two balances after the move, or `null` when nothing moved.
+
 - `limitSliding`, `limitTokens`, `limitSlidingWithRetry` and `limitTokensWithRetry` for the `SLIDING` and `TOKENS` modes of `LIMIT`, and the `LimitOutcome` record (needs a server that has them).
 
 ## 0.1.2 - 2026-10-17

@@ -318,6 +318,16 @@ fn hash_field_ttls_and_sorted_set_pops() {
     );
     assert_eq!(db.bzpopmin(&["z"], Duration::from_secs(1)).unwrap(), None);
 
+    db.zadd("due", &[("a", 1.0), ("b", 2.0), ("c", 3.0), ("d", 9.0)])
+        .unwrap();
+    assert_eq!(
+        db.zpopbyscore("due", "-inf", "1", 5).unwrap(),
+        vec![SortedSetEntry::new("a", 1.0)]
+    );
+    assert_eq!(db.zmovedue("due", "ready", "3", 5).unwrap(), 2);
+    assert_eq!(db.lrange("ready", 0, -1).unwrap(), ["b", "c"]);
+    assert!(db.zpopbyscore("due", "-inf", "3", 5).unwrap().is_empty());
+
     db.zadd("r", &[("a", 1.0), ("b", 2.0), ("c", 3.0), ("x", 0.0)])
         .unwrap();
     assert_eq!(db.zremrangebyrank("r", 0, 0).unwrap(), 1);

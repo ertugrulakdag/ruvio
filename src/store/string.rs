@@ -1277,6 +1277,60 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
         Ok(Some(current - count))
     }
 
+    /// `Ok(None)` leaves both keys unchanged: `source` is missing or smaller than `amount`,
+    /// or `destination` would overflow or pass `max`. Otherwise `(source, destination)` after.
+    pub(crate) fn preview_transfer(
+        &self,
+        source: &[u8],
+        destination: &[u8],
+        amount: i64,
+        max: Option<i64>,
+    ) -> Result<Option<(i64, i64)>, IncrementError> {
+        let Some(from) = self.current_integer(source)? else {
+            return Ok(None);
+        };
+
+        let to = self.current_integer(destination)?.unwrap_or(0);
+
+        Ok(transfer_result(from, to, amount, max))
+    }
+
+    /// `preview_transfer` between two fields of one hash.
+    pub(crate) fn preview_hash_transfer(
+        &self,
+        key: &[u8],
+        from: &[u8],
+        to: &[u8],
+        amount: i64,
+        max: Option<i64>,
+    ) -> Result<Option<(i64, i64)>, IncrementError> {
+        let Some(hash) = self.live_hash(key).map_err(|_| IncrementError::WrongType)? else {
+            return Ok(None);
+        };
+
+        let integer = |field: &[u8]| -> Result<Option<i64>, IncrementError> {
+            hash.get(field)
+                .map(|value| {
+                    std::str::from_utf8(value)
+                        .ok()
+                        .and_then(|value| value.parse::<i64>().ok())
+                        .ok_or(IncrementError::NotIntegerOrOverflow)
+                })
+                .transpose()
+        };
+
+        let Some(source) = integer(from)? else {
+            return Ok(None);
+        };
+
+        Ok(transfer_result(
+            source,
+            integer(to)?.unwrap_or(0),
+            amount,
+            max,
+        ))
+    }
+
     pub(crate) fn copy_string(&self, key: &[u8]) -> Result<Option<Vec<u8>>, WrongType> {
         let Some(hit) = self
             .entries
@@ -1442,4 +1496,17 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
             .map_err(|_| IncrementError::WrongType)?;
         Ok(updated)
     }
+}
+
+/// The balances after moving `amount`, or `None` when `from` is short or `to` would
+/// overflow or pass `max`.
+fn transfer_result(from: i64, to: i64, amount: i64, max: Option<i64>) -> Option<(i64, i64)> {
+    let from = from.checked_sub(amount).filter(|left| *left >= 0)?;
+    let to = to.checked_add(amount)?;
+
+    if max.is_some_and(|max| to > max) {
+        return None;
+    }
+
+    Some((from, to))
 }

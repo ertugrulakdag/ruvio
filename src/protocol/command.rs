@@ -218,6 +218,19 @@ impl<'a> Command<'a> {
                 expected: owned(expected),
                 options,
             },
+            Self::SetIfCmp {
+                key,
+                value,
+                number,
+                greater,
+                options,
+            } => Command::SetIfCmp {
+                key: owned(key),
+                value: owned(value),
+                number,
+                greater,
+                options,
+            },
             Self::DelIfEq { key, expected } => Command::DelIfEq {
                 key: owned(key),
                 expected: owned(expected),
@@ -236,6 +249,30 @@ impl<'a> Command<'a> {
             Self::Take { key, count } => Command::Take {
                 key: owned(key),
                 count,
+            },
+            Self::Transfer {
+                source,
+                destination,
+                amount,
+                max,
+            } => Command::Transfer {
+                source: owned(source),
+                destination: owned(destination),
+                amount,
+                max,
+            },
+            Self::HashTransfer {
+                key,
+                from,
+                to,
+                amount,
+                max,
+            } => Command::HashTransfer {
+                key: owned(key),
+                from: owned(from),
+                to: owned(to),
+                amount,
+                max,
             },
             Self::GetEx { key, ttl_ms } => Command::GetEx {
                 key: owned(key),
@@ -738,6 +775,30 @@ impl<'a> Command<'a> {
                 key: owned(key),
                 count,
                 max,
+            },
+            Self::SortedSetPopByScore {
+                key,
+                min,
+                max,
+                count,
+                with_scores,
+            } => Command::SortedSetPopByScore {
+                key: owned(key),
+                min,
+                max,
+                count,
+                with_scores,
+            },
+            Self::SortedSetMoveDue {
+                source,
+                destination,
+                max,
+                count,
+            } => Command::SortedSetMoveDue {
+                source: owned(source),
+                destination: owned(destination),
+                max,
+                count,
             },
             Self::SortedSetBlockPop {
                 keys,

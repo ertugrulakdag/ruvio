@@ -49,6 +49,7 @@ KeyTypeT = Union[
 from ._converters import (  # noqa: F401
     Conv,
     KeyT,
+    _balances,
     _bf_info,
     _bloom_seen,
     _bool,
@@ -636,14 +637,18 @@ class Commands:
         xx: bool = False,
         get: bool = False,
         ifeq: Optional[Arg] = None,
+        ifgt: bool = False,
+        iflt: bool = False,
     ) -> Any:
-        """``SET key value [IFEQ x] [EX|PX|EXAT|PXAT|KEEPTTL] [NX|XX] [GET]`` - writes a string.
+        """``SET key value [IFEQ x|IFGT n|IFLT n] [EX|PX|EXAT|PXAT|KEEPTTL] [NX|XX] [GET]`` - writes a string.
 
         ``SET`` replaces a value of any type. Without ``keepttl`` it clears an existing TTL.
         ``nx``, ``xx`` and ``ifeq`` are conditions: when one is not met nothing is written.
         ``ifeq`` is a Ruvio extension: it writes only when the current string equals the given value,
-        which makes compare-and-set and lock renewal a single command; it cannot be combined with
-        ``nx``, ``xx`` or ``get``.
+        which makes compare-and-set and lock renewal a single command. ``ifgt`` / ``iflt`` (also Ruvio
+        extensions) write ``value`` (an integer) only when the key is missing or it is greater / smaller than the
+        stored integer, to keep a watermark, version or highest bid. None of them can be combined with
+        ``nx``, ``xx`` or ``get``, and only one of the three can be used per call.
 
         Args:
             key: The key.
@@ -657,9 +662,11 @@ class Commands:
             xx: Write only when the key already exists.
             get: Return the previous string value instead of a success flag.
             ifeq: Write only when the key holds a string equal to this value (Ruvio extension).
+            ifgt: Write ``value`` only when the key is missing or ``value`` is greater than the stored integer.
+            iflt: Write ``value`` only when the key is missing or ``value`` is smaller than the stored integer.
 
         Returns:
-            ``True`` when written, ``False`` when ``nx``/``xx``/``ifeq`` refused the write. With
+            ``True`` when written, ``False`` when ``nx``/``xx``/``ifeq``/``ifgt``/``iflt`` refused the write. With
             ``get=True``: the previous value, or ``None`` when there was none (a refused write then
             also gives the previous value or ``None``).
 
@@ -671,9 +678,10 @@ class Commands:
             client.set("k", "v", ex=60)             # -> True, expires in a minute
             client.set("k", "w", nx=True)           # -> False (already exists)
             client.set("k", "x", ifeq="v")          # -> True only if the value is still "v"
+            client.set("wm", 1700000000, ifgt=True) # -> True only if greater than the stored number
             client.set("k", "y", get=True)          # -> previous value
         """
-        if ex is None and px is None and exat is None and pxat is None and not (keepttl or nx or xx or get) and ifeq is None:
+        if ex is None and px is None and exat is None and pxat is None and not (keepttl or nx or xx or get or ifgt or iflt) and ifeq is None:
             t = type(key)
             if t is str:
                 key = key.encode("utf-8", "surrogateescape")  # type: ignore[union-attr]
@@ -703,6 +711,10 @@ class Commands:
         args: List[Any] = [key, value]
         if ifeq is not None:
             args += ["IFEQ", ifeq]
+        if ifgt:
+            args.append("IFGT")
+        if iflt:
+            args.append("IFLT")
         if ex is not None:
             args += ["EX", ex]
         if px is not None:
@@ -777,6 +789,38 @@ class Commands:
             client.take("stock", 9)   # -> None, stock stays 3
         """
         return self._c(None, "TAKE", key, count)
+
+    def transfer(self, source: KeyT, destination: KeyT, amount: int, max: Optional[int] = None) -> Any:
+        """``TRANSFER source destination amount [MAX max]`` - moves an amount between two integer keys. Ruvio extension.
+
+        The check and both writes are one atomic step (one WAL record): ``source`` loses ``amount`` only
+        when it holds at least that much, ``destination`` gains it (a missing ``destination`` starts at 0).
+        Handy for wallets, credits and inventory.
+
+        Args:
+            source: A key holding a decimal integer.
+            destination: Another integer key. On a cluster both keys must share a slot (use a hash tag
+                such as ``{user:42}``).
+            amount: A positive integer to move.
+            max: Optional ceiling for ``destination`` after the move.
+
+        Returns:
+            ``(source_after, destination_after)``, or ``None`` when ``source`` is missing or short, or
+            ``destination`` would overflow or pass ``max`` (nothing is written then).
+
+        Raises:
+            ResponseError: ``amount`` is not positive, the two keys are the same, or a value is not an integer.
+            WrongTypeError: A key holds a non-string type.
+            CrossSlotError: Cluster client only, when the keys are in different slots.
+
+        Example:
+            client.set("{u}:wallet", 50)
+            client.transfer("{u}:wallet", "{u}:escrow", 30)   # -> (20, 30)
+            client.transfer("{u}:wallet", "{u}:escrow", 30)   # -> None, nothing changes
+        """
+        if max is None:
+            return self._c(_balances, "TRANSFER", source, destination, amount)
+        return self._c(_balances, "TRANSFER", source, destination, amount, "MAX", max)
 
     def delex(self, key: KeyT, ifeq: Arg) -> Any:
         """``DELEX key IFEQ value`` - deletes a string only when it equals ``value``. Ruvio extension.
@@ -2807,6 +2851,30 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
         """
         return self._c(None, "HINCRBY", key, field, amount)
 
+    def htransfer(self, key: KeyT, from_field: Arg, to_field: Arg, amount: int, max: Optional[int] = None) -> Any:
+        """``HTRANSFER key from to amount [MAX max]`` - :meth:`transfer` between two integer fields of one hash. Ruvio extension.
+
+        A missing ``to_field`` starts at 0 and field TTLs stay.
+
+        Args:
+            key: The hash key.
+            from_field: Field to subtract from.
+            to_field: Field to add to.
+            amount: A positive integer to move.
+            max: Optional ceiling for ``to_field`` after the move.
+
+        Returns:
+            ``(from_after, to_after)``, or ``None`` when the key or ``from_field`` is missing or short, or
+            ``to_field`` would overflow or pass ``max`` (nothing is written then).
+
+        Raises:
+            ResponseError: ``amount`` is not positive, the fields are the same, or a field is not an integer.
+            WrongTypeError: The key holds a non-hash type.
+        """
+        if max is None:
+            return self._c(_balances, "HTRANSFER", key, from_field, to_field, amount)
+        return self._c(_balances, "HTRANSFER", key, from_field, to_field, amount, "MAX", max)
+
     def hincrbyfloat(self, key: KeyT, field: Arg, amount: float) -> Any:
         """``HINCRBYFLOAT key field amount`` - adds a float to a field (15 significant digits). Keeps a field TTL.
 
@@ -3349,6 +3417,41 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
             A list of ``(member, score)`` tuples, lowest first; empty when the key is missing.
         """
         return self._c(_scored, "ZPOPMIN", key) if count is None else self._c(_scored, "ZPOPMIN", key, count)
+
+    def zpopbyscore(self, key: KeyT, max: Arg, min: Arg = "-inf", count: int = 1) -> Any:  # noqa: A002
+        """``ZPOPBYSCORE key max MIN min COUNT count WITHSCORES`` - pops the members that are due.
+
+        Removes and returns up to ``count`` members whose score is between ``min`` and ``max``,
+        lowest score first. With scores set to due times this takes the jobs that are ready.
+
+        Args:
+            key: The sorted-set key.
+            max: Upper bound: number, ``"+inf"`` or ``"(9"`` (exclusive).
+            min: Lower bound: number, ``"-inf"`` (default) or ``"(5"`` (exclusive).
+            count: How many to pop, 1 to 10000 (default one).
+
+        Returns:
+            A list of ``(member, score)`` tuples, lowest first; empty when nothing is due.
+        """
+        return self._c(_scored, "ZPOPBYSCORE", key, max, "MIN", min, "COUNT", count, "WITHSCORES")
+
+    def zmovedue(self, source: KeyT, destination: KeyT, max: Arg, count: int = 1) -> Any:  # noqa: A002
+        """``ZMOVEDUE source destination max COUNT count`` - moves due members to a list.
+
+        Moves up to ``count`` members whose score is at most ``max`` from the sorted set
+        ``source`` to the tail of the list ``destination``, lowest score first. Clients blocked
+        on ``destination`` are served first. Both keys must share a slot on a sharded server.
+
+        Args:
+            source: The sorted-set key.
+            destination: The list key.
+            max: Upper bound: number, ``"+inf"`` or ``"(9"`` (exclusive).
+            count: How many to move, 1 to 10000 (default one).
+
+        Returns:
+            The number of members moved.
+        """
+        return self._c(None, "ZMOVEDUE", source, destination, max, "COUNT", count)
 
     def zpopmax(self, key: KeyT, count: Optional[int] = None) -> Any:
         """``ZPOPMAX key [count]`` - removes and returns the highest-scored members.

@@ -464,6 +464,10 @@ pub(super) fn validate_command_payloads(
             validate_value(value, limits)?;
             validate_value(expected, limits)?;
         }
+        Command::SetIfCmp { key, value, .. } => {
+            validate_key(key, limits)?;
+            validate_value(value, limits)?;
+        }
         Command::BloomInsert { key, items, .. } => {
             validate_key(key, limits)?;
             validate_values(items, limits)?;
@@ -518,6 +522,21 @@ pub(super) fn validate_command_payloads(
             validate_value(field, limits)?;
         }
 
+        Command::HashTransfer { key, from, to, .. } => {
+            validate_key(key, limits)?;
+            validate_value(from, limits)?;
+            validate_value(to, limits)?;
+        }
+
+        Command::Transfer {
+            source,
+            destination,
+            ..
+        } => {
+            validate_key(source, limits)?;
+            validate_key(destination, limits)?;
+        }
+
         Command::SortedSetAdd { key, pairs, .. } => {
             validate_key(key, limits)?;
 
@@ -538,7 +557,17 @@ pub(super) fn validate_command_payloads(
             validate_values(fields, limits)?;
         }
 
-        Command::SortedSetPop { key, .. } => validate_key(key, limits)?,
+        Command::SortedSetPop { key, .. } | Command::SortedSetPopByScore { key, .. } => {
+            validate_key(key, limits)?
+        }
+        Command::SortedSetMoveDue {
+            source,
+            destination,
+            ..
+        } => {
+            validate_key(source, limits)?;
+            validate_key(destination, limits)?;
+        }
         Command::SortedSetBlockPop { keys, .. } => validate_keys(keys, limits)?,
         Command::SortedSetRemoveRange { key, range } => {
             validate_key(key, limits)?;

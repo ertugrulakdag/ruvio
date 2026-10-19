@@ -88,6 +88,11 @@ def test_set_options_in_wire_order():
     r = Rec(reply="OK")
     r.set("k", "v", ex=1, px=2, exat=3, pxat=4, keepttl=True, nx=True, xx=True, ifeq="old")
     assert r.args == ["SET", "k", "v", "IFEQ", "old", "EX", "1", "PX", "2", "EXAT", "3", "PXAT", "4", "KEEPTTL", "NX", "XX"]
+    r.reply = "OK"
+    r.set("k", 5, px=9, ifgt=True)
+    assert r.args == ["SET", "k", "5", "IFGT", "PX", "9"]
+    r.set("k", -5, iflt=True)
+    assert r.args == ["SET", "k", "-5", "IFLT"]
     r.reply = "prev"
     assert r.set("k", "v", get=True) == "prev"
     assert r.args == ["SET", "k", "v", "GET"]
@@ -265,3 +270,28 @@ def test_limit_modes_encode_their_keywords_and_convert_the_retry_reply():
     out = r.limit_tokens_with_retry("k", 10, 2000)
     assert (out.allowed, out.remaining, out.retry_after_ms) == (False, 0, 250)
     assert r.args == ["LIMIT", "k", "10", "2000", "TOKENS", "COST", "1", "WITHRETRY"]
+
+
+def test_due_commands_encode_their_options():
+    r = Rec(reply=[b"m", b"2"])
+
+    assert r.zpopbyscore("z", "(5", min=1, count=3) == [(b"m", 2.0)]
+    assert r.args == ["ZPOPBYSCORE", "z", "(5", "MIN", "1", "COUNT", "3", "WITHSCORES"]
+
+    r = Rec(reply=2)
+
+    assert r.zmovedue("{t}z", "{t}l", "+inf", count=4) == 2
+    assert r.args == ["ZMOVEDUE", "{t}z", "{t}l", "+inf", "COUNT", "4"]
+
+
+def test_transfer_commands_encode_the_optional_cap_and_return_a_pair():
+    r = Rec(reply=[6, 4])
+    assert r.transfer("a", "b", 4) == (6, 4)
+    assert r.args == ["TRANSFER", "a", "b", "4"]
+    assert r.transfer("a", "b", 4, max=9) == (6, 4)
+    assert r.args == ["TRANSFER", "a", "b", "4", "MAX", "9"]
+    assert r.htransfer("h", "f", "g", 1, max=5) == (6, 4)
+    assert r.args == ["HTRANSFER", "h", "f", "g", "1", "MAX", "5"]
+    r.reply = None
+    assert r.transfer("a", "b", 4) is None
+    assert r.htransfer("h", "f", "g", 1) is None

@@ -76,6 +76,11 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         Assert.InRange(await db.GetTimeToLiveMillisecondsAsync("cas"), 1, 30000);
         Assert.True(await db.SetIfEqualKeepingTimeToLiveAsync("cas", "3", "2"));
         Assert.InRange(await db.GetTimeToLiveMillisecondsAsync("cas"), 1, 30000);
+        Assert.True(await db.SetIfGreaterAsync("wm", 10));
+        Assert.False(await db.SetIfGreaterAsync("wm", 10));
+        Assert.True(await db.SetIfGreaterAsync("wm", 11, TimeSpan.FromSeconds(30)));
+        Assert.False(await db.SetIfLessAsync("wm", 12));
+        Assert.True(await db.SetIfLessAsync("wm", -1));
         Assert.False(await db.DeleteIfEqualAsync("cas", "2"));
         Assert.True(await db.DeleteIfEqualAsync("cas", "3"));
         Assert.False(await db.DeleteIfEqualAsync("cas", "3"));
@@ -108,6 +113,16 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         Assert.True(await db.SetAsync("stock", "5"));
         Assert.Equal(2, await db.TakeAsync("stock", 3));
         Assert.Null(await db.TakeAsync("stock", 3));
+
+        Assert.True(await db.SetAsync("{w}a", "10"));
+        Assert.Equal((6L, 4L), await db.TransferAsync("{w}a", "{w}b", 4));
+        Assert.Null(await db.TransferAsync("{w}a", "{w}b", 7));
+        Assert.Null(await db.TransferAsync("{w}a", "{w}b", 3, 6));
+        Assert.Equal((4L, 6L), await db.TransferAsync("{w}a", "{w}b", 2, 6));
+        Assert.Equal(1, await db.SetHashFieldsAsync("th", ("f", "10")));
+        Assert.Equal((6L, 4L), await db.TransferHashFieldAsync("th", "f", "g", 4));
+        Assert.Null(await db.TransferHashFieldAsync("th", "f", "g", 3, 5));
+
         Assert.Equal(1, await db.OnceAsync("once", 10000));
         Assert.Equal(0, await db.OnceAsync("once", 10000));
         Assert.Equal(1, await db.LimitAsync("lim", 2, 10000));
@@ -356,6 +371,11 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         Assert.Equal(1, await db.RemoveSortedSetMembersAsync("z", "c"));
         Assert.Equal("b", (await db.PopSortedSetMinAsync("z"))[0].Member);
         Assert.Equal("a", (await db.PopSortedSetMaxAsync("z"))[0].Member);
+        Assert.Equal(4, await db.AddSortedSetAsync("due", ("a", 1), ("b", 2), ("c", 3), ("d", 9)));
+        Assert.Equal("a", (await db.PopSortedSetByScoreAsync("due", "-inf", "1", 5))[0].Member);
+        Assert.Equal(2, await db.MoveDueSortedSetAsync("due", "ready", "3", 5));
+        Assert.Equal(["b", "c"], await db.GetListRangeAsync("ready", 0, -1));
+        Assert.Empty(await db.PopSortedSetByScoreAsync("due", "-inf", "3", 5));
         Assert.True(await db.AddSortedSetAsync("bz", "m", 1));
         Assert.Equal("m", (await db.PopSortedSetMinBlockingAsync("bz", TimeSpan.FromSeconds(1)))!.Value.Entry.Member);
         Assert.True(await db.AddSortedSetAsync("bz", "n", 1));

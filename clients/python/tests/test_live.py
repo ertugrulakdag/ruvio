@@ -108,6 +108,12 @@ async def test_strings(c):
     assert await c.set("s", "y", ifeq="nope") is False
     assert await c.set("s", "y", ifeq="x", px=50000) is True
     assert await c.get("s") == "y" and await c.pttl("s") > 0
+    # Ruvio: SET ... IFGT / IFLT
+    assert await c.set("wm", 10, ifgt=True) is True
+    assert await c.set("wm", 10, ifgt=True) is False
+    assert await c.set("wm", 11, ifgt=True, px=50000) is True and await c.pttl("wm") > 0
+    assert await c.set("wm", 12, iflt=True) is False
+    assert await c.set("wm", -1, iflt=True) is True and await c.get("wm") == "-1"
     # binary-safe through the raw view
     assert await c.set(b"bin", b"\x00\xff\x80") is True
     assert await c.raw.get(b"bin") == b"\x00\xff\x80"
@@ -167,6 +173,17 @@ async def test_versioned_take_once_limit(c):
     assert await c.take("stock", 2) == 3
     assert await c.take("stock", 4) is None
     assert await c.get("stock") == "3"
+    # TRANSFER / HTRANSFER
+    await c.set("{w}a", "10")
+    assert await c.transfer("{w}a", "{w}b", 4) == (6, 4)
+    assert await c.transfer("{w}a", "{w}b", 7) is None
+    assert await c.transfer("{w}a", "{w}b", 3, max=6) is None
+    assert await c.transfer("{w}a", "{w}b", 2, max=6) == (4, 6)
+    with pytest.raises(ruvio.ResponseError):
+        await c.transfer("{w}a", "{w}a", 1)
+    await c.hset("th", "f", "10")
+    assert await c.htransfer("th", "f", "g", 4) == (6, 4)
+    assert await c.htransfer("th", "f", "g", 3, max=5) is None
     # ONCE
     assert await c.once("o", 10000) is True
     assert await c.once("o", 10000) is False
@@ -470,6 +487,11 @@ async def test_sorted_sets(c):
     assert await c.zpopmax("z", 1) == [("d", 6.0)]
     await c.zadd("r", {"x": 1, "y": 2, "w": 3})
     assert await c.zremrangebyrank("r", 0, 0) == 1
+    await c.zadd("due", {"a": 1, "b": 2, "c": 3, "d": 9})
+    assert await c.zpopbyscore("due", 1) == [("a", 1.0)]
+    assert await c.zmovedue("due", "ready", 3, count=5) == 2
+    assert await c.lrange("ready", 0, -1) == ["b", "c"]
+    assert await c.zpopbyscore("due", 3, count=5) == []
     assert await c.zremrangebyscore("r", 3, 3) == 1
     assert await c.bzpopmin("r", 0.1) == ("r", "y", 2.0)
     await c.zadd("r", {"x": 1, "y": 2})

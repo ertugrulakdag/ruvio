@@ -4,6 +4,9 @@ Notable changes to the Node.js client `ruvio-client` on npm. New entries go unde
 
 ## Unreleased
 
+- `zpopbyscore` and `zmovedue` send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call.
+- New `transfer(source, destination, amount, max?)` and `htransfer(key, from, to, amount, max?)` for the server's `TRANSFER` and `HTRANSFER`: they return `[a, b]` after the move, or `null` when nothing moved.
+
 - `limitSliding`, `limitTokens`, `limitSlidingWithRetry` and `limitTokensWithRetry` for the `SLIDING` and `TOKENS` modes of `LIMIT` (needs a server that has them).
 
 ## 0.2.0 - 2026-10-17

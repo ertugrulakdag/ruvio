@@ -358,6 +358,19 @@ test('RESP3 push frames arrive as "push" events and never as command replies', a
   );
 });
 
+test('set: IFGT and IFLT go before the expiry', async () => {
+  await withClient(
+    () => ok,
+    {},
+    async (c, s) => {
+      assert.equal(await c.set('wm', 5, { ifGt: true, px: 9 }), 'OK');
+      assert.deepEqual(s.seen.at(-1), ['SET', 'wm', '5', 'IFGT', 'PX', '9']);
+      assert.equal(await c.set('wm', -5, { ifLt: true }), 'OK');
+      assert.deepEqual(s.seen.at(-1), ['SET', 'wm', '-5', 'IFLT']);
+    },
+  );
+});
+
 // ---- Lock / Lease / Permit ------------------------------------------------------------------
 
 test('lock: retries until free, renew/release/isReleased, dispose, withLock cleanup and timeout', async () => {

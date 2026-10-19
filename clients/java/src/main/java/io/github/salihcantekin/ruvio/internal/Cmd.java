@@ -190,6 +190,8 @@ public final class Cmd {
     public static final byte[] HSETNX = RespOut.fragment("HSETNX");
     /** The word {@code HSTRLEN}, pre-encoded as a RESP bulk string. */
     public static final byte[] HSTRLEN = RespOut.fragment("HSTRLEN");
+    /** The word {@code HTRANSFER}, pre-encoded as a RESP bulk string. */
+    public static final byte[] HTRANSFER = RespOut.fragment("HTRANSFER");
     /** The word {@code HTTL}, pre-encoded as a RESP bulk string. */
     public static final byte[] HTTL = RespOut.fragment("HTTL");
     /** The word {@code HVALS}, pre-encoded as a RESP bulk string. */
@@ -198,6 +200,10 @@ public final class Cmd {
     public static final byte[] IDEM = RespOut.fragment("IDEM");
     /** The word {@code IFEQ}, pre-encoded as a RESP bulk string. */
     public static final byte[] IFEQ = RespOut.fragment("IFEQ");
+    /** The word {@code IFGT}, pre-encoded as a RESP bulk string. */
+    public static final byte[] IFGT = RespOut.fragment("IFGT");
+    /** The word {@code IFLT}, pre-encoded as a RESP bulk string. */
+    public static final byte[] IFLT = RespOut.fragment("IFLT");
     /** The word {@code INCR}, pre-encoded as a RESP bulk string. */
     public static final byte[] INCR = RespOut.fragment("INCR");
     /** The word {@code INCRBY}, pre-encoded as a RESP bulk string. */
@@ -438,6 +444,8 @@ public final class Cmd {
     public static final byte[] TOKENS = RespOut.fragment("TOKENS");
     /** The word {@code TOUCH}, pre-encoded as a RESP bulk string. */
     public static final byte[] TOUCH = RespOut.fragment("TOUCH");
+    /** The word {@code TRANSFER}, pre-encoded as a RESP bulk string. */
+    public static final byte[] TRANSFER = RespOut.fragment("TRANSFER");
     /** The word {@code TTL}, pre-encoded as a RESP bulk string. */
     public static final byte[] TTL = RespOut.fragment("TTL");
     /** The word {@code TYPE}, pre-encoded as a RESP bulk string. */
@@ -502,8 +510,12 @@ public final class Cmd {
     public static final byte[] ZINTERSTORE = RespOut.fragment("ZINTERSTORE");
     /** The word {@code ZLEXCOUNT}, pre-encoded as a RESP bulk string. */
     public static final byte[] ZLEXCOUNT = RespOut.fragment("ZLEXCOUNT");
+    /** The word {@code ZMOVEDUE}, pre-encoded as a RESP bulk string. */
+    public static final byte[] ZMOVEDUE = RespOut.fragment("ZMOVEDUE");
     /** The word {@code ZMSCORE}, pre-encoded as a RESP bulk string. */
     public static final byte[] ZMSCORE = RespOut.fragment("ZMSCORE");
+    /** The word {@code ZPOPBYSCORE}, pre-encoded as a RESP bulk string. */
+    public static final byte[] ZPOPBYSCORE = RespOut.fragment("ZPOPBYSCORE");
     /** The word {@code ZPOPMAX}, pre-encoded as a RESP bulk string. */
     public static final byte[] ZPOPMAX = RespOut.fragment("ZPOPMAX");
     /** The word {@code ZPOPMIN}, pre-encoded as a RESP bulk string. */

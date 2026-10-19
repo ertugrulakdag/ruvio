@@ -201,6 +201,35 @@ fn optional_integer_commands_map_null_and_reject_garbage() {
 }
 
 #[test]
+fn transfer_commands_send_the_cap_and_decode_the_pair() {
+    let (reply, request) = probe("*2\r\n:6\r\n:4\r\n", |c| c.transfer("a", "b", 4, None));
+    assert_eq!(reply.unwrap(), Some((6, 4)));
+    assert_eq!(request, words(&["TRANSFER", "a", "b", "4"]));
+    let (reply, request) = probe("*2\r\n:6\r\n:4\r\n", |c| c.transfer("a", "b", 4, Some(9)));
+    assert_eq!(reply.unwrap(), Some((6, 4)));
+    assert_eq!(request, words(&["TRANSFER", "a", "b", "4", "MAX", "9"]));
+    let (reply, _) = probe("$-1\r\n", |c| c.transfer("a", "b", 4, None));
+    assert_eq!(reply.unwrap(), None);
+    let (reply, _) = probe("+nope\r\n", |c| c.transfer("a", "b", 4, None));
+    assert!(protocol(reply).contains("TRANSFER returned"));
+    let (reply, _) = probe("*1\r\n:1\r\n", |c| c.transfer("a", "b", 4, None));
+    assert!(protocol(reply).contains("TRANSFER returned"));
+
+    let (reply, request) = probe("*2\r\n:1\r\n:2\r\n", |c| {
+        c.htransfer("h", "f", "g", 1, Some(5))
+    });
+    assert_eq!(reply.unwrap(), Some((1, 2)));
+    assert_eq!(
+        request,
+        words(&["HTRANSFER", "h", "f", "g", "1", "MAX", "5"])
+    );
+    let (reply, _) = probe("$-1\r\n", |c| c.htransfer("h", "f", "g", 1, None));
+    assert_eq!(reply.unwrap(), None);
+    let (reply, _) = probe(":1\r\n", |c| c.htransfer("h", "f", "g", 1, None));
+    assert!(protocol(reply).contains("HTRANSFER returned"));
+}
+
+#[test]
 fn getex_returns_the_string_or_none() {
     let (reply, request) = probe("$1\r\nv\r\n", |c| c.getex("k", 100));
     assert_eq!(reply.unwrap().as_deref(), Some("v"));
@@ -344,6 +373,14 @@ fn set_variants_build_the_right_arguments() {
     assert_eq!(request, words(&["SET", "k", "v", "IFEQ", "old"]));
     let (_, request) = probe("+OK\r\n", |c| c.set_if_eq_keep_ttl("k", "v", "old"));
     assert_eq!(request, words(&["SET", "k", "v", "IFEQ", "old", "KEEPTTL"]));
+    let (reply, request) = probe("+OK\r\n", |c| c.set_if_greater("k", -7, None));
+    assert!(reply.unwrap());
+    assert_eq!(request, words(&["SET", "k", "-7", "IFGT"]));
+    let (reply, request) = probe("$-1\r\n", |c| {
+        c.set_if_less("k", 9, Some(Duration::from_millis(5)))
+    });
+    assert!(!reply.unwrap());
+    assert_eq!(request, words(&["SET", "k", "9", "IFLT", "PX", "5"]));
 }
 
 #[test]
@@ -409,6 +446,33 @@ fn blocking_pops_decode_pairs_and_timeouts() {
     assert!(protocol(reply).starts_with("BRPOP returned"));
     let (reply, _) = probe(":1\r\n", |c| c.blpop_key("k", Duration::ZERO));
     assert!(protocol(reply).starts_with("BLPOP returned"));
+
+    let (reply, request) = probe("*2\r\n$1\r\nm\r\n$1\r\n2\r\n", |c| {
+        c.zpopbyscore("z", "-inf", "(5", 3)
+    });
+    assert_eq!(
+        reply.unwrap(),
+        vec![ruvio_client::SortedSetEntry::new("m", 2.0)]
+    );
+    assert_eq!(
+        request,
+        words(&[
+            "ZPOPBYSCORE",
+            "z",
+            "(5",
+            "MIN",
+            "-inf",
+            "COUNT",
+            "3",
+            "WITHSCORES"
+        ])
+    );
+    let (reply, request) = probe(":2\r\n", |c| c.zmovedue("{t}z", "{t}l", "+inf", 4));
+    assert_eq!(reply.unwrap(), 2);
+    assert_eq!(
+        request,
+        words(&["ZMOVEDUE", "{t}z", "{t}l", "+inf", "COUNT", "4"])
+    );
 
     let triple = "*3\r\n$1\r\nz\r\n$1\r\nm\r\n$3\r\n1.5\r\n";
     let (reply, request) = probe(triple, |c| c.bzpopmin(&["z"], Duration::from_secs(1)));
