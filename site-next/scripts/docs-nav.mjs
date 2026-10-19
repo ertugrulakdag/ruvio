@@ -74,6 +74,7 @@ export const GROUPS = [
       { src: "docs/PORTABILITY.md", label: "Portability" },
       { src: "docs/SUPPORT_MATRIX.md", label: "Support matrix" },
       { src: "docs/IMPORT.md", label: "Import from Redis" },
+      { src: "docs/FAQ.md", label: "FAQ" },
     ],
   },
   {
