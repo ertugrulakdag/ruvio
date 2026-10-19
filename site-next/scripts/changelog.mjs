@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Builds src/data/changelog.json from the repository's git history for the /changelog/ page.
 // Reads the first-parent history of main and dev (remote refs first, then local branches) and the
-// release tags, groups them by day and writes one small JSON file. The output is not committed.
+// release tags, newest first, and writes one JSON file. The output is not committed.
 // A checkout without the history (shallow clone, no git) writes { available: false } and the page
 // links to GitHub instead, so the build never fails on it. Plain Node, no dependencies.
 
@@ -14,8 +14,8 @@ const SITE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const REPO_ROOT = path.resolve(SITE_ROOT, "..");
 const OUT = path.join(SITE_ROOT, "src/data/changelog.json");
 const BRANCHES = ["main", "dev"];
-const DAYS = 90; // how far back the page goes
-const MAX_ENTRIES = 400;
+const DAYS = 3650; // how far back the pages go; they are split into pages of PAGE_SIZE entries
+const MAX_ENTRIES = 5000;
 const NOTE_SECTIONS = 5; // newest sections of the server CHANGELOG.md shown at the top of the page
 
 const git = (...args) => execFileSync("git", args, { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 << 20 }).trim();
@@ -115,13 +115,9 @@ function build() {
     entries.push(e);
   }
 
-  const days = [];
-  for (const e of entries) {
-    if (days.at(-1)?.date !== e.date) days.push({ date: e.date, entries: [] });
-    days.at(-1).entries.push(e);
-  }
+  for (const e of entries) { delete e.time; delete e.branches; }
   const tips = Object.fromEntries(Object.entries(refs).map(([b, r]) => [b, git("rev-parse", "--short", r)]));
-  return { since, tips, days };
+  return { since, tips, entries };
 }
 
 const isBump = (e) => e.kind === "commit" && /^Set release versions to /.test(e.text);
@@ -153,7 +149,7 @@ function releaseNotes() {
 let data;
 try {
   const r = build();
-  data = r.days ? { available: true, generated: new Date().toISOString(), ...r } : { available: false, reason: r.reason };
+  data = r.entries ? { available: true, generated: new Date().toISOString(), ...r } : { available: false, reason: r.reason };
 } catch (err) {
   data = { available: false, reason: String(err.message ?? err).split("\n")[0] };
 }
@@ -162,6 +158,6 @@ mkdirSync(path.dirname(OUT), { recursive: true });
 writeFileSync(OUT, JSON.stringify(data));
 console.log(
   data.available
-    ? `changelog: ${data.days.reduce((n, d) => n + d.entries.length, 0)} entries over ${data.days.length} days`
+    ? `changelog: ${data.entries.length} entries since ${data.since}`
     : `changelog: history not available (${data.reason}); the page links to GitHub`,
 );
