@@ -1361,6 +1361,7 @@ fn scriptable(command: &Command<'_>) -> bool {
                 | Command::ConfigSet(_)
                 | Command::ConfigRewrite
                 | Command::ReplicaOf { .. }
+                | Command::MoveSlots(_)
                 | Command::Role
                 | Command::Bgsave
                 | Command::Hello { .. }

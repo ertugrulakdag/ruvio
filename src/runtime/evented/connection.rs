@@ -1003,6 +1003,15 @@ pub(super) async fn handle_client(
                                     wal_group.commit().await?;
                                 }
                             }
+                            // A command that waited above may find its slot taken over by
+                            // another shard meanwhile: it goes through routing again.
+                            if let Some(forwarding) = state.forwarding.as_ref()
+                                && forwarding.fabric.mover.moved()
+                                && !session.in_pubsub
+                                && super::moveslots::runs_elsewhere(&state, &session, &command)
+                            {
+                                continue;
+                            }
                             let command_timing =
                                 CommandTiming::new(state.clone(), command_group(&command), || {
                                     crate::acl::command_acl_name(&command)
@@ -1441,6 +1450,7 @@ fn plain_command(command: &Command<'_>) -> bool {
                 | Command::ConfigSet(_)
                 | Command::ConfigRewrite
                 | Command::ReplicaOf { .. }
+                | Command::MoveSlots(_)
                 | Command::Role
                 | Command::Bgsave
                 | Command::ChangesSubscribe(_)
@@ -1781,6 +1791,12 @@ async fn dispatch_inner<'s>(
 
             Command::ConfigRewrite => {
                 write_response(output, super::live::config_rewrite(state))?;
+
+                return Ok(());
+            }
+
+            Command::MoveSlots(target) => {
+                write_response(output, super::moveslots::command(state, *target))?;
 
                 return Ok(());
             }
@@ -2802,6 +2818,16 @@ async fn finish_retry(
         }
 
         let timed_out = deadline.is_some_and(|deadline| Instant::now() >= deadline);
+
+        // The key's slot moved to another shard while the command waited here.
+        if state
+            .forwarding
+            .as_ref()
+            .is_some_and(|forwarding| forwarding.fabric.mover.moved())
+            && super::moveslots::runs_elsewhere(state, session, &command)
+        {
+            break Some(Response::Error(super::moveslots::UNBLOCKED_ERROR));
+        }
 
         // The batch that parked this command sampled the clock once; a retry must see time pass.
         state.store.borrow().sample_time();

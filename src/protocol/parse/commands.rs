@@ -30,10 +30,62 @@ pub(in crate::protocol) fn cmd_wait<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
 }
 
 pub(in crate::protocol) fn cmd_ruvio<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() >= 1 && args.bytes(0).eq_ignore_ascii_case(b"MOVESLOTS") {
+        return parse_moveslots(args);
+    }
+
     match args.len() {
         0 => Ok(Command::Ruvio(None)),
         1 => Ok(Command::Ruvio(Some(args.arg(0)))),
         _ => Err(ProtocolError::Invalid("RUVIO expects zero or one argument")),
+    }
+}
+
+/// `RUVIO MOVESLOTS first-last shard`, `RUVIO MOVESLOTS slot shard` or `RUVIO MOVESLOTS STATUS`.
+fn parse_moveslots<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    const USAGE: &str = "RUVIO MOVESLOTS expects first-last shard, or STATUS";
+    let slot = |bytes: &[u8]| {
+        std::str::from_utf8(bytes)
+            .ok()
+            .and_then(|text| text.parse::<u16>().ok())
+            .filter(|slot| usize::from(*slot) < crate::routing::HASH_SLOT_COUNT)
+            .ok_or(ProtocolError::Invalid(
+                "RUVIO MOVESLOTS slot is not between 0 and 16383",
+            ))
+    };
+
+    match args.len() {
+        2 if args.bytes(1).eq_ignore_ascii_case(b"STATUS") => Ok(Command::MoveSlots(None)),
+        3 => {
+            let range = args.bytes(1);
+            let (first, last) = match range.iter().position(|byte| *byte == b'-') {
+                Some(dash) => (slot(&range[..dash])?, slot(&range[dash + 1..])?),
+                None => {
+                    let only = slot(range)?;
+
+                    (only, only)
+                }
+            };
+            let shard = std::str::from_utf8(args.bytes(2))
+                .ok()
+                .and_then(|text| text.parse::<u16>().ok())
+                .ok_or(ProtocolError::Invalid(
+                    "RUVIO MOVESLOTS shard is not a shard index",
+                ))?;
+
+            if first > last {
+                return Err(ProtocolError::Invalid(
+                    "RUVIO MOVESLOTS range ends before it starts",
+                ));
+            }
+
+            Ok(Command::MoveSlots(Some(crate::protocol::SlotRangeMove {
+                first,
+                last,
+                shard,
+            })))
+        }
+        _ => Err(ProtocolError::Invalid(USAGE)),
     }
 }
 

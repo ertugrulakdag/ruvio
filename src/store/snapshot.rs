@@ -176,7 +176,7 @@ pub(crate) enum SnapshotStep {
 impl<C: Clock, I: StorageIndex> KvShard<C, I> {
     /// An expired key is left out of a snapshot, except on a replica: it keeps the key
     /// until the primary deletes it, and a restart must too.
-    fn snapshot_skips(&self, db: u8, key: &[u8]) -> bool {
+    pub(super) fn snapshot_skips(&self, db: u8, key: &[u8]) -> bool {
         !self.removals.keeps_expired() && self.deadline_passed(db, key)
     }
 
@@ -204,7 +204,7 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
         entries
     }
 
-    fn map_of(&self, database: u8) -> Option<&I> {
+    pub(super) fn map_of(&self, database: u8) -> Option<&I> {
         if database == self.active {
             Some(&self.entries)
         } else {
