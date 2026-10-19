@@ -313,6 +313,34 @@ Short benchmark (`RUVIO_TEST_ADDR` plain 1-shard server vs `RUVIO_CLUSTER_ADDR` 
 coroutine: the node connection's pending-reply future is returned directly, and only a `MOVED`
 reply is intercepted.
 
+## Reads from replicas
+
+`read_policy=` on a cluster client (sync and asyncio) sends reads to a replica of the key's shard. It takes
+`ReadPolicy.PRIMARY` (default: nothing changes), `ReadPolicy.PREFER_REPLICA` or `ReadPolicy.REPLICA`, or the
+strings `"primary"`, `"prefer-replica"` and `"replica"`. A standalone server ignores it.
+
+```python
+from ruvio import ClusterRuvio, ReadPolicy
+
+client = ClusterRuvio("127.0.0.1", 7000, read_policy=ReadPolicy.PREFER_REPLICA)
+client.set("user:1", "Ada")   # primary
+client.get("user:1")          # a replica; may not have the write yet
+```
+
+- Replication is asynchronous: a read from a replica may miss a recent write, including your own.
+- A read is a command the server flags read-only and not blocking (`GET`, `MGET`, `EXISTS`, `HGETALL`,
+  `ZRANGE` ...). Writes, keyless commands, transactions (`MULTI`/`EXEC`/`WATCH`), blocking commands, scripts,
+  Pub/Sub, `SCAN` and the commands sent to every node stay on the primaries. A multi-key command split over
+  several slots decides per part: `MGET` and `EXISTS` parts read from replicas, `DEL` and `MSET` parts go to primaries.
+- A pipeline goes to replicas only when every command in it is a read; a pipeline with a write is routed as before.
+- When the slot table loads, the client picks one replica per shard at random and keeps it until the next load.
+  Each replica connection sends `READONLY` right after it opens. With the default policy no replica connection
+  is opened and routing does one extra comparison.
+- A replica that cannot be connected, or answers `LOADING` (still copying its primary), is skipped until the
+  next slot table load. `PREFER_REPLICA` then reads from the primary (a `LOADING` read is sent again there);
+  `REPLICA` raises (`ConnectionError`, or the `LOADING` `ResponseError`), and a `RuvioError` saying "no replica"
+  when none is known. A socket that drops after a command was sent fails the command, as for every node.
+
 ## Seed addresses
 
 `seeds=` takes the place of `host`/`port` (both clients, plain and `cluster=True`): `"host:port"` strings
@@ -372,6 +400,8 @@ RUVIO_TEST_FLUSHALL=1 ...                                               # also r
   `BLPOP`, pub/sub and sharded pub/sub, losing one node's connection. The standalone fallback
   test uses `RUVIO_TEST_ADDR` (plain server). Cluster mode has only database 0, so the older
   live suites (database 11) are not run on the cluster.
+- `tests/test_replica_reads_live.py` needs `RUVIO_REPLICATED_ADDR` (a 2-shard primary) and `RUVIO_REPLICA_ADDR` (its
+  2-shard replica, shard i on port + i); `scripts/run_with_servers.sh` starts both. Without them it is skipped.
 - Without `RUVIO_TEST_ADDR` the live tests are skipped. Live tests use database 11 and run
   `FLUSHDB`. `test_keys` also uses database 12. `JSON.INDEX` only works in database 0, so
   that test uses unique keys there and cleans up after itself.

@@ -152,6 +152,23 @@ only for a possible `MOVED` retry.
 - Introspection: `c.isCluster`, `c.nodes`, `c.nodeFor(key)` (a node with its own `RuvioClient`), `c.slotOf(key)`, `c.refreshSlots()`, `c.redirectCount`, `c.refreshCount`.
 - `hashSlot(key)` is exported and is checked against `CLUSTER KEYSLOT` in the live tests. Cluster mode has database 0 only (`SELECT` is not routed).
 
+## Reads from replicas
+
+`ClusterClient` takes `readPolicy: 'primary' | 'prefer-replica' | 'replica'` (type `ReadPolicy`). A standalone server ignores it.
+
+```ts
+const c = createClusterClient({ host: '127.0.0.1', port: 17340, readPolicy: 'prefer-replica' });
+```
+
+- `'primary'` (default): every command goes to the shard's primary, as before. No replica connection is opened and routing does one extra comparison.
+- `'prefer-replica'`: reads go to a replica of the key's shard; when no replica can be used they go to the primary.
+- `'replica'`: reads go to a replica and fail when none can be used (`RuvioError`, message `no replica is known for slot N`).
+- Replication is asynchronous: a read from a replica may miss a recent write, including your own.
+- A read is a command the server flags readonly and not blocking, with a key (`GET`, `MGET`, `HGETALL`, `EXISTS`, ...). Writes, keyless commands, transactions, Pub/Sub, blocking commands and `SCAN`/fan-out commands (`KEYS`, `DBSIZE`) always use the primary. Split multi-key commands apply the rule per slot (`MGET` and `EXISTS` parts read, `DEL` and `MSET` parts write).
+- A pipeline goes to replicas only when every command in it is a read; otherwise it is routed as for `'primary'`.
+- `CLUSTER SLOTS` lists each shard's replicas after its primary. On every slot table load the client picks one replica per shard at random and keeps it until the next load. A replica connection sends `READONLY` right after it is opened, and again after every reconnect.
+- A replica that cannot be opened, or answers `-LOADING` (still copying its primary), is skipped until the next slot table load: its read goes to the primary under `'prefer-replica'`, and fails under `'replica'` (the `LOADING` error is returned). A socket that drops after the command was sent still rejects the command; it is not sent again.
+
 ## Seed addresses
 
 `seeds` lists addresses (`host:port`, IPv6 as `[::1]:6379`) in place of `host` and `port`. Without it nothing changes.
@@ -208,7 +225,7 @@ and the 3-shard server shares this VM's CPUs with the benchmark, so the cluster 
 
 ## Not done / not verified
 
-- **Cluster, not done:** `ASK` redirects and replica reads (`READONLY`) are not handled (Ruvio's per-shard layout has no slot migration); a plain `scan()` call is single-node (use `scanIterator()`);
+- **Cluster, not done:** `ASK` redirects are not handled (Ruvio's per-shard layout has no slot migration); a plain `scan()` call is single-node (use `scanIterator()`);
   `MOVED` inside a transaction is not retried; split `MSET`/`DEL`... are not atomic; `SELECT` is not routed (database 0 only); `CLUSTER NODES/SHARDS/INFO/MYID` go to the seed node only.
   Cluster routing is verified only against Ruvio's 3-shard `per-shard` port layout on one machine, not against a Redis Cluster.
 - **Not verified live:** TLS and unix-socket connections; `ACL LOAD`/`ACL SAVE` success (server has no acl_file; the call round-trips an error); `WAIT` with real replicas;

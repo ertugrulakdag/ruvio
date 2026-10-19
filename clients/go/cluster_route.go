@@ -49,7 +49,82 @@ func (cl *cluster) route(ctx context.Context, r *request, blocking bool) (Value,
 		putReq(r)
 		return Value{}, err
 	}
+	if cl.policy != ReadPrimary && slot >= 0 && !blocking && spec.reads() {
+		return cl.runRead(ctx, t, slot, r)
+	}
 	return cl.run(ctx, t, slot, r, blocking)
+}
+
+// replicaFor returns the replica the reads of slot go to, connected. It returns nil when
+// the read goes to the primary (ReadPreferReplica with no usable replica), and an error
+// under ReadReplica when there is none.
+func (cl *cluster) replicaFor(ctx context.Context, t *topology, slot int) (*replicaRoute, error) {
+	var rt *replicaRoute
+	if ni := t.owner[slot]; ni != noOwner && int(ni) < len(t.read) {
+		rt = t.read[ni]
+	}
+	if rt != nil && !rt.bad.Load() {
+		_, err := rt.node.shared(ctx)
+		if err == nil {
+			return rt, nil
+		}
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		rt.bad.Store(true)
+		if cl.policy == ReadReplica {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if cl.policy == ReadReplica {
+		return nil, fmt.Errorf("ruvio: no replica is known for slot %d (ReadReplica)", slot)
+	}
+	return nil, nil
+}
+
+// isLoading reports whether an error reply says the server is still loading its data.
+func isLoading(msg []byte) bool {
+	return len(msg) >= 7 && string(msg[:7]) == "LOADING"
+}
+
+// runRead sends the read r for slot to the slot's replica. A replica that answers LOADING
+// is skipped from then on, and the read goes to the primary unless the policy is
+// ReadReplica. It recycles r.
+func (cl *cluster) runRead(ctx context.Context, t *topology, slot int, r *request) (Value, error) {
+	rt, err := cl.replicaFor(ctx, t, slot)
+	if err != nil {
+		putReq(r)
+		return Value{}, err
+	}
+	if rt == nil {
+		return cl.run(ctx, t, slot, r, false)
+	}
+	ok, err := rt.node.rt(ctx, r, false, false)
+	if !ok {
+		return Value{}, err
+	}
+	if r.err != nil {
+		err := r.err // the socket failed after the command was sent: not sent again
+		putReq(r)
+		return Value{}, err
+	}
+	v := r.val
+	if v.Kind == KindError {
+		loading := isLoading(v.Bytes)
+		if loading {
+			rt.bad.Store(true)
+		}
+		if _, _, isMoved := parseMoved(v.Bytes); (loading && cl.policy != ReadReplica) || isMoved {
+			r.val, r.vals, r.err = Value{}, nil, nil // the command was not executed: send it again
+			r.state.Store(stateWaiting)
+			return cl.run(ctx, t, slot, r, false)
+		}
+		putReq(r)
+		return v, &Error{Msg: b2s(v.Bytes)}
+	}
+	putReq(r)
+	return v, nil
 }
 
 func crossSlotErr(buf []byte) error {
@@ -325,8 +400,19 @@ func (cl *cluster) split(ctx context.Context, t *topology, spec cmdSpec, r *requ
 	type nodeGroup struct{ parts []int }
 	var order []int
 	groups := map[int]*nodeGroup{}
+	readParts := cl.policy != ReadPrimary && spec.reads()
 	for pi, part := range parts {
 		ni := int(t.owner[part.slot])
+		if readParts {
+			rt, err := cl.replicaFor(ctx, t, part.slot)
+			if err != nil {
+				putReq(r)
+				return Value{}, err
+			}
+			if rt != nil {
+				ni = -2 - ni // a negative key names the replica of node -2-ni
+			}
+		}
 		g := groups[ni]
 		if g == nil {
 			g = &nodeGroup{}
@@ -339,7 +425,12 @@ func (cl *cluster) split(ctx context.Context, t *topology, spec cmdSpec, r *requ
 	do := func(ni int) {
 		g := groups[ni]
 		node := cl.seed
-		if ni != noOwner {
+		var rt *replicaRoute
+		switch {
+		case ni <= -2:
+			rt = t.read[-2-ni]
+			node = rt.node
+		case ni != noOwner:
 			node = t.nodes[ni]
 		}
 		sub := getReq()
@@ -360,6 +451,15 @@ func (cl *cluster) split(ctx context.Context, t *topology, spec cmdSpec, r *requ
 		for j, pi := range g.parts {
 			v := sub.vals[j]
 			if v.Kind == KindError {
+				if rt != nil && isLoading(v.Bytes) {
+					rt.bad.Store(true)
+					if cl.policy != ReadReplica { // read this part from the primary
+						again := getReq()
+						p.appendPart(again, pi)
+						replies[pi], errs[pi] = cl.run(ctx, t, parts[pi].slot, again, false)
+						continue
+					}
+				}
 				if _, _, isMoved := parseMoved(v.Bytes); isMoved { // repair this part alone
 					again := getReq()
 					p.appendPart(again, pi)

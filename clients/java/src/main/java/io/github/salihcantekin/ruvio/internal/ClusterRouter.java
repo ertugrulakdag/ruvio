@@ -3,12 +3,14 @@ package io.github.salihcantekin.ruvio.internal;
 
 import io.github.salihcantekin.ruvio.RuvioConnectionException;
 import io.github.salihcantekin.ruvio.RuvioException;
+import io.github.salihcantekin.ruvio.ReadPolicy;
 import io.github.salihcantekin.ruvio.RuvioOptions;
 import io.github.salihcantekin.ruvio.RuvioServerException;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -17,6 +19,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -30,6 +33,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * command is sent there, at most {@link #MAX_REDIRECTS} times per command; the whole table is re-read from
  * the server only when the named node is unknown or from the command's second MOVED on, and the retry still
  * goes to the named node.
+ *
+ * <p>With a {@link ReadPolicy} other than {@code PRIMARY}, reads with a key go to one replica of the key's shard
+ * (listed after the primary in {@code CLUSTER SLOTS}, picked at random whenever the table loads). A replica that
+ * cannot be opened or answers {@code LOADING} is skipped until the next load.
  */
 public final class ClusterRouter implements AutoCloseable {
     /** The number of hash slots. */
@@ -79,6 +86,10 @@ public final class ClusterRouter implements AutoCloseable {
     /** The configured seed addresses, asked for the slot map when no known node answers. */
     private final Address[] seedAddresses;
     private final ConcurrentHashMap<String, ClusterNode> nodes = new ConcurrentHashMap<>();
+    /** The replicas that serve reads; kept apart from {@link #nodes}, which only holds primaries and seeds. */
+    private final ConcurrentHashMap<String, ClusterNode> replicas = new ConcurrentHashMap<>();
+    /** Reads may go to replicas ({@code readPolicy} is not {@code PRIMARY}); checked once per command. */
+    private final boolean replicaReads;
     private volatile ClusterNode[] table = new ClusterNode[SLOTS];
     private final AtomicInteger nextIndex = new AtomicInteger();
     private final Object refreshLock = new Object();
@@ -86,6 +97,7 @@ public final class ClusterRouter implements AutoCloseable {
 
     private ClusterRouter(RuvioOptions options, ClusterNode seed) {
         this.options = options;
+        this.replicaReads = options.readPolicy != ReadPolicy.PRIMARY;
         this.seedAddresses = Address.parseAll(options.seeds).toArray(new Address[0]);
         this.seed = seed;
         seed.index = 0;
@@ -294,6 +306,7 @@ public final class ClusterRouter implements AutoCloseable {
         List<Object> ranges = Reply.list(tree);
         ClusterNode[] t = new ClusterNode[SLOTS];
         int assigned = 0;
+        Map<ClusterNode, List<Address>> listed = replicaReads ? new LinkedHashMap<>() : null;
         for (Object o : ranges) {
             List<Object> range = Reply.list(o);
             if (range.size() < 3) {
@@ -315,11 +328,68 @@ public final class ClusterRouter implements AutoCloseable {
                 t[s] = n;
                 assigned++;
             }
+            if (listed != null) {
+                addReplicas(listed.computeIfAbsent(n, k -> new ArrayList<>()), range, from);
+            }
         }
         if (assigned == 0) {
             throw new RuvioServerException("ERR CLUSTER SLOTS returned no slot ranges");
         }
+        if (listed != null) {
+            pickReaders(listed);
+        }
         table = t;
+    }
+
+    /** Adds the replicas listed after the primary in a range; an entry that cannot be read is skipped. */
+    private static void addReplicas(List<Address> into, List<Object> range, ClusterNode from) {
+        for (int i = 3; i < range.size(); i++) {
+            try {
+                List<Object> entry = Reply.list(range.get(i));
+                String host = Reply.str(entry.get(0));
+                long port = (Long) entry.get(1);
+                if (host == null || host.isEmpty()) {
+                    host = from.host;
+                }
+                if (port < 1 || port > 65535) {
+                    continue;
+                }
+                boolean known = false;
+                for (Address a : into) {
+                    known |= a.port == port && a.host.equals(host);
+                }
+                if (!known) {
+                    into.add(new Address(host, (int) port));
+                }
+            } catch (RuntimeException ignored) {
+                // a malformed replica entry does not fail the load
+            }
+        }
+    }
+
+    /**
+     * Gives each primary one of its replicas for reads, kept until the next load. One random number per load, so
+     * many clients spread over the replicas.
+     */
+    private void pickReaders(Map<ClusterNode, List<Address>> listed) {
+        int pick = ThreadLocalRandom.current().nextInt(Integer.MAX_VALUE);
+        for (ClusterNode n : nodes.values()) {
+            n.reader = null;
+        }
+        for (Map.Entry<ClusterNode, List<Address>> e : listed.entrySet()) {
+            List<Address> list = e.getValue();
+            if (list.isEmpty()) {
+                continue;
+            }
+            Address a = list.get(pick % list.size());
+            ClusterNode primary = e.getKey();
+            ClusterNode replica = replicas.computeIfAbsent(ClusterNode.address(a.host, a.port), k -> {
+                RuvioOptions o = options.toBuilder().seeds().host(a.host).port(a.port).database(0).build();
+                return new ClusterNode(a.host, a.port, Link.replica(o));
+            });
+            replica.primary = primary;
+            primary.reader = replica;
+        }
     }
 
     // ---- routing ---------------------------------------------------------------------------
@@ -343,9 +413,37 @@ public final class ClusterRouter implements AutoCloseable {
      * @param sink where the frame goes
      */
     public void dispatch(Frame f, RoutedRequest<?> r, Sink sink) {
+        dispatch(f, r, sink, false);
+    }
+
+    /**
+     * Tells whether reads may go to replicas.
+     *
+     * @return {@code true} when the read policy is not {@code PRIMARY}
+     */
+    public boolean replicaReads() {
+        return replicaReads;
+    }
+
+    /**
+     * Routes a frame of a pipeline: reads are still sent to the primary's group, but marked in the request, because
+     * the pipeline can only go to replicas once it is known that every command in it reads.
+     *
+     * @param f the encoded frame
+     * @param r the request awaiting the reply
+     * @param sink where the frame goes
+     */
+    public void dispatchQueued(Frame f, RoutedRequest<?> r, Sink sink) {
+        dispatch(f, r, sink, true);
+    }
+
+    private void dispatch(Frame f, RoutedRequest<?> r, Sink sink, boolean queued) {
         f.parse();
         byte[] b = f.out.buf;
         ClusterKeys.Spec spec = ClusterKeys.spec(b, f.off[0], f.len[0]);
+        if (replicaReads) {
+            r.read = spec.read;
+        }
         int slot = -1;
         if (spec.first) {
             if (f.argc >= 2) {
@@ -358,7 +456,7 @@ public final class ClusterRouter implements AutoCloseable {
                 slot = HashSlot.of(b, f.off[k[0]], f.len[k[0]]);
                 for (int i = 1; i < n; i++) {
                     if (HashSlot.of(b, f.off[k[i]], f.len[k[i]]) != slot) {
-                        crossSlot(spec, f, n, r, sink);
+                        crossSlot(spec, f, n, r, sink, queued);
                         return;
                     }
                 }
@@ -375,12 +473,23 @@ public final class ClusterRouter implements AutoCloseable {
             off = 0;
         }
         r.setFrame(buf, off, total);
-        route(sink, slot, buf, off, total, r);
+        route(sink, slot, buf, off, total, r, queued);
     }
 
     /** Sends a frame to the owner of {@code slot} (any node when the slot is -1). */
-    private void route(Sink sink, int slot, byte[] buf, int off, int len, RoutedRequest<?> r) {
+    private void route(Sink sink, int slot, byte[] buf, int off, int len, RoutedRequest<?> r, boolean queued) {
         ClusterNode node = slot < 0 ? anyNode() : owner(slot);
+        if (replicaReads && slot >= 0 && r.read) {
+            if (queued) {
+                r.replicaOk = true;
+            } else {
+                ClusterNode replica = readNode(node);
+                if (replica != null) {
+                    r.replica = replica;
+                    node = replica;
+                }
+            }
+        }
         try {
             sink.send(node, buf, off, len, r);
         } catch (RuvioConnectionException e) {
@@ -393,6 +502,7 @@ public final class ClusterRouter implements AutoCloseable {
      * for, to the owner the new map names. A keyless command goes to the first node of the new map that opens.
      */
     private void sendAfterReload(Sink sink, int slot, byte[] buf, int off, int len, RoutedRequest<?> r, RuvioConnectionException error) {
+        r.replica = null;
         if (closed) {
             throw error;
         }
@@ -457,12 +567,12 @@ public final class ClusterRouter implements AutoCloseable {
         return new RuvioServerException("CROSSSLOT Keys in request do not hash to the same slot (checked by the client, nothing was sent)");
     }
 
-    private void crossSlot(ClusterKeys.Spec spec, Frame f, int n, RoutedRequest<?> r, Sink sink) {
+    private void crossSlot(ClusterKeys.Spec spec, Frame f, int n, RoutedRequest<?> r, Sink sink, boolean queued) {
         if (spec.split == ClusterKeys.NO_SPLIT) {
             r.failFinal(crossSlotError());
             return;
         }
-        split(spec, f, n, r, sink);
+        split(spec, f, n, r, sink, queued);
     }
 
     /**
@@ -470,7 +580,7 @@ public final class ClusterRouter implements AutoCloseable {
      * requires one slot per command, even inside one shard), each sent to its owner. The sub-commands
      * run concurrently and the replies are re-assembled in the caller's order.
      */
-    private void split(ClusterKeys.Spec spec, Frame f, int n, RoutedRequest<?> r, Sink sink) {
+    private void split(ClusterKeys.Spec spec, Frame f, int n, RoutedRequest<?> r, Sink sink, boolean queued) {
         boolean pairs = spec.pairs;
         if (pairs && (f.argc & 1) == 0) {
             r.failFinal(new RuvioServerException("ERR wrong number of arguments for '" + spec.name.toLowerCase() + "' command"));
@@ -519,9 +629,10 @@ public final class ClusterRouter implements AutoCloseable {
             }
             SplitPart part = new SplitPart(parent, g, r);
             part.router = this;
+            part.read = r.read;
             part.setFrame(Arrays.copyOf(tmp.buf, tmp.pos), 0, tmp.pos);
             try {
-                route(sink, groupSlot[g], part.frame, 0, part.frameLen, part);
+                route(sink, groupSlot[g], part.frame, 0, part.frameLen, part, queued);
             } catch (RuntimeException e) {
                 parent.fail(e);
                 return;
@@ -619,6 +730,85 @@ public final class ClusterRouter implements AutoCloseable {
         }
     }
 
+    // ---- replica reads ---------------------------------------------------------------------
+
+    /**
+     * Returns the replica that serves the reads of a primary, with its connection open.
+     *
+     * @param primary the primary
+     * @return the replica; null when the read should go to the primary (none known or reachable under
+     *         {@code PREFER_REPLICA})
+     * @throws RuvioException under {@code REPLICA}, when there is no replica to use ("no replica ..."), or
+     *         the connection error when it cannot be opened
+     */
+    public ClusterNode readNode(ClusterNode primary) {
+        ClusterNode replica = primary.reader;
+        if (replica != null) {
+            try {
+                replica.link.get();
+                return replica;
+            } catch (RuvioException e) {
+                // skipped until the next slot map load
+                if (primary.reader == replica) {
+                    primary.reader = null;
+                }
+                if (options.readPolicy == ReadPolicy.REPLICA) {
+                    throw e;
+                }
+                return null;
+            }
+        }
+        if (options.readPolicy == ReadPolicy.REPLICA) {
+            throw new RuvioException("no replica is known for " + primary + " (read policy REPLICA)");
+        }
+        return null;
+    }
+
+    /**
+     * Tells whether an error is a {@code LOADING} reply: the replica is still copying its primary.
+     *
+     * @param error the failure
+     * @return {@code true} for a server error starting with {@code LOADING}
+     */
+    public static boolean isLoading(Throwable error) {
+        if (!(error instanceof RuvioServerException)) {
+            return false;
+        }
+        String m = error.getMessage();
+        return m != null && m.startsWith("LOADING");
+    }
+
+    /**
+     * A replica answered {@code LOADING}: skip it until the next slot map load and, under {@code PREFER_REPLICA},
+     * send the command to the primary instead. Under {@code REPLICA} the error is the command's result.
+     *
+     * @param r the request to send again
+     * @param replica the replica that answered
+     * @param loading the {@code LOADING} error
+     */
+    public void readAgain(RoutedRequest<?> r, ClusterNode replica, Throwable loading) {
+        ClusterNode primary = replica.primary;
+        if (primary != null && primary.reader == replica) {
+            primary.reader = null;
+        }
+        r.replica = null;
+        if (primary == null || options.readPolicy == ReadPolicy.REPLICA) {
+            r.failFinal(loading);
+            return;
+        }
+        try {
+            BACKGROUND.execute(() -> {
+                try {
+                    DIRECT.send(primary, r.frame, r.frameOff, r.frameLen, r);
+                } catch (RuntimeException e) {
+                    r.failFinal(e);
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            r.failFinal(loading);
+        }
+    }
+
     // ---- MOVED -----------------------------------------------------------------------------
 
     /**
@@ -661,6 +851,7 @@ public final class ClusterRouter implements AutoCloseable {
             int colon = addr.lastIndexOf(':');
             String host = colon > 0 ? addr.substring(0, colon) : seed.host;
             int port = Integer.parseInt(addr.substring(colon + 1));
+            r.replica = null;
             ClusterNode target = onMoved(slot, host, port, r.redirects > 1);
             DIRECT.send(target, r.frame, r.frameOff, r.frameLen, r);
         } catch (RuntimeException e) {
@@ -705,6 +896,9 @@ public final class ClusterRouter implements AutoCloseable {
     public void close() {
         closed = true;
         for (ClusterNode n : nodes.values()) {
+            n.close();
+        }
+        for (ClusterNode n : replicas.values()) {
             n.close();
         }
     }

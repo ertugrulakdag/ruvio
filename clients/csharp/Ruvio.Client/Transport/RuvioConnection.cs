@@ -342,6 +342,7 @@ public sealed class RuvioConnection : IRuvioConnection
         ReconnectBaseDelay = options.ReconnectBaseDelay,
         ReconnectMaxDelay = options.ReconnectMaxDelay,
         ReconnectDelay = options.ReconnectDelay,
+        ReadPolicy = options.ReadPolicy,
         JsonSerializerOptions = options.JsonSerializerOptions,
     };
 }
