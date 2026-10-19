@@ -369,6 +369,15 @@ impl Api {
         if primary {
             fields.push(("num-slaves", (group.members.len() - 1).to_string()));
             fields.push(("quorum", self.config.quorum().to_string()));
+            // Read by Sentinel clients (redis-py's `check_master_state`).
+            fields.push((
+                "num-other-sentinels",
+                (self.config.peers.len() - 1).to_string(),
+            ));
+            fields.push((
+                "down-after-milliseconds",
+                self.config.down_after.as_millis().to_string(),
+            ));
             fields.push((
                 "config-epoch",
                 self.machine

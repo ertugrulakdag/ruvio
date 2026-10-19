@@ -5,14 +5,14 @@ coordinators, a TCP proxy between the coordinators and each data node):
   leader      the coordinator leader is killed, then the primary
   minority    two of three coordinators are down: no failover may happen
   restart     every coordinator restarts; the agreed primary is kept
-  loss        a writer runs while the primary is killed: acknowledged writes lost, with and
-              without min-replicas-to-write"""
+  loss        a writer runs while the primary is killed: acknowledged writes lost
+  client      redis-py's Sentinel client follows the failover (skipped without redis-py)"""
 import os, signal, socket, subprocess, sys, threading, time, shutil
 
 # Usage: scripts/coordinator_faults.py target/debug/ruvio [scenario ...]
 # Every scenario takes a few seconds; all of them well under a minute.
 RUVIO = sys.argv[1]
-SCENARIOS = sys.argv[2:] or ["partition", "leader", "minority", "restart", "loss"]
+SCENARIOS = sys.argv[2:] or ["partition", "leader", "minority", "restart", "loss", "client"]
 WORK = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"ruvio-coordinator-faults-{os.getpid()}")
 NODES = [(18300, 38300), (18320, 38320), (18340, 38340)]
 PROXY = [18500, 18520, 18540]           # coordinators reach node i through PROXY[i]
@@ -148,6 +148,26 @@ def run(SCEN):
             check("after a restart the agreed primary is kept", wait(lambda: all(primary_index(p) == 0 for _, p in COORDS), 20))
             nodes[0].send_signal(signal.SIGKILL); nodes[0].wait()
             check("and the restarted coordinators still fail over", wait(lambda: primary_index(COORDS[0][1]) not in (None, 0), 20))
+        elif SCEN == "client":
+            # A Redis client library with Sentinel support follows the failover by itself.
+            try:
+                import redis
+                from redis.sentinel import Sentinel
+            except ImportError:
+                print("SKIP client: redis-py is not installed (pip install redis)")
+                return
+            sentinel = Sentinel([("127.0.0.1", p) for _, p in COORDS], socket_timeout=1)
+            check("redis-py discovers the primary", sentinel.discover_master("main") == ("127.0.0.1", PROXY[0]))
+            master = sentinel.master_for("main", socket_timeout=1)
+            check("redis-py writes through it", master.set("k", "v") is True)
+            nodes[0].send_signal(signal.SIGKILL); nodes[0].wait(); t0 = time.time()
+            def write():
+                try:
+                    return master.set("after", "1")
+                except (redis.ConnectionError, redis.TimeoutError, redis.ReadOnlyError):
+                    return False
+            ok = wait(write, 20)
+            check(f"redis-py writes to the new primary {time.time()-t0:.2f}s after the kill", ok)
         elif SCEN == "loss":
             acked, stop_flag = [], threading.Event()
             def writer():

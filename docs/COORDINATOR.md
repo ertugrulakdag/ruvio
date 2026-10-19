@@ -105,7 +105,7 @@ support connects to the coordinators with the group name as the service name:
 | Command | Answer |
 | --- | --- |
 | `SENTINEL get-master-addr-by-name group` | `[host, port]` of the agreed primary, or a null array |
-| `SENTINEL masters`, `SENTINEL master group` | The primary as a field list: `name`, `ip`, `port`, `flags` (`master`, `s_down` when this coordinator cannot reach it), `last-ok-ping-reply`, `num-slaves`, `quorum`, `config-epoch` |
+| `SENTINEL masters`, `SENTINEL master group` | The primary as a field list: `name`, `ip`, `port`, `flags` (`master`, `s_down` when this coordinator cannot reach it), `last-ok-ping-reply`, `num-slaves`, `quorum`, `num-other-sentinels`, `down-after-milliseconds`, `config-epoch` |
 | `SENTINEL replicas group` (`slaves`) | The other members, with `slave-repl-offset` (their synced sequence) |
 | `SENTINEL sentinels group` | The other coordinators |
 | `SUBSCRIBE +switch-master` | `group old-host old-port new-host new-port` on every failover |
@@ -113,7 +113,9 @@ support connects to the coordinators with the group name as the service name:
 | `INFO` | `coordinator_id`, `leader_id`, `is_leader`, and `group_<name>:primary=…,epoch=…` |
 | `AUTH secret` | Required first when `secret` is set; `NOAUTH` otherwise |
 
-Ruvio's own clients do not speak Sentinel yet; after a failover they reach the new primary through their
+Checked with redis-py's `Sentinel` (5.2): it discovers the primary, writes through it, and writes to
+the new primary about 1.2 seconds after the old one is killed (`scripts/coordinator_faults.py client`).
+Other libraries were not tried. Ruvio's own clients do not speak Sentinel yet; after a failover they reach the new primary through their
 seed addresses (see [CLIENT_BEHAVIOR.md](CLIENT_BEHAVIOR.md)) and `ROLE`.
 
 ## Security
@@ -138,4 +140,5 @@ private network. The secret travels in clear text; use a private network or a tu
   coordinator, no failover without a majority, and the secret.
 - `scripts/coordinator_faults.py target/debug/ruvio [scenario ...]`: a TCP proxy between the coordinators
   and each data node; `partition` (primary cut from the coordinators only), `leader` (the coordinator
-  leader killed, then the primary), `minority`, `restart`, `loss` (acknowledged writes lost under load).
+  leader killed, then the primary), `minority`, `restart`, `loss` (acknowledged writes lost under load),
+  `client` (redis-py's Sentinel client; skipped when redis-py is not installed).
