@@ -61,6 +61,25 @@ impl Default for ReplicationConfig {
     }
 }
 
+impl ReplicationConfig {
+    /// Whether replication listens for, or dials, another machine. Replication traffic is
+    /// not covered by `tls_cert`, so this is where its cleartext matters.
+    pub fn leaves_the_host(&self) -> bool {
+        match self.role {
+            ReplicationRole::Off => false,
+            ReplicationRole::Primary => self
+                .listen
+                .is_some_and(|address| !address.ip().is_loopback()),
+            ReplicationRole::Replica => {
+                self.primary_name.is_some()
+                    || self
+                        .primary
+                        .is_some_and(|address| !address.ip().is_loopback())
+            }
+        }
+    }
+}
+
 /// How `shards > 1` exposes its listeners. In both modes a command whose key another shard
 /// owns is forwarded to that shard.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
