@@ -1,0 +1,7 @@
+version: 2
+updates:
+  # Keeps the base image digests in the Dockerfiles current, so security patches arrive as PRs.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

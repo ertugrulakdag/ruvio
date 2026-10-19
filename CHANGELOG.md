@@ -4,6 +4,7 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+- Docker image (issue #46): new `ruvio-ctl ping [--address A] [--connect-only]` (exit 0 when the server answers; `NOAUTH` counts), used by a `HEALTHCHECK` in `Dockerfile` and `Dockerfile.linux`; the builder and runtime base images are pinned by digest, and `.github/dependabot.yml` keeps the digests current weekly.
 - Docs: `clients/java/README.md` said 287 commands (the matrix has 296); the compatibility check now also catches a capital "All N commands", and `clients/README.md` explains why `clients/testdata/commands.json` has fewer entries (it lists command names, the matrix lists subcommands separately) and that `ruvio-ui` is not a client (issue #47).
 - `ruvio import --replace` now writes each key under a temporary key and renames it over the target's, so a crash no longer leaves a half-written key or one without its TTL (issue #29). See `docs/IMPORT.md`.
 - The HTTP `/metrics` endpoint is not served by the server (the setting was accepted but nothing listened). It is removed from the docs, `deploy/kubernetes.yaml` and `deploy/ruvio.toml`; metrics are read with `INFO prometheus`. The server logs a warning at startup when `metrics_address` is set. An HTTP endpoint may come later.
