@@ -26,6 +26,7 @@ import uuid
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 from urllib.parse import unquote, urlparse
 
+from ._blocking import FOREVER, blocking_wait, pipeline_wait
 from ._cluster import ReadPolicy, policy_code
 from ._commands import Commands, Conv, KeyT, KeyTypeT, _s
 from ._models import Message
@@ -281,9 +282,10 @@ class Ruvio(Commands):
         password: Password for ``AUTH``, sent on every (re)connect.
         username: ACL user for ``AUTH``; omit for the default user.
         client_name: Name sent with ``CLIENT SETNAME`` on connect.
-        socket_timeout: Seconds a send or receive may take; ``None`` (default) waits forever. On expiry
-            the socket is closed and :class:`ruvio.TimeoutError` is raised. Blocking commands such as
-            ``blpop`` need a timeout longer than their own.
+        socket_timeout: Seconds a send or receive may take (default 30.0); ``None`` waits forever. On
+            expiry the socket is closed and :class:`ruvio.TimeoutError` is raised. A blocking command gets
+            its own wait on top (``blpop(k, 5)`` may take 5 s plus this), and one that waits forever
+            (timeout ``0``) has no limit. Pub/Sub sockets have none either.
         connect_timeout: Seconds allowed to open the socket (default 5.0, ``None`` for no limit).
         decode_responses: ``True`` (default) returns ``str``; ``False`` returns ``bytes``. ``client.raw``
             gives the opposite view of the same connection.
@@ -332,7 +334,7 @@ class Ruvio(Commands):
         password: Optional[str] = None,
         username: Optional[str] = None,
         client_name: Optional[str] = None,
-        socket_timeout: Optional[float] = None,
+        socket_timeout: Optional[float] = 30.0,
         connect_timeout: Optional[float] = 5.0,
         decode_responses: bool = True,
         unix_socket_path: Optional[str] = None,
@@ -352,7 +354,8 @@ class Ruvio(Commands):
             password: Password for ``AUTH``.
             username: ACL user for ``AUTH``.
             client_name: Connection name set on connect.
-            socket_timeout: Seconds for a send/receive; ``None`` waits forever.
+            socket_timeout: Seconds for a send/receive (default 30.0, plus a blocking command's own wait);
+                ``None`` waits forever.
             connect_timeout: Seconds to open the socket; ``None`` for no limit.
             decode_responses: Return ``str`` (``True``) or ``bytes`` (``False``).
             unix_socket_path: Unix socket to use instead of host/port.
@@ -426,9 +429,15 @@ class Ruvio(Commands):
         dec = self._decode if decode is None else decode
         if p.decode is not dec:
             p.decode = dec
+        t = conn.opts.socket_timeout
+        wait = blocking_wait(data) if t is not None else 0.0
         try:
+            if wait:
+                sock.settimeout(None if wait == FOREVER else t + wait)  # type: ignore[union-attr]
             sock.sendall(data)  # type: ignore[union-attr]
             reply = conn.read()
+            if wait:
+                sock.settimeout(t)  # type: ignore[union-attr]
         except socket.timeout as exc:
             conn.close()
             raise TimeoutError("timed out waiting for the reply") from exc
@@ -453,9 +462,17 @@ class Ruvio(Commands):
         p = conn.parser
         if p.decode is not self._decode:
             p.decode = self._decode
+        t = conn.opts.socket_timeout
+        wait = pipeline_wait(payload) if t is not None else 0.0
         try:
-            conn.sock.sendall(b"".join(payload))  # type: ignore[union-attr]
-            return [conn.read() for _ in range(count)]
+            sock = conn.sock
+            if wait:
+                sock.settimeout(None if wait == FOREVER else t + wait)  # type: ignore[union-attr]
+            sock.sendall(b"".join(payload))  # type: ignore[union-attr]
+            replies = [conn.read() for _ in range(count)]
+            if wait:
+                sock.settimeout(t)  # type: ignore[union-attr]
+            return replies
         except socket.timeout as exc:
             conn.close()
             raise TimeoutError("timed out waiting for pipeline replies") from exc

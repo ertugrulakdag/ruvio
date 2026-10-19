@@ -50,9 +50,11 @@ type Options struct {
 	DialTimeout time.Duration
 	// CommandTimeout bounds one command, from sending it to reading its reply, when its
 	// context has no deadline; the command then fails with context.DeadlineExceeded and
-	// the connection stays usable. Default 0: no limit, so a half-open peer blocks a
-	// call made with context.Background() until the connection drops. It also caps
-	// blocking commands (BLPop and the like): set it above their own timeout.
+	// the connection stays usable. Default (0) 30 seconds; a negative value means no
+	// limit, so a half-open peer blocks a call made with context.Background() until the
+	// connection drops. A blocking command gets its own wait on top (BLPop with 5s may
+	// take 5s plus this), and one that waits forever (timeout 0) has no limit. Pub/Sub
+	// connections are not bounded.
 	CommandTimeout time.Duration
 	// Dial overrides the dialer (for TLS, unix sockets, tests). The network argument
 	// is always "tcp" and addr is the address being tried: Options.Addr, the seed (with
@@ -133,7 +135,7 @@ type Client struct {
 // NewClient returns a Client without connecting. The first command opens the connection,
 // and if the connection later drops, the next command opens a new one (there is no
 // reconnect option; the command that found the drop fails and is not retried). Defaults:
-// Addr "127.0.0.1:6379", DialTimeout 5s, MaxIdleDedicated 4. Use Connect to fail fast on
+// Addr "127.0.0.1:6379", DialTimeout 5s, CommandTimeout 30s, MaxIdleDedicated 4. Use Connect to fail fast on
 // a wrong address or password.
 func NewClient(opts Options) *Client {
 	if opts.Addr == "" {
@@ -144,6 +146,9 @@ func NewClient(opts Options) *Client {
 	}
 	if opts.MaxIdleDedicated == 0 {
 		opts.MaxIdleDedicated = 4
+	}
+	if opts.CommandTimeout == 0 {
+		opts.CommandTimeout = defaultCommandTimeout
 	}
 	c := &Client{opts: opts}
 	if len(opts.Seeds) > 0 {

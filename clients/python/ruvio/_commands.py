@@ -2464,8 +2464,7 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
         The server polls every 5 ms instead of parking a waiter and counts it against the limit of
         1,024 blocked clients per shard. Not allowed inside a transaction or script. It occupies the
         connection: on the shared asyncio connection every other caller waits too, so run it on
-        :meth:`dedicated`. With a sync ``socket_timeout`` shorter than ``timeout`` the call raises
-        :class:`TimeoutError`.
+        :meth:`dedicated`. On the sync client ``timeout`` is added to ``socket_timeout`` for this call.
 
         Args:
             src: Source list.

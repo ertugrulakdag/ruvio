@@ -113,6 +113,90 @@ class LinkFakeTest {
     }
 
     @Test
+    void theCommandTimeoutDefaultsToThirtySeconds() {
+        assertEquals(30_000, RuvioOptions.builder().build().commandTimeoutMillis);
+        assertEquals(0, RuvioOptions.builder().commandTimeoutMillis(0).build().commandTimeoutMillis);
+    }
+
+    @Test
+    void aBlockingCommandWaitsItsOwnTimeoutOnTop() throws Exception {
+        try (FakeNode n = new FakeNode(a -> {
+            if (!a.get(0).equals("BLPOP")) {
+                return a.get(0).equals("PING") ? FakeNode.SILENT : ok(a);
+            }
+            try {
+                Thread.sleep(1000); // an empty list: nil when BLPOP's 1 s runs out
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return "*-1\r\n";
+        })) {
+            try (RuvioClient<String, String> c = RuvioClient.connect(to(n).commandTimeoutMillis(200).build())) {
+                long start = System.nanoTime();
+                assertNull(c.blpop(1, "k"));
+                long took = (System.nanoTime() - start) / 1_000_000;
+                assertTrue(took >= 900 && took < 3000, "took " + took + " ms");
+                // The plain limit still holds for the next command.
+                RuvioException e = assertThrows(RuvioException.class, c::ping);
+                assertTrue(e.getMessage().contains("no reply within 200 ms"), e.getMessage());
+            }
+        }
+    }
+
+    @Test
+    void blockingWaitTable() {
+        Object[][] cases = {
+            {new String[] {"GET", "k"}, 0L},
+            {new String[] {"SET", "k", "v"}, 0L},
+            {new String[] {"blpop", "a", "b", "1"}, 1000L},
+            {new String[] {"BLPOP", "k", "0"}, Blocking.FOREVER},
+            {new String[] {"BLPOP", "k", "0.5"}, 500L},
+            {new String[] {"BLPOP", "k", "soon"}, Blocking.FOREVER},
+            {new String[] {"BLPOP", "k", "-1"}, Blocking.FOREVER},
+            {new String[] {"BRPOP", "k", "2"}, 2000L},
+            {new String[] {"BZPOPMIN", "k", "1.5"}, 1500L},
+            {new String[] {"BZPOPMAX", "k", "3"}, 3000L},
+            {new String[] {"BRPOPLPUSH", "a", "b", "4"}, 4000L},
+            {new String[] {"BLMOVE", "a", "b", "LEFT", "RIGHT", "0.25"}, 250L},
+            {new String[] {"BLMPOP", "2", "2", "a", "b", "LEFT"}, 2000L},
+            {new String[] {"BZMPOP", "0", "1", "z", "MIN"}, Blocking.FOREVER},
+            {new String[] {"XREAD", "STREAMS", "s", "$"}, 0L},
+            {new String[] {"XREAD", "COUNT", "1", "BLOCK", "700", "STREAMS", "s", "$"}, 700L},
+            {new String[] {"XREAD", "BLOCK", "0", "STREAMS", "s", "$"}, Blocking.FOREVER},
+            {new String[] {"XREADGROUP", "GROUP", "g", "c", "STREAMS", "s", ">"}, 0L},
+            {new String[] {"XREADGROUP", "GROUP", "BLOCK", "c", "STREAMS", "s", ">"}, 0L},
+            {new String[] {"XREADGROUP", "GROUP", "g", "c", "BLOCK", "50", "STREAMS", "s", ">"}, 50L},
+            {new String[] {"WAIT", "1", "100"}, 100L},
+            {new String[] {"WAIT", "1", "0"}, Blocking.FOREVER},
+            {new String[] {"WAITAOF", "1", "0", "200"}, 200L},
+            {new String[] {"FILLGET", "k", "1000"}, 0L},
+            {new String[] {"FILLGET", "k", "1000", "WAIT", "300"}, 300L},
+            {new String[] {"FILLGET", "k", "1000", "WAIT", "0"}, Blocking.FOREVER},
+            {new String[] {"MONITOR"}, Blocking.FOREVER},
+            {new String[] {"SUBSCRIBE", "news"}, Blocking.FOREVER},
+            {new String[] {"PSUBSCRIBE", "n*"}, Blocking.FOREVER},
+            {new String[] {"SSUBSCRIBE", "news"}, Blocking.FOREVER},
+            {new String[] {"PUBLISH", "news", "x"}, 0L},
+            {new String[] {"BLPOP"}, Blocking.FOREVER},
+        };
+        for (Object[] c : cases) {
+            String[] args = (String[]) c[0];
+            Args a = new Args(io.github.salihcantekin.ruvio.RuvioCodec.UTF8, io.github.salihcantekin.ruvio.RuvioCodec.UTF8);
+            for (String x : args) {
+                a.s(x);
+            }
+            assertEquals((long) (Long) c[1], Blocking.waitMillis(a.out.buf, a.out.pos, a.count), String.join(" ", args));
+        }
+        assertEquals(0, Blocking.waitMillis(new byte[] {'x', 'y', 'z', 'w', 'v'}, 5, 1));
+        // The timeout one synchronous call gets.
+        java.util.concurrent.CompletableFuture<Object> plain = new java.util.concurrent.CompletableFuture<>();
+        assertEquals(30_000, Blocking.timeoutFor(30_000, plain));
+        assertEquals(31_000, Blocking.timeoutFor(30_000, Blocking.request(false, Reply.RAW, io.github.salihcantekin.ruvio.RuvioCodec.UTF8, io.github.salihcantekin.ruvio.RuvioCodec.UTF8, 1000)));
+        assertEquals(31_000, Blocking.timeoutFor(30_000, Blocking.request(true, Reply.RAW, io.github.salihcantekin.ruvio.RuvioCodec.UTF8, io.github.salihcantekin.ruvio.RuvioCodec.UTF8, 1000)));
+        assertEquals(0, Blocking.timeoutFor(30_000, Blocking.request(false, Reply.RAW, io.github.salihcantekin.ruvio.RuvioCodec.UTF8, io.github.salihcantekin.ruvio.RuvioCodec.UTF8, Blocking.FOREVER)));
+    }
+
+    @Test
     void usingAClosedClientFails() throws Exception {
         try (FakeNode n = new FakeNode(LinkFakeTest::ok)) {
             RuvioClient<String, String> c = RuvioClient.connect(to(n).build());

@@ -64,8 +64,8 @@ impl Client {
     ///
     /// # Returns
     /// How many replicas reached the position. With `port_mode = "per-shard"` this covers the
-    /// connection's shard plus shards its writes were forwarded to. Blocks this connection, so
-    /// set a longer read timeout or none.
+    /// connection's shard plus shards its writes were forwarded to. Blocks this connection; the
+    /// command timeout is extended by `timeout` (none when it is zero).
     pub fn wait(&mut self, replicas: u64, timeout: Duration) -> Result<i64, Error> {
         let replicas = Num::uint(replicas);
         let timeout = Num::wide(duration_millis(timeout));

@@ -4,6 +4,7 @@ package io.github.salihcantekin.ruvio;
 import io.github.salihcantekin.ruvio.args.ScanArgs;
 import io.github.salihcantekin.ruvio.args.SetOptions;
 import io.github.salihcantekin.ruvio.commands.RuvioSyncCommands;
+import io.github.salihcantekin.ruvio.internal.Blocking;
 import io.github.salihcantekin.ruvio.internal.ClusterNode;
 import io.github.salihcantekin.ruvio.internal.ClusterRouter;
 import io.github.salihcantekin.ruvio.internal.HashSlot;
@@ -331,7 +332,8 @@ public final class RuvioClient<K, V> extends RuvioSyncCommands<K, V> implements 
     @Override
     protected <T> T await(CompletableFuture<T> future) {
         if (timeout > 0) {
-            return Link.await(future, timeout);
+            // A blocking command waits its own time on top; one that waits forever has no limit.
+            return Link.await(future, Blocking.timeoutFor(timeout, future));
         }
         try {
             return future.join();

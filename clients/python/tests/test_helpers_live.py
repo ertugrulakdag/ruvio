@@ -169,8 +169,8 @@ def test_sync_reconnect_and_timeout(sync_client):
     killer.close()
     host, port = r._conn.opts.host, r._conn.opts.port
     slow = ruvio.Ruvio(host, port, db=11, socket_timeout=0.05)
-    with pytest.raises(ruvio.TimeoutError):
-        slow.blpop("never", 5)
+    # A blocking command waits its own timeout on top of socket_timeout.
+    assert slow.blpop("never", 0.3) is None
     assert slow.ping() == "PONG"
     slow.close()
     with pytest.raises(ruvio.ConnectionError):
