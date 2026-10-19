@@ -99,14 +99,15 @@ A shard is one worker inside a Ruvio process with its own data and its own
 port. The 16,384 slots are split into consecutive ranges, one per shard. With
 2 shards, slots 0-8191 belong to the first and 8192-16383 to the second; the
 shard of a slot is `slot * shards / 16384`. So a key's place is decided by its
-name: key to slot to shard. Nothing is stored about where a key lives and
-nothing moves a key between shards while the server runs.
+name: key to slot to shard. The server keeps that answer in a table of 16,384
+entries, filled from the rule when it starts, and routes by the table; nothing
+moves a slot or a key between shards while the server runs yet.
 
 ### Who decides this, and where?
 
-The rule is in `src/routing.rs` of the server (`hash_slot` and
-`shard_for_slot`). Every client library has its own copy, checked against the
-same test vectors. The client asks the server for the slot ranges with
+The rule is in `src/routing.rs` of the server (`hash_slot`, `shard_for_slot`
+and the `SlotTable` filled from it). Every client library has its own copy of
+`hash_slot`, checked against the same test vectors. The client asks the server for the slot ranges with
 `CLUSTER SLOTS` when it connects and sends each key to its owner. If a key
 reaches the wrong shard anyway, the server forwards it to the owner and answers
 on the same connection.

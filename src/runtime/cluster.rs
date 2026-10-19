@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     persistence::{CheckpointManager, PersistenceError, ShardCheckpoint, ShardFile},
-    routing::{shard_for_slot, slot_range_for_shard},
+    routing::SlotTable,
     time::UnixMillis,
 };
 
@@ -24,6 +24,8 @@ pub(crate) struct ClusterRoute {
     pub advertised_host: String,
     /// Port announced for shard 0. Shard `i` is announced on this port plus `i`.
     pub advertised_port: u16,
+    /// Which shard owns each slot, shared by every shard of the process.
+    pub slots: SlotTable,
 }
 
 pub(crate) fn write_cluster_slots(
@@ -36,10 +38,11 @@ pub(crate) fn write_cluster_slots(
         return Ok(());
     };
 
-    write!(output, "*{}\r\n", route.shard_count)?;
+    let ranges = route.slots.ranges();
 
-    for shard_id in 0..route.shard_count {
-        let (start, end) = slot_range_for_shard(shard_id, route.shard_count);
+    write!(output, "*{}\r\n", ranges.len())?;
+
+    for (start, end, shard_id) in ranges {
         let port = route.advertised_port + shard_id as u16;
         let node_id = node_id(shard_id);
 
@@ -67,9 +70,18 @@ pub(crate) fn write_cluster_nodes(
     };
 
     let mut nodes = Vec::new();
+    let ranges = route.slots.ranges();
 
     for shard_id in 0..route.shard_count {
-        let (start, end) = slot_range_for_shard(shard_id, route.shard_count);
+        let slots = shard_ranges(&ranges, shard_id)
+            .map(|(start, end)| {
+                if start == end {
+                    format!(" {start}")
+                } else {
+                    format!(" {start}-{end}")
+                }
+            })
+            .collect::<String>();
         let port = route.advertised_port + shard_id as u16;
         let bus_port = u32::from(port) + 10_000;
         let node_id = node_id(shard_id);
@@ -81,7 +93,7 @@ pub(crate) fn write_cluster_nodes(
 
         writeln!(
             nodes,
-            "{node_id} {}:{port}@{bus_port} {flags} - 0 0 {} connected {start}-{end}",
+            "{node_id} {}:{port}@{bus_port} {flags} - 0 0 {} connected{slots}",
             route.advertised_host,
             shard_id + 1
         )?;
@@ -100,17 +112,20 @@ pub(crate) fn write_cluster_shards(
         return Ok(());
     };
 
+    let ranges = route.slots.ranges();
+
     write!(output, "*{}\r\n", route.shard_count)?;
 
     for shard_id in 0..route.shard_count {
-        let (start, end) = slot_range_for_shard(shard_id, route.shard_count);
         let port = route.advertised_port + shard_id as u16;
         let host = &route.advertised_host;
+        let owned: Vec<(u16, u16)> = shard_ranges(&ranges, shard_id).collect();
 
-        write!(
-            output,
-            "*4\r\n$5\r\nslots\r\n*2\r\n:{start}\r\n:{end}\r\n$5\r\nnodes\r\n*1\r\n*14\r\n"
-        )?;
+        write!(output, "*4\r\n$5\r\nslots\r\n*{}\r\n", owned.len() * 2)?;
+        for (start, end) in owned {
+            write!(output, ":{start}\r\n:{end}\r\n")?;
+        }
+        output.write_all(b"$5\r\nnodes\r\n*1\r\n*14\r\n")?;
         write_bulk(output, b"id")?;
         write_bulk(output, node_id(shard_id).as_bytes())?;
         write_bulk(output, b"port")?;
@@ -187,6 +202,17 @@ pub(crate) fn info_section(route: Option<&ClusterRoute>) -> &'static str {
     }
 }
 
+/// The slot ranges `shard_id` owns, from [`SlotTable::ranges`].
+fn shard_ranges(
+    ranges: &[(u16, u16, usize)],
+    shard_id: usize,
+) -> impl Iterator<Item = (u16, u16)> + '_ {
+    ranges
+        .iter()
+        .filter(move |(_, _, owner)| *owner == shard_id)
+        .map(|(start, end, _)| (*start, *end))
+}
+
 fn node_id(shard_id: usize) -> String {
     format!("{:040x}", shard_id + 1)
 }
@@ -206,7 +232,7 @@ pub(crate) fn redirect_if_remote(
         return Ok(false);
     };
 
-    let owner = shard_for_slot(slot, route.shard_count);
+    let owner = route.slots.owner(slot);
 
     if owner == route.shard_id {
         return Ok(false);
@@ -863,6 +889,7 @@ mod tests {
             shard_count: 2,
             advertised_host: "127.0.0.1".into(),
             advertised_port: 6379,
+            slots: SlotTable::from_formula(2),
         }
     }
 
@@ -1388,5 +1415,123 @@ mod tests {
         coordinator.fail_requests(3);
         assert!(!coordinator.save_waiting());
         drop(third);
+    }
+
+    /// The answers before the slot table, built from the formula's one range per shard.
+    fn formula_answers(route: &ClusterRoute) -> (String, String, String) {
+        use crate::routing::slot_range_for_shard;
+
+        let host = &route.advertised_host;
+        let mut slots = format!("*{}\r\n", route.shard_count);
+        let mut nodes = String::new();
+        let mut shards = format!("*{}\r\n", route.shard_count);
+
+        for shard_id in 0..route.shard_count {
+            let (start, end) = slot_range_for_shard(shard_id, route.shard_count);
+            let port = route.advertised_port + shard_id as u16;
+            let id = node_id(shard_id);
+            let flags = if shard_id == route.shard_id {
+                "myself,master"
+            } else {
+                "master"
+            };
+
+            slots += &format!(
+                "*3\r\n:{start}\r\n:{end}\r\n*3\r\n${}\r\n{host}\r\n:{port}\r\n${}\r\n{id}\r\n",
+                host.len(),
+                id.len()
+            );
+            nodes += &format!(
+                "{id} {host}:{port}@{} {flags} - 0 0 {} connected {start}-{end}\n",
+                u32::from(port) + 10_000,
+                shard_id + 1
+            );
+            shards += &format!(
+                "*4\r\n$5\r\nslots\r\n*2\r\n:{start}\r\n:{end}\r\n$5\r\nnodes\r\n*1\r\n*14\r\n\
+                 $2\r\nid\r\n${}\r\n{id}\r\n$4\r\nport\r\n:{port}\r\n$2\r\nip\r\n${}\r\n{host}\r\n\
+                 $8\r\nendpoint\r\n${}\r\n{host}\r\n$4\r\nrole\r\n$6\r\nmaster\r\n\
+                 $18\r\nreplication-offset\r\n:0\r\n$6\r\nhealth\r\n$6\r\nonline\r\n",
+                id.len(),
+                host.len(),
+                host.len()
+            );
+        }
+
+        (slots, format!("${}\r\n{nodes}\r\n", nodes.len()), shards)
+    }
+
+    #[test]
+    fn cluster_answers_from_the_slot_table_match_the_formula() {
+        for count in [1, 2, 3, 7, 16] {
+            let route = ClusterRoute {
+                shard_id: count / 2,
+                shard_count: count,
+                advertised_host: "10.0.0.7".into(),
+                advertised_port: 7000,
+                slots: SlotTable::from_formula(count),
+            };
+            let (slots, nodes, shards) = formula_answers(&route);
+            let mut written = Vec::new();
+
+            write_cluster_slots(&mut written, Some(&route)).unwrap();
+            assert_eq!(String::from_utf8(written).unwrap(), slots, "{count} shards");
+            let mut written = Vec::new();
+
+            write_cluster_nodes(&mut written, Some(&route)).unwrap();
+            assert_eq!(String::from_utf8(written).unwrap(), nodes, "{count} shards");
+            let mut written = Vec::new();
+
+            write_cluster_shards(&mut written, Some(&route)).unwrap();
+            assert_eq!(
+                String::from_utf8(written).unwrap(),
+                shards,
+                "{count} shards"
+            );
+        }
+    }
+
+    #[test]
+    fn a_slot_given_to_another_shard_moves_its_redirect_and_splits_the_ranges() {
+        let route = two_shard_route(0);
+
+        // Slot 100 belongs to shard 0 by the formula; give it to shard 1.
+        assert!(!redirect_if_remote(&mut Vec::new(), Some(&route), 100).unwrap());
+        route.slots.assign(100, 1);
+        let mut moved = Vec::new();
+
+        assert!(redirect_if_remote(&mut moved, Some(&route), 100).unwrap());
+        assert_eq!(moved, b"-MOVED 100 127.0.0.1:6380\r\n");
+
+        let mut slots = Vec::new();
+
+        write_cluster_slots(&mut slots, Some(&route)).unwrap();
+        let slots = String::from_utf8(slots).unwrap();
+
+        // Shard 0 now owns 0-99 and 101-8191, shard 1 owns 100 and 8192-16383.
+        assert!(slots.starts_with("*4\r\n*3\r\n:0\r\n:99\r\n"), "{slots}");
+        assert!(slots.contains(":100\r\n:100\r\n"), "{slots}");
+        assert!(slots.contains(":101\r\n:8191\r\n"), "{slots}");
+
+        let mut nodes = Vec::new();
+
+        write_cluster_nodes(&mut nodes, Some(&route)).unwrap();
+        let nodes = String::from_utf8(nodes).unwrap();
+
+        assert!(nodes.contains("connected 0-99 101-8191\n"), "{nodes}");
+        assert!(nodes.contains("connected 100 8192-16383\n"), "{nodes}");
+
+        let mut shards = Vec::new();
+
+        write_cluster_shards(&mut shards, Some(&route)).unwrap();
+        let shards = String::from_utf8(shards).unwrap();
+
+        assert!(
+            shards.contains("$5\r\nslots\r\n*4\r\n:0\r\n:99\r\n:101\r\n:8191\r\n"),
+            "{shards}"
+        );
+        assert!(
+            shards.contains("$5\r\nslots\r\n*4\r\n:100\r\n:100\r\n:8192\r\n:16383\r\n"),
+            "{shards}"
+        );
     }
 }

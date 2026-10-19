@@ -7,7 +7,7 @@
 
 use super::*;
 
-use crate::{engine::RespVersion, routing::hash_slot, routing::shard_for_slot};
+use crate::{engine::RespVersion, routing::SlotTable, routing::hash_slot};
 use std::sync::atomic::AtomicUsize;
 
 /// Data directories whose next commit before a forwarded command fails, once each.
@@ -203,6 +203,8 @@ pub(crate) struct Fabric {
     boxes: Vec<Mutex<Vec<Message>>>,
     /// Each shard's log and replica acknowledgements, so `WAIT` covers every shard.
     durability: Mutex<Vec<Option<ShardDurability>>>,
+    /// Which shard owns each hash slot (see [`SlotTable`]).
+    slots: SlotTable,
     /// The newest `CONFIG SET` configuration and its version (see `live`).
     pub(super) config: Mutex<super::live::ConfigAuthority>,
 }
@@ -229,6 +231,7 @@ impl Fabric {
                 .collect(),
             boxes: (0..count * count).map(|_| Mutex::new(Vec::new())).collect(),
             durability: Mutex::new(vec![None; count]),
+            slots: SlotTable::from_formula(count),
             config: Mutex::new(super::live::ConfigAuthority::default()),
         })
     }
@@ -267,7 +270,18 @@ impl Fabric {
     }
 
     pub(super) fn owner_of(&self, key: &[u8]) -> usize {
-        shard_for_slot(hash_slot(key), self.count)
+        self.slots.owner(hash_slot(key))
+    }
+
+    /// The shard that owns `slot`.
+    #[inline]
+    pub(super) fn slot_owner(&self, slot: u16) -> usize {
+        self.slots.owner(slot)
+    }
+
+    /// Which shard owns each slot; shared with the cluster route of every shard.
+    pub(crate) fn slot_table(&self) -> SlotTable {
+        self.slots.clone()
     }
 
     pub(super) fn hand_off(&self, shard: usize, item: Handoff) {
@@ -1286,7 +1300,7 @@ pub(super) fn command_owner(
         match crate::routing::command_slot(command) {
             Ok(None) => return (Owner::Local, true),
             Ok(Some(slot)) => {
-                let found = shard_for_slot(slot, forwarding.fabric.count);
+                let found = forwarding.fabric.slot_owner(slot);
 
                 return (
                     if found == forwarding.me {
@@ -1333,7 +1347,7 @@ pub(super) fn hot_remote_owner(
     command: &crate::protocol::HotCommand<'_>,
 ) -> Option<usize> {
     let slot = hot_command_slot(command)?;
-    let owner = shard_for_slot(slot, forwarding.fabric.count);
+    let owner = forwarding.fabric.slot_owner(slot);
 
     (owner != forwarding.me).then_some(owner)
 }
@@ -1636,7 +1650,7 @@ fn unwatch_remote(forwarding: &Forwarding, session: &TxSession, conn: u64) {
     let Some(slot) = session.watch_slot() else {
         return;
     };
-    let dst = shard_for_slot(slot, forwarding.fabric.count);
+    let dst = forwarding.fabric.slot_owner(slot);
 
     if dst != forwarding.me {
         forwarding.fabric.send(
@@ -1693,7 +1707,7 @@ pub(super) async fn forward_special(
                 let Some(slot) = slot else {
                     return Ok(false);
                 };
-                let dst = shard_for_slot(slot, shards);
+                let dst = forwarding.fabric.slot_owner(slot);
 
                 if session.watch_slot().is_some_and(|watched| watched != slot) {
                     unwatch_remote(forwarding, session, conn);
@@ -1759,7 +1773,7 @@ pub(super) async fn forward_special(
             let slot = hash_slot(first);
             let crossed = matches!(owner, Owner::Split)
                 || session.watch_slot().is_some_and(|watched| {
-                    shard_for_slot(watched, shards) != shard_for_slot(slot, shards)
+                    forwarding.fabric.slot_owner(watched) != forwarding.fabric.slot_owner(slot)
                 });
 
             if crossed {
@@ -2006,6 +2020,20 @@ async fn scan_all(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn keys_and_slots_are_routed_by_the_slot_table_not_the_formula() {
+        let fabric = Fabric::new(2);
+        let slot = crate::routing::hash_slot(b"user:1");
+        let formula = crate::routing::shard_for_slot(slot, 2);
+
+        assert_eq!(fabric.owner_of(b"user:1"), formula);
+        fabric.slots.assign(slot, 1 - formula);
+        assert_eq!(fabric.owner_of(b"user:1"), 1 - formula);
+        assert_eq!(fabric.slot_owner(slot), 1 - formula);
+        // The route each shard gets shares the same table.
+        assert_eq!(fabric.slot_table().owner(slot), 1 - formula);
+    }
+
     #[test]
     fn publish_budget_bounds_messages_and_bytes_per_shard_and_is_returned_on_delivery() {
         let fabric = Fabric::new(2);

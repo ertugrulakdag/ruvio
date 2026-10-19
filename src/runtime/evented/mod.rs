@@ -607,6 +607,10 @@ fn run_cluster(config: &AppConfig, shutdown: ShutdownToken, force: bool) -> io::
             shard_count: config.shards,
             advertised_host: config.advertised_host.clone(),
             advertised_port,
+            slots: fabric.as_ref().map_or_else(
+                || crate::routing::SlotTable::from_formula(config.shards),
+                |fabric| fabric.slot_table(),
+            ),
         };
 
         let cfg = config.clone();
