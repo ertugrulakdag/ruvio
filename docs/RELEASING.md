@@ -8,8 +8,7 @@ No release runs on its own. Every workflow in `.github/workflows/` is started by
 | `ci` | Wider checks: three operating systems, clippy, supply chain, every client against a standalone and a cluster server, the applications (tours, site, UI), fuzz, container and fault tests |
 | `release` | Publishes the packages below; choose one target or `all` |
 | `integration-packages` | Builds and optionally publishes the .NET integration packages |
-| `site-azure` | Builds `site-next/` and publishes it to Azure Static Web Apps (ruviodb.com) |
-| `site-azure-dev` | Same build from the `dev` branch with an `X-Robots-Tag: noindex` header, published to the Ruvio-Dev Static Web App (secret `AZURE_STATIC_WEB_APPS_API_TOKEN_DEV`) |
+| `site-azure` | Builds `site-next/` and publishes it to Azure Static Web Apps; target `production` builds `main` (ruviodb.com), target `dev` builds `dev` to the Ruvio-Dev app (secret `AZURE_STATIC_WEB_APPS_API_TOKEN_DEV`, noindex) |
 
 ## What `release` publishes
 
