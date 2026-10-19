@@ -915,27 +915,34 @@ async fn serve_async(
     // copy: a record that does not replay must not keep it from starting.
     let resync_pending = config.replication.role == crate::config::ReplicationRole::Replica
         && marker == Some(CatchupMarker::Preparing);
-    for (index, (database, mutation)) in mutations.iter().enumerate() {
-        if *database == 0
+    let replayed = mutations.len();
+
+    // Each record is dropped once applied and the list with the loop, so after replay the
+    // shard holds its store only, not a second copy of everything since the checkpoint.
+    for (index, (database, mutation)) in mutations.into_iter().enumerate() {
+        if database == 0
             && hot_store.as_ref().is_some_and(|store| {
-                crate::hot_store::apply_owned(store, &config.hot_keys, mutation)
+                crate::hot_store::apply_owned(store, &config.hot_keys, &mutation)
             })
         {
             continue;
         }
 
-        if let Err(error) = apply_mutation(&mut store, *database, mutation) {
+        if let Err(error) = apply_mutation(&mut store, database, &mutation) {
             if !resync_pending {
                 return Err(io::Error::other(error.to_string()));
             }
             warn!(
                 shard_id,
                 %error,
-                skipped = mutations.len() - index,
+                skipped = replayed - index,
                 "replica log does not replay; leaving the rest to the pending full resync"
             );
             break;
         }
+    }
+    if replayed != 0 {
+        crate::memory::release_free_pages();
     }
     if proven_complete {
         sink.flush()
