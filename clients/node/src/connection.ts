@@ -8,6 +8,10 @@ import { Encoder, cmd, type Arg, type Cmd } from './encoder.js';
 import { Parser, NEED_MORE, PushMessage } from './parser.js';
 import { RuvioError, ConnectionError } from './errors.js';
 import type { Tf } from './transforms.js';
+import { blockingWait, FRAME_COUNT, WAIT_FOREVER } from './blocking.js';
+
+/** `commandTimeoutMs` when it is not set. */
+export const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
 
 /**
  * Connection settings shared by {@link RuvioClient}, {@link ClusterClient} and {@link Subscriber}.
@@ -63,8 +67,9 @@ export interface ConnectionOptions {
   /**
    * Fail the connection with a {@link ConnectionError} when replies are outstanding and none has arrived for
    * this many milliseconds (checked on a timer, so it fires up to a quarter of this later). Every pending call
-   * rejects and a later command reconnects. Default `0`: no limit, so a half-open peer blocks callers until
-   * the socket drops. It also applies to blocking commands (`blpop` and the like): set it above their own timeout.
+   * rejects and a later command reconnects. Default 30000; `0` for no limit, so a half-open peer blocks callers
+   * until the socket drops. A blocking command gets its own wait on top (`blpop(k, 5)` may take 5 s plus this),
+   * and one that waits forever (timeout `0`) has no limit while it is pending.
    */
   commandTimeoutMs?: number;
   /** Disable Nagle's algorithm (`TCP_NODELAY`). Default true. */
@@ -228,6 +233,11 @@ export class Connection extends EventEmitter {
   private rx = 0;
   private markRx = -1;
   private markAt = 0;
+  // Replies dispatched so far; a pending blocking command adds `extraMs` (Infinity: no limit) to the
+  // limit until reply number `extraUntil` has arrived.
+  private replies = 0;
+  private extraMs = 0;
+  private extraUntil = 0;
   private lastBuf: Buffer | null = null;
   private lastOff = 0;
   private lastLen = 0;
@@ -252,11 +262,23 @@ export class Connection extends EventEmitter {
       this.scheduled = false;
       this.enc.flush();
     };
-    const limit = opts.commandTimeoutMs ?? 0;
+    const limit = opts.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
     if (limit > 0) {
       this.watchdog = setInterval(() => this.stallCheck(limit), Math.max(10, Math.min(250, limit / 4)));
       this.watchdog.unref();
+      this.enc.onFrame = (b, s, e) => this.noteFrame(b, s, e);
     }
+  }
+
+  /** Command timeout: remembers the wait of a blocking command (or pipeline) about to be tracked. */
+  private noteFrame(b: Uint8Array, s: number, e: number): void {
+    const w = blockingWait(b, s, e);
+    if (w === 0) return;
+    if (this.replies >= this.extraUntil) this.extraMs = 0;
+    this.extraMs = w === WAIT_FOREVER ? Infinity : Math.max(this.extraMs, w);
+    // Its replies come after every slot pending now; a pipeline frame may hold several, so the extra
+    // time lasts until the whole queue as it will stand after this frame has been answered.
+    this.extraUntil = this.replies + this.count + FRAME_COUNT;
   }
 
   private stallCheck(limit: number): void {
@@ -270,10 +292,11 @@ export class Connection extends EventEmitter {
       return;
     }
     const now = Date.now();
+    const extra = this.replies < this.extraUntil ? this.extraMs : 0;
     if (this.markRx !== this.rx) {
       this.markRx = this.rx;
       this.markAt = now;
-    } else if (now - this.markAt >= limit) {
+    } else if (now - this.markAt >= limit + extra) {
       this.markRx = -1;
       this.abort(new ConnectionError(`ruvio: command timeout after ${limit} ms`));
     }
@@ -413,6 +436,7 @@ export class Connection extends EventEmitter {
     enc.pos = p + n;
     enc.frameStart = enc.pos;
     enc.partial = false;
+    if (enc.onFrame !== null) enc.onFrame(enc.buf, p, p + n);
     this.lastBuf = enc.buf;
     this.lastOff = p;
     this.lastLen = n;
@@ -670,6 +694,8 @@ export class Connection extends EventEmitter {
   }
 
   private rejectAll(err: Error, unreachable = false): void {
+    this.extraUntil = 0;
+    this.replies = 0;
     while (this.count > 0) {
       const i = this.head;
       const res = this.rRes[i];
@@ -765,6 +791,7 @@ export class Connection extends EventEmitter {
     this.rTf[i] = null;
     this.head = (i + 1) & this.mask;
     this.count--;
+    this.replies++;
     let fb: Buffer | null = null;
     if (this.rFB !== null) {
       fb = this.rFB[i]!;

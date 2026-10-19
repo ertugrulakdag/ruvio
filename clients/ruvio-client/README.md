@@ -141,7 +141,7 @@ db.execute(&["GET", "balance"])?;
 let replies = db.exec()?; // None when a watched key changed
 ```
 
-`subscribe` opens a second socket, the same way `Ruvio.Client` does. Keep `publish`, `GET`, and `PING` on the same client. `listen` (callback) or `next_message` reads that subscriber socket. `subscriber()` still returns the extra socket if you want it separately. `set_read_timeout` bounds the wait. On a cluster that socket reaches one shard; `sharded_subscriber(channel)` opens one to the shard that owns a sharded channel, for `ssubscribe`.
+`subscribe` opens a second socket, the same way `Ruvio.Client` does. Keep `publish`, `GET`, and `PING` on the same client. `listen` (callback) or `next_message` reads that subscriber socket. `subscriber()` still returns the extra socket if you want it separately. The subscriber socket has no read timeout until you call `set_read_timeout`; command sockets start with `ClientOptions::command_timeout` (30 s by default, plus a blocking command's own wait, see [Timeouts](../README.md#timeouts)). On a cluster that socket reaches one shard; `sharded_subscriber(channel)` opens one to the shard that owns a sharded channel, for `ssubscribe`.
 
 A dropped socket is opened again before the next command, including a shard socket. The command that discovers the drop returns an error. `on_connection_lost` and `on_connection_restored` report the change. Set `ClientOptions::reconnect` to false and call `reconnect` yourself, or `set_reconnect_delay` to own the wait. Returning `None` stops the retry.
 

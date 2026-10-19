@@ -4,7 +4,8 @@ Notable changes to the Rust client crate `ruvio-client`. New entries go under "U
 
 ## Unreleased
 
-- `ClientOptions::command_timeout` applies `Client::set_read_timeout` to every socket right after connecting. Default `None`: no limit, as before (issue #48).
+- **Behavior change:** `ClientOptions::command_timeout` is now `Some(30 s)` by default (was `None`, no limit); `None` turns it off. It also applies after a reconnect and on new shard sockets, but not on Pub/Sub sockets, and `MONITOR` drops it from its socket. A blocking command gets its own wait on top (`BLPOP k 5` may take 5 s plus the timeout; a wait of 0, or one the client cannot parse, has no deadline; a pipeline takes its largest wait), and a Pub/Sub or `MONITOR` connection never times out while it waits for messages (issue #48 follow-up).
+- `ClientOptions::command_timeout` applies `Client::set_read_timeout` to every command socket right after connecting (issue #48).
 - `ClientOptions::read_policy` with `ReadPolicy::{Primary, PreferReplica, Replica}`: a cluster client sends read-only commands to a replica of the slot's shard (listed by the server in `CLUSTER SLOTS`), with a fallback to the primary under `PreferReplica`. The default keeps every command on the primaries. `ClientOptions` built with a struct literal needs `..Default::default()`.
 - `replicaof(host, port)`, `replicaof_no_one(force)` and `role()` for `REPLICAOF` and `ROLE`.
 - `ClientOptions::seeds`: a list of `(host, port)` seed addresses tried in order. A dropped standalone connection reconnects starting with the next seed, and a cluster slot map reload asks the other known nodes and the seeds when no open socket answers. `ClientOptions` built with a struct literal needs `..Default::default()`.

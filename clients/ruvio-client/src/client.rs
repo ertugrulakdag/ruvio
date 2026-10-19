@@ -79,11 +79,12 @@ pub struct ClientOptions {
     /// Upper bound for each TCP connect attempt (not for reads). Defaults to 5 seconds. A
     /// timeout surfaces as [`Error::Io`].
     pub connect_timeout: Duration,
-    /// Read timeout applied to every socket right after connecting, as
-    /// [`Client::set_read_timeout`] does later. `None` (the default) waits for a reply
-    /// forever, so a half-open peer blocks a call until the socket drops. It also caps
-    /// blocking commands (`blpop` and the like): set it above their own timeout. A timeout
-    /// surfaces as [`Error::Io`].
+    /// Read timeout applied to every command socket right after connecting (and after a
+    /// reconnect), as [`Client::set_read_timeout`] does later. Defaults to 30 seconds; `None`
+    /// waits for a reply forever, so a half-open peer blocks a call until the socket drops.
+    /// A blocking command gets its own wait on top (`BLPOP k 5` may take 5 s plus this), and
+    /// one that waits forever (`BLPOP k 0`) has no limit; Pub/Sub sockets have none either.
+    /// A timeout surfaces as [`Error::Io`].
     pub command_timeout: Option<Duration>,
     /// When true (the default) connecting sends `CLUSTER SLOTS`. If the server returns a slot
     /// map with more than one node the client becomes a router that sends each key to its
@@ -178,7 +179,7 @@ impl Default for ClientOptions {
             password: None,
             database: 0,
             connect_timeout: Duration::from_secs(5),
-            command_timeout: None,
+            command_timeout: Some(Duration::from_secs(30)),
             discover_cluster: true,
             reconnect: true,
             max_reconnect_attempts: 8,
@@ -210,8 +211,9 @@ pub struct ConnectionNotice {
 /// connection per shard (lazily) and sends each command to the shard that owns its key; see
 /// the crate-level docs for the cluster rules. All command methods are in this one type and
 /// take `&mut self`, so share a client between threads behind a `Mutex`, or give each thread
-/// its own client. A command waits for its reply: there is no read timeout unless you set
-/// one with [`Client::set_read_timeout`].
+/// its own client. A command waits up to [`ClientOptions::command_timeout`] (30 s by
+/// default, plus a blocking command's own wait) for its reply; change it with
+/// [`Client::set_read_timeout`].
 ///
 /// Subscribe commands open a second TCP socket automatically, so `GET`, `SET`, `PING` and
 /// `PUBLISH` stay on the command socket while messages arrive on the other one.
@@ -391,17 +393,6 @@ impl Client {
     /// # }
     /// ```
     pub fn connect_with(options: ClientOptions) -> Result<Self, Error> {
-        let command_timeout = options.command_timeout;
-        let mut client = Self::open_with(options)?;
-
-        if command_timeout.is_some() {
-            client.set_read_timeout(command_timeout)?;
-        }
-
-        Ok(client)
-    }
-
-    fn open_with(options: ClientOptions) -> Result<Self, Error> {
         let addresses = options.addresses();
 
         if addresses.iter().any(|(host, _)| host.is_empty()) {
@@ -613,13 +604,14 @@ impl Client {
     }
 
     /// Sets how long a reply read may block, on every socket of this client (including the
-    /// Pub/Sub socket). `None` waits forever, which is the default.
+    /// Pub/Sub socket). `None` waits forever. Command sockets start with
+    /// [`ClientOptions::command_timeout`] (30 s by default); Pub/Sub sockets start with none.
     ///
     /// A timeout while nothing has arrived yet is harmless: [`Error::Io`] with kind
     /// `WouldBlock`/`TimedOut`, and the connection stays usable (this is how you poll
     /// [`Client::read_message`]). A timeout in the middle of a command reply leaves the reply
-    /// unread, so drop the client in that case. Blocking commands such as `blpop` need a read
-    /// timeout longer than their own timeout.
+    /// unread, so drop the client in that case. A blocking command such as `blpop` gets its
+    /// own wait on top of this timeout, and none at all when it waits forever (`0`).
     ///
     /// # Arguments
     /// * `timeout` - `Some(duration)` (must be non-zero) or `None`.
@@ -636,6 +628,8 @@ impl Client {
     /// ```
     pub fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
         self.read_timeout = Some(timeout);
+        // Sockets opened later (reconnects, new shards) start with it too.
+        self.options.command_timeout = timeout;
 
         match &mut self.transport {
             Transport::Single(connection) => connection.set_read_timeout(timeout)?,
@@ -1415,6 +1409,20 @@ impl Client {
 
         self.remember_subscription(arguments);
 
+        // MONITOR turns this socket into a push stream: drop the command timeout from it,
+        // unless the caller set a read timeout to poll with.
+        if self.read_timeout.is_none()
+            && matches!(&reply, RespValue::Simple(ok) if ok == "OK")
+            && arguments
+                .first()
+                .is_some_and(|name| name.len() == 7 && name.eq_ignore_ascii_case("MONITOR"))
+        {
+            match &mut self.transport {
+                Transport::Single(connection) => connection.set_read_timeout(None)?,
+                Transport::Cluster(router) => router.monitor_without_timeout()?,
+            }
+        }
+
         Ok(reply)
     }
 
@@ -1557,6 +1565,9 @@ impl Client {
         let mut options = self.options.clone();
 
         options.discover_cluster = false;
+        // A subscriber waits for pushes for as long as it takes; only an explicit
+        // set_read_timeout (copied below) bounds its reads.
+        options.command_timeout = None;
 
         if let Transport::Cluster(router) = &self.transport {
             let (host, port) = router.subscription_endpoint(arguments);
@@ -2026,6 +2037,47 @@ mod tests {
         let _server = accepted.join().unwrap();
 
         assert!(matches!(client.ping(), Err(crate::Error::Io(_))));
+    }
+
+    #[test]
+    fn command_timeout_defaults_to_thirty_seconds() {
+        assert_eq!(
+            ClientOptions::default().command_timeout,
+            Some(Duration::from_secs(30))
+        );
+    }
+
+    #[test]
+    fn a_blocking_command_waits_its_own_timeout_on_top_of_the_command_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let mut socket = bound(crate::test_support::accept(&listener).0);
+            let mut got = [0_u8; 64];
+            let _ = socket.read(&mut got).unwrap();
+            // An empty list: the server answers when BLPOP's 1 s runs out.
+            thread::sleep(Duration::from_millis(1000));
+            socket.write_all(b"*-1\r\n").unwrap();
+            // PING is never answered.
+            let _ = socket.read(&mut got).unwrap();
+            socket
+        });
+        let mut client = Client::connect_with(ClientOptions {
+            host: "127.0.0.1".to_owned(),
+            port,
+            discover_cluster: false,
+            command_timeout: Some(Duration::from_millis(200)),
+            ..ClientOptions::default()
+        })
+        .unwrap();
+
+        assert_eq!(client.blpop(&["k"], Duration::from_secs(1)).unwrap(), None);
+        // The plain command timeout is back for the next command.
+        let started = std::time::Instant::now();
+        assert!(matches!(client.ping(), Err(crate::Error::Io(_))));
+        assert!(started.elapsed() < Duration::from_secs(2));
+
+        let _server = server.join().unwrap();
     }
 
     #[test]

@@ -4,7 +4,8 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 
 ## Unreleased
 
-- `RuvioClientOptions.CommandTimeout`: a command with no cancellation of its own throws `TimeoutException` when its reply takes longer; the connection stays in use. Default zero: no limit, as before (issue #48).
+- **Behavior change:** `RuvioClientOptions.CommandTimeout` is now 30 seconds by default (was no limit); `TimeSpan.Zero` turns it off. A blocking command gets its own wait on top (`BLPOP k 5` may take 5 s plus the timeout; a wait of 0, or one the client cannot parse, has no deadline; a pipeline takes its largest wait), and a Pub/Sub or `MONITOR` connection never times out while it waits for messages (issue #48 follow-up).
+- `RuvioClientOptions.CommandTimeout`: a command throws `TimeoutException` when its reply takes longer; the connection stays in use (issue #48).
 - `RuvioClientOptions.ReadPolicy` (`ReadPolicy.Primary` by default, `PreferReplica`, `Replica`): a cluster client sends reads (commands the server flags `readonly` and not blocking) to one replica per shard, picked when the slot map loads. Pipelines go to replicas only when every command reads. A replica that cannot be opened or answers `LOADING` is skipped until the next load. `Ruvio.Client.AspNetCore` is unchanged.
 - `ReplicaOfAsync(host, port)`, `ReplicaOfNoOneAsync(force)` and `GetRoleAsync()` for `REPLICAOF` and `ROLE`.
 - `RuvioClientOptions.Seeds`: `host:port` seed addresses tried in order instead of `Host`/`Port`. A dropped standalone connection reconnects starting with the next seed; a cluster reloads its slot map from the other known nodes and then the seeds when no open socket answers. `Ruvio.Client.AspNetCore` binds a `Seeds` array from configuration.

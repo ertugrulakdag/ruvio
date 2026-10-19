@@ -79,6 +79,7 @@
 //!   `Client::json_get_value` that accept and return any serde type.
 
 mod args;
+mod blocking;
 mod client;
 mod cluster;
 mod codec;

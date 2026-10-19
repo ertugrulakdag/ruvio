@@ -138,7 +138,7 @@ type conn struct {
 	onPush    func(Value)
 	addr      int32                     // index of the dialed address in Client.addrs
 	sink      atomic.Pointer[sinkFuncs] // Pub/Sub mode: every reply goes here
-	timeout   time.Duration             // Options.CommandTimeout; 0 means none
+	timeout   time.Duration             // Options.CommandTimeout; <= 0 means none
 
 	// read state, owned by the holder of the reading token
 	rbuf   []byte
@@ -481,9 +481,18 @@ func (c *conn) close() { c.fail(ErrClosed) }
 func (c *conn) roundTrip(ctx context.Context, r *request) (bool, error) {
 	if c.timeout > 0 {
 		if _, has := ctx.Deadline(); !has {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, c.timeout)
-			defer cancel()
+			limit := c.timeout
+			// A blocking command waits its own time on top; one that waits forever has none.
+			if w := requestWait(r.buf); w == waitForever {
+				limit = 0
+			} else {
+				limit += w
+			}
+			if limit > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, limit)
+				defer cancel()
+			}
 		}
 	}
 	if err := ctx.Err(); err != nil {

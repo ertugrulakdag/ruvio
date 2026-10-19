@@ -7,6 +7,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 
 use std::time::Duration;
 
+use crate::blocking::{Wait, blocking_wait, pipeline_wait};
 use crate::client::{ClientOptions, NoticeHook, ReadPolicy};
 use crate::codec::read_value;
 use crate::command_keys::{COMMAND_KEY_RULES, KeyRule};
@@ -368,6 +369,9 @@ pub(crate) struct Connection {
     host: String,
     port: u16,
     broken: bool,
+    /// The socket's read timeout between commands (`ClientOptions::command_timeout` or
+    /// `set_read_timeout`); a blocking command widens it for its own reply.
+    timeout: Option<Duration>,
 }
 
 impl Connection {
@@ -379,12 +383,17 @@ impl Connection {
                 Ok(stream) => {
                     stream.set_nodelay(true)?;
 
+                    if options.command_timeout.is_some() {
+                        stream.set_read_timeout(options.command_timeout)?;
+                    }
+
                     let mut connection = Self {
                         stream: BufReader::new(stream),
                         scratch: Vec::with_capacity(256),
                         host: host.to_owned(),
                         port,
                         broken: false,
+                        timeout: options.command_timeout,
                     };
 
                     if let Some(password) = options.password.clone() {
@@ -410,13 +419,77 @@ impl Connection {
     }
 
     pub(crate) fn send(&mut self, arguments: &[&str]) -> Result<RespValue, Error> {
+        if self.timeout.is_some() {
+            let wait = blocking_wait(arguments);
+
+            if wait != Wait::None {
+                return self.waiting(wait, |connection| {
+                    connection.write_commands(&[arguments])?;
+                    connection.read_reply()
+                });
+            }
+        }
+
         self.write_commands(&[arguments])?;
 
         self.read_reply()
     }
 
+    /// Runs `run` with the read timeout widened by a blocking command's own wait, then puts
+    /// the command timeout back.
+    #[cold]
+    fn waiting<T>(
+        &mut self,
+        wait: Wait,
+        run: impl FnOnce(&mut Self) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        self.widen(wait)?;
+
+        let result = run(self);
+
+        self.narrow();
+
+        result
+    }
+
+    /// Sets the read timeout a pipeline holding `wait` needs; pair it with `narrow`.
+    pub(crate) fn widen(&mut self, wait: Wait) -> Result<(), Error> {
+        if self.timeout.is_some() && wait != Wait::None {
+            self.stream
+                .get_ref()
+                .set_read_timeout(wait.deadline(self.timeout))?;
+        }
+
+        Ok(())
+    }
+
+    /// Restores the command timeout after `widen`.
+    pub(crate) fn narrow(&mut self) {
+        if self.timeout.is_some()
+            && self
+                .stream
+                .get_ref()
+                .set_read_timeout(self.timeout)
+                .is_err()
+        {
+            self.broken = true;
+        }
+    }
+
     /// Binary-safe single command.
     pub(crate) fn send_bytes(&mut self, arguments: &[&[u8]]) -> Result<RespValue, Error> {
+        if self.timeout.is_some() {
+            let wait = blocking_wait(arguments);
+
+            if wait != Wait::None {
+                return self.waiting(wait, |connection| connection.send_bytes_now(arguments));
+            }
+        }
+
+        self.send_bytes_now(arguments)
+    }
+
+    fn send_bytes_now(&mut self, arguments: &[&[u8]]) -> Result<RespValue, Error> {
         if self.broken {
             return Err(closed_socket());
         }
@@ -468,6 +541,18 @@ impl Connection {
     }
 
     pub(crate) fn send_many(&mut self, commands: &[&[&str]]) -> Result<Vec<RespValue>, Error> {
+        if self.timeout.is_some() {
+            let wait = pipeline_wait(commands);
+
+            if wait != Wait::None {
+                return self.waiting(wait, |connection| connection.send_many_now(commands));
+            }
+        }
+
+        self.send_many_now(commands)
+    }
+
+    fn send_many_now(&mut self, commands: &[&[&str]]) -> Result<Vec<RespValue>, Error> {
         self.write_commands(commands)?;
 
         let mut values = Vec::with_capacity(commands.len());
@@ -589,6 +674,7 @@ impl Connection {
 
     pub(crate) fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
         self.stream.get_ref().set_read_timeout(timeout)?;
+        self.timeout = timeout;
 
         Ok(())
     }
@@ -1195,9 +1281,16 @@ impl ClusterRouter {
         }
 
         let mut replies = vec![RespValue::Null; commands.len()];
+        let wait = if self.options.command_timeout.is_some() {
+            pipeline_wait(commands)
+        } else {
+            Wait::None
+        };
 
         for (read, &endpoint) in used.iter().enumerate() {
             let connection = self.connection(endpoint)?;
+
+            connection.widen(wait)?;
 
             for (index, target) in targets.iter().enumerate() {
                 if *target != endpoint {
@@ -1207,12 +1300,15 @@ impl ClusterRouter {
                 match connection.read_reply() {
                     Ok(reply) => replies[index] = reply,
                     Err(error) => {
+                        connection.narrow();
                         self.drain(targets, &used[read + 1..]);
 
                         return Err(error);
                     }
                 }
             }
+
+            connection.narrow();
         }
 
         Ok(replies)
@@ -1345,7 +1441,16 @@ impl ClusterRouter {
         self.connection(target)?.read()
     }
 
+    /// After `MONITOR`: the socket `read_message` reads waits for pushes with no timeout.
+    pub(crate) fn monitor_without_timeout(&mut self) -> Result<(), Error> {
+        let target = self.subscriber.unwrap_or(self.seed);
+
+        self.connection(target)?.set_read_timeout(None)
+    }
+
     pub(crate) fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<(), Error> {
+        self.options.command_timeout = timeout;
+
         for endpoint in &mut self.endpoints {
             if let Some(connection) = endpoint.connection.as_mut() {
                 connection.set_read_timeout(timeout)?;

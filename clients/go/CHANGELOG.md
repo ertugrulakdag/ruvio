@@ -4,7 +4,8 @@ Notable changes to the Go client `github.com/salihcantekin/ruvio/clients/go`. A 
 
 ## Unreleased
 
-- `Options.CommandTimeout` bounds a call whose context has no deadline (it fails with `context.DeadlineExceeded`, the connection stays usable). Default 0: no limit, as before (issue #48).
+- **Behavior change:** `Options.CommandTimeout` is now 30 seconds when left 0 (was no limit); a negative value turns it off. A blocking command gets its own wait on top (`BLPOP k 5` may take 5 s plus the timeout; a wait of 0, or one the client cannot parse, has no deadline; a pipeline takes its largest wait), and a Pub/Sub or `MONITOR` connection never times out while it waits for messages (issue #48 follow-up).
+- `Options.CommandTimeout` bounds a call whose context has no deadline (it fails with `context.DeadlineExceeded`, the connection stays usable) (issue #48).
 - Docs: the README states that `-ASK` is not followed, as the Python and Node clients already did (issue #49).
 - `Options.ReadPolicy` (`ReadPrimary` by default, `ReadPreferReplica`, `ReadReplica`): a cluster client sends reads (commands the server flags readonly and not blocking) to one replica per shard, found in `CLUSTER SLOTS` and picked when the slot map loads. Pipelines go to replicas only when every command is a read; a replica that cannot be connected or answers `LOADING` is skipped until the next load. Replication is asynchronous, so reads can miss recent writes. With the default policy nothing changes.
 - `ReplicaOf(ctx, host, port)`, `ReplicaOfNoOne(ctx, force)` and `Role(ctx)` for `REPLICAOF` and `ROLE`.

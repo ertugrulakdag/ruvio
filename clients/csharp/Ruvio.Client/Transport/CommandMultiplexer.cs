@@ -68,10 +68,18 @@ internal sealed class CommandMultiplexer
     internal bool IsBroken => Volatile.Read(ref _failure) is not null;
 
     internal ValueTask<IReadOnlyList<RespValue>> SendAsync(
-        IReadOnlyList<IReadOnlyList<string>> commands, CancellationToken token) =>
-        _commandTimeout > TimeSpan.Zero
-            ? Timed(t => SendCore(commands, t), token)
-            : SendCore(commands, token);
+        IReadOnlyList<IReadOnlyList<string>> commands, CancellationToken token)
+    {
+        if (_commandTimeout > TimeSpan.Zero)
+        {
+            TimeSpan limit = Limit(BlockingWait.OfPipeline(commands));
+
+            if (limit != Timeout.InfiniteTimeSpan)
+                return Timed(t => SendCore(commands, t), token, limit);
+        }
+
+        return SendCore(commands, token);
+    }
 
     private ValueTask<IReadOnlyList<RespValue>> SendCore(
         IReadOnlyList<IReadOnlyList<string>> commands, CancellationToken token)
@@ -91,9 +99,14 @@ internal sealed class CommandMultiplexer
     {
         if (_commandTimeout > TimeSpan.Zero)
         {
-            RespCommand copy = command;
+            TimeSpan limit = Limit(BlockingWait.OfCommand(command));
 
-            return Timed(t => SendCommandCore(copy, t), token);
+            if (limit != Timeout.InfiniteTimeSpan)
+            {
+                RespCommand copy = command;
+
+                return Timed(t => SendCommandCore(copy, t), token, limit);
+            }
         }
 
         return SendCommandCore(command, token);
@@ -112,10 +125,18 @@ internal sealed class CommandMultiplexer
         return LeadOrWait(lead, request, request.SubmitOne(this));
     }
 
-    internal ValueTask<RespValue> SendAsync(IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken token) =>
-        _commandTimeout > TimeSpan.Zero
-            ? Timed(t => SendArgumentsCore(arguments, t), token)
-            : SendArgumentsCore(arguments, token);
+    internal ValueTask<RespValue> SendAsync(IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken token)
+    {
+        if (_commandTimeout > TimeSpan.Zero)
+        {
+            TimeSpan limit = Limit(BlockingWait.OfArguments(arguments));
+
+            if (limit != Timeout.InfiniteTimeSpan)
+                return Timed(t => SendArgumentsCore(arguments, t), token, limit);
+        }
+
+        return SendArgumentsCore(arguments, token);
+    }
 
     private ValueTask<RespValue> SendArgumentsCore(IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken token)
     {
@@ -131,10 +152,18 @@ internal sealed class CommandMultiplexer
     }
 
     internal ValueTask<IReadOnlyList<RespValue>> SendAsync(
-        ReadOnlyMemory<byte> payload, int replies, CancellationToken token) =>
-        _commandTimeout > TimeSpan.Zero
-            ? Timed(t => SendPayloadCore(payload, replies, t), token)
-            : SendPayloadCore(payload, replies, token);
+        ReadOnlyMemory<byte> payload, int replies, CancellationToken token)
+    {
+        if (_commandTimeout > TimeSpan.Zero)
+        {
+            TimeSpan limit = Limit(BlockingWait.OfPayload(payload.Span));
+
+            if (limit != Timeout.InfiniteTimeSpan)
+                return Timed(t => SendPayloadCore(payload, replies, t), token, limit);
+        }
+
+        return SendPayloadCore(payload, replies, token);
+    }
 
     private ValueTask<IReadOnlyList<RespValue>> SendPayloadCore(
         ReadOnlyMemory<byte> payload, int replies, CancellationToken token)
@@ -151,14 +180,32 @@ internal sealed class CommandMultiplexer
     }
 
     /// <summary>
-    /// Runs one send under <c>CommandTimeout</c>. The wait is abandoned when it expires, like any cancelled
+    /// The limit for one send: <c>CommandTimeout</c>, plus a blocking command's own wait (see
+    /// <see cref="BlockingWait"/>); <see cref="Timeout.InfiniteTimeSpan"/> when it may wait forever.
+    /// </summary>
+    private TimeSpan Limit(TimeSpan wait)
+    {
+        if (wait == TimeSpan.Zero)
+            return _commandTimeout;
+
+        if (wait == BlockingWait.Forever)
+            return Timeout.InfiniteTimeSpan;
+
+        double total = _commandTimeout.TotalMilliseconds + wait.TotalMilliseconds;
+
+        // CancelAfter takes at most int.MaxValue milliseconds (about 24 days).
+        return total >= int.MaxValue - 1 ? Timeout.InfiniteTimeSpan : TimeSpan.FromMilliseconds(total);
+    }
+
+    /// <summary>
+    /// Runs one send under <paramref name="limit"/>. The wait is abandoned when it expires, like any cancelled
     /// wait (sent replies are still drained), and the caller gets a <see cref="TimeoutException"/>.
     /// </summary>
-    private async ValueTask<T> Timed<T>(Func<CancellationToken, ValueTask<T>> send, CancellationToken token)
+    private async ValueTask<T> Timed<T>(Func<CancellationToken, ValueTask<T>> send, CancellationToken token, TimeSpan limit)
     {
         using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
 
-        timeout.CancelAfter(_commandTimeout);
+        timeout.CancelAfter(limit);
 
         try
         {
@@ -166,7 +213,7 @@ internal sealed class CommandMultiplexer
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested && timeout.IsCancellationRequested)
         {
-            throw new TimeoutException($"ruvio: no reply within the command timeout of {_commandTimeout}");
+            throw new TimeoutException($"ruvio: no reply within the command timeout of {limit}");
         }
     }
 

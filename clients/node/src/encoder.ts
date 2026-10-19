@@ -83,6 +83,8 @@ export class Encoder {
   frameStart = 0;
   /** Receives completed byte ranges (the socket). Absent for pipeline-local encoders. */
   sink: ((chunk: Buffer) => void) | null;
+  /** @internal Sees each completed frame `buf[s..e)` (the command timeout looks for blocking commands). */
+  onFrame: ((buf: Uint8Array, s: number, e: number) => void) | null = null;
 
   constructor(sink: ((chunk: Buffer) => void) | null = null, size = SLAB) {
     this.buf = Buffer.allocUnsafe(size) as BufferFast;
@@ -154,6 +156,7 @@ export class Encoder {
 
   /** Marks the current frame complete. */
   endFrame(): void {
+    if (this.onFrame !== null) this.onFrame(this.buf, this.frameStart, this.pos);
     this.frameStart = this.pos;
     this.partial = false;
   }
