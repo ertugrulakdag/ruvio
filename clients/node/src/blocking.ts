@@ -15,6 +15,16 @@
  * @internal
  */
 
+const NAMES = new Set([
+  'BLPOP', 'BRPOP', 'BZPOPMIN', 'BZPOPMAX', 'BRPOPLPUSH', 'BLMOVE', 'BLMPOP', 'BZMPOP', 'XREAD', 'XREADGROUP',
+  'WAIT', 'WAITAOF', 'FILLGET', 'MONITOR', 'SUBSCRIBE', 'PSUBSCRIBE', 'SSUBSCRIBE',
+]);
+
+/** Whether a command name may carry a blocking wait; checked once per {@link cmd}, not per call. */
+export function mayBlock(name: string): boolean {
+  return NAMES.has(name.toUpperCase());
+}
+
 /** The wait of a command that blocks with no bound. */
 export const WAIT_FOREVER = -1;
 

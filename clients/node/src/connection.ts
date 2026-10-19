@@ -417,7 +417,9 @@ export class Connection extends EventEmitter {
   }
 
   /** Copies pre-encoded frames into the outgoing buffer. */
-  writeFrames(bytes: Buffer): void {
+  writeFrames(bytes: Buffer, mayBlock = true): void {
+    // A batch that may hold a blocking command gets its wait noted before its slots are tracked.
+    if (mayBlock && this.watchdog !== null) this.noteFrame(bytes, 0, bytes.length);
     const e = this.encoder();
     e.ensure(bytes.length);
     bytes.copy(e.buf, e.pos);

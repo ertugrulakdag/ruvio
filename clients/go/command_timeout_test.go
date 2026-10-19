@@ -175,3 +175,87 @@ func TestCommandWaitDoesNotAllocate(t *testing.T) {
 		t.Fatalf("allocs per run: %v", n)
 	}
 }
+
+// A server that answers its first two commands late and every later one at once.
+func lateServer(t *testing.T, late time.Duration) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { c.Close() })
+			go func() {
+				p := parser{}
+				buf := make([]byte, 4096)
+				var pending []byte
+				seen := 0
+				for {
+					n, err := c.Read(buf)
+					if err != nil {
+						return
+					}
+					pending = append(pending, buf[:n]...)
+					for {
+						_, used, done, err := p.next(pending)
+						if err != nil || !done {
+							break
+						}
+						pending = pending[used:]
+						seen++
+						reply := "$2\r\nok\r\n"
+						if seen <= 2 {
+							time.Sleep(late)
+							reply = "$4\r\nlate\r\n"
+						}
+						if _, err := c.Write([]byte(reply)); err != nil {
+							return
+						}
+					}
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// Expired calls, whether the caller read its own reply or waited for the reader, fail with
+// DeadlineExceeded; their late replies are dropped and the connection stays in step.
+func TestCommandTimeoutDropsLateRepliesAndKeepsTheConnection(t *testing.T) {
+	client := NewClient(Options{Addr: lateServer(t, 300*time.Millisecond), CommandTimeout: 100 * time.Millisecond})
+	defer client.Close()
+	ctx := context.Background()
+
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, _, err := client.Get(ctx, "k")
+			errs <- err
+		}()
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-errs; !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("want DeadlineExceeded, got %v", err)
+		}
+	}
+	time.Sleep(800 * time.Millisecond) // both late replies arrive and are dropped
+	for i := 0; i < 3; i++ {
+		v, ok, err := client.Get(ctx, "k")
+		if err != nil || !ok || v != "ok" {
+			t.Fatalf("after the timeouts: %q %v %v", v, ok, err)
+		}
+	}
+	p := client.Pipeline()
+	p.Get("a")
+	p.Get("b")
+	pl, err := p.Exec(ctx)
+	if err != nil || len(pl) != 2 || pl[0].Str() != "ok" {
+		t.Fatalf("pipeline: %v %v", pl, err)
+	}
+}

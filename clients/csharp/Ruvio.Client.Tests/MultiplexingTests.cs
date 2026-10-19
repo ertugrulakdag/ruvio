@@ -186,6 +186,40 @@ public class MultiplexingTests
         }
     }
 
+    [Fact(Timeout = 15000)]
+    public async Task CommandTimeoutDropsTheLateReplyAndKeepsTheConnection()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        using var tcp = new TcpClient { NoDelay = true };
+        Task connecting = tcp.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+        using TcpClient server = await TestDeadlines.AcceptAsync(listener);
+        await connecting;
+        using NetworkStream stream = tcp.GetStream();
+        var mux = new CommandMultiplexer(stream, new RespReader(stream), 4, commandTimeout: TimeSpan.FromMilliseconds(200));
+        try
+        {
+            // The first caller reads the socket itself; the second waits behind it. Both run out.
+            ValueTask<RespValue> first = mux.SendCommandAsync(new RespCommand("GET", "a"), CancellationToken.None);
+            ValueTask<IReadOnlyList<RespValue>> second = mux.SendAsync(
+                new IReadOnlyList<string>[] { new[] { "GET", "b" }, new[] { "GET", "c" } }, CancellationToken.None);
+            await Assert.ThrowsAsync<TimeoutException>(async () => await first);
+            await Assert.ThrowsAsync<TimeoutException>(async () => await second);
+            Assert.False(mux.IsBroken);
+
+            // The late replies are read and dropped; the next command gets its own reply.
+            await server.GetStream().WriteAsync(Encoding.ASCII.GetBytes("+late-a\r\n+late-b\r\n+late-c\r\n"));
+            ValueTask<RespValue> third = mux.SendCommandAsync(new RespCommand("PING"), CancellationToken.None);
+            await Task.Delay(50);
+            await server.GetStream().WriteAsync(Encoding.ASCII.GetBytes("+PONG\r\n"));
+            Assert.Equal("PONG", (await third).AsString());
+        }
+        finally
+        {
+            await mux.StopAsync();
+        }
+    }
+
     [Fact]
     public void CommandTimeoutDefaultsToThirtySeconds()
     {
