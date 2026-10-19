@@ -2814,6 +2814,34 @@ impl Client {
         self.ok(["CONFIG", "REWRITE"])
     }
 
+    /// Sends `REPLICAOF host port`: every shard of the server stops taking writes and follows
+    /// the primary at `host:port` (shard `i` dials `port + i`). A shard continues from its own
+    /// log when the new primary's history allows it, otherwise it takes a full copy. Lasts
+    /// until the server restarts.
+    pub fn replicaof(&mut self, host: &str, port: u16) -> Result<(), Error> {
+        let port = port.to_string();
+
+        self.ok(["REPLICAOF", host, port.as_str()])
+    }
+
+    /// Sends `REPLICAOF NO ONE`: promotes a replica in place, one epoch above its old primary.
+    /// `force` adds `FORCE`, which promotes even when a shard has not finished copying its
+    /// primary and may lose writes.
+    pub fn replicaof_no_one(&mut self, force: bool) -> Result<(), Error> {
+        if force {
+            self.ok(["REPLICAOF", "NO", "ONE", "FORCE"])
+        } else {
+            self.ok(["REPLICAOF", "NO", "ONE"])
+        }
+    }
+
+    /// Sends `ROLE`: raw reply for the shard this connection is on. A primary answers
+    /// `["master", sequence, []]`; a replica `["slave", host, port, "connect"|"connected",
+    /// sequence]`.
+    pub fn role(&mut self) -> Result<RespValue, Error> {
+        self.run(["ROLE"])
+    }
+
     /// Sends `SAVE`: writes a snapshot now and waits.
     pub fn save(&mut self) -> Result<(), Error> {
         self.ok(["SAVE"])

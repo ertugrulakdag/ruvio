@@ -143,6 +143,10 @@ class ServerLiveTest {
         c.configSet(Map.of("slowlog-max-len", "128"));
         assertEquals("128", c.configGet("slowlog-max-len").get("slowlog-max-len"));
         assertThrows(RuvioServerException.class, () -> c.configSet(Map.of("shards", "2")));
+        assertEquals("master", String.valueOf(c.role().get(0)));
+        // The live server keeps no WAL, so it cannot replicate: both forms are refused unchanged.
+        assertThrows(RuvioServerException.class, () -> c.replicaOf("127.0.0.1", 1));
+        assertThrows(RuvioServerException.class, () -> c.replicaOfNoOne(false));
         c.save();
         assertNotNull(c.bgsave());
         assertEquals(0L, c.waitReplicas(0, 10));

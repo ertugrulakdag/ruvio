@@ -109,6 +109,8 @@ disk I/O. They sit in ACL categories `admin`, `slow`, and `dangerous`.
 | `CONFIG GET` | Lists settings | `requirepass` is `***` |
 | `CONFIG SET` | Changes live settings on every shard: memory limits and eviction policy, slowlog and key statistics, connection limits and timeouts, script limits, `requirepass` | ACL `@admin @dangerous`; a `+config` grant includes it, as in Redis (`-config\|set` denies it alone). Restart-only settings (bind address, shards, data directory, durability, TLS files, protected mode, ACL file, replication) are refused, so it cannot open a listener, move data or turn TLS or protected mode off. One bad pair changes nothing. Not logged, not replicated, refused inside `MULTI` and scripts. Values are redacted in `SLOWLOG` when the name contains `pass`, `secret` or `token`. `requirepass` changes the default user's password; open connections stay logged in, and with no `replication_password` the replication port keeps the old one until restart |
 | `CONFIG REWRITE` | Writes the live settings into the config file the server started from | ACL `@admin @dangerous`. Owner-only atomic write through the `--write-config` path; it may write a secret that came from the environment into the file. Restart-only keys keep the file's values |
+| `REPLICAOF` | Makes every shard follow another primary (`host port`), or promotes a replica in place (`NO ONE`) | ACL `@admin @slow @dangerous`. Pointed at a server the caller controls, the shards replace their data with that server's copy; the replication password (`replication_password` or `requirepass`) must match there. Not replicated, refused in `MULTI` and scripts, lasts until restart. Deny `replicaof` to every user that does not operate the deployment. |
+| `ROLE` | Shows the shard's role, its log sequence and, on a replica, the primary address it dials | ACL `@admin @fast @dangerous`. |
 | `INFO` / `INFO prometheus` | Counters and memory | No secrets. ACL `@admin` can deny it |
 | `SAVE` / `BGSAVE` | Checkpoint + WAL compact | Persistence `MISCONF` on failure; `BGSAVE` is in-process, not a fork |
 | `SCRIPT LOAD/EXISTS/FLUSH/KILL` | Script cache | Size and count caps. `SCRIPT KILL` returns `NOTBUSY` because eval is synchronous |
@@ -237,6 +239,10 @@ the default quota).
    allowed `config` can also raise memory and connection limits or change the
    default password with `CONFIG SET`; deny `config|set` and `config|rewrite`
    to users that only read settings.
+7. Anyone allowed `replicaof` (`@admin`) can point the server at another
+   primary and have its data replaced by that primary's copy, or promote a
+   replica next to a running primary. Deny `replicaof` to users that do not
+   operate the deployment.
 
 ## Operator checklist
 

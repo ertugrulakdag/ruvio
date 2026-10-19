@@ -5435,6 +5435,41 @@ Sends ``XCLAIM key group consumer min_idle_ms id... [IDLE ms] [TIME ms] [RETRYCO
         """
         return self._c(_ok, "CONFIG REWRITE")
 
+    def replicaof(self, host: str, port: int) -> Any:
+        """``REPLICAOF host port`` - every shard follows the primary at ``host:port``.
+
+        Shard ``i`` dials ``port + i``. Writes are refused at once. A shard continues from its
+        own log when the new primary's history allows it, otherwise it takes a full copy.
+        Lasts until the server restarts.
+
+        Returns:
+            ``True``.
+        """
+        return self._c(_ok, "REPLICAOF", host, port)
+
+    def replicaof_no_one(self, force: bool = False) -> Any:
+        """``REPLICAOF NO ONE [FORCE]`` - promotes a replica in place, one epoch up.
+
+        Args:
+            force: Promote even when a shard has not finished copying its primary, which may
+                lose writes.
+
+        Returns:
+            ``True``.
+        """
+        if force:
+            return self._c(_ok, "REPLICAOF", "NO", "ONE", "FORCE")
+        return self._c(_ok, "REPLICAOF", "NO", "ONE")
+
+    def role(self) -> Any:
+        """``ROLE`` - the role of the shard this connection is on.
+
+        Returns:
+            ``["master", sequence, []]`` on a primary; ``["slave", host, port,
+            "connect"|"connected", sequence]`` on a replica.
+        """
+        return self._c(None, "ROLE")
+
     def save(self) -> Any:
         """``SAVE`` - writes an in-process checkpoint now (blocks the shard).
 

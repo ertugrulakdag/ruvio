@@ -197,7 +197,7 @@ listen has started.
 
 ## Promote a replica by hand
 
-The process does not elect a primary. You stop writers, wait until the replica's disk matches the primary's durable WAL, then start that data directory as the writer. Do this on every shard. Shard `i` is the RESP port plus `i`, and the same offset on the replication port.
+The process does not elect a primary. You stop writers, wait until the replica's disk matches the primary's durable WAL, then make the replica the writer: with `REPLICAOF NO ONE` while it runs, or by restarting its data directory as the writer. Either way every shard is promoted. Shard `i` is the RESP port plus `i`, and the same offset on the replication port.
 
 `redis-cli -p <port> INFO` prints a `# Replication` block:
 
@@ -216,7 +216,9 @@ The process does not elect a primary. You stop writers, wait until the replica's
 2. On each primary shard, wait until `wal_last_sequence` equals `wal_durable_sequence`. With `everysec` this is the sync interval. With `always` they already match after an acknowledged write.
 3. On each replica shard, wait until `wal_durable_sequence` equals that same number. `replication_send_lag` `0` on the primary is not this check.
 4. If the replica's replication stream stopped because a WAL prefix was missing and no checkpoint covered it, do not treat it as complete. Its memory is the generation it had when the stream stopped. An interrupted snapshot/WAL catch-up leaves a durable per-shard `REPLICA_CATCHUP_0000` (and corresponding shard-numbered) marker. Reads return `LOADING`, then `MASTERDOWN` after 30 seconds if recovery stalls; neither response exposes partial data. While still configured as a replica, the process retries a fresh snapshot when the primary returns. Do not remove these marker files manually.
-5. Stop the replica process. Keep its data directory.
+5. **Without a restart:** send `REPLICAOF NO ONE` to the replica. Every shard applies what it already received, forks a new history one epoch up and takes writes; with `replication.listen` set it also ships to replicas. A shard that has not finished copying (a catch-up marker) refuses it; `REPLICAOF NO ONE FORCE` promotes it anyway, with the same meaning as `--force-promote-incomplete` below. A replica whose every shard is still copying answers `LOADING` to every command, so it is promoted with a restart. The role lasts until the process restarts: change `replication.role` in the config file too. Then go to step 7.
+
+   **With a restart:** stop the replica process and keep its data directory.
 6. Start that directory as the new writer. One process, no further replicas:
 
 ```toml
@@ -239,7 +241,7 @@ ruvio --config ./ruvio.toml --force-promote-incomplete
 ```
 
    The flag is CLI-only, not a config or environment setting, and is not saved to the config file. It bypasses the completion gate, **not** WAL/checkpoint corruption checks. The marker remains on disk: a later writer restart needs another explicit force decision. Force does not restore missing writes; keys, JSON documents, or transactions not copied before the failure may be absent. An incomplete replica cannot use this flag while its role is still `replica`.
-7. Point clients at the new process's RESP address. Point the other replicas at the new primary's replication address: each continues from its own log when it stopped at or before the point where the new primary took over (see *Write history*), and takes a full copy otherwise.
+7. Point clients at the new process's RESP address. Point the other replicas at the new primary's replication address, with `REPLICAOF host port` or a restart with the new `replication.primary`: each continues from its own log when it stopped at or before the point where the new primary took over (see *Write history*), and takes a full copy otherwise. `ROLE` on each shard shows `master` or `slave` and the address it follows.
 8. Leave the old primary stopped. Starting it again next to the new writer forks the history. A replica that already follows the new primary refuses the old one (its epoch is lower), and the old primary refuses such a replica. Take a backup of the old directory if you still need it, then retire it.
 
 ### Write history
@@ -303,7 +305,14 @@ logs a warning naming both versions, and a replica logs a warning when the prima
 refuses it or does not answer its handshake (an older primary cannot parse it and
 closes the link). Upgrade the primary and its replicas together.
 
-`REPLICAOF` does not exist. Changing role is a restart with a new config.
+`REPLICAOF host port` makes a running primary or replica follow another primary
+without a restart: writes answer `READONLY` at once, and every shard resumes from
+its own log or takes a full copy by the rules above. A former primary that wrote
+past the point where its replacement forked loses those writes. `REPLICAOF` lasts
+until the process restarts; the config file's role applies again after that.
+
+`min-replicas-to-write` limits how long a primary cut off from its replicas keeps
+taking writes (see [CONFIGURATION.md](CONFIGURATION.md)).
 A client can block with `WAIT replicas milliseconds` until that many replicas
 have synced this shard's `wal_last_sequence` (in `port_mode = "single"` every shard's; in per-shard mode also the shards this connection's writes were forwarded to). The integer reply is the number
 that reached it. Timeout `0` waits until the process shuts down.

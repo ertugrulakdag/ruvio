@@ -296,6 +296,7 @@ static async Task Server(IRuvioClient db, bool isCluster)
     Console.WriteLine($"config {(await db.GetConfigAsync("databases")).Kind}");
     await db.SetConfigAsync([("slowlog-max-len", "128")]);
     Console.WriteLine("config set slowlog-max-len 128");
+    Console.WriteLine($"role {(await db.GetRoleAsync()).Items![0].AsString()}");
     Console.WriteLine($"whoami {await db.GetAclUserNameAsync()} users {string.Join(',', await db.GetAclUsersAsync())}");
     Console.WriteLine($"acl list {(await db.GetAclListAsync()).Count} cat {(await db.GetAclCategoriesAsync()).Count}");
     Console.WriteLine($"getuser {(await db.GetAclUserAsync("default")).Kind}");

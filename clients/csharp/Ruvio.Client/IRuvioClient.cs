@@ -3409,6 +3409,38 @@ public partial interface IRuvioClient
     /// </example>
     ValueTask RewriteConfigAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Sends <c>REPLICAOF host port</c>: every shard of the server follows the primary at <paramref name="host"/>:<paramref name="port"/> (shard <c>i</c> dials <c>port + i</c>).</summary>
+    /// <param name="host">The primary's host.</param>
+    /// <param name="port">The primary's base replication port.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <remarks>Writes are refused at once. A shard continues from its own log when the new primary's history allows it, otherwise it takes a full copy. Lasts until the server restarts.</remarks>
+    /// <example>
+    /// <code>
+    /// await db.ReplicaOfAsync("10.0.0.5", 26379);
+    /// </code>
+    /// </example>
+    ValueTask ReplicaOfAsync(string host, int port, CancellationToken cancellationToken = default);
+
+    /// <summary>Sends <c>REPLICAOF NO ONE</c>: promotes a replica in place, one epoch above its old primary.</summary>
+    /// <param name="force">Adds <c>FORCE</c>: promote even when a shard has not finished copying its primary, which may lose writes.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <example>
+    /// <code>
+    /// await db.ReplicaOfNoOneAsync();
+    /// </code>
+    /// </example>
+    ValueTask ReplicaOfNoOneAsync(bool force = false, CancellationToken cancellationToken = default);
+
+    /// <summary>Sends <c>ROLE</c> for the shard this connection is on.</summary>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>The raw reply: <c>["master", sequence, []]</c> on a primary, <c>["slave", host, port, "connect"|"connected", sequence]</c> on a replica.</returns>
+    /// <example>
+    /// <code>
+    /// RespValue role = await db.GetRoleAsync();
+    /// </code>
+    /// </example>
+    ValueTask<RespValue> GetRoleAsync(CancellationToken cancellationToken = default);
+
     /// <summary>Sends <c>FLUSHDB</c>: deletes every key of the selected database.</summary>
     /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
     /// <remarks>Only this client's database is emptied. In a multi-shard deployment (<c>port_mode = "per-shard"</c>) each shard holds its own keys: a discovering client sends the command to every shard, but a client or connection that talks to a single shard port clears only that shard. <c>ASYNC</c> runs synchronously on Ruvio. This cannot be undone.</remarks>

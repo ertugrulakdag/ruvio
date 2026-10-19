@@ -34,6 +34,8 @@ var (
 	cCOMMAND           = preEnc("COMMAND")
 	cCONFIG            = preEnc("CONFIG")
 	cCOPY              = preEnc("COPY")
+	cREPLICAOF         = preEnc("REPLICAOF")
+	cROLE              = preEnc("ROLE")
 	cDBSIZE            = preEnc("DBSIZE")
 	cDECR              = preEnc("DECR")
 	cDECRBY            = preEnc("DECRBY")

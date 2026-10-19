@@ -2125,6 +2125,24 @@ public sealed partial class RuvioClient
     }
 
     /// <inheritdoc />
+    public ValueTask ReplicaOfAsync(string host, int port, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+
+        return Ok(new RespCommand("REPLICAOF", host, port.ToString(System.Globalization.CultureInfo.InvariantCulture)), cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public ValueTask ReplicaOfNoOneAsync(bool force = false, CancellationToken cancellationToken = default)
+    {
+        return Ok(force ? new RespCommand("REPLICAOF", "NO", "ONE", "FORCE") : new RespCommand("REPLICAOF", "NO", "ONE"), cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public ValueTask<RespValue> GetRoleAsync(CancellationToken cancellationToken = default)
+        => ExecuteCommandAsync(new RespCommand("ROLE"), cancellationToken);
+
+    /// <inheritdoc />
     public ValueTask FlushDatabaseAsync(CancellationToken cancellationToken = default)
     {
         return Ok(new RespCommand("FLUSHDB"), cancellationToken);
