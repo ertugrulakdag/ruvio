@@ -4,6 +4,8 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+- `LIMIT key max window_ms SLIDING` counts with a weighted two-window estimate, and `LIMIT key capacity refill_ms TOKENS [COST n]` is a token bucket. Both keep a few bytes per key, write nothing when they refuse, and take `WITHRETRY` to reply `[remaining, retry_after_ms]`. Plain `LIMIT key max window_ms` is unchanged, and the new modes use the existing limit records, so the WAL and snapshot formats do not change.
+
 ## 0.3.4 - 2026-10-17
 
 - `XADD ... MAXLEN` accepts `=` as well as `~` before the count, like `XTRIM` and `XADD ... MINID` already did.

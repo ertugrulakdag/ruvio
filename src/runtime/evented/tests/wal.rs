@@ -17,6 +17,7 @@ fn evented_wal_group_policy_checks_execution_path_and_session() {
         key: b"k".as_slice().into(),
         max: 10,
         window_ms: 1000,
+        mode: crate::protocol::LimitMode::Fixed,
     };
     for command in &hot {
         assert!(wal_group_eligible(WalGroupCommand::Hot(command), &session));

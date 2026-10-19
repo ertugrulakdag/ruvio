@@ -258,6 +258,7 @@ mod hot;
 mod json;
 mod json_ops_more;
 mod lease;
+mod limit_modes;
 mod misc;
 mod replay_failures;
 mod response;

@@ -174,10 +174,12 @@ impl<'a> Command<'a> {
                 key,
                 max,
                 window_ms,
+                mode,
             } => Command::Limit {
                 key: owned(key),
                 max,
                 window_ms,
+                mode,
             },
             Self::Once { key, ttl_ms } => Command::Once {
                 key: owned(key),

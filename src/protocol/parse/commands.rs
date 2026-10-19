@@ -327,7 +327,7 @@ pub(in crate::protocol) fn cmd_semaphore<'a>(args: &Args<'a, '_>) -> Parsed<'a> 
 }
 
 pub(in crate::protocol) fn cmd_limit<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
-    if args.len() != 3 {
+    if args.len() < 3 {
         return Err(ProtocolError::Invalid(
             "LIMIT expects a key, a maximum, and a window in milliseconds",
         ));
@@ -344,10 +344,96 @@ pub(in crate::protocol) fn cmd_limit<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
         ));
     }
 
+    let mode = if args.len() == 3 {
+        LimitMode::Fixed
+    } else {
+        parse_limit_mode(args, max, window_ms)?
+    };
+
     Ok(Command::Limit {
         key: args.arg(0),
         max,
         window_ms,
+        mode,
+    })
+}
+
+/// The trailing `SLIDING | TOKENS [COST n] [WITHRETRY]` of `LIMIT`. Only reached with more
+/// than three arguments, so the plain form never pays for it.
+fn parse_limit_mode(
+    args: &Args<'_, '_>,
+    max: u64,
+    window_ms: u64,
+) -> Result<LimitMode, ProtocolError> {
+    use crate::store::{LIMIT_SLIDING_MAX, LIMIT_TOKENS_MAX_CAPACITY, LIMIT_TOKENS_MAX_REFILL_MS};
+
+    let tokens = if args.bytes(3).eq_ignore_ascii_case(b"SLIDING") {
+        false
+    } else if args.bytes(3).eq_ignore_ascii_case(b"TOKENS") {
+        true
+    } else {
+        return Err(ProtocolError::Invalid(
+            "LIMIT mode must be SLIDING or TOKENS",
+        ));
+    };
+    let mut cost = None;
+    let mut with_retry = false;
+    let mut index = 4;
+
+    while index < args.len() {
+        let option = args.bytes(index);
+
+        if option.eq_ignore_ascii_case(b"WITHRETRY") && !with_retry {
+            with_retry = true;
+            index += 1;
+        } else if tokens && option.eq_ignore_ascii_case(b"COST") && cost.is_none() {
+            if index + 1 >= args.len() {
+                return Err(ProtocolError::Invalid("LIMIT COST expects a token count"));
+            }
+
+            cost =
+                Some(parse_u64(args.bytes(index + 1)).map_err(|_| {
+                    ProtocolError::Invalid("LIMIT COST must be a positive integer")
+                })?);
+            index += 2;
+        } else {
+            return Err(ProtocolError::Invalid("syntax error"));
+        }
+    }
+
+    if !tokens {
+        if max > LIMIT_SLIDING_MAX {
+            return Err(ProtocolError::Invalid(
+                "LIMIT SLIDING maximum must be at most 2147483647",
+            ));
+        }
+
+        return Ok(LimitMode::Sliding { with_retry });
+    }
+
+    if max > LIMIT_TOKENS_MAX_CAPACITY {
+        return Err(ProtocolError::Invalid(
+            "LIMIT TOKENS capacity must be at most 1000000",
+        ));
+    }
+
+    if window_ms > LIMIT_TOKENS_MAX_REFILL_MS {
+        return Err(ProtocolError::Invalid(
+            "LIMIT TOKENS refill must be at most 4294967295 milliseconds",
+        ));
+    }
+
+    let cost = cost.unwrap_or(1);
+
+    if cost == 0 || cost > max {
+        return Err(ProtocolError::Invalid(
+            "LIMIT COST must be between 1 and the capacity",
+        ));
+    }
+
+    Ok(LimitMode::Tokens {
+        cost: cost as u32,
+        with_retry,
     })
 }
 

@@ -748,6 +748,7 @@ fn limit_and_once_cost_only_the_keys_that_use_them() {
                 key: owned(b"durable"),
                 max: 3,
                 window_ms: 4_000_000_000_000,
+                mode: crate::protocol::LimitMode::Fixed,
             },
             &mut sink,
         )
@@ -773,6 +774,7 @@ fn limit_and_once_cost_only_the_keys_that_use_them() {
                 key: owned(b"plain"),
                 max: 5,
                 window_ms: 60_000,
+                mode: crate::protocol::LimitMode::Fixed,
             },
             &mut sink,
         )
@@ -788,6 +790,7 @@ fn limit_and_once_cost_only_the_keys_that_use_them() {
                     key: owned(b"login"),
                     max: 5,
                     window_ms: 60_000,
+                    mode: crate::protocol::LimitMode::Fixed,
                 },
                 &mut sink,
             )
@@ -803,6 +806,7 @@ fn limit_and_once_cost_only_the_keys_that_use_them() {
                 key: owned(b"login"),
                 max: 5,
                 window_ms: 60_000,
+                mode: crate::protocol::LimitMode::Fixed,
             },
             &mut sink,
         )
@@ -852,6 +856,7 @@ fn limit_and_once_cost_only_the_keys_that_use_them() {
                 key: owned(b"other"),
                 max: 1,
                 window_ms: 1_000,
+                mode: crate::protocol::LimitMode::Fixed,
             },
             &mut sink,
         )
@@ -866,6 +871,7 @@ fn limit_and_once_cost_only_the_keys_that_use_them() {
                 key: owned(b"login"),
                 max: 5,
                 window_ms: 60_000,
+                mode: crate::protocol::LimitMode::Fixed,
             },
             &mut sink,
         )
@@ -940,6 +946,7 @@ fn limit_and_once_cost_only_the_keys_that_use_them() {
                 key: owned(b"fresh"),
                 max: 2,
                 window_ms: 1_000,
+                mode: crate::protocol::LimitMode::Fixed,
             },
             &mut failed,
         )

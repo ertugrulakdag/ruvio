@@ -221,7 +221,7 @@
       "family": "keys",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Fixed window on one key. Returns the remaining allowance after this call, or a null bulk when the window is full. The counter is not incremented on rejection. The window is the key deadline, so an unused window disappears. A plain key does not store a limit. The accepted call is a WAL record. GET of a limit is WRONGTYPE.",
+      "limitations": "Fixed window on one key. Returns the remaining allowance after this call, or a null bulk when the window is full. The counter is not incremented on rejection. SLIDING keeps a weighted count of the current and previous window (maximum up to 2147483647), TOKENS a token bucket of `max` tokens that refills over the window (capacity up to 1000000, refill up to 4294967295 ms, COST n takes n tokens); a refused call writes nothing. WITHRETRY returns [remaining, retry_after_ms] with remaining -1 when refused. A key keeps the mode it was created with: another mode on it is an error. The window is the key deadline, so an unused window disappears. A plain key does not store a limit. The accepted call is a WAL record. GET of a limit is WRONGTYPE.",
       "coverage": [
         "src/protocol/",
         "src/engine/"

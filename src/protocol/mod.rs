@@ -580,6 +580,7 @@ pub enum Command<'a> {
         key: Bytes<'a>,
         max: u64,
         window_ms: u64,
+        mode: LimitMode,
     },
     Once {
         key: Bytes<'a>,
@@ -1323,6 +1324,20 @@ impl ScoreBound {
             Self::Exclusive(bound) => score < bound,
         }
     }
+}
+
+/// How `LIMIT` counts. `Fixed` is the plain `LIMIT key max window_ms`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitMode {
+    Fixed,
+    Sliding {
+        with_retry: bool,
+    },
+    /// `cost` tokens are taken from a bucket of `max` tokens that refills over `window_ms`.
+    Tokens {
+        cost: u32,
+        with_retry: bool,
+    },
 }
 
 /// `LIMIT offset count` on a score or lexicographical range. A negative count means the rest of the range.
