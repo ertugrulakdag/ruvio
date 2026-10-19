@@ -84,11 +84,12 @@ A change to persistence, the WAL, unsafe code or memory layout gets a second, in
 | Environment variable | `apply_environment` in `src/config.rs` (`RUVIO_<NAME>`) |
 | Command-line flag (optional) | `Cli` in `src/bin/ruvio.rs`, `apply_overrides` in `src/config.rs` |
 | `CONFIG GET` | `introspect` in `src/config.rs` |
+| Live or restart-only | `LIVE_SETTINGS` or `RESTART_ONLY_SETTINGS` in `src/config/live.rs`. A live setting also needs a `set_live` arm and a line in `copy_live_settings` there, and the shard must read it from `ShardState::live` (a `Cell` if it is read per command, `live.with` otherwise), never from `published_config`; `live::apply` in `src/runtime/evented/live.rs` pushes it into the store, limiter or slowlog if they keep their own copy. Restart-only is the default for anything that moves data, opens a listener or changes persistence |
 | `--write-config` | `overlay_config` in `src/config.rs` |
 | Template | `ruvio.example.toml` (its values are tested against the code defaults) |
-| Docs | `docs/CONFIGURATION.md` (the key and a row in the environment table); the site's configuration page is generated from it |
+| Docs | `docs/CONFIGURATION.md` (the key and a row in the environment table, with `yes` in its *Live* column for a live setting); the site's configuration page is generated from it |
 
-`every_template_setting_answers_config_get`, `every_file_setting_is_documented`, `every_environment_variable_is_documented` and `every_command_line_flag_is_documented` (all in `scripts/check.sh`) catch a template value, file key, variable or flag that is missing; the site page is checked by hand.
+`every_config_get_name_is_live_or_restart_only` fails until a new `CONFIG GET` name is in one of the two lists, and `every_live_setting_accepts_its_config_get_value` until a live one has a `set_live` arm. `every_template_setting_answers_config_get`, `every_file_setting_is_documented`, `every_environment_variable_is_documented` and `every_command_line_flag_is_documented` (all in `scripts/check.sh`) catch a template value, file key, variable or flag that is missing; the site page is checked by hand.
 
 ## Adding a client method
 

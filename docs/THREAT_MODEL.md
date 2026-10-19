@@ -60,7 +60,7 @@ not consume past a truncated frame.
 | Bulk-string or array length bombs | `ProtocolLimits` (`max_command_bytes`, `max_key_bytes`, `max_value_bytes`, `max_arguments`) checked before allocation | `protocol::rejects_oversized_bulk_strings_before_allocating`, `enforces_key_and_value_limits_in_every_parser` |
 | Pipeline / connection buffer growth | `max_pipeline_commands`, `max_connection_buffer_bytes`, idle and read timeouts | `server::applies_configured_protocol_limits`, `limits_inactive_partial_frame_reads` |
 | Truncated or garbage frames | Incremental parse returns incomplete; consume is bounded; a framing error closes the connection | `every_truncated_*_frame_is_incomplete`, `parsers_bound_consume_on_small_garbage_frames`, `parsers_never_panic_or_consume_past_arbitrary_input` |
-| Unknown name, wrong arity, or unsupported subcommand | The frame is consumed and answered with `-ERR`. The socket stays open. `CONFIG SET`, `CLUSTER MEET`, `SHUTDOWN`, `DEBUG`, and `MONITOR` are in this class. `FLUSHDB`, `FLUSHALL`, and `SWAPDB` exist and are in the ACL `@dangerous` category. `ACL SETUSER` changes only the in-memory user list | `protocol::rejects_mutating_admin_and_cluster_verbs`, `server::rejected_admin_verbs_reply_and_keep_the_connection`, `evented::evented_rejected_admin_verbs_reply_and_keep_the_connection` |
+| Unknown name, wrong arity, or unsupported subcommand | The frame is consumed and answered with `-ERR`. The socket stays open. `CONFIG RESETSTAT`, `CLUSTER MEET`, `SHUTDOWN`, `DEBUG`, and `MONITOR` are in this class; `CONFIG SET` of a restart-only or unknown name is refused the same way. `FLUSHDB`, `FLUSHALL`, and `SWAPDB` exist and are in the ACL `@dangerous` category. `ACL SETUSER` changes only the in-memory user list | `protocol::rejects_mutating_admin_and_cluster_verbs`, `server::rejected_admin_verbs_reply_and_keep_the_connection`, `evented::evented_rejected_admin_verbs_reply_and_keep_the_connection` |
 | Binary keys and values | Values are length-prefixed bytes; they are never interpreted as paths or Lua source unless the command is `EVAL` | store binary round-trips |
 
 The library crate forbids `unsafe`. Hot-path parse borrows the connection
@@ -106,7 +106,9 @@ disk I/O. They sit in ACL categories `admin`, `slow`, and `dangerous`.
 | --- | --- | --- |
 | `AUTH` | Selects a user | Constant-time compare; `NOAUTH` until success; not allowed inside `MULTI` |
 | `ACL WHOAMI/USERS/LIST/GETUSER/CAT/SETUSER` | Introspect or change users | `SETUSER` updates the in-memory directory only. `SAVE`/`LOAD` do not parse. Passwords stay redacted |
-| `CONFIG GET` | Lists settings | `requirepass` is `***`. `CONFIG SET` is an error reply and the connection stays open |
+| `CONFIG GET` | Lists settings | `requirepass` is `***` |
+| `CONFIG SET` | Changes live settings on every shard: memory limits and eviction policy, slowlog and key statistics, connection limits and timeouts, script limits, `requirepass`, `metrics-token` | ACL `@admin @dangerous` (`-config\|set` denies it alone). Restart-only settings (bind address, shards, data directory, durability, TLS files, protected mode, ACL file, replication) are refused, so it cannot open a listener, move data or turn TLS or protected mode off. One bad pair changes nothing. Not logged, not replicated, refused inside `MULTI` and scripts. Values are redacted in `SLOWLOG` when the name contains `pass`, `secret` or `token`. `requirepass` changes the default user's password; open connections stay logged in |
+| `CONFIG REWRITE` | Writes the live settings into the config file the server started from | ACL `@admin @dangerous`. Owner-only atomic write through the `--write-config` path; it may write a secret that came from the environment into the file. Restart-only keys keep the file's values |
 | `INFO` / `INFO prometheus` | Counters and memory | No secrets. ACL `@admin` can deny it |
 | `SAVE` / `BGSAVE` | Checkpoint + WAL compact | Persistence `MISCONF` on failure; `BGSAVE` is in-process, not a fork |
 | `SCRIPT LOAD/EXISTS/FLUSH/KILL` | Script cache | Size and count caps. `SCRIPT KILL` returns `NOTBUSY` because eval is synchronous |
@@ -231,7 +233,10 @@ the default quota).
 4. Experimental static cluster discovery is not an authenticated cluster.
 5. Unauthenticated metrics HTTP on loopback when no token is set. A public
    metrics bind requires `metrics_token`.
-6. `CONFIG GET` path disclosure to anyone allowed `config` (`@admin`).
+6. `CONFIG GET` path disclosure to anyone allowed `config` (`@admin`). Anyone
+   allowed `config` can also raise memory and connection limits or change the
+   default password with `CONFIG SET`; deny `config|set` and `config|rewrite`
+   to users that only read settings.
 
 ## Operator checklist
 

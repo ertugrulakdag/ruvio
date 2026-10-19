@@ -1641,6 +1641,28 @@ mod tests {
     }
 
     #[test]
+    fn config_set_and_rewrite_can_be_denied_while_config_get_stays() {
+        let user = AclUser::parse("ops", "on nopass ~* +@all -config|set").unwrap();
+        let set = Command::ConfigSet(vec![(
+            Cow::Borrowed(&b"maxmemory"[..]),
+            Cow::Borrowed(&b"1"[..]),
+        )]);
+
+        assert_eq!(
+            user.rules.authorize(&set),
+            Err(AclDeny::Command("config|set"))
+        );
+        user.rules
+            .authorize(&Command::ConfigGet(Cow::Borrowed(b"*")))
+            .unwrap();
+        user.rules.authorize(&Command::ConfigRewrite).unwrap();
+
+        let reader = AclUser::parse("reader", "on nopass ~* +@read").unwrap();
+        assert!(reader.rules.authorize(&set).is_err());
+        assert!(reader.rules.authorize(&Command::ConfigRewrite).is_err());
+    }
+
+    #[test]
     fn named_user_rules_limit_commands_and_keys() {
         let user =
             AclUser::parse("app", "on >app-secret ~app:* +@read +ping +auth -@admin").unwrap();

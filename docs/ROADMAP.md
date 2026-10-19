@@ -357,7 +357,7 @@ slows a command or raises RSS for the same data does not land.
 
 - [ ] All `P1` items selected for the release are complete.
 - [ ] Security review and operational failure drills are complete.
-  Unknown names, wrong arity, `CONFIG SET`, `SHUTDOWN`, `DEBUG`, and
+  Unknown names, wrong arity, `CONFIG RESETSTAT`, `SHUTDOWN`, `DEBUG`, and
   `CLUSTER MEET` reply with an error and keep the socket on the evented
   runtime. Process-kill, full-disk, and live permission drills stay
   blocked on a dedicated host.

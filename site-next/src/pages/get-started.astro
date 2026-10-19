@@ -130,7 +130,9 @@ cd ruvio-$v-linux-x64
         <p>
           Settings merge in this order: built-in defaults, <code>ruvio.toml</code> (or <code>--config</code> /{" "}
           <code>RUVIO_CONFIG</code>), <code>RUVIO_*</code> environment variables, then command-line flags. The file is
-          read once, at process start, and unknown TOML fields are rejected.
+          read once, at process start, and unknown TOML fields are rejected. Memory limits, slowlog, connection limits,
+          script limits and the password also change while the server runs with <code>CONFIG SET</code>, and
+          <code>CONFIG REWRITE</code> writes them back to the file; see <a href="/docs/configuration/#changing-settings-at-runtime">Changing settings at runtime</a>.
         </p>
       </section>
 
