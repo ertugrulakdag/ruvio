@@ -1223,7 +1223,7 @@ public partial interface IRuvioClient
         => RespRead.Ok(ExecuteAsync(new RespCommand("AUTH", username, password).AsList(), cancellationToken));
 
     /// <summary>Sends <c>CLIENT KILL ADDR address</c>: closes the client connections with that remote address.</summary>
-    /// <param name="address">The client address as <c>ip:port</c>, as shown by <see cref="GetClientListAsync"/>.</param>
+    /// <param name="address">The client address as <c>ip:port</c>, as shown by <see cref="GetClientListAsync(CancellationToken)"/>.</param>
     /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
     /// <returns>The number of connections closed.</returns>
     /// <remarks>Each shard knows only its own connections. With several shards the command reaches the shard that got it.</remarks>

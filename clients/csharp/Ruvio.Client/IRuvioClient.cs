@@ -3840,7 +3840,7 @@ public partial interface IRuvioClient
         => RespRead.RequiredText(ExecuteAsync(new string[] { "CLIENT", "LIST", "TYPE", Keywords.Word(type) }, cancellationToken), "CLIENT LIST");
 
     /// <summary>Sends <c>CLIENT KILL ID id</c>.</summary>
-    /// <param name="id">The connection id from <see cref="GetClientIdAsync"/> or <see cref="GetClientListAsync"/>.</param>
+    /// <param name="id">The connection id from <see cref="GetClientIdAsync"/> or <see cref="GetClientListAsync(CancellationToken)"/>.</param>
     /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
     /// <returns>The number of connections closed (0 or 1).</returns>
     /// <remarks>Reaches only the shard that got the command.</remarks>

@@ -69,6 +69,7 @@ public class Connection implements AutoCloseable {
      * @param name the name used for the threads
      * @throws IOException when the socket cannot be opened
      */
+    @SuppressWarnings("this-escape") // the writer and reader threads start here on purpose
     public Connection(String host, int port, int connectTimeoutMs, int maxInFlight, String name) throws IOException {
         this.host = host;
         this.port = port;
