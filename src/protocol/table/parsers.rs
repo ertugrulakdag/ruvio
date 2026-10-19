@@ -1949,6 +1949,14 @@ pub(super) fn parse_zpopmin<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, Prot
     commands::cmd_zpopmin(b"ZPOPMIN", args)
 }
 
+pub(super) fn parse_zpopbyscore<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_zpopbyscore(args)
+}
+
+pub(super) fn parse_zmovedue<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
+    commands::cmd_zmovedue(args)
+}
+
 pub(super) fn parse_zpopmax<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, ProtocolError> {
     commands::cmd_zpopmin(b"ZPOPMAX", args)
 }

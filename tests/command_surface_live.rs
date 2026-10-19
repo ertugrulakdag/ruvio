@@ -509,6 +509,8 @@ const TEMPLATES: &[&str] = &[
     "RPOP @list 2",
     "ZPOPMIN @zset 1",
     "ZPOPMAX @zset 1",
+    "ZPOPBYSCORE @zset 10 MIN 0 COUNT 2 WITHSCORES",
+    "ZMOVEDUE @zset @list 10 COUNT 2",
     "LMPOP 1 @list LEFT COUNT 2",
     "SINTERCARD 1 @set LIMIT 2",
     "LPOS @list e1 RANK 1 COUNT 1 MAXLEN 10",

@@ -111,6 +111,11 @@ pub fn command_slot(command: &Command<'_>) -> Result<Option<u16>, CrossSlot> {
             source,
             destination,
             ..
+        }
+        | Command::SortedSetMoveDue {
+            source,
+            destination,
+            ..
         } => common_slot([source.as_ref(), destination.as_ref()].into_iter()).map(Some),
         Command::MGet(keys)
         | Command::JsonMGet { keys, .. }
@@ -265,6 +270,7 @@ pub fn command_slot(command: &Command<'_>) -> Result<Option<u16>, CrossSlot> {
         | Command::SortedSetScore { key, .. }
         | Command::SortedSetRank { key, .. }
         | Command::SortedSetPop { key, .. }
+        | Command::SortedSetPopByScore { key, .. }
         | Command::SortedSetRemoveRange { key, .. }
         | Command::HashExpire { key, .. }
         | Command::HashTtl { key, .. }
@@ -413,6 +419,11 @@ pub fn command_keys<'a>(command: &'a Command<'_>) -> Vec<&'a [u8]> {
             source,
             destination,
             ..
+        }
+        | Command::SortedSetMoveDue {
+            source,
+            destination,
+            ..
         } => vec![source.as_ref(), destination.as_ref()],
         Command::SetAlgebra {
             keys, destination, ..
@@ -541,6 +552,7 @@ pub fn command_keys<'a>(command: &'a Command<'_>) -> Vec<&'a [u8]> {
         | Command::SortedSetScore { key, .. }
         | Command::SortedSetRank { key, .. }
         | Command::SortedSetPop { key, .. }
+        | Command::SortedSetPopByScore { key, .. }
         | Command::SortedSetRemoveRange { key, .. }
         | Command::HashExpire { key, .. }
         | Command::HashTtl { key, .. }
@@ -860,6 +872,8 @@ mod tests {
             (&["ZCARD", "z"], &["z"]),
             (&["ZINCRBY", "z", "1", "m"], &["z"]),
             (&["ZPOPMIN", "z"], &["z"]),
+            (&["ZPOPBYSCORE", "z", "10"], &["z"]),
+            (&["ZMOVEDUE", "z", "l", "10"], &["z", "l"]),
             (&["XADD", "x", "*", "f", "v"], &["x"]),
             (&["XLEN", "x"], &["x"]),
             (&["XRANGE", "x", "-", "+"], &["x"]),

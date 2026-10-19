@@ -1270,6 +1270,8 @@ pub fn command_acl_name(command: &Command<'_>) -> &'static str {
         Command::SortedSetRank { reverse: true, .. } => "zrevrank",
         Command::SortedSetPop { max: false, .. } => "zpopmin",
         Command::SortedSetPop { max: true, .. } => "zpopmax",
+        Command::SortedSetPopByScore { .. } => "zpopbyscore",
+        Command::SortedSetMoveDue { .. } => "zmovedue",
         Command::SortedSetBlockPop { max: false, .. } => "bzpopmin",
         Command::SortedSetBlockPop { max: true, .. } => "bzpopmax",
         Command::SortedSetRemoveRange {

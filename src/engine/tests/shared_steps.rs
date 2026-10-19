@@ -339,6 +339,8 @@ const CASES: &[(&str, &[&[&str]])] = &[
     ("zincrby", &[&["ZINCRBY", "z", "2", "a"]]),
     ("zpopmin", &[&["ZPOPMIN", "z"]]),
     ("zpopmax", &[&["ZPOPMAX", "z"]]),
+    ("zpopbyscore", &[&["ZPOPBYSCORE", "z", "10", "COUNT", "2"]]),
+    ("zmovedue", &[&["ZMOVEDUE", "z", "l", "10", "COUNT", "2"]]),
     ("bzpopmin", &[&["BZPOPMIN", "z", "0"]]),
     ("bzpopmax", &[&["BZPOPMAX", "z", "0"]]),
     ("zremrangebyrank", &[&["ZREMRANGEBYRANK", "z", "0", "0"]]),

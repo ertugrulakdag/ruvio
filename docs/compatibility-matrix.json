@@ -1300,6 +1300,26 @@
       ]
     },
     {
+      "name": "ZPOPBYSCORE",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Ruvio extension. `ZPOPBYSCORE key max [MIN min] [COUNT n] [WITHSCORES]` removes and returns up to `n` (default 1, at most 10000) members with `min <= score <= max`, lowest score first. Bounds take `-inf`, `+inf` and `(` exclusive forms. Empty array when nothing is due. Recorded as one ZREM of the popped members.",
+      "coverage": [
+        "src/engine/tests/due.rs"
+      ]
+    },
+    {
+      "name": "ZMOVEDUE",
+      "family": "zsets",
+      "status": "supported",
+      "same_slot": true,
+      "limitations": "Ruvio extension. `ZMOVEDUE source destination max [COUNT n]` moves up to `n` (default 1, at most 10000) members with `score <= max`, lowest first, from a sorted set to the tail of a list, and returns how many moved. Source and destination must hash to the same slot. Clients blocked on the destination list are served first. Recorded as one transaction.",
+      "coverage": [
+        "src/engine/tests/due.rs"
+      ]
+    },
+    {
       "name": "BZPOPMIN",
       "family": "zsets",
       "status": "supported",

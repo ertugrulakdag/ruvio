@@ -92,6 +92,12 @@ class SortedSetGeoLiveTest {
         assertEquals(Arrays.asList(new ScoredValue<>("w", 3.0)), c.zpopmax("pz", 1));
         assertEquals(1, c.zpopmin("pz", 5).size());
         assertTrue(c.zpopmax("pz").isEmpty());
+        // due members
+        c.zadd("due", scores("a", 1, "b", 2, "c", 3, "d", 9));
+        assertEquals(Arrays.asList(new ScoredValue<>("a", 1.0)), c.zpopbyscore("due", "-inf", "1", 5));
+        assertEquals(2L, c.zmovedue("due", "ready", "3", 5));
+        assertEquals(Arrays.asList("b", "c"), c.lrange("ready", 0, -1));
+        assertTrue(c.zpopbyscore("due", "-inf", "3", 5).isEmpty());
         // algebra
         c.zadd("z1", scores("a", 1, "b", 2));
         c.zadd("z2", scores("b", 3, "c", 4));

@@ -1509,6 +1509,24 @@ public partial class CommandSurfaceTests
     }
 
     [Fact(Timeout = 15000)]
+    public async Task DueSortedSetCommandsSendTheirOptions()
+    {
+        await using ScriptedSession session = await ScriptedSession.Open();
+
+        ValueTask<IReadOnlyList<SortedSetEntry>> due = session.Client.PopSortedSetByScoreAsync("z", "-inf", "(5", 3);
+
+        await session.Expect("ZPOPBYSCORE", "z", "(5", "MIN", "-inf", "COUNT", "3", "WITHSCORES");
+        await session.Reply("*2\r\n$1\r\nm\r\n$1\r\n2\r\n");
+        Assert.Equal("m", (await due)[0].Member);
+
+        ValueTask<long> moved = session.Client.MoveDueSortedSetAsync("{t}z", "{t}l", "+inf", 4);
+
+        await session.Expect("ZMOVEDUE", "{t}z", "{t}l", "+inf", "COUNT", "4");
+        await session.Reply(":2\r\n");
+        Assert.Equal(2, await moved);
+    }
+
+    [Fact(Timeout = 15000)]
     public async Task SortedSetPopsAndRangeRemovalsSendTheirCommands()
     {
         await using ScriptedSession session = await ScriptedSession.Open();

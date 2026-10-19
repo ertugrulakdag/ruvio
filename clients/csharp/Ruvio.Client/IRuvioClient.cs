@@ -1980,6 +1980,36 @@ public partial interface IRuvioClient
     /// </example>
     ValueTask<IReadOnlyList<SortedSetEntry>> PopSortedSetMinAsync(string key, long count = 1, CancellationToken cancellationToken = default);
 
+    /// <summary>Sends <c>ZPOPBYSCORE</c>: removes and returns the members that are due, lowest score first. With scores set to due times this takes the jobs that are ready.</summary>
+    /// <param name="key">The key.</param>
+    /// <param name="min">Lowest score: a number, <c>-inf</c>, or <c>(5</c> for exclusive.</param>
+    /// <param name="max">Highest score: a number, <c>+inf</c>, or <c>(5</c> for exclusive.</param>
+    /// <param name="count">How many to pop, 1 to 10000.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>The removed members with scores, lowest first. Empty when nothing is due.</returns>
+    /// <exception cref="RuvioException">The key holds a value of another type (<c>WRONGTYPE</c>), or the server refuses the command.</exception>
+    /// <example>
+    /// <code>
+    /// var jobs = await db.PopSortedSetByScoreAsync("scheduled", "-inf", nowUnixSeconds.ToString(), 100);
+    /// </code>
+    /// </example>
+    ValueTask<IReadOnlyList<SortedSetEntry>> PopSortedSetByScoreAsync(string key, string min, string max, long count = 1, CancellationToken cancellationToken = default);
+
+    /// <summary>Sends <c>ZMOVEDUE</c>: moves the members that are due from a sorted set to the tail of a list, lowest score first. Clients blocked on the list are served first. Both keys must hash to the same slot on a sharded server.</summary>
+    /// <param name="source">The sorted set to take members from.</param>
+    /// <param name="destination">The list that receives them.</param>
+    /// <param name="max">Highest score: a number, <c>+inf</c>, or <c>(5</c> for exclusive.</param>
+    /// <param name="count">How many to move, 1 to 10000.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>How many members were moved.</returns>
+    /// <exception cref="RuvioException">A key holds a value of another type (<c>WRONGTYPE</c>), the keys are in different slots (<c>CROSSSLOT</c>), or the server refuses the command.</exception>
+    /// <example>
+    /// <code>
+    /// long moved = await db.MoveDueSortedSetAsync("{q}scheduled", "{q}ready", nowUnixSeconds.ToString(), 100);
+    /// </code>
+    /// </example>
+    ValueTask<long> MoveDueSortedSetAsync(string source, string destination, string max, long count = 1, CancellationToken cancellationToken = default);
+
     /// <summary>Sends <c>ZPOPMAX</c>: removes and returns the highest-scored members.</summary>
     /// <param name="key">The key.</param>
     /// <param name="count">How many to pop; default 1.</param>

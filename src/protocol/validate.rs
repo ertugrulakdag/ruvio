@@ -557,7 +557,17 @@ pub(super) fn validate_command_payloads(
             validate_values(fields, limits)?;
         }
 
-        Command::SortedSetPop { key, .. } => validate_key(key, limits)?,
+        Command::SortedSetPop { key, .. } | Command::SortedSetPopByScore { key, .. } => {
+            validate_key(key, limits)?
+        }
+        Command::SortedSetMoveDue {
+            source,
+            destination,
+            ..
+        } => {
+            validate_key(source, limits)?;
+            validate_key(destination, limits)?;
+        }
         Command::SortedSetBlockPop { keys, .. } => validate_keys(keys, limits)?,
         Command::SortedSetRemoveRange { key, range } => {
             validate_key(key, limits)?;
