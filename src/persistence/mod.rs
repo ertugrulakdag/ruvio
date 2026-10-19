@@ -117,10 +117,19 @@ pub(crate) fn validate_shard_layout(
         return Ok(());
     }
 
-    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    // Written beside the final name and renamed, so a crash leaves either no file or a whole
+    // one; a partial `SHARD_LAYOUT` would make every later start refuse the directory.
+    let temporary = config.data_dir.join(".SHARD_LAYOUT.tmp");
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&temporary)?;
     use io::Write;
     file.write_all(expected.as_bytes())?;
     file.sync_all()?;
+    drop(file);
+    fs::rename(&temporary, &path)?;
     #[cfg(unix)]
     File::open(&config.data_dir)?.sync_all()?;
     Ok(())
@@ -1028,6 +1037,29 @@ pub(crate) fn write_file_atomically(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shard_layout_file_is_written_whole_and_a_leftover_temporary_is_harmless() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = PersistenceConfig {
+            profile: DurabilityProfile::Always,
+            data_dir: directory.path().to_path_buf(),
+            ..PersistenceConfig::default()
+        };
+        let limits = crate::protocol::ProtocolLimits::default();
+
+        // A crash in an earlier start left a partial temporary behind.
+        fs::write(directory.path().join(".SHARD_LAYOUT.tmp"), b"ruvio-sh").unwrap();
+        validate_shard_layout(&config, 2, 2, limits).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(directory.path().join("SHARD_LAYOUT")).unwrap(),
+            "ruvio-shards-v1 2\n"
+        );
+        assert!(!directory.path().join(".SHARD_LAYOUT.tmp").exists());
+        validate_shard_layout(&config, 2, 2, limits).unwrap();
+        assert!(validate_shard_layout(&config, 3, 3, limits).is_err());
+    }
 
     #[test]
     fn data_directory_lock_excludes_a_second_owner() {
