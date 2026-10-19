@@ -459,6 +459,34 @@ fn next_stream_id(id: &[u8]) -> Result<Vec<u8>, String> {
     .into_bytes())
 }
 
+const STAGING_SUFFIX: &[u8] = b":import-tmp";
+
+/// A temporary name that hashes to the same slot as `key` (same hash tag, or `{key}` when it
+/// has no braces). None for a key with braces but no usable tag, where no same-slot name can
+/// be built by adding text; that key is replaced in place.
+fn staging_key(key: &[u8]) -> Option<Vec<u8>> {
+    let tag_end = key.iter().position(|byte| *byte == b'{').and_then(|open| {
+        key[open + 1..]
+            .iter()
+            .position(|byte| *byte == b'}')
+            .map(|close| (open, close))
+    });
+    let mut staging = Vec::with_capacity(key.len() + STAGING_SUFFIX.len() + 2);
+
+    match tag_end {
+        Some((_, close)) if close > 0 => staging.extend_from_slice(key),
+        _ if !key.contains(&b'{') && !key.contains(&b'}') => {
+            staging.push(b'{');
+            staging.extend_from_slice(key);
+            staging.push(b'}');
+        }
+        _ => return None,
+    }
+
+    staging.extend_from_slice(STAGING_SUFFIX);
+    Some(staging)
+}
+
 fn write_value(target: &mut Connection, key: &[u8], value: &Value) -> Result<(), String> {
     let mut commands: Vec<Vec<Vec<u8>>> = Vec::new();
 
@@ -624,14 +652,28 @@ pub fn run(
                     continue;
                 }
 
+                // `--replace` builds the copy under a temporary key in the same slot and
+                // renames it over the target's key, so a crash leaves the old value or the
+                // new one (with its TTL), never a half-written key.
+                let staging = if options.replace {
+                    staging_key(key)
+                } else {
+                    None
+                };
+                let destination: &[u8] = staging.as_deref().unwrap_or(key);
+
                 if options.replace {
-                    target.call(&[b"DEL", key])?;
+                    target.call(&[b"DEL", destination])?;
                 }
 
-                write_value(&mut target, key, &value)?;
+                write_value(&mut target, destination, &value)?;
 
                 if ttl > 0 {
-                    target.call(&[b"PEXPIRE", key, ttl.to_string().as_bytes()])?;
+                    target.call(&[b"PEXPIRE", destination, ttl.to_string().as_bytes()])?;
+                }
+
+                if staging.is_some() {
+                    target.call(&[b"RENAME", destination, key])?;
                 }
 
                 if options.verify {
@@ -683,6 +725,22 @@ mod tests {
         );
         assert!(parse_endpoint("redis://").is_err());
         assert!(parse_endpoint("host:1/x").is_err());
+    }
+
+    #[test]
+    fn staging_key_keeps_the_slot_of_the_target() {
+        assert_eq!(
+            staging_key(b"user:1").as_deref(),
+            Some(&b"{user:1}:import-tmp"[..])
+        );
+        assert_eq!(
+            staging_key(b"post:{9001}:body").as_deref(),
+            Some(&b"post:{9001}:body:import-tmp"[..])
+        );
+        // No usable tag but braces present: no same-slot name exists by adding text.
+        assert_eq!(staging_key(b"a{}b"), None);
+        assert_eq!(staging_key(b"a}b{c"), None);
+        assert_eq!(staging_key(b"{open"), None);
     }
 
     #[test]

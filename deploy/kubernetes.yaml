@@ -2,7 +2,6 @@
 # Create the secret first; no password is committed to this file:
 #   kubectl create secret generic ruvio \
 #     --from-literal=RUVIO_REQUIREPASS="$(openssl rand -hex 24)" \
-#     --from-literal=RUVIO_METRICS_TOKEN="$(openssl rand -hex 24)"
 # The published image defaults to RUVIO_PROTECTED_MODE=false and RUVIO_DURABILITY unset
 # (memory). This manifest turns durability on. The image tag is checked against Cargo.toml
 # by scripts/check_package_metadata.py; set it with scripts/release_version.py.
@@ -40,8 +39,6 @@ spec:
           ports:
             - name: resp
               containerPort: 6379
-            - name: metrics
-              containerPort: 9121
           env:
             - name: RUVIO_ADDR
               value: 0.0.0.0:6379
@@ -49,18 +46,11 @@ spec:
               value: everysec
             - name: RUVIO_DATA_DIR
               value: /data
-            - name: RUVIO_METRICS_ADDR
-              value: 0.0.0.0:9121
             - name: RUVIO_REQUIREPASS
               valueFrom:
                 secretKeyRef:
                   name: ruvio
                   key: RUVIO_REQUIREPASS
-            - name: RUVIO_METRICS_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: ruvio
-                  key: RUVIO_METRICS_TOKEN
           readinessProbe:
             tcpSocket:
               port: resp
@@ -110,6 +100,3 @@ spec:
     - name: resp
       port: 6379
       targetPort: resp
-    - name: metrics
-      port: 9121
-      targetPort: metrics
