@@ -2,9 +2,17 @@
 //! `RUVIO_REPLICATED_ADDR`, its 2-shard replica on `RUVIO_REPLICA_ADDR`); skipped without them.
 
 use std::net::SocketAddr;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use ruvio_client::{Client, ClientOptions, ReadPolicy, hash_slot};
+
+// Each test counts the GETs one replica shard has served, so they take turns.
+static TURN: Mutex<()> = Mutex::new(());
+
+fn turn() -> MutexGuard<'static, ()> {
+    TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn addresses() -> Option<(SocketAddr, SocketAddr)> {
     let primary = std::env::var("RUVIO_REPLICATED_ADDR").ok()?.parse().ok()?;
@@ -56,6 +64,7 @@ fn wait_for_copy(shard: &mut Client, key: &str, value: &str) {
 
 #[test]
 fn prefer_replica_reads_from_the_replica_and_writes_to_the_primary() {
+    let _turn = turn();
     let Some((primary, replica)) = addresses() else {
         return;
     };
@@ -73,6 +82,7 @@ fn prefer_replica_reads_from_the_replica_and_writes_to_the_primary() {
 
 #[test]
 fn replica_policy_reads_from_the_replica() {
+    let _turn = turn();
     let Some((primary, replica)) = addresses() else {
         return;
     };
@@ -90,6 +100,7 @@ fn replica_policy_reads_from_the_replica() {
 
 #[test]
 fn primary_policy_keeps_reads_on_the_primary() {
+    let _turn = turn();
     let Some((primary, replica)) = addresses() else {
         return;
     };

@@ -193,7 +193,12 @@ fn read_endpoint(port: u16, host: &[u8]) -> Result<Option<Endpoint>, FrameError>
 
     if !announceable_host(host) {
         warn!(
-            host = host.escape_debug().to_string(),
+            host = host
+                .chars()
+                .take(64)
+                .collect::<String>()
+                .escape_debug()
+                .to_string(),
             "announced client host is not a host name or address; not listed"
         );
 
