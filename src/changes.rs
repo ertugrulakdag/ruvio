@@ -24,9 +24,12 @@ pub enum ChangeKind {
     Stream,
     Flush,
     Other,
+    /// A slot range left this shard: key `first-last`, value the cursor where the new
+    /// owner's log continues it.
+    Moved,
 }
 
-const KINDS: [(&str, ChangeKind); 12] = [
+const KINDS: [(&str, ChangeKind); 13] = [
     ("put", ChangeKind::Put),
     ("json", ChangeKind::Json),
     ("del", ChangeKind::Del),
@@ -39,6 +42,7 @@ const KINDS: [(&str, ChangeKind); 12] = [
     ("stream", ChangeKind::Stream),
     ("flush", ChangeKind::Flush),
     ("other", ChangeKind::Other),
+    ("moved", ChangeKind::Moved),
 ];
 
 impl ChangeKind {
@@ -70,6 +74,11 @@ pub struct ChangeSubscription {
 
 impl ChangeSubscription {
     pub fn accepts(&self, kind: ChangeKind, key: Option<&[u8]>) -> bool {
+        // A move names slots, not keys, and ends what this shard reports about them: every
+        // subscriber needs it, whatever it filters.
+        if kind == ChangeKind::Moved {
+            return true;
+        }
         if self.kinds != 0 && self.kinds & kind.bit() == 0 {
             return false;
         }
@@ -260,6 +269,23 @@ pub fn describe(mutation: &OwnedMutation, emit: &mut dyn FnMut(ChangeEvent<'_>))
             for inner in mutations {
                 describe(inner, emit);
             }
+        }
+        // The copy a slot move wrote here is not a client's write.
+        M::SlotCopy { .. } => {}
+        M::SlotsMoved {
+            first,
+            last,
+            to,
+            position,
+        } => {
+            let range = format!("{first}-{last}");
+            let cursor = format!("{to}:{position}");
+
+            emit(ChangeEvent {
+                kind: ChangeKind::Moved,
+                key: Some(range.as_bytes()),
+                value: Some(cursor.into_bytes()),
+            });
         }
         // Ruvio's own structures. Listed by name, not caught by a wildcard, so a new record
         // kind fails to compile here until it is given an event.

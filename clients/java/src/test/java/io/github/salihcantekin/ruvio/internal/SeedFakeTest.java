@@ -115,7 +115,7 @@ class SeedFakeTest {
             assertEquals("two", c.get("k"));
             int before = first.sockets.size();
             try (io.github.salihcantekin.ruvio.RuvioPubSub sub = c.pubSub(m -> { })) {
-                assertEquals(2, second.sockets.size(), "the subscriber joined the second seed");
+                assertEquals(2, second.awaitSockets(2), "the subscriber joined the second seed");
                 assertEquals(before, first.sockets.size(), "the first seed was not tried");
             }
         }

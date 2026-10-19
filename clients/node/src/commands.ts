@@ -413,6 +413,35 @@ export abstract class Commands {
     return owner ? this._1(null, C.RUVIO, W.OWNER) : this._0(null, C.RUVIO);
   }
   /**
+   * Moves the hash slots `first`..`last` to `shard` (counted from 0) of the same server, which
+   * keeps serving them meanwhile (`RUVIO MOVESLOTS first-last shard`). Resolves once the move has
+   * started; {@link moveSlotsStatus} follows it. One move runs at a time, and every slot of the
+   * range must be on one shard.
+   *
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.moveSlots(0, 1000, 2);
+   * ```
+   */
+  moveSlots(first: number, last: number, shard: number): R<'OK'> {
+    return this._3(null, C.RUVIO, 'MOVESLOTS', `${first}-${last}`, shard);
+  }
+  /**
+   * The running or last slot move (`RUVIO MOVESLOTS STATUS`). `state` is `none`, `copying`,
+   * `cleaning`, `cancelling`, `done` or `cancelled`; the other names are `first`, `last`,
+   * `from`, `to`, `keys`, `rounds`, `elapsed_ms`, `freeze_ms` and `error`.
+   *
+   * @example
+   * ```ts
+   * (await client.moveSlotsStatus()).state;   // 'done'
+   * ```
+   */
+  moveSlotsStatus(): R<Record<string, string>> {
+    return this._2(T.map, C.RUVIO, 'MOVESLOTS', 'STATUS');
+  }
+  /**
    * Checks that the server answers (`PING`).
    *
    * @param message Optional text to echo back.

@@ -2847,6 +2847,24 @@ impl Client {
         }
     }
 
+    /// Sends `RUVIO MOVESLOTS first-last shard`: moves the hash slots `first..=last` to shard
+    /// `shard` (counted from 0) of the same server, which keeps serving them meanwhile. Returns
+    /// once the move has started; [`Client::move_slots_status`] follows it. One move runs at
+    /// a time, and every slot of the range must be on one shard.
+    pub fn move_slots(&mut self, first: u16, last: u16, shard: u16) -> Result<(), Error> {
+        let range = format!("{first}-{last}");
+        let shard = shard.to_string();
+
+        self.ok(["RUVIO", "MOVESLOTS", range.as_str(), shard.as_str()])
+    }
+
+    /// Sends `RUVIO MOVESLOTS STATUS`: the running or last move as name/value pairs. `state`
+    /// is `none`, `copying`, `cleaning`, `cancelling`, `done` or `cancelled`; the others are
+    /// `first`, `last`, `from`, `to`, `keys`, `rounds`, `elapsed_ms`, `freeze_ms` and `error`.
+    pub fn move_slots_status(&mut self) -> Result<Vec<(String, String)>, Error> {
+        pairs(&self.run(["RUVIO", "MOVESLOTS", "STATUS"])?)
+    }
+
     /// Sends `ROLE`: raw reply for the shard this connection is on. A primary answers
     /// `["master", sequence, []]`; a replica `["slave", host, port, "connect"|"connected",
     /// sequence]`.

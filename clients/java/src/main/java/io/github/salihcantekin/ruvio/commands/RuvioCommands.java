@@ -66,6 +66,28 @@ public abstract class RuvioCommands<K, V> extends ScriptingCommands<K, V> {
     }
 
     /**
+     * Sends {@code RUVIO MOVESLOTS first-last shard}: moves the hash slots {@code first..last} to {@code shard} (counted from 0) of the same server, which keeps serving them meanwhile. Completes once the move has started; {@link #moveSlotsStatus()} follows it. One move runs at a time, and every slot of the range must be on one shard.
+     *
+     * @param first first hash slot of the range (0-16383)
+     * @param last last hash slot of the range, inclusive
+     * @param shard shard of the same server to move it to
+     * @return a future that completes with no value once the move has started
+     * @throws RuvioServerException when the range is already on that shard, spans shards, another move runs, the server has one shard, or replication is on
+     */
+    public CompletableFuture<Void> moveSlots(int first, int last, int shard) {
+        return send(args().w(Cmd.RUVIO).s("MOVESLOTS").s(first + "-" + last).s(Integer.toString(shard)), Reply.OK);
+    }
+
+    /**
+     * Sends {@code RUVIO MOVESLOTS STATUS}: the running or last slot move. {@code state} is {@code none}, {@code copying}, {@code cleaning}, {@code cancelling}, {@code done} or {@code cancelled}; the other names are {@code first}, {@code last}, {@code from}, {@code to}, {@code keys}, {@code rounds}, {@code elapsed_ms}, {@code freeze_ms} and {@code error}.
+     *
+     * @return name to value, as text
+     */
+    public CompletableFuture<Map<String, String>> moveSlotsStatus() {
+        return send(args().w(Cmd.RUVIO).s("MOVESLOTS").s("STATUS"), Reply.STRING_MAP);
+    }
+
+    /**
      * Sends {@code PING}: checks that the server answers.
      *
      * <pre>{@code

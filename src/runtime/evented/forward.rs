@@ -118,6 +118,8 @@ pub(super) enum Message {
     /// A change another shard made that every shard applies on its own thread (see
     /// [`Forwarding::apply_everywhere`]).
     Broadcast(Arc<Broadcast>),
+    /// A step of `RUVIO MOVESLOTS`.
+    Move(super::moveslots::MoveMessage),
 }
 
 /// Something every shard applies on its own thread, such as a `CONFIG SET`.
@@ -207,6 +209,8 @@ pub(crate) struct Fabric {
     slots: SlotTable,
     /// The newest `CONFIG SET` configuration and its version (see `live`).
     pub(super) config: Mutex<super::live::ConfigAuthority>,
+    /// Slot moves between these shards.
+    pub(super) mover: super::moveslots::SlotMover,
 }
 
 #[derive(Clone)]
@@ -233,6 +237,7 @@ impl Fabric {
             durability: Mutex::new(vec![None; count]),
             slots: SlotTable::from_formula(count),
             config: Mutex::new(super::live::ConfigAuthority::default()),
+            mover: super::moveslots::SlotMover::default(),
         })
     }
 
@@ -911,6 +916,8 @@ pub(super) async fn remote_loop(state: Rc<ShardState>, shutdown: ShutdownToken) 
 
                 Message::Broadcast(broadcast) => broadcast.apply_on(&state),
 
+                Message::Move(message) => super::moveslots::on_message(&state, message),
+
                 Message::Cancel { src, conn } => {
                     if let Some(cancel) = forwarding.blocked.borrow().get(&(src, conn)) {
                         cancel.cancel();
@@ -919,6 +926,25 @@ pub(super) async fn remote_loop(state: Rc<ShardState>, shutdown: ShutdownToken) 
 
                 Message::Unwatch { src, conn } => {
                     state.store.borrow_mut().unwatch(remote_id(src, conn));
+                }
+
+                // Every key of it now belongs to another shard (see `SlotMover::moved`).
+                Message::Request(request)
+                    if forwarding.fabric.mover.moved()
+                        && super::moveslots::request_owner(
+                            &state,
+                            &request.frames,
+                            request.count,
+                        )
+                        .is_some() =>
+                {
+                    let owner =
+                        super::moveslots::request_owner(&state, &request.frames, request.count)
+                            .unwrap_or(forwarding.me);
+
+                    forwarding
+                        .fabric
+                        .send(forwarding.me, owner, Message::Request(request));
                 }
 
                 Message::Request(request) if request.spawn => {
@@ -1180,7 +1206,22 @@ async fn execute_request_in(
 
                     (!waiters.is_empty()).then(|| waiters.unlogged_deliveries())
                 };
-                let failed = if synced {
+                // Routed here before another shard took the slot over: the client sends it
+                // again and reaches the new owner.
+                let misrouted = state
+                    .forwarding
+                    .as_ref()
+                    .is_some_and(|forwarding| forwarding.fabric.mover.moved())
+                    && super::moveslots::runs_elsewhere(state, &session, &command);
+                let failed = if misrouted {
+                    if matches!(command, Command::Exec) {
+                        state.store.borrow_mut().unwatch(id);
+                        session.finish_exec();
+                        session.clear_watches();
+                    }
+
+                    Some(super::moveslots::TRYAGAIN_REPLY)
+                } else if synced {
                     let dispatch = std::pin::pin!(dispatch_command(
                         state,
                         &mut output,
@@ -1742,6 +1783,18 @@ pub(super) async fn forward_special(
                     return Ok(true);
                 }
 
+                // The watched keys moved to another shard since WATCH: they count as changed.
+                if session.watch_shard().is_some_and(|watches| watches != dst) {
+                    unwatch_remote(forwarding, session, conn);
+                    state.store.borrow_mut().unwatch(conn);
+                    session.finish_exec();
+                    session.clear_watches();
+                    log.clear();
+                    output.write_all(session.resp.null_aggregate())?;
+
+                    return Ok(true);
+                }
+
                 if dst == forwarding.me {
                     log.clear();
 
@@ -1823,7 +1876,7 @@ pub(super) async fn forward_special(
                 .await;
 
             if reply.data == b"+OK\r\n" {
-                session.accept_watch(slot, keys.len());
+                session.accept_watch(slot, keys.len(), *dst);
                 entry.remote_state.set(true);
             }
 
@@ -2130,6 +2183,7 @@ mod tests {
         "ConfigRewrite",
         "ConfigSet",
         "ReplicaOf",
+        "MoveSlots",
         "Role",
         "Discard",
         "Echo",

@@ -5,6 +5,7 @@ Notable changes to the Java client `io.github.salihcantekin:ruvio-client`. New e
 ## Unreleased
 
 - **Behavior change:** `commandTimeoutMillis` (synchronous calls) is now 30000 by default (was 0, no limit); `0` turns it off. A blocking command gets its own wait on top (`BLPOP k 5` may take 5 s plus the timeout; a wait of 0, or one the client cannot parse, has no deadline; a pipeline takes its largest wait), and a Pub/Sub or `MONITOR` connection never times out while it waits for messages (issue #48 follow-up).
+- `moveSlots(first, last, shard)` and `moveSlotsStatus()` for `RUVIO MOVESLOTS`, which moves a slot range to another shard of the same server, async and blocking.
 - `hmset(key, fields)` sends `HMSET` (multi-field `HSET` that replies `OK`; Redis marks it deprecated) (issue #26).
 - Docs: `commandTimeoutMillis` is the command timeout; the README timeout table lists the matching option of every client (issue #48).
 - `RuvioOptions.Builder.readPolicy(ReadPolicy)` with `ReadPolicy.PRIMARY` (default), `PREFER_REPLICA` and `REPLICA`: a cluster client sends reads (commands the server flags readonly, not blocking) to one replica per shard, listed after the primary in `CLUSTER SLOTS` and picked when the slot map loads. A pipeline goes to replicas only when every command reads. A replica that cannot be opened or answers `LOADING` is skipped until the next load. Replication is asynchronous, so reads may miss recent writes.

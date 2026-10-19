@@ -294,6 +294,14 @@ public sealed partial class RuvioClient
         => RespRead.RequiredText(ExecuteCommandAsync(new RespCommand("RUVIO", "OWNER"), cancellationToken), "RUVIO");
 
     /// <inheritdoc />
+    public ValueTask MoveSlotsAsync(int first, int last, int shard, CancellationToken cancellationToken = default)
+        => RespRead.Ok(ExecuteCommandAsync(new RespCommand("RUVIO", "MOVESLOTS", RespRead.Number(first) + "-" + RespRead.Number(last), RespRead.Number(shard)), cancellationToken));
+
+    /// <inheritdoc />
+    public ValueTask<IReadOnlyDictionary<string, string>> GetMoveSlotsStatusAsync(CancellationToken cancellationToken = default)
+        => RespRead.Map(ExecuteCommandAsync(new RespCommand("RUVIO", "MOVESLOTS", "STATUS"), cancellationToken), "RUVIO");
+
+    /// <inheritdoc />
     public ValueTask<RespValue> GetCommandsAsync(CancellationToken cancellationToken = default)
         => ExecuteCommandAsync(new RespCommand("COMMAND"), cancellationToken);
 

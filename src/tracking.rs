@@ -261,6 +261,15 @@ impl KeyTracker {
         }
     }
 
+    /// Tracked keys (tagged with their database) that `select` picks.
+    pub fn tracked_where(&self, select: impl Fn(&[u8]) -> bool) -> Vec<Vec<u8>> {
+        self.by_key
+            .keys()
+            .filter(|key| select(crate::database::untagged(key).1))
+            .map(|key| key.to_vec())
+            .collect()
+    }
+
     /// Drops the tracked keys and returns one key list per connection.
     pub fn invalidate(&mut self, keys: &[Vec<u8>]) -> Vec<(u64, Vec<Vec<u8>>)> {
         let mut grouped: AHashMap<u64, Vec<Vec<u8>>> = AHashMap::new();

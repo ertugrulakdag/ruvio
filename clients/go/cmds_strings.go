@@ -4,6 +4,7 @@ package ruvio
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -800,6 +801,21 @@ func (c *cmds) Ruvio(ctx context.Context) (string, error) {
 // keys (the shard rule).
 func (c *cmds) RuvioOwner(ctx context.Context) (string, error) {
 	return c.strR(ctx, newCmd(2, cRUVIO).t(tOWNER))
+}
+
+// MoveSlots moves the hash slots first..last to shard (counted from 0) of the same server,
+// which keeps serving them meanwhile (RUVIO MOVESLOTS first-last shard). It returns once
+// the move has started; MoveSlotsStatus follows it. One move runs at a time, and every slot
+// of the range must be on one shard.
+func (c *cmds) MoveSlots(ctx context.Context, first, last, shard int) error {
+	return c.ok(ctx, newCmd(4, cRUVIO).s("MOVESLOTS").s(fmt.Sprintf("%d-%d", first, last)).i(int64(shard)))
+}
+
+// MoveSlotsStatus returns the running or last slot move (RUVIO MOVESLOTS STATUS) as a
+// name-to-value map. state is none, copying, cleaning, cancelling, done or cancelled; the
+// other names are first, last, from, to, keys, rounds, elapsed_ms, freeze_ms and error.
+func (c *cmds) MoveSlotsStatus(ctx context.Context) (map[string]string, error) {
+	return c.strMap(ctx, newCmd(3, cRUVIO).s("MOVESLOTS").s("STATUS"))
 }
 
 // ---- bitmaps & HyperLogLog ---------------------------------------------------

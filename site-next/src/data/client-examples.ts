@@ -639,6 +639,60 @@ const c = createClusterClient({ host: '10.0.0.5', port: 7000, readPolicy: 'prefe
 await c.set('user:1', 'Ada');          // primary
 const name = await c.get('user:1');    // a replica; may not have the write yet`,
   },
+  rebalance: {
+    rust: `use ruvio_client::Client;
+
+let mut db = Client::connect("127.0.0.1", 6379)?;
+db.move_slots(0, 2047, 3)?; // starts the move to shard 3
+loop {
+    let status = db.move_slots_status()?;
+    let state = status.iter().find(|(name, _)| name == "state").map(|(_, v)| v.clone());
+    if !matches!(state.as_deref(), Some("copying" | "cleaning")) { break; } // "done"
+    std::thread::sleep(std::time::Duration::from_millis(100));
+}`,
+    csharp: `await using var connection = await RuvioConnection.ConnectAsync("127.0.0.1", 6379);
+var db = await connection.GetDefaultDatabaseAsync();
+
+await db.MoveSlotsAsync(0, 2047, 3); // starts the move to shard 3
+while ((await db.GetMoveSlotsStatusAsync())["state"] is "copying" or "cleaning")
+{
+    await Task.Delay(100);
+}
+// state "done"`,
+    go: `c, err := ruvio.Connect(ctx, ruvio.Options{Addr: "127.0.0.1:6379"})
+if err != nil { return err }
+
+if err := c.MoveSlots(ctx, 0, 2047, 3); err != nil { return err } // starts the move to shard 3
+for {
+	status, err := c.MoveSlotsStatus(ctx)
+	if err != nil { return err }
+	if s := status["state"]; s != "copying" && s != "cleaning" { break } // "done"
+	time.Sleep(100 * time.Millisecond)
+}`,
+    java: `var c = RuvioClient.connect("127.0.0.1", 6379);
+
+c.moveSlots(0, 2047, 3); // starts the move to shard 3
+while (List.of("copying", "cleaning").contains(c.moveSlotsStatus().get("state"))) {
+    Thread.sleep(100);
+}
+// state "done"`,
+    python: `import time
+from ruvio import Ruvio
+
+r = Ruvio("127.0.0.1", 6379)
+r.move_slots(0, 2047, 3)  # starts the move to shard 3
+while r.move_slots_status()["state"] in ("copying", "cleaning"):
+    time.sleep(0.1)
+# state "done"`,
+    node: `import { createClient } from 'ruvio-client';
+
+const c = createClient({ host: '127.0.0.1', port: 6379 });
+await c.moveSlots(0, 2047, 3); // starts the move to shard 3
+while (['copying', 'cleaning'].includes((await c.moveSlotsStatus()).state)) {
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}
+// state "done"`,
+  },
   data: {
     rust: `use ruvio_client::{Client, GeoFrom, GeoSearch, JsonIndexType};
 

@@ -202,6 +202,43 @@ class Commands:
         """
         return self._c(None, "RUVIO") if option is None else self._c(None, "RUVIO", option)
 
+    def move_slots(self, first: int, last: int, shard: int) -> Any:
+        """``RUVIO MOVESLOTS first-last shard`` - moves a slot range to another shard.
+
+        The server keeps serving the range meanwhile. Returns once the move has started;
+        :meth:`move_slots_status` follows it. One move runs at a time, and every slot of the
+        range must be on one shard.
+
+        Args:
+            first: First hash slot of the range (0-16383).
+            last: Last hash slot of the range, inclusive.
+            shard: Shard of the same server to move it to, counted from 0.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            ResponseError: the range is already on that shard, spans shards, another move
+                runs, the server has one shard, or replication is on.
+
+        Example:
+            client.move_slots(0, 1000, 2)
+        """
+        return self._c(_ok, "RUVIO", "MOVESLOTS", f"{first}-{last}", shard)
+
+    def move_slots_status(self) -> Any:
+        """``RUVIO MOVESLOTS STATUS`` - the running or last slot move.
+
+        Returns:
+            A dict of text: ``state`` is ``none``, ``copying``, ``cleaning``, ``cancelling``,
+            ``done`` or ``cancelled``; the other names are ``first``, ``last``, ``from``,
+            ``to``, ``keys``, ``rounds``, ``elapsed_ms``, ``freeze_ms`` and ``error``.
+
+        Example:
+            client.move_slots_status()["state"]    # -> "done"
+        """
+        return self._c(_pairs_text_keys, "RUVIO", "MOVESLOTS", "STATUS")
+
     def ping(self, message: Optional[Arg] = None) -> Any:
         """``PING [message]`` - checks that the connection is alive.
 
