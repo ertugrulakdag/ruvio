@@ -126,6 +126,7 @@ fn encode_handshake_returns_an_error_when_the_password_does_not_fit() {
         shard_count: 1,
         password: vec![b'a'; 65_536],
         epoch: 0,
+        announce: None,
     };
 
     assert!(encode_handshake(&handshake).is_err());
@@ -141,6 +142,7 @@ fn handshake_round_trips_and_rejects_a_bad_checksum() {
         shard_count: 1,
         password: b"secret".to_vec(),
         epoch: 0,
+        announce: None,
     };
 
     let bytes = encode_handshake(&handshake).unwrap();
@@ -174,11 +176,12 @@ fn decode_handshake_rejects_a_short_buffer_bad_magic_and_length_mismatch() {
         shard_count: 1,
         password: Vec::new(),
         epoch: 0,
+        announce: None,
     };
 
     let empty_bytes = encode_handshake(&empty).unwrap();
 
-    assert_eq!(empty_bytes.len(), 56);
+    assert_eq!(empty_bytes.len(), 60);
     assert_eq!(decode_handshake(&empty_bytes), Ok(empty));
 
     let handshake = Handshake {
@@ -189,6 +192,7 @@ fn decode_handshake_rejects_a_short_buffer_bad_magic_and_length_mismatch() {
         shard_count: 1,
         password: b"secret".to_vec(),
         epoch: 0,
+        announce: None,
     };
 
     let mut bad_magic = encode_handshake(&handshake).unwrap();
@@ -265,7 +269,7 @@ fn handshake_status_codes_and_limits_match_the_contract() {
     assert_eq!(SHIPPER_POLL, Duration::from_millis(10));
     assert_eq!(
         (VERSION_RESUME, VERSION_RESYNC, VERSION_RESYNC_INCOMPLETE),
-        (9, 10, 11)
+        (12, 13, 14)
     );
 
     let handshake = Handshake {
@@ -276,11 +280,12 @@ fn handshake_status_codes_and_limits_match_the_contract() {
         shard_count: 1,
         password: b"secret".to_vec(),
         epoch: 3,
+        announce: None,
     };
 
     let bytes = encode_handshake(&handshake).unwrap();
 
-    assert_eq!(&bytes[8..10], &9u16.to_le_bytes());
+    assert_eq!(&bytes[8..10], &12u16.to_le_bytes());
     assert_eq!(&bytes[10..14], &2u32.to_le_bytes());
     assert_eq!(&bytes[14..22], &40u64.to_le_bytes());
     assert_eq!(&bytes[22..24], &6u16.to_le_bytes());
@@ -288,9 +293,11 @@ fn handshake_status_codes_and_limits_match_the_contract() {
     assert_eq!(&bytes[30..46], &[0; HISTORY_LEN]);
     assert_eq!(&bytes[46..50], &1u32.to_le_bytes());
     assert_eq!(&bytes[50..58], &3u64.to_le_bytes());
+    // No client address: port 0 and an empty host.
+    assert_eq!(&bytes[58..62], &[0; 4]);
     assert_eq!(
-        u32::from_le_bytes(bytes[58..62].try_into().unwrap()),
-        crc32c::crc32c(&bytes[..58])
+        u32::from_le_bytes(bytes[62..66].try_into().unwrap()),
+        crc32c::crc32c(&bytes[..62])
     );
 
     let reply = encode_reply_with_history(
@@ -940,6 +947,7 @@ fn gap_handshake_leaves_the_live_generation() {
             lineage: Lineage::root([0; HISTORY_LEN]),
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
+            announce: None,
         },
     )
     .unwrap();
@@ -953,11 +961,12 @@ fn gap_handshake_leaves_the_live_generation() {
         shard_count: 1,
         password: Vec::new(),
         epoch: 0,
+        announce: None,
     })
     .unwrap();
 
     live.write_all(&live_handshake).unwrap();
-    let reply = read_socket(&mut live, REPLY_LEN);
+    let reply = read_reply_bytes(&mut live);
 
     assert_eq!(decode_reply(&reply).unwrap().0, HandshakeStatus::Ok);
     let _frame = read_replication_frame(&mut live);
@@ -973,11 +982,12 @@ fn gap_handshake_leaves_the_live_generation() {
         shard_count: 1,
         password: Vec::new(),
         epoch: 0,
+        announce: None,
     })
     .unwrap();
 
     gap.write_all(&gap_handshake).unwrap();
-    let gap_reply = read_socket(&mut gap, REPLY_LEN);
+    let gap_reply = read_reply_bytes(&mut gap);
 
     assert_eq!(decode_reply(&gap_reply).unwrap().0, HandshakeStatus::Gap);
     drop(gap);
@@ -1042,6 +1052,7 @@ fn two_replicas_receive_the_same_appended_frame() {
             lineage: Lineage::root([0; HISTORY_LEN]),
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
+            announce: None,
         },
     )
     .unwrap();
@@ -1103,6 +1114,7 @@ fn closing_one_replica_leaves_the_other_streaming() {
             lineage: Lineage::root([0; HISTORY_LEN]),
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
+            announce: None,
         },
     )
     .unwrap();
@@ -1162,6 +1174,7 @@ fn replica_limit_closes_the_extra_connection() {
             lineage: Lineage::root([0; HISTORY_LEN]),
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
+            announce: None,
         },
     )
     .unwrap();
@@ -1175,6 +1188,7 @@ fn replica_limit_closes_the_extra_connection() {
         shard_count: 1,
         password: Vec::new(),
         epoch: 0,
+        announce: None,
     })
     .unwrap();
     let wrote = extra.write_all(&handshake);
@@ -1233,6 +1247,7 @@ fn a_replica_that_hangs_up_on_an_idle_primary_frees_its_slot() {
             lineage: Lineage::root([0; HISTORY_LEN]),
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
+            announce: None,
         },
     )
     .unwrap();
@@ -1244,6 +1259,7 @@ fn a_replica_that_hangs_up_on_an_idle_primary_frees_its_slot() {
         shard_count: 1,
         password: Vec::new(),
         epoch: 0,
+        announce: None,
     })
     .unwrap();
 
@@ -1253,12 +1269,11 @@ fn a_replica_that_hangs_up_on_an_idle_primary_frees_its_slot() {
         let deadline = std::time::Instant::now() + PATIENCE;
         let served = loop {
             let mut stream = connect_replication(address);
-            let mut reply = [0u8; REPLY_LEN];
             let answered = stream
                 .write_all(&handshake)
-                .and_then(|()| stream.read_exact(&mut reply));
+                .and_then(|()| try_read_reply_bytes(&mut stream));
 
-            if answered.is_ok() {
+            if let Ok(reply) = answered {
                 break decode_reply(&reply).ok().map(|reply| reply.0);
             }
             if std::time::Instant::now() >= deadline {
@@ -1312,6 +1327,7 @@ fn primary_refuses_a_replica_from_another_history_or_shard_layout() {
             lineage: Lineage::root([7; HISTORY_LEN]),
             newer_epoch: Arc::new(AtomicU64::new(0)),
             snapshot_requests: Arc::new(AtomicU64::new(0)),
+            announce: None,
         },
     )
     .unwrap();
@@ -1325,13 +1341,12 @@ fn primary_refuses_a_replica_from_another_history_or_shard_layout() {
             shard_count,
             password: Vec::new(),
             epoch: 0,
+            announce: None,
         })
         .unwrap();
 
         stream.write_all(&handshake).unwrap();
-        decode_reply(&read_socket(&mut stream, REPLY_LEN))
-            .unwrap()
-            .0
+        decode_reply(&read_reply_bytes(&mut stream)).unwrap().0
     };
 
     // Resuming from its own log under a different history is refused; a forced snapshot
@@ -1367,11 +1382,12 @@ fn open_ok_replica(address: SocketAddr, after_sequence: u64) -> TcpStream {
         shard_count: 1,
         password: Vec::new(),
         epoch: 0,
+        announce: None,
     })
     .unwrap();
 
     stream.write_all(&handshake).unwrap();
-    let reply = read_socket(&mut stream, REPLY_LEN);
+    let reply = read_reply_bytes(&mut stream);
 
     assert_eq!(decode_reply(&reply).unwrap().0, HandshakeStatus::Ok);
     stream
@@ -1431,6 +1447,29 @@ fn read_socket(stream: &mut TcpStream, length: usize) -> Vec<u8> {
     buffer
 }
 
+/// A primary's reply, after reading the client address that follows every reply but a
+/// version refusal.
+fn try_read_reply_bytes(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
+    let mut reply = vec![0; REPLY_LEN];
+
+    stream.read_exact(&mut reply)?;
+    if read_u16(&reply, 8) != HandshakeStatus::Version as u16 {
+        let mut address = vec![0; 4];
+
+        stream.read_exact(&mut address)?;
+        address.resize(ADDRESS_FRAME_MIN + usize::from(read_u16(&address, 2)), 0);
+        stream.read_exact(&mut address[4..])?;
+        decode_address(&address)
+            .map_err(|reason| io::Error::new(io::ErrorKind::InvalidData, reason))?;
+    }
+
+    Ok(reply)
+}
+
+fn read_reply_bytes(stream: &mut TcpStream) -> Vec<u8> {
+    try_read_reply_bytes(stream).unwrap()
+}
+
 fn read_replication_frame(stream: &mut TcpStream) -> Vec<u8> {
     let mut length_bytes = [0; 4];
 
@@ -1474,6 +1513,7 @@ fn idle_shipment(data_dir: &Path, history: HistoryId) -> Shipment {
         lineage: Lineage::root(history),
         newer_epoch: Arc::new(AtomicU64::new(0)),
         snapshot_requests: Arc::new(AtomicU64::new(0)),
+        announce: None,
     }
 }
 
@@ -1544,6 +1584,8 @@ fn link_to(
             shard_count: 1,
             status: Arc::new(LinkStatus::default()),
             wake_shard: Arc::new(tokio::sync::Notify::new()),
+            announce: None,
+            peers: Arc::new(DurableAcks::new()),
         },
         outbound,
     )
@@ -1588,6 +1630,11 @@ fn answer_once(reply: Vec<u8>) -> (SocketAddr, JoinHandle<Handshake>) {
             panic!("replica sent no current handshake");
         };
 
+        let mut reply = reply;
+
+        if read_u16(&reply, 8) != HandshakeStatus::Version as u16 {
+            reply.extend_from_slice(&encode_address(None));
+        }
         stream.write_all(&reply).unwrap();
         handshake
     });
@@ -1719,6 +1766,32 @@ fn primary_refuses_older_and_newer_handshake_versions_at_once() {
         assert!(checksum_matches(&reply));
     }
 
+    // A build with an epoch but no client address: its handshake ends with the epoch, and it
+    // reads this build's reply without the address after it.
+    for epoch_only in [9u16, 11] {
+        let mut bytes = HANDSHAKE_MAGIC.to_vec();
+
+        put_u16(&mut bytes, epoch_only);
+        put_u32(&mut bytes, 0);
+        put_u64(&mut bytes, 7);
+        put_u16(&mut bytes, 0);
+        bytes.extend_from_slice(&[0; HISTORY_LEN]);
+        put_u32(&mut bytes, 1);
+        put_u64(&mut bytes, 0);
+        append_checksum(&mut bytes);
+        let mut stream = connect_replication(address);
+        let started = std::time::Instant::now();
+
+        stream.write_all(&bytes).unwrap();
+        let reply = read_socket(&mut stream, REPLY_LEN);
+
+        assert!(
+            started.elapsed() < Duration::from_millis(2500),
+            "refusal waited for a timeout"
+        );
+        assert_eq!(decode_reply(&reply).unwrap().0, HandshakeStatus::Version);
+    }
+
     // A newer build gets a refusal in this build's reply format.
     let mut stream = connect_replication(address);
 
@@ -1732,14 +1805,13 @@ fn primary_refuses_older_and_newer_handshake_versions_at_once() {
                 history: [0; HISTORY_LEN],
                 shard_count: 1,
                 epoch: 0,
+                announce: None,
             })
             .unwrap(),
         )
         .unwrap();
     assert_eq!(
-        decode_reply(&read_socket(&mut stream, REPLY_LEN))
-            .unwrap()
-            .0,
+        decode_reply(&read_reply_bytes(&mut stream)).unwrap().0,
         HandshakeStatus::Version
     );
 
@@ -1787,14 +1859,13 @@ fn replica_accept_loop_survives_accept_errors() {
                 history: [0; HISTORY_LEN],
                 shard_count: 1,
                 epoch: 0,
+                announce: None,
             })
             .unwrap(),
         )
         .unwrap();
     assert_eq!(
-        decode_reply(&read_socket(&mut stream, REPLY_LEN))
-            .unwrap()
-            .0,
+        decode_reply(&read_reply_bytes(&mut stream)).unwrap().0,
         HandshakeStatus::Ok
     );
     assert!(!primary.is_finished());
@@ -2180,6 +2251,7 @@ fn a_primary_refuses_a_replica_that_followed_a_newer_epoch() {
         history: [7; HISTORY_LEN],
         shard_count: 1,
         epoch,
+        announce: None,
     };
 
     // A replica that followed the primary which replaced this one.
@@ -2189,9 +2261,7 @@ fn a_primary_refuses_a_replica_that_followed_a_newer_epoch() {
         .write_all(&encode_handshake(&handshake(3)).unwrap())
         .unwrap();
     assert_eq!(
-        decode_reply(&read_socket(&mut stream, REPLY_LEN))
-            .unwrap()
-            .0,
+        decode_reply(&read_reply_bytes(&mut stream)).unwrap().0,
         HandshakeStatus::Stale
     );
     // The shard reads it on its next maintenance tick and stops taking writes.
@@ -2252,6 +2322,100 @@ fn fresh_counts_connected_replicas_that_acknowledged_within_the_lag() {
 }
 
 #[test]
+fn handshake_and_address_frame_carry_the_client_address() {
+    let endpoint = Endpoint {
+        host: "replica-1.internal".into(),
+        port: 7001,
+    };
+    let handshake = Handshake {
+        version: VERSION_RESUME,
+        shard_id: 1,
+        after_sequence: 9,
+        password: b"secret".to_vec(),
+        history: [3; HISTORY_LEN],
+        shard_count: 2,
+        epoch: 4,
+        announce: Some(endpoint.clone()),
+    };
+    let bytes = encode_handshake(&handshake).unwrap();
+
+    assert_eq!(bytes.len(), 60 + 6 + endpoint.host.len());
+    assert_eq!(decode_handshake(&bytes), Ok(handshake));
+
+    let frame = encode_address(Some(&endpoint));
+
+    assert_eq!(decode_address(&frame), Ok(Some(endpoint)));
+    assert_eq!(decode_address(&encode_address(None)), Ok(None));
+    let mut corrupt = encode_address(None);
+
+    corrupt[0] ^= 1;
+    assert!(decode_address(&corrupt).is_err());
+}
+
+#[test]
+fn a_loopback_announcement_from_another_machine_is_listed_at_the_peer_address() {
+    let announced = |host: &str| {
+        Some(Endpoint {
+            host: host.into(),
+            port: 7001,
+        })
+    };
+    let remote = Some("10.1.2.3".parse().unwrap());
+    let local = Some("127.0.0.1".parse().unwrap());
+
+    assert_eq!(
+        reachable_endpoint(announced("127.0.0.1"), remote),
+        announced("10.1.2.3")
+    );
+    assert_eq!(
+        reachable_endpoint(announced("localhost"), remote),
+        announced("10.1.2.3")
+    );
+    assert_eq!(
+        reachable_endpoint(announced("127.0.0.1"), local),
+        announced("127.0.0.1")
+    );
+    assert_eq!(
+        reachable_endpoint(announced("db.example"), remote),
+        announced("db.example")
+    );
+    assert_eq!(reachable_endpoint(None, remote), None);
+}
+
+#[test]
+fn only_announced_replicas_that_acknowledged_are_listed() {
+    let acks = DurableAcks::new();
+    let endpoint = |port| Endpoint {
+        host: "10.0.0.2".into(),
+        port,
+    };
+
+    acks.reserve(0);
+    acks.announce(0, Some(endpoint(7000)));
+    acks.reserve(1);
+    acks.announce(1, None);
+    acks.reserve(2);
+    acks.announce(2, Some(endpoint(7002)));
+    // Still copying: no acknowledgement yet.
+    assert!(acks.replicas().is_empty());
+
+    acks.observe(0, 5);
+    acks.observe(1, 5);
+    let listed = acks.replicas();
+
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].endpoint, endpoint(7000));
+    assert_eq!(listed[0].sequence, 5);
+
+    acks.clear(0);
+    assert!(acks.replicas().is_empty());
+
+    assert_eq!(acks.primary(), None);
+    acks.set_primary(Some(endpoint(6379)));
+    assert_eq!(acks.primary(), Some(endpoint(6379)));
+}
+
+#[test]
 fn dial_address_adds_the_shard_id_to_the_port_and_refuses_an_overflow() {
     let directory = tempfile::tempdir().unwrap();
     let primary: SocketAddr = "127.0.0.1:1".parse().unwrap();
@@ -2267,4 +2431,59 @@ fn dial_address_adds_the_shard_id_to_the_port_and_refuses_an_overflow() {
     link.primary_name = Some(("127.0.0.1".to_owned(), 7000));
     link.shard_id = 70_000;
     assert!(dial_address(&link).is_err());
+}
+
+#[test]
+fn a_replica_still_copying_sends_no_acknowledgement() {
+    let directory = tempfile::tempdir().unwrap();
+    let primary = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut replica_side = TcpStream::connect(primary.local_addr().unwrap()).unwrap();
+    let (mut primary_side, _) = primary.accept().unwrap();
+    let (link, _deliveries) = link_to(primary.local_addr().unwrap(), directory.path());
+    let mut acks = AckSend {
+        status: Arc::clone(&link.status),
+        last: 0,
+        sent_at: std::time::Instant::now() - ACK_HEARTBEAT,
+        offset: 0,
+        bytes: [0; ACK_LEN],
+        queued: false,
+    };
+
+    link.status.set_copying(true);
+    acks.poll(&mut replica_side, &link.wal);
+    primary_side
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .unwrap();
+    let mut byte = [0; 1];
+
+    assert!(primary_side.read(&mut byte).is_err(), "an ack was sent");
+
+    link.status.set_copying(false);
+    acks.poll(&mut replica_side, &link.wal);
+    assert_eq!(read_socket(&mut primary_side, ACK_LEN).len(), ACK_LEN);
+}
+
+#[test]
+fn only_host_names_and_addresses_are_announced() {
+    for host in [
+        "10.0.0.1",
+        "db-1.example.com",
+        "fe80::1%en0",
+        "[::1]",
+        "replica_2",
+    ] {
+        assert!(announceable_host(host), "{host}");
+    }
+
+    for host in [
+        "",
+        "a b",
+        "1.2.3.4\nx",
+        "1.2.3.4\r\nrole:master",
+        "h,ip=1",
+        &"a".repeat(256),
+    ] {
+        assert!(!announceable_host(host), "{host:?}");
+        assert_eq!(read_endpoint(7000, host.as_bytes()), Ok(None));
+    }
 }

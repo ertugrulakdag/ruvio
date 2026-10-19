@@ -196,6 +196,21 @@ ZMOVEDUE due:jobs queue:ready 1700000400 COUNT 100
     refs: [{ label: "CHANGES", href: commands }, { label: "Change stream settings", href: "/docs/configuration/#change-stream" }],
   },
   {
+    id: "replica-reads",
+    nav: "Reads from replicas",
+    title: "Scale reads with replicas",
+    problem: "Send read-heavy traffic to replicas while writes stay on the primaries.",
+    code: `CLUSTER SLOTS
+# 1) 0, 8191,     [10.0.0.5, 7000, <id>], [10.0.0.6, 7000, <id>]
+# 2) 8192, 16383, [10.0.0.5, 7001, <id>], [10.0.0.6, 7001, <id>]
+#    each range: the primary shard, then its replicas
+ROLE
+# master, <sequence>, [[10.0.0.6, 7000, <acknowledged>]]`,
+    body: "A replica tells its primary where clients reach it. Once it has finished copying, the primary lists it after its own shard in <code>CLUSTER SLOTS</code>, <code>CLUSTER SHARDS</code>, <code>CLUSTER NODES</code>, <code>ROLE</code> and <code>INFO replication</code>. Every Ruvio client takes a read policy: <code>primary</code> (the default), <code>prefer-replica</code> or <code>replica</code>. Reads go to one replica per shard, picked when the slot map loads; writes, transactions, blocking commands and any pipeline with a write stay on the primary. A replica that is down or still copying is skipped.",
+    note: "Replication is asynchronous: a read from a replica can miss a write the primary already acknowledged, including your own. Set <code>advertised_host</code> on replicas behind NAT or in containers; <code>replication.announced = false</code> keeps a replica out of the topology.",
+    refs: [{ label: "Client behavior", href: "/docs/client-behavior/#reads-from-replicas" }, { label: "Replication settings", href: "/docs/configuration/" }],
+  },
+  {
     id: "data",
     nav: "Leaderboards, geo, JSON",
     title: "Leaderboards, geo and documents",

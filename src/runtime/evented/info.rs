@@ -155,6 +155,18 @@ pub(super) fn evented_info(state: &ShardState, section: Option<&[u8]>) -> io::Re
         epoch = state.epoch.get(),
         fenced = u8::from(state.write_gate.get() == crate::replication::WriteGate::Fenced),
     )?;
+    // Redis's lines for each replica that announced where clients reach it; replicas that
+    // announced nothing, or are still copying, are counted above but not listed.
+    for (index, replica) in state.durable_acks.replicas().iter().enumerate() {
+        write!(
+            info,
+            "slave{index}:ip={},port={},state=online,offset={},lag={}\r\n",
+            replica.endpoint.host,
+            replica.endpoint.port,
+            replica.sequence,
+            replica.lag.as_secs()
+        )?;
+    }
     if state.role.get() == crate::config::ReplicationRole::Replica {
         let link = &state.replica_link;
         // A replica whose log refuses frames is not following its primary.

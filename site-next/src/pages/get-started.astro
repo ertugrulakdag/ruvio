@@ -176,7 +176,8 @@ cd ruvio-$v-linux-x64
           round trip. The rules and
           the measured cost per client are in <a href="/docs/client-behavior/#routing-cost">Client behavior</a>; the
           C# client also has an opt-in reader thread per socket (<code>DedicatedReaderThread</code>) for the lowest CPU
-          per round trip.
+          per round trip. A read policy (<code>prefer-replica</code> or <code>replica</code>) sends read-only commands
+          to the replicas the server lists; see <a href="/docs/client-behavior/#reads-from-replicas">Reads from replicas</a>.
         </p>
         <ul class="client-list">
           {clients.map((c) => {

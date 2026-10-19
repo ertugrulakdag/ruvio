@@ -11,12 +11,13 @@ node so they never stall the shared one.
 from __future__ import annotations
 
 import asyncio
+import random
 from typing import Any, Awaitable, Dict, List, Optional, Tuple
 
 from .. import _cluster as cl
 from .._commands import Conv
 from .._pipeline import _EXEC, _MULTI
-from ..client import _Options
+from ..client import _Options, _ReplicaOptions
 from ..errors import ConnectionError, CrossSlotError, MovedError, ResponseError, RuvioError
 from .client import PubSub, Ruvio, _Batch, _open
 
@@ -26,7 +27,7 @@ _frame_head = cl.frame_head
 
 
 class _Node:
-    __slots__ = ("host", "port", "opts", "proto", "lock", "idx")
+    __slots__ = ("host", "port", "opts", "proto", "lock", "idx", "replica", "primary")
 
     def __init__(self, host: str, port: int, opts: _Options) -> None:
         self.host = host
@@ -35,10 +36,12 @@ class _Node:
         self.proto: Any = None
         self.lock: Optional[asyncio.Lock] = None
         self.idx = -1
+        self.replica = False  # a replica chosen for reads (READONLY is sent when its connection opens)
+        self.primary = -1  # for a replica: the index of the node it serves
 
 
 class _State:
-    __slots__ = ("mode", "slots", "nodes", "by_addr", "seed", "watch", "gate", "targets")
+    __slots__ = ("mode", "slots", "nodes", "by_addr", "seed", "watch", "gate", "targets", "policy", "reps", "rnodes")
 
     def __init__(self, seed: _Node) -> None:
         self.mode = 0
@@ -49,6 +52,9 @@ class _State:
         self.watch: Optional[_Node] = None
         self.gate: Optional[asyncio.Lock] = None  # serializes discovery / refresh
         self.targets: List[_Node] = [seed]  # nodes + the seed last: index -1 is the seed
+        self.policy = cl.POLICY_PRIMARY  # where reads go; anything but primary adds the replica paths
+        self.reps: List[Optional[_Node]] = []  # per node index: the replica its reads go to (None = none usable)
+        self.rnodes: Dict[Tuple[str, int], _Node] = {}  # the replica nodes of the last load, by address
 
 
 class _RoutedFuture(asyncio.Future):  # type: ignore[type-arg]
@@ -94,6 +100,11 @@ class ClusterRuvio(Ruvio):
     * Pipelines are grouped per node; transactions must use one slot.
     * ``MOVED`` is followed up to 3 times per command. Failed node connections are reopened by the next
       command; a failed command is never re-sent.
+    * With ``read_policy=ReadPolicy.PREFER_REPLICA`` or ``REPLICA`` (default ``PRIMARY``), commands the server
+      flags read-only and not blocking go to one replica of the key's shard, picked at random whenever the slot
+      table loads; a pipeline goes to replicas only when every command in it is a read. A replica that cannot
+      be connected or answers ``LOADING`` is skipped until the next load: ``PREFER_REPLICA`` uses the primary
+      then, ``REPLICA`` fails. Replication is asynchronous, so a read may miss a recent write, your own included.
 
     Note:
         ``is_cluster`` and ``nodes`` are coroutines here (``await client.nodes()``), unlike the sync client
@@ -120,6 +131,7 @@ class ClusterRuvio(Ruvio):
         if o.unix_socket_path:
             raise ValueError("cluster mode needs host:port, not a unix socket")
         self._cl = _State(_Node(o.host, o.port, o))
+        self._cl.policy = cl.policy_code(o.read_policy)
 
     # ---------------------------------------------------------------- connections
     async def _open_node(self, node: _Node) -> Any:
@@ -278,6 +290,36 @@ class ClusterRuvio(Ruvio):
         c.by_addr = by
         c.slots = topo.slots
         c.targets = [*nodes, c.seed]
+        if c.policy:
+            self._pick_replicas(topo)
+
+    def _pick_replicas(self, topo: cl.Topology) -> None:
+        """Each node's reads go to one of its replicas, picked at random per client (one number per load)
+        so many clients spread over the replicas, and kept until the next load."""
+        c = self._cl
+        old = c.rnodes
+        pick = random.getrandbits(32)
+        reps: List[Optional[_Node]] = []
+        rnodes: Dict[Tuple[str, int], _Node] = {}
+        for i, found in enumerate(topo.replicas):
+            node = None
+            if found:
+                addr = found[pick % len(found)]
+                node = rnodes.get(addr) or old.get(addr)
+                if node is None:
+                    node = self._new_node(*addr)
+                    node.opts = _ReplicaOptions(**node.opts.as_dict())
+                    node.replica = True
+                node.primary = i
+                rnodes[addr] = node
+            reps.append(node)
+        for addr, node in old.items():
+            if addr not in rnodes and node.proto is not None:
+                node.proto.on_lost = None
+                node.proto.transport.close()
+                node.proto = None
+        c.reps = reps
+        c.rnodes = rnodes
 
     async def _refresh(self) -> bool:
         """Reloads the slot table. Nodes with an open connection are asked first; when none answers,
@@ -367,6 +409,8 @@ class ClusterRuvio(Ruvio):
         if c.mode == 1:
             ni = cl.node_index(data, c.slots)
             if ni is not None:
+                if c.policy and ni >= 0 and cl.is_read(data):
+                    return self._route(conv, data, decode)
                 # warm path: no coroutine, the node's pending-reply future is returned directly
                 node = c.targets[ni]
                 proto = node.proto
@@ -404,19 +448,74 @@ class ClusterRuvio(Ruvio):
         dec = self._decode if decode is None else decode
         ni = cl.node_index(data, c.slots)
         if ni is not None:
-            node = c.targets[ni]
-            proto = node.proto
-            if proto is None or proto.closed:
-                proto = await self._open_target(ni, data)
-            fut = proto.loop.create_future()
-            proto.pending.append((fut, conv, dec))
-            proto.send(data)
-            try:
-                return await fut
-            except MovedError as err:
-                return await self._redirect(err, data, conv, dec, False)
+            if c.policy and ni >= 0 and cl.is_read(data):
+                return await self._route_read(ni, conv, data, dec, None)
+            return await self._route_ordinary(ni, conv, data, dec)
         name, _ = _frame_head(data)
         return await self._special(name.upper(), data, conv, dec)
+
+    async def _route_ordinary(self, ni: int, conv: Conv, data: bytes, dec: bool) -> Any:
+        """An ordinary command on the node of target ``ni``."""
+        node = self._cl.targets[ni]
+        proto = node.proto
+        if proto is None or proto.closed:
+            proto = await self._open_target(ni, data)
+        fut = proto.loop.create_future()
+        proto.pending.append((fut, conv, dec))
+        proto.send(data)
+        try:
+            return await fut
+        except MovedError as err:
+            return await self._redirect(err, data, conv, dec, False)
+
+    # ---------------------------------------------------------------- reads from replicas
+    async def _replica(self, ni: int) -> Optional[_Node]:
+        """The replica that reads of node ``ni`` go to, its connection open; None sends them to the
+        primary. A replica that cannot be opened is skipped until the next load; under the replica
+        policy that raises."""
+        c = self._cl
+        node = c.reps[ni] if 0 <= ni < len(c.reps) else None
+        if node is not None:
+            if node.proto is not None and not node.proto.closed:
+                return node
+            try:
+                await self._open_node(node)
+                return node
+            except (ConnectionError, ResponseError):
+                if 0 <= ni < len(c.reps) and c.reps[ni] is node:
+                    c.reps[ni] = None
+                if c.policy == cl.POLICY_REPLICA:
+                    raise
+                return None
+        if c.policy == cl.POLICY_REPLICA:
+            host, port = (c.nodes[ni].host, c.nodes[ni].port) if 0 <= ni < len(c.nodes) else ("?", 0)
+            raise RuvioError(f"no replica is known for the node {host}:{port} (read_policy 'replica')")
+        return None
+
+    def _loading(self, node: _Node, reply: Any) -> bool:
+        """Whether a replica's reply is ``-LOADING`` (it is still copying its primary); it is then skipped
+        until the next load."""
+        if not isinstance(reply, ResponseError) or not str(reply).startswith(("LOADING", "MASTERDOWN")):
+            return False
+        c = self._cl
+        if 0 <= node.primary < len(c.reps) and c.reps[node.primary] is node:
+            c.reps[node.primary] = None
+        return True
+
+    async def _route_read(self, ni: int, conv: Conv, data: bytes, dec: bool, slot: Optional[int]) -> Any:
+        """A read for node ``ni`` under a replica read policy. ``slot`` is None for an ordinary command."""
+        node = await self._replica(ni)
+        if node is not None:
+            try:
+                return await self._send(node, data, conv, dec)
+            except MovedError as err:
+                return await self._redirect(err, data, conv, dec, False)
+            except ResponseError as exc:
+                if not self._loading(node, exc) or self._cl.policy == cl.POLICY_REPLICA:
+                    raise
+        if slot is None:
+            return await self._route_ordinary(ni, conv, data, dec)
+        return await self._single(slot, data, conv, dec, False)
 
     async def _open_target(self, ni: int, data: bytes) -> Any:
         """Opens the connection of target ``ni`` for an ordinary command. When the node cannot be
@@ -518,7 +617,11 @@ class ClusterRuvio(Ruvio):
             if name == b"UNWATCH" and c.watch is not None:
                 node, c.watch = c.watch, None
                 return await self._send(node, data, conv, dec)
-            reply = await self._single(p[1], data, conv, dec, _is_blocking(name, args))
+            blocking = _is_blocking(name, args)
+            if c.policy and not blocking and p[1] is not None and name in cl.READS and c.slots[p[1]] >= 0:
+                reply = await self._route_read(c.slots[p[1]], conv, data, dec, p[1])
+            else:
+                reply = await self._single(p[1], data, conv, dec, blocking)
             if name == b"WATCH":
                 c.watch = self._owner(p[1])
             return reply
@@ -556,7 +659,12 @@ class ClusterRuvio(Ruvio):
         return results[0]
 
     async def _split(self, name: bytes, args: List[bytes], keys: List[bytes], dec: bool) -> Any:
-        groups = cl.split_groups(name, args, keys, self._owner_by_slot)
+        c = self._cl
+        reads = c.policy and name in cl.READS
+        if reads:
+            for ni in {c.slots[cl.key_slot(k)] for k in keys}:
+                await self._replica(ni)  # opens the replicas; one that cannot be opened is dropped
+        groups = cl.split_groups(name, args, keys, self._read_owner_by_slot if reads else self._owner_by_slot)
         order = list(groups.items())
         results = await self._gather([self._node_batch(node, [f for _, f in subs], dec) for node, subs in order])
         parts: List[Tuple[List[int], Any]] = []
@@ -564,6 +672,13 @@ class ClusterRuvio(Ruvio):
             if isinstance(r, BaseException):
                 raise r
             for (pos, frame), reply in zip(subs, r):
+                if node.replica and self._loading(node, reply) and c.policy != cl.POLICY_REPLICA:
+                    try:
+                        reply = await self._send(c.nodes[node.primary], frame, None, dec)
+                    except MovedError as err:
+                        reply = err
+                    except ResponseError as exc:
+                        reply = exc
                 if reply.__class__ is MovedError:
                     try:
                         reply = await self._redirect(reply, frame, None, dec, False)
@@ -574,6 +689,13 @@ class ClusterRuvio(Ruvio):
 
     def _owner_by_slot(self, slot: int) -> _Node:
         return self._owner(slot)
+
+    def _read_owner_by_slot(self, slot: int) -> _Node:
+        """The node a read part of a split command goes to: the replica of the slot's node when it is usable."""
+        c = self._cl
+        ni = c.slots[slot]
+        node = c.reps[ni] if 0 <= ni < len(c.reps) else None
+        return node if node is not None else self._owner(slot)
 
     async def _scan(self, args: List[bytes], dec: bool) -> Any:
         c = self._cl
@@ -606,6 +728,13 @@ class ClusterRuvio(Ruvio):
             return await self._batch_split(payload, dec)
         order = [i for i, b in enumerate(bufs) if b]
         targets = c.targets
+        if c.policy and cl.all_reads(payload):  # reads only: each node's replica takes its part
+            targets = list(targets)
+            for i in order:
+                if i < len(bufs) - 1:  # the last target is the seed (keyless commands)
+                    node = await self._replica(i)
+                    if node is not None:
+                        targets[i] = node
         if len(order) == 1:
             replies = await self._node_batch(targets[order[0]], payload, dec)
         else:
@@ -689,7 +818,7 @@ class ClusterRuvio(Ruvio):
     def _share_opts(self) -> None:
         o = self._st.opts
         c = self._cl
-        for n in {id(x): x for x in [c.seed, *c.nodes, *c.by_addr.values()]}.values():
+        for n in {id(x): x for x in [c.seed, *c.nodes, *c.by_addr.values(), *c.rnodes.values()]}.values():
             no = n.opts
             no.password, no.username, no.db, no.client_name = o.password, o.username, o.db, o.client_name
 
@@ -760,7 +889,7 @@ class ClusterRuvio(Ruvio):
     async def aclose(self) -> None:
         """Closes every node connection. The client can be used again. ``close`` is an alias."""
         c = self._cl
-        for n in {id(x): x for x in [c.seed, *c.nodes, *c.by_addr.values()]}.values():
+        for n in {id(x): x for x in [c.seed, *c.nodes, *c.by_addr.values(), *c.rnodes.values()]}.values():
             proto, n.proto = n.proto, None
             if proto is not None and proto.transport is not None:
                 proto.transport.close()

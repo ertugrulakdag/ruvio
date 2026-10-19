@@ -61,6 +61,21 @@ let mut client = Client::connect_with(ClientOptions {
 })?;
 ```
 
+### Reads from replicas
+
+`ClientOptions::read_policy` decides where a cluster client sends read-only commands. `ReadPolicy::Primary` (the default) keeps every command on the slot's primary. `ReadPolicy::PreferReplica` sends reads to one replica of the slot's shard, picked at random when the slot map loads, and falls back to the primary when none is known, it cannot be opened, or it answers `LOADING`. `ReadPolicy::Replica` sends reads only to replicas and fails with `Error::Protocol` ("no replica ...") when none is usable. Reads are the commands the server flags `readonly` and not blocking (`GET`, `MGET`, `HGETALL`, `ZRANGE`, ...); writes, transactions, blocking commands, scripts and Pub/Sub stay on the primaries, and a pipeline goes to replicas only when every command in it reads. Replica connections send `READONLY` when they open. Replication is asynchronous, so a read from a replica may miss recent writes, including your own. Standalone connections ignore the policy. The rules are the same in every client ([docs/CLIENT_BEHAVIOR.md](../../docs/CLIENT_BEHAVIOR.md#reads-from-replicas)).
+
+```rust
+use ruvio_client::{Client, ClientOptions, ReadPolicy};
+
+let mut client = Client::connect_with(ClientOptions {
+    host: "10.0.0.5".into(),
+    port: 7000,
+    read_policy: ReadPolicy::PreferReplica,
+    ..ClientOptions::default()
+})?;
+```
+
 A standalone client is bound to one logical database. Database 0 sends nothing after discovery. Any other index sends `SELECT` before the connect call returns. Cluster mode has only database 0.
 
 ```rust

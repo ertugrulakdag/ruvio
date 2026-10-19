@@ -91,8 +91,32 @@ fn spawn_shipper(
         lineage,
         newer_epoch: Arc::clone(&state.newer_epoch),
         snapshot_requests: Arc::clone(&state.snapshot_requests),
+        announce: client_endpoint(&state.published_config, shard_id),
     })
     .map(Some)
+}
+
+/// Where clients reach shard `shard_id` of this node: `advertised-host`, and
+/// `advertised-port` (else the bind port) plus the shard index when every shard has its own
+/// port, as `CLUSTER SLOTS` announces it.
+pub(super) fn client_endpoint(
+    config: &crate::config::AppConfig,
+    shard_id: u32,
+) -> Option<crate::replication::Endpoint> {
+    let bind: SocketAddr = config.address.parse().ok()?;
+    let base = config.advertised_port.unwrap_or(bind.port());
+    let port = if config.shards > 1 && config.port_mode != crate::config::PortMode::Single {
+        base.checked_add(u16::try_from(shard_id).ok()?)?
+    } else {
+        base
+    };
+
+    crate::replication::announceable_host(&config.advertised_host).then(|| {
+        crate::replication::Endpoint {
+            host: config.advertised_host.clone(),
+            port,
+        }
+    })
 }
 
 /// Starts following `primary` (the base address; this shard dials its own port).
@@ -105,6 +129,8 @@ fn spawn_reader(
     let (inbound, outbound) = mpsc::sync_channel(crate::replication::QUEUE_FRAMES);
     let dialed = shard_port(primary, shard_id)?;
 
+    // Until the new primary accepts this shard, it names no primary in the cluster answers.
+    state.durable_acks.set_primary(None);
     *state.followed.borrow_mut() = Some(match &primary_name {
         Some((host, _)) => (host.clone(), dialed.port()),
         None => (dialed.ip().to_string(), dialed.port()),
@@ -127,6 +153,9 @@ fn spawn_reader(
         shard_count: state.published_config.shards as u32,
         status: Arc::clone(&state.replica_link),
         wake_shard: Arc::clone(&state.replica_wake),
+        announce: client_endpoint(&state.published_config, shard_id)
+            .filter(|_| state.published_config.replication.announced),
+        peers: Arc::clone(&state.durable_acks),
     });
 
     *state.replica_frames.borrow_mut() = Some(outbound);
@@ -252,10 +281,24 @@ pub(super) fn role_response(state: &ShardState) -> Response<'static> {
     let bulk = |bytes: Vec<u8>| Response::Bulk(Some(Cow::Owned(bytes)));
 
     if state.role.get() != crate::config::ReplicationRole::Replica {
+        // Redis's shape: host, port and acknowledged offset of each replica, as strings.
+        let replicas = state
+            .durable_acks
+            .replicas()
+            .into_iter()
+            .map(|replica| {
+                Response::Exec(vec![
+                    bulk(replica.endpoint.host.into_bytes()),
+                    bulk(replica.endpoint.port.to_string().into_bytes()),
+                    bulk(replica.sequence.to_string().into_bytes()),
+                ])
+            })
+            .collect();
+
         return Response::Exec(vec![
             bulk(b"master".to_vec()),
             Response::Integer(last as i64),
-            Response::Exec(Vec::new()),
+            Response::Exec(replicas),
         ]);
     }
 
@@ -296,6 +339,11 @@ pub(super) fn promote(state: &ShardState, shard_id: u32, force: bool) -> io::Res
     *state.replica_reader.borrow_mut() = None;
     while drain_replicated_budget(state, REPLICA_DRAIN_BUDGET) > 0 {}
     *state.replica_frames.borrow_mut() = None;
+    // A full copy queued and dropped here never runs, so whether this shard still copies is
+    // what its incomplete flag says, not what the reader last announced.
+    state
+        .replica_link
+        .set_copying(state.replica_incomplete.get());
     state.replica_link.mark_down();
 
     if state.replica_incomplete.get() {
@@ -307,8 +355,11 @@ pub(super) fn promote(state: &ShardState, shard_id: u32, force: bool) -> io::Res
             "promoting an incomplete replica: writes it never received are lost"
         );
         state.replica_incomplete.set(false);
+        state.replica_link.set_copying(false);
     }
 
+    // A primary lists its own replicas, not the one it used to follow.
+    state.durable_acks.set_primary(None);
     let lineage = writer_lineage(state, shard_id)?;
     let uses_wal = state.published_config.persistence.profile.uses_wal();
     {
@@ -353,6 +404,11 @@ pub(super) fn demote(
     drop(state.replication.borrow_mut().take());
     *state.replica_reader.borrow_mut() = None;
     *state.replica_frames.borrow_mut() = None;
+    // A full copy queued and dropped here never runs, so whether this shard still copies is
+    // what its incomplete flag says, not what the reader last announced.
+    state
+        .replica_link
+        .set_copying(state.replica_incomplete.get());
 
     let data_dir = &state.published_config.persistence.data_dir;
 
@@ -546,6 +602,7 @@ pub(super) fn install_replica_snapshot(
         .as_ref()
         .map_or(0, |route| route.shard_id as u32);
     state.replica_incomplete.set(true);
+    state.replica_link.set_copying(true);
     state.replica_caught_up.set(false);
     state.catchup_wait_started.set(Instant::now());
     if replica_guard::write(data_dir, shard_id, CatchupMarker::Preparing).is_err() {
@@ -662,6 +719,7 @@ pub(super) fn finish_replica_catchup(state: &ShardState) -> io::Result<()> {
     replica_guard::clear(data_dir, shard_id)?;
     state.replica_catchup_through.set(0);
     state.replica_incomplete.set(false);
+    state.replica_link.set_copying(false);
     state.replica_caught_up.set(false);
     Ok(())
 }
@@ -859,6 +917,7 @@ fn drain_replicated_budget(state: &ShardState, budget: usize) -> usize {
                         CatchupMarker::Preparing,
                     );
                     state.replica_incomplete.set(true);
+                    state.replica_link.set_copying(true);
                     state.replica_caught_up.set(false);
                     state
                         .replica_resync_sequence
