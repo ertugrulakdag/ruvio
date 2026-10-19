@@ -64,7 +64,7 @@ Most scripts take the path to a built `ruvio` binary and start their own server.
 | `gen_client_keys.py` | Writes each client's command key table from `clients/testdata/commands.json`; `--check` runs in `check.sh` |
 | `client_stubs.py` | Prints a method skeleton per client, and the `command_methods.json` row, for a command already in `clients/testdata/commands.json` |
 | `bench_matrix.py`, `perf_matrix.py`, `benchmark.sh`, `benchmark_regression.py`, `pinned_run.py` | Throughput matrices and repeatable samples |
-| `bench_added_commands.py`, `bench_checkpoint_latency.py`, `bench_concurrency_durability.py`, `json_compare.py` | Feature, checkpoint, durability and JSON costs |
+| `bench_added_commands.py`, `bench_scripted_equivalents.py`, `bench_checkpoint_latency.py`, `bench_concurrency_durability.py`, `json_compare.py` | Feature, checkpoint, durability and JSON costs |
 | `benchmark_shards.py`, `benchmark_shard_skew.py`, `fairness_multishard.py`, `fairness_probe.py` | Shard scaling and tail fairness |
 | `memory_churn.py`, `churn_benchmark.py`, `compare_lru_reads.py`, `rss_docker.py`, `mixed_docker.py` | Memory, eviction and mixed workloads |
 | `ceiling.sh`, `ceiling_compare.py`, `ceiling_logic.sh` | Single-core ceiling |
