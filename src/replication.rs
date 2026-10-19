@@ -26,9 +26,9 @@ use crate::{
 pub const HANDSHAKE_MAGIC: &[u8; 8] = b"RUVREP01";
 /// Handshake versions this build speaks; the version also names the request: resume from the
 /// replica's log, resync from a snapshot at a sequence, or resync an incomplete image.
-pub const VERSION_RESUME: u16 = 9;
-pub const VERSION_RESYNC: u16 = 10;
-pub const VERSION_RESYNC_INCOMPLETE: u16 = 11;
+pub const VERSION_RESUME: u16 = 12;
+pub const VERSION_RESYNC: u16 = 13;
+pub const VERSION_RESYNC_INCOMPLETE: u16 = 14;
 const SUPPORTED_VERSIONS: std::ops::RangeInclusive<u16> =
     VERSION_RESUME..=VERSION_RESYNC_INCOMPLETE;
 /// Versions of builds whose handshake ended after the password and whose reply carried no
@@ -40,6 +40,10 @@ const LEGACY_REPLY_LEN: usize = 8 + 2 + 8 + CHECKSUM_LEN;
 const HISTORY_ONLY_VERSIONS: std::ops::RangeInclusive<u16> = 6..=8;
 const HISTORY_ONLY_TAIL: usize = HISTORY_LEN + 4;
 const HISTORY_ONLY_REPLY_LEN: usize = 8 + 2 + 8 + HISTORY_LEN + CHECKSUM_LEN;
+/// Versions of builds whose handshake carried an epoch but no client address. Their reply
+/// is this build's reply without the address that follows it.
+const EPOCH_ONLY_VERSIONS: std::ops::RangeInclusive<u16> = 9..=11;
+const EPOCH_ONLY_TAIL: usize = HISTORY_LEN + 4 + 8;
 const VERSION_MISMATCH: &str =
     "primary and replicas must run the same Ruvio version (replication handshake version mismatch)";
 pub const READONLY_LINE: &[u8] = b"READONLY You can't write against a read only replica.";
@@ -49,6 +53,9 @@ pub const NOREPLICAS_LINE: &[u8] = b"NOREPLICAS Not enough good replicas to writ
 /// A replica that has nothing new to acknowledge repeats its last acknowledgement this
 /// often, so a primary can tell a quiet replica from a lost one (`min-replicas-max-lag`).
 pub const ACK_HEARTBEAT: Duration = Duration::from_secs(1);
+/// A replica silent for longer than this (ten missed heartbeats) is no longer listed for
+/// reads, even while its connection looks open: a host that lost power sends no reset.
+pub const LISTED_REPLICA_LAG: Duration = Duration::from_secs(10);
 
 /// Whether a shard takes writes, and the error it answers when it does not. Read for every
 /// write command as one byte, like the role check it replaced.
@@ -97,11 +104,15 @@ const PASSWORD_LEN_OFFSET: usize = 22;
 pub type HistoryId = [u8; HISTORY_LEN];
 
 pub const HISTORY_LEN: usize = 16;
-/// History id (16), shard count (4) and epoch (8) follow the password; the checksum closes
-/// the frame.
-const HANDSHAKE_TAIL: usize = HISTORY_LEN + 4 + 8;
+/// History id (16), shard count (4), epoch (8), client port (2) and client host length (2)
+/// follow the password; the host and the checksum close the frame.
+const HANDSHAKE_TAIL: usize = HISTORY_LEN + 4 + 8 + 2 + 2;
 const HANDSHAKE_MIN: usize = HANDSHAKE_PREFIX + HANDSHAKE_TAIL + CHECKSUM_LEN;
+/// The reply up to its first checksum; every reply to a current handshake is followed by
+/// the primary's client address (see [`encode_address`]).
 const REPLY_LEN: usize = 8 + 2 + 8 + HISTORY_LEN + 8 + CHECKSUM_LEN;
+/// Client port (2), host length (2) and checksum (4) of an address frame, around the host.
+const ADDRESS_FRAME_MIN: usize = 2 + 2 + CHECKSUM_LEN;
 const CHECKSUM_LEN: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +143,101 @@ pub struct Handshake {
     pub shard_count: u32,
     /// Highest epoch this replica has seen; a primary below it was replaced.
     pub epoch: u64,
+    /// Where clients reach this replica shard; `None` keeps it out of the primary's topology.
+    pub announce: Option<Endpoint>,
+}
+
+/// Where clients reach one shard of a node: the host and the shard's own client port.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Endpoint {
+    pub host: String,
+    pub port: u16,
+}
+
+/// Port, host length and host of an optional endpoint; port 0 and no host stand for none.
+fn put_endpoint(bytes: &mut Vec<u8>, endpoint: Option<&Endpoint>) -> Result<(), ()> {
+    let (port, host) = endpoint.map_or((0, &b""[..]), |endpoint| {
+        (endpoint.port, endpoint.host.as_bytes())
+    });
+    let Ok(host_len) = u16::try_from(host.len()) else {
+        return Err(());
+    };
+
+    put_u16(bytes, port);
+    put_u16(bytes, host_len);
+    bytes.extend_from_slice(host);
+    Ok(())
+}
+
+/// Longest host a node announces; longer ones are not announced.
+pub const MAX_ANNOUNCED_HOST: usize = 255;
+
+/// Whether `host` may be written into `CLUSTER NODES` and `INFO`: a host name or an IP
+/// address (with an IPv6 zone or brackets), nothing that could split a line or a field.
+pub fn announceable_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= MAX_ANNOUNCED_HOST
+        && host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".-_:%[]".contains(&byte))
+}
+
+/// An announced endpoint; a host that is not [`announceable_host`] is treated as no
+/// announcement, so a peer cannot write arbitrary text into the cluster answers.
+fn read_endpoint(port: u16, host: &[u8]) -> Result<Option<Endpoint>, FrameError> {
+    if port == 0 || host.is_empty() {
+        return Ok(None);
+    }
+
+    let host = std::str::from_utf8(host).map_err(|_| "client host is not UTF-8")?;
+
+    if !announceable_host(host) {
+        warn!(
+            host = host
+                .chars()
+                .take(64)
+                .collect::<String>()
+                .escape_debug()
+                .to_string(),
+            "announced client host is not a host name or address; not listed"
+        );
+
+        return Ok(None);
+    }
+
+    Ok(Some(Endpoint {
+        host: host.to_owned(),
+        port,
+    }))
+}
+
+/// The frame that follows every reply to a current handshake: the primary shard's client
+/// address, with its own checksum.
+pub fn encode_address(endpoint: Option<&Endpoint>) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(ADDRESS_FRAME_MIN + 64);
+
+    // A host too long for the frame is announced as none.
+    if put_endpoint(&mut bytes, endpoint).is_err() {
+        bytes.clear();
+        let _ = put_endpoint(&mut bytes, None);
+    }
+
+    append_checksum(&mut bytes);
+    bytes
+}
+
+pub fn decode_address(bytes: &[u8]) -> Result<Option<Endpoint>, FrameError> {
+    if bytes.len() < ADDRESS_FRAME_MIN
+        || bytes.len() != ADDRESS_FRAME_MIN + usize::from(read_u16(bytes, 2))
+    {
+        return Err("address frame length");
+    }
+
+    if !checksum_matches(bytes) {
+        return Err("address frame checksum mismatch");
+    }
+
+    read_endpoint(read_u16(bytes, 0), &bytes[4..bytes.len() - CHECKSUM_LEN])
 }
 
 pub fn encode_handshake(handshake: &Handshake) -> Result<Vec<u8>, ()> {
@@ -139,7 +245,7 @@ pub fn encode_handshake(handshake: &Handshake) -> Result<Vec<u8>, ()> {
         return Err(());
     };
 
-    let mut bytes = Vec::with_capacity(HANDSHAKE_MIN + handshake.password.len());
+    let mut bytes = Vec::with_capacity(HANDSHAKE_MIN + handshake.password.len() + 64);
 
     bytes.extend_from_slice(HANDSHAKE_MAGIC);
     put_u16(&mut bytes, handshake.version);
@@ -150,6 +256,7 @@ pub fn encode_handshake(handshake: &Handshake) -> Result<Vec<u8>, ()> {
     bytes.extend_from_slice(&handshake.history);
     put_u32(&mut bytes, handshake.shard_count);
     put_u64(&mut bytes, handshake.epoch);
+    put_endpoint(&mut bytes, handshake.announce.as_ref())?;
     append_checksum(&mut bytes);
     Ok(bytes)
 }
@@ -167,9 +274,16 @@ pub fn decode_handshake(bytes: &[u8]) -> Result<Handshake, FrameError> {
     }
 
     let password_len = usize::from(read_u16(bytes, PASSWORD_LEN_OFFSET));
+    let tail = HANDSHAKE_PREFIX + password_len;
 
-    if bytes.len() != HANDSHAKE_MIN + password_len {
+    if bytes.len() < HANDSHAKE_MIN + password_len {
         return Err("handshake length does not match its password length");
+    }
+
+    let host_len = usize::from(read_u16(bytes, tail + HANDSHAKE_TAIL - 2));
+
+    if bytes.len() != HANDSHAKE_MIN + password_len + host_len {
+        return Err("handshake length does not match its password and host lengths");
     }
 
     if !checksum_matches(bytes) {
@@ -179,13 +293,15 @@ pub fn decode_handshake(bytes: &[u8]) -> Result<Handshake, FrameError> {
     let version = read_u16(bytes, 8);
     let shard_id = read_u32(bytes, 10);
     let after_sequence = read_u64(bytes, 14);
-    let tail = bytes.len() - CHECKSUM_LEN - HANDSHAKE_TAIL;
     let password = bytes[HANDSHAKE_PREFIX..tail].to_vec();
     let mut history = [0; HISTORY_LEN];
 
     history.copy_from_slice(&bytes[tail..tail + HISTORY_LEN]);
     let shard_count = read_u32(bytes, tail + HISTORY_LEN);
     let epoch = read_u64(bytes, tail + HISTORY_LEN + 4);
+    let port = read_u16(bytes, tail + HISTORY_LEN + 12);
+    let host_at = tail + HANDSHAKE_TAIL;
+    let announce = read_endpoint(port, &bytes[host_at..host_at + host_len])?;
 
     Ok(Handshake {
         version,
@@ -195,6 +311,7 @@ pub fn decode_handshake(bytes: &[u8]) -> Result<Handshake, FrameError> {
         history,
         shard_count,
         epoch,
+        announce,
     })
 }
 
@@ -946,10 +1063,34 @@ pub fn decode_ack(bytes: &[u8]) -> Option<u64> {
     Some(u64::from_le_bytes(bytes[8..].try_into().ok()?))
 }
 
-/// Durable sequences reported by connected replicas. `SET` does not read this.
+/// One connected replica of a shard: what it acknowledged, and where clients reach it.
+#[derive(Clone)]
+struct AckSlot {
+    sequence: u64,
+    at: std::time::Instant,
+    /// False until the replica's first acknowledgement, which comes once any full copy is
+    /// installed: only then does it serve reads.
+    acknowledged: bool,
+    endpoint: Option<Endpoint>,
+}
+
+/// A replica a shard ships to that serves reads, as `CLUSTER SLOTS`, `ROLE` and `INFO` show it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReplicaPeer {
+    pub endpoint: Endpoint,
+    /// Highest sequence the replica reported durable.
+    pub sequence: u64,
+    /// Time since its last acknowledgement.
+    pub lag: Duration,
+}
+
+/// Durable sequences reported by connected replicas and the addresses they announced, and
+/// on a replica the address of the primary it follows. `SET` does not read this.
 pub struct DurableAcks {
     /// Per connected replica: the sequence it reported and when it last reported.
-    slots: Mutex<Vec<Option<(u64, std::time::Instant)>>>,
+    slots: Mutex<Vec<Option<AckSlot>>>,
+    /// Where clients reach the primary this shard follows, from the last accepted handshake.
+    primary: Mutex<Option<Endpoint>>,
     notify: tokio::sync::Notify,
 }
 
@@ -957,6 +1098,7 @@ impl DurableAcks {
     pub fn new() -> Self {
         Self {
             slots: Mutex::new(Vec::new()),
+            primary: Mutex::new(None),
             notify: tokio::sync::Notify::new(),
         }
     }
@@ -968,7 +1110,21 @@ impl DurableAcks {
             slots.resize(index + 1, None);
         }
 
-        slots[index] = Some((0, std::time::Instant::now()));
+        slots[index] = Some(AckSlot {
+            sequence: 0,
+            at: std::time::Instant::now(),
+            acknowledged: false,
+            endpoint: None,
+        });
+    }
+
+    /// Records where clients reach the replica in slot `index`.
+    pub fn announce(&self, index: usize, endpoint: Option<Endpoint>) {
+        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+
+        if let Some(Some(slot)) = slots.get_mut(index) {
+            slot.endpoint = endpoint;
+        }
     }
 
     pub fn observe(&self, index: usize, sequence: u64) {
@@ -978,12 +1134,54 @@ impl DurableAcks {
             slots.resize(index + 1, None);
         }
 
-        let current = slots[index].map_or(0, |(sequence, _)| sequence);
+        let slot = slots[index].get_or_insert(AckSlot {
+            sequence: 0,
+            at: std::time::Instant::now(),
+            acknowledged: false,
+            endpoint: None,
+        });
+        let current = slot.sequence;
 
-        slots[index] = Some((sequence.max(current), std::time::Instant::now()));
+        slot.sequence = sequence.max(current);
+        slot.at = std::time::Instant::now();
+        slot.acknowledged = true;
         if sequence > current {
             self.notify.notify_waiters();
         }
+    }
+
+    /// Connected replicas that announced an address and acknowledged within
+    /// [`LISTED_REPLICA_LAG`], in slot order.
+    pub fn replicas(&self) -> Vec<ReplicaPeer> {
+        let slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+
+        slots
+            .iter()
+            .flatten()
+            .filter(|slot| slot.acknowledged && slot.at.elapsed() <= LISTED_REPLICA_LAG)
+            .filter_map(|slot| {
+                Some(ReplicaPeer {
+                    endpoint: slot.endpoint.clone()?,
+                    sequence: slot.sequence,
+                    lag: slot.at.elapsed(),
+                })
+            })
+            .collect()
+    }
+
+    pub fn set_primary(&self, endpoint: Option<Endpoint>) {
+        *self
+            .primary
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = endpoint;
+    }
+
+    /// Where clients reach the primary this shard last followed, if it announced itself.
+    pub fn primary(&self) -> Option<Endpoint> {
+        self.primary
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
 
     pub fn clear(&self, index: usize) {
@@ -1001,7 +1199,7 @@ impl DurableAcks {
 
         slots
             .iter()
-            .filter(|slot| slot.is_some_and(|(sequence, _)| sequence >= target))
+            .filter(|slot| slot.as_ref().is_some_and(|slot| slot.sequence >= target))
             .count() as u64
     }
 
@@ -1011,7 +1209,10 @@ impl DurableAcks {
 
         slots
             .iter()
-            .filter(|slot| slot.is_some_and(|(_, at)| at.elapsed() <= max_lag))
+            .filter(|slot| {
+                slot.as_ref()
+                    .is_some_and(|slot| slot.at.elapsed() <= max_lag)
+            })
             .count()
     }
 
@@ -1209,6 +1410,8 @@ pub struct Shipment {
     pub newer_epoch: Arc<AtomicU64>,
     /// Request a coordinated checkpoint after a rejected delta; never used by ordinary streams.
     pub snapshot_requests: Arc<AtomicU64>,
+    /// Where clients reach this primary shard, sent to every replica with the reply.
+    pub announce: Option<Endpoint>,
 }
 
 struct ReplicaProgress {
@@ -1273,6 +1476,10 @@ impl CursorHold {
 
     fn ack(&self, sequence: u64) {
         self.progress.acks.observe(self.index, sequence);
+    }
+
+    fn announce(&self, endpoint: Option<Endpoint>) {
+        self.progress.acks.announce(self.index, endpoint);
     }
 }
 
@@ -1378,9 +1585,21 @@ pub enum ReplicaDelivery {
 pub struct LinkStatus {
     up: AtomicBool,
     last_io_millis: AtomicU64,
+    /// Set from the moment a full copy is queued until the shard has installed it and
+    /// caught up: the replica then sends no acknowledgement, so its primary neither lists
+    /// it for reads nor counts it for `WAIT` and `min-replicas-to-write`.
+    copying: AtomicBool,
 }
 
 impl LinkStatus {
+    pub(crate) fn set_copying(&self, copying: bool) {
+        self.copying.store(copying, Ordering::Release);
+    }
+
+    pub fn is_copying(&self) -> bool {
+        self.copying.load(Ordering::Acquire)
+    }
+
     fn mark_up(&self) {
         self.up.store(true, Ordering::Release);
         self.touch();
@@ -1433,6 +1652,10 @@ pub struct ReplicaLink {
     /// Woken after every delivery so the shard applies frames as they arrive instead of
     /// on its next timer tick.
     pub wake_shard: Arc<tokio::sync::Notify>,
+    /// Where clients reach this replica shard, sent with the handshake.
+    pub announce: Option<Endpoint>,
+    /// Records the primary's client address from each accepted handshake.
+    pub peers: Arc<DurableAcks>,
 }
 
 pub fn spawn_replica_reader(link: ReplicaLink) -> ReplicationThread {
@@ -1688,6 +1911,11 @@ fn serve_replica(
 
     let through = shipment.published.load(Ordering::Acquire);
     let hold = progress.hold(handshake.after_sequence);
+
+    hold.announce(reachable_endpoint(
+        handshake.announce,
+        stream.peer_addr().ok().map(|peer| peer.ip()),
+    ));
     if forced_snapshot
         && (handshake.after_sequence > through
             || (!incomplete && handshake.after_sequence == through))
@@ -1749,11 +1977,7 @@ fn serve_replica(
 
             if !write_live(
                 &mut stream,
-                &encode_reply_with_history(
-                    HandshakeStatus::Snapshot,
-                    through,
-                    &shipment.lineage.origin,
-                ),
+                &accepted_reply(HandshakeStatus::Snapshot, through, shipment),
                 stop,
             )? {
                 return Ok(());
@@ -1815,7 +2039,7 @@ fn serve_replica(
 
     if !write_live(
         &mut stream,
-        &encode_reply_with_history(HandshakeStatus::Ok, next_sequence, &shipment.lineage.origin),
+        &accepted_reply(HandshakeStatus::Ok, next_sequence, shipment),
         stop,
     )? {
         return Ok(());
@@ -1843,6 +2067,27 @@ fn serve_replica(
         &mut reader,
         last_sent,
     )
+}
+
+/// The address a peer announced, with its host replaced by the address of the connection
+/// when it announced a loopback host but is not on this machine: a node left at the default
+/// `advertised-host` is still listed where clients can reach it.
+fn reachable_endpoint(
+    announced: Option<Endpoint>,
+    peer: Option<std::net::IpAddr>,
+) -> Option<Endpoint> {
+    let mut endpoint = announced?;
+    let loopback = endpoint.host.eq_ignore_ascii_case("localhost")
+        || endpoint
+            .host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+
+    if loopback && let Some(peer) = peer.filter(|peer| !peer.is_loopback()) {
+        endpoint.host = peer.to_string();
+    }
+
+    Some(endpoint)
 }
 
 fn caught_up_cursor_is_retained(shipment: &Shipment, after_sequence: u64, through: u64) -> bool {
@@ -1911,6 +2156,8 @@ fn poll_acks(stream: &mut TcpStream, hold: &CursorHold, pending: &mut Vec<u8>) -
 }
 
 struct AckSend {
+    /// While it reports a copy in progress, nothing is sent.
+    status: Arc<LinkStatus>,
     last: u64,
     /// When `last` was sent: it is sent again after [`ACK_HEARTBEAT`].
     sent_at: std::time::Instant,
@@ -1921,6 +2168,11 @@ struct AckSend {
 
 impl AckSend {
     fn poll(&mut self, stream: &mut TcpStream, wal: &Mutex<WalSink>) {
+        // The log of a replica still copying belongs to the history it is replacing.
+        if !self.queued && self.status.is_copying() {
+            return;
+        }
+
         if !self.queued {
             let durable = wal
                 .lock()
@@ -2154,6 +2406,7 @@ fn read_primary(
         history: followed.history,
         shard_count: link.shard_count,
         epoch: followed.epoch,
+        announce: link.announce.clone(),
     };
 
     let Ok(encoded) = encode_handshake(&handshake) else {
@@ -2166,7 +2419,7 @@ fn read_primary(
         return (true, false);
     }
 
-    let (status, snapshot_through, primary_history) = match read_reply(stream) {
+    let (status, snapshot_through, primary_history, primary_endpoint) = match read_reply(stream) {
         Ok(reply) => reply,
         Err(error) => {
             // A primary of another build cannot parse this handshake and closes the link (or
@@ -2214,6 +2467,13 @@ fn read_primary(
         );
 
         return (true, false);
+    }
+
+    if matches!(status, HandshakeStatus::Ok | HandshakeStatus::Snapshot) {
+        link.peers.set_primary(reachable_endpoint(
+            primary_endpoint,
+            stream.peer_addr().ok().map(|peer| peer.ip()),
+        ));
     }
 
     if status == HandshakeStatus::History {
@@ -2270,6 +2530,9 @@ fn read_primary(
             }
             _ => return (true, false),
         };
+        // Before the shard sees the copy, so not one acknowledgement of the log it replaces
+        // goes out in between.
+        link.status.set_copying(true);
         if link
             .inbound
             .send(ReplicaDelivery::Snapshot {
@@ -2319,6 +2582,7 @@ fn read_primary(
     let _ = stream.set_read_timeout(Some(SHIPPER_POLL));
     let _ = stream.set_write_timeout(Some(SHIPPER_POLL));
     let mut acks = AckSend {
+        status: Arc::clone(&link.status),
         last: 0,
         sent_at: std::time::Instant::now(),
         offset: 0,
@@ -2576,6 +2840,8 @@ fn read_handshake(stream: &mut TcpStream) -> io::Result<Incoming> {
             Some(password_len + CHECKSUM_LEN)
         } else if HISTORY_ONLY_VERSIONS.contains(&version) {
             Some(password_len + HISTORY_ONLY_TAIL + CHECKSUM_LEN)
+        } else if EPOCH_ONLY_VERSIONS.contains(&version) {
+            Some(password_len + EPOCH_ONLY_TAIL + CHECKSUM_LEN)
         } else {
             None
         };
@@ -2588,12 +2854,16 @@ fn read_handshake(stream: &mut TcpStream) -> io::Result<Incoming> {
 
         return Ok(Incoming::Unsupported(version));
     }
-    let mut rest = vec![0; password_len + HANDSHAKE_TAIL + CHECKSUM_LEN];
-
-    stream.read_exact(&mut rest)?;
     let mut bytes = prefix.to_vec();
 
-    bytes.extend_from_slice(&rest);
+    bytes.resize(HANDSHAKE_PREFIX + password_len + HANDSHAKE_TAIL, 0);
+    stream.read_exact(&mut bytes[HANDSHAKE_PREFIX..])?;
+    // The client host and the checksum follow the fixed tail.
+    let host_len = usize::from(read_u16(&bytes, bytes.len() - 2));
+    let read = bytes.len();
+
+    bytes.resize(read + host_len + CHECKSUM_LEN, 0);
+    stream.read_exact(&mut bytes[read..])?;
     decode_handshake(&bytes)
         .map(Incoming::Handshake)
         .map_err(|reason| io::Error::new(io::ErrorKind::InvalidData, reason))
@@ -2630,26 +2900,49 @@ pub fn read_snapshot_blob(stream: &mut TcpStream, maximum: u64) -> io::Result<Ve
     Ok(bytes)
 }
 
-fn read_reply(stream: &mut TcpStream) -> io::Result<(HandshakeStatus, u64, Origin)> {
+/// The primary's reply and the client address that follows it. A version refusal comes
+/// from a build that may not send the address, so nothing more is read after one.
+fn read_reply(
+    stream: &mut TcpStream,
+) -> io::Result<(HandshakeStatus, u64, Origin, Option<Endpoint>)> {
+    let invalid = |reason| io::Error::new(io::ErrorKind::InvalidData, reason);
     let mut bytes = [0; REPLY_LEN];
 
     stream.read_exact(&mut bytes)?;
-    decode_reply_with_history(&bytes)
-        .map_err(|reason| io::Error::new(io::ErrorKind::InvalidData, reason))
+    let (status, next, origin) = decode_reply_with_history(&bytes).map_err(invalid)?;
+
+    if status == HandshakeStatus::Version {
+        return Ok((status, next, origin, None));
+    }
+
+    let mut address = vec![0; 4];
+
+    stream.read_exact(&mut address)?;
+    let host_len = usize::from(read_u16(&address, 2));
+
+    address.resize(ADDRESS_FRAME_MIN + host_len, 0);
+    stream.read_exact(&mut address[4..])?;
+    let endpoint = decode_address(&address).map_err(invalid)?;
+
+    Ok((status, next, origin, endpoint))
 }
 
 fn refuse_handshake(stream: &mut TcpStream, status: HandshakeStatus) -> io::Result<()> {
     warn!(?status, "replication handshake rejected");
-    write_status(stream, status, 0)
+    let mut reply = encode_reply(status, 0);
+
+    reply.extend_from_slice(&encode_address(None));
+    stream.write_all(&reply)?;
+    stream.flush()
 }
 
-fn write_status(
-    stream: &mut TcpStream,
-    status: HandshakeStatus,
-    next_sequence: u64,
-) -> io::Result<()> {
-    stream.write_all(&encode_reply(status, next_sequence))?;
-    stream.flush()
+/// A reply to a current handshake that the primary follows with its log: the reply and the
+/// primary shard's client address.
+fn accepted_reply(status: HandshakeStatus, next_sequence: u64, shipment: &Shipment) -> Vec<u8> {
+    let mut reply = encode_reply_with_history(status, next_sequence, &shipment.lineage.origin);
+
+    reply.extend_from_slice(&encode_address(shipment.announce.as_ref()));
+    reply
 }
 
 fn write_snapshot_blob(

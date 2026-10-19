@@ -59,6 +59,7 @@ The script runs the Rust and C# unit tests. Set `RUVIO_TEST_ADDR` (the script do
 - The C# client sends one `GET`, `MGET`, `EXISTS`, `HGET`, `TTL`, or `PTTL` again when the socket closes before any reply byte; a pipeline is not retried. The Rust client does not retry that command.
 - Subscriptions are sent again on the new Pub/Sub socket.
 - A seed list (`Seeds` / `seeds`) can replace the single host and port in every client. Reconnects start with the seed after the one that dropped; a cluster reloads its slot map from another known node or seed. See [docs/CLIENT_BEHAVIOR.md](../docs/CLIENT_BEHAVIOR.md).
+- A read policy (`primary` by default, `prefer-replica`, `replica`) lets a cluster client send read-only commands to the replicas the server lists in `CLUSTER SLOTS`. Replication is asynchronous, so such a read may miss recent writes. See [docs/CLIENT_BEHAVIOR.md](../docs/CLIENT_BEHAVIOR.md#reads-from-replicas).
 - Retry is on by default. Set `Reconnect` / `reconnect` to false and call `ReconnectAsync` / `reconnect`, or pass a delay function. Null / `None` stops the retry.
 - Connection lost and restored events carry the host, port, and whether the socket is the subscriber. ASP.NET Core binds the retry settings and can attach those events when the singleton opens.
 

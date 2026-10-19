@@ -4,6 +4,7 @@ Notable changes to the Rust client crate `ruvio-client`. New entries go under "U
 
 ## Unreleased
 
+- `ClientOptions::read_policy` with `ReadPolicy::{Primary, PreferReplica, Replica}`: a cluster client sends read-only commands to a replica of the slot's shard (listed by the server in `CLUSTER SLOTS`), with a fallback to the primary under `PreferReplica`. The default keeps every command on the primaries. `ClientOptions` built with a struct literal needs `..Default::default()`.
 - `replicaof(host, port)`, `replicaof_no_one(force)` and `role()` for `REPLICAOF` and `ROLE`.
 - `ClientOptions::seeds`: a list of `(host, port)` seed addresses tried in order. A dropped standalone connection reconnects starting with the next seed, and a cluster slot map reload asks the other known nodes and the seeds when no open socket answers. `ClientOptions` built with a struct literal needs `..Default::default()`.
 - TTL on create: a deadline set only when the call creates the key (an existing key keeps its deadline), sent as `EX` for whole seconds and `PX` otherwise.

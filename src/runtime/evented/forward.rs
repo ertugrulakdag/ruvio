@@ -253,6 +253,29 @@ impl Fabric {
             .collect()
     }
 
+    /// Each shard's replicas, or the primary it follows, by shard index; a shard not yet
+    /// registered has none.
+    pub(super) fn shard_peers(&self) -> Vec<crate::runtime::cluster::ShardPeers> {
+        let durability = self
+            .durability
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+
+        durability
+            .iter()
+            .map(|durability| {
+                durability
+                    .as_ref()
+                    .map(|durability| crate::runtime::cluster::ShardPeers {
+                        primary: durability.acks.primary(),
+                        replicas: durability.acks.replicas(),
+                    })
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
     /// The registered shards whose bit is set in `mask`.
     pub(super) fn durability_of(&self, mask: u64) -> Vec<ShardDurability> {
         self.durability

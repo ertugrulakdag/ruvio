@@ -64,7 +64,34 @@ type Options struct {
 	// (connected lazily). A seed that answers "cluster mode is disabled" is a standalone
 	// server: the client then behaves exactly as without this option.
 	Cluster bool
+	// ReadPolicy is where a cluster client sends read-only commands; see ReadPolicy. A
+	// standalone connection ignores it. Default ReadPrimary.
+	ReadPolicy ReadPolicy
 }
+
+// ReadPolicy is where a cluster client sends read-only commands: those the server flags
+// readonly and not blocking, such as GET, HGETALL or ZRANGE, including the per-slot parts
+// of a split MGET or EXISTS. The replicas of each shard come from CLUSTER SLOTS, which lists
+// them after the primary.
+//
+// Replication is asynchronous: a read from a replica may miss recent writes, including the
+// caller's own. Writes, transactions, blocking commands, Pub/Sub, keyless and fan-out
+// commands, and any pipeline that holds a command that is not a read always go to the
+// primaries.
+type ReadPolicy uint8
+
+const (
+	// ReadPrimary sends every command to the primary of its slot. This is the default.
+	ReadPrimary ReadPolicy = iota
+	// ReadPreferReplica sends reads to one replica of the slot's shard, picked at random
+	// when the slot map is loaded, and to the primary when the shard has none or the
+	// replica cannot be connected or answers LOADING. Such a replica is skipped until the
+	// next slot map load.
+	ReadPreferReplica
+	// ReadReplica sends reads to a replica only: with none known or usable the read fails,
+	// and a LOADING reply is returned as the error.
+	ReadReplica
+)
 
 // Client is a connection to one Ruvio server (or, with Options.Cluster, to a whole
 // sharded server). It is safe for concurrent use by many goroutines and meant to be
@@ -91,6 +118,10 @@ type Client struct {
 	addrs  []string
 	at     atomic.Int32
 	cfgErr error
+
+	// readOnly marks a replica chosen for reads: READONLY is sent on every connection
+	// it opens.
+	readOnly bool
 }
 
 // NewClient returns a Client without connecting. The first command opens the connection,
@@ -326,6 +357,11 @@ func (c *Client) handshake(ctx context.Context, cn *conn) error {
 	}
 	if o.ClientName != "" {
 		if _, err := cn.exec(ctx, newCmd(3, cCLIENT).t(tSETNAME).s(o.ClientName)); err != nil {
+			return err
+		}
+	}
+	if c.readOnly {
+		if _, err := cn.exec(ctx, newCmd(1, cREADONLY)); err != nil {
 			return err
 		}
 	}

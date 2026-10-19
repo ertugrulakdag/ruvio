@@ -13,6 +13,31 @@ public enum SetMode
     IfExists = 2,
 }
 
+/// <summary>
+/// Where a cluster client sends read-only commands (those the server flags <c>readonly</c>, such as
+/// <c>GET</c>, <c>HGETALL</c> or <c>ZRANGE</c>). Replicas are found in <c>CLUSTER SLOTS</c>, which lists each
+/// shard's replicas after its primary. Replication is asynchronous: a read from a replica may miss recent
+/// writes, including the caller's own. Writes, transactions, blocking commands, Pub/Sub and any pipeline that
+/// holds a write always go to the primaries.
+/// </summary>
+public enum ReadPolicy
+{
+    /// <summary>Every command goes to the slot's primary, as before replicas were listed.</summary>
+    Primary = 0,
+
+    /// <summary>
+    /// Reads go to one replica of the slot's shard when one is known and reachable, otherwise to the primary.
+    /// A replica that cannot be opened, or answers <c>LOADING</c>, is skipped until the slot map is reloaded.
+    /// </summary>
+    PreferReplica = 1,
+
+    /// <summary>
+    /// Reads go to a replica of the slot's shard; with none known or reachable they fail with a
+    /// <see cref="RuvioException"/>.
+    /// </summary>
+    Replica = 2,
+}
+
 /// <summary>Where to connect, and an optional password sent as <c>AUTH</c>.</summary>
 public sealed class RuvioClientOptions
 {
@@ -97,6 +122,12 @@ public sealed class RuvioClientOptions
     /// Return null to stop. When this is set, <see cref="MaxReconnectAttempts"/> is not applied.
     /// </summary>
     public Func<int, TimeSpan?>? ReconnectDelay { get; set; }
+
+    /// <summary>
+    /// Where a cluster client sends read-only commands; see <see cref="ReadPolicy"/>. A standalone connection
+    /// ignores it. Defaults to <see cref="ReadPolicy.Primary"/>.
+    /// </summary>
+    public ReadPolicy ReadPolicy { get; set; } = ReadPolicy.Primary;
 }
 
 /// <summary>Reads and checks the <c>host:port</c> entries of <see cref="RuvioClientOptions.Seeds"/>.</summary>

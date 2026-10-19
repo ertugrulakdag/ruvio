@@ -89,10 +89,17 @@ fn evented_cluster_discovery_reports_shards_and_the_advertised_port() {
     assert!(info.contains("cluster_state:ok\r\n"), "{info}");
     assert!(info.contains("cluster_known_nodes:2\r\n"), "{info}");
     assert!(info.contains("cluster_my_epoch:2\r\n"), "{info}");
-    assert!(
-        info.contains("$40\r\n0000000000000000000000000000000000000002\r\n"),
-        "{info}"
-    );
+    // A node's id is the SHA-1 of the address it is announced on: shard 1 is on 17001.
+    let id: String = {
+        use sha1::{Digest, Sha1};
+
+        Sha1::digest(b"127.0.0.1:17001")
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    };
+
+    assert!(info.contains(&format!("$40\r\n{id}\r\n")), "{info}");
     assert!(info.ends_with(":3443\r\n+OK\r\n+OK\r\n"), "{info}");
 
     let shards = String::from_utf8(request(left_addr, &resp(&[&[b"CLUSTER", b"SHARDS"]]))).unwrap();
