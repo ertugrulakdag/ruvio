@@ -45,6 +45,10 @@ const VERSION_MISMATCH: &str =
 pub const READONLY_LINE: &[u8] = b"READONLY You can't write against a read only replica.";
 pub const FENCED_LINE: &[u8] =
     b"READONLY This primary was replaced: a replica has followed a newer epoch.";
+pub const NOREPLICAS_LINE: &[u8] = b"NOREPLICAS Not enough good replicas to write.";
+/// A replica that has nothing new to acknowledge repeats its last acknowledgement this
+/// often, so a primary can tell a quiet replica from a lost one (`min-replicas-max-lag`).
+pub const ACK_HEARTBEAT: Duration = Duration::from_secs(1);
 
 /// Whether a shard takes writes, and the error it answers when it does not. Read for every
 /// write command as one byte, like the role check it replaced.
@@ -55,6 +59,8 @@ pub enum WriteGate {
     Replica,
     /// A primary that learned a newer epoch exists: another primary replaced it.
     Fenced,
+    /// A primary with fewer recently acknowledging replicas than `min-replicas-to-write`.
+    NoReplicas,
 }
 
 impl WriteGate {
@@ -64,6 +70,7 @@ impl WriteGate {
             Self::Open => None,
             Self::Replica => Some(READONLY_LINE),
             Self::Fenced => Some(FENCED_LINE),
+            Self::NoReplicas => Some(NOREPLICAS_LINE),
         }
     }
 }
@@ -941,7 +948,8 @@ pub fn decode_ack(bytes: &[u8]) -> Option<u64> {
 
 /// Durable sequences reported by connected replicas. `SET` does not read this.
 pub struct DurableAcks {
-    slots: Mutex<Vec<Option<u64>>>,
+    /// Per connected replica: the sequence it reported and when it last reported.
+    slots: Mutex<Vec<Option<(u64, std::time::Instant)>>>,
     notify: tokio::sync::Notify,
 }
 
@@ -960,7 +968,7 @@ impl DurableAcks {
             slots.resize(index + 1, None);
         }
 
-        slots[index] = Some(0);
+        slots[index] = Some((0, std::time::Instant::now()));
     }
 
     pub fn observe(&self, index: usize, sequence: u64) {
@@ -970,10 +978,10 @@ impl DurableAcks {
             slots.resize(index + 1, None);
         }
 
-        let current = slots[index].unwrap_or(0);
+        let current = slots[index].map_or(0, |(sequence, _)| sequence);
 
+        slots[index] = Some((sequence.max(current), std::time::Instant::now()));
         if sequence > current {
-            slots[index] = Some(sequence);
             self.notify.notify_waiters();
         }
     }
@@ -993,8 +1001,18 @@ impl DurableAcks {
 
         slots
             .iter()
-            .filter(|slot| slot.is_some_and(|sequence| sequence >= target))
+            .filter(|slot| slot.is_some_and(|(sequence, _)| sequence >= target))
             .count() as u64
+    }
+
+    /// How many connected replicas acknowledged within `max_lag`.
+    pub fn fresh(&self, max_lag: Duration) -> usize {
+        let slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+
+        slots
+            .iter()
+            .filter(|slot| slot.is_some_and(|(_, at)| at.elapsed() <= max_lag))
+            .count()
     }
 
     pub async fn notified(&self) {
@@ -1894,6 +1912,8 @@ fn poll_acks(stream: &mut TcpStream, hold: &CursorHold, pending: &mut Vec<u8>) -
 
 struct AckSend {
     last: u64,
+    /// When `last` was sent: it is sent again after [`ACK_HEARTBEAT`].
+    sent_at: std::time::Instant,
     offset: usize,
     bytes: [u8; ACK_LEN],
     queued: bool,
@@ -1908,7 +1928,7 @@ impl AckSend {
                 .durable()
                 .load(Ordering::Acquire);
 
-            if durable == self.last {
+            if durable == self.last && self.sent_at.elapsed() < ACK_HEARTBEAT {
                 return;
             }
 
@@ -1925,6 +1945,7 @@ impl AckSend {
 
                 if self.offset == self.bytes.len() {
                     self.last = decode_ack(&self.bytes).unwrap_or(self.last);
+                    self.sent_at = std::time::Instant::now();
                     self.queued = false;
                 }
             }
@@ -2291,6 +2312,7 @@ fn read_primary(
     let _ = stream.set_write_timeout(Some(SHIPPER_POLL));
     let mut acks = AckSend {
         last: 0,
+        sent_at: std::time::Instant::now(),
         offset: 0,
         bytes: [0; ACK_LEN],
         queued: false,

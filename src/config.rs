@@ -42,6 +42,10 @@ pub struct ReplicationConfig {
     pub listen: Option<SocketAddr>,
     pub primary: Option<SocketAddr>,
     pub primary_name: Option<(String, u16)>,
+    /// A primary refuses writes while fewer replicas than this acknowledged within
+    /// `min_replicas_max_lag`; 0 turns the check off.
+    pub min_replicas_to_write: usize,
+    pub min_replicas_max_lag: Duration,
 }
 
 impl Default for ReplicationConfig {
@@ -51,6 +55,8 @@ impl Default for ReplicationConfig {
             listen: None,
             primary: None,
             primary_name: None,
+            min_replicas_to_write: 0,
+            min_replicas_max_lag: Duration::from_secs(10),
         }
     }
 }
@@ -480,6 +486,16 @@ impl AppConfig {
         if let Some(value) = get("RUVIO_REPLICATION_PRIMARY") {
             self.set_replication_primary(&value)?;
         }
+
+        apply_usize(
+            &get,
+            "RUVIO_MIN_REPLICAS_TO_WRITE",
+            &mut self.replication.min_replicas_to_write,
+        )?;
+        let mut max_lag = self.replication.min_replicas_max_lag.as_secs();
+
+        apply_u64(&get, "RUVIO_MIN_REPLICAS_MAX_LAG", &mut max_lag)?;
+        self.replication.min_replicas_max_lag = Duration::from_secs(max_lag);
 
         Ok(())
     }
@@ -983,6 +999,14 @@ impl AppConfig {
                 .into(),
             ),
             (
+                "min-replicas-to-write".into(),
+                self.replication.min_replicas_to_write.to_string(),
+            ),
+            (
+                "min-replicas-max-lag".into(),
+                self.replication.min_replicas_max_lag.as_secs().to_string(),
+            ),
+            (
                 "replication-listen".into(),
                 self.replication
                     .listen
@@ -1431,6 +1455,9 @@ struct ReplicationFileConfig {
     role: Option<ReplicationRole>,
     listen: Option<String>,
     primary: Option<String>,
+    min_replicas_to_write: Option<usize>,
+    /// Seconds, as Redis's `min-replicas-max-lag`.
+    min_replicas_max_lag: Option<u64>,
 }
 
 impl ReplicationFileConfig {
@@ -1456,6 +1483,14 @@ impl ReplicationFileConfig {
         if let Some(parsed) = primary {
             replication.primary = parsed.socket;
             replication.primary_name = parsed.name;
+        }
+
+        if let Some(count) = self.min_replicas_to_write {
+            replication.min_replicas_to_write = count;
+        }
+
+        if let Some(seconds) = self.min_replicas_max_lag {
+            replication.min_replicas_max_lag = Duration::from_secs(seconds);
         }
 
         Ok(())
@@ -2307,6 +2342,18 @@ fn overlay_config(table: &mut toml::Table, loaded: &AppConfig, effective: &AppCo
         &["replication", "primary"],
         &replication_primary_text(&loaded.replication),
         &replication_primary_text(&effective.replication),
+    );
+    sync_usize(
+        table,
+        &["replication", "min_replicas_to_write"],
+        loaded.replication.min_replicas_to_write,
+        effective.replication.min_replicas_to_write,
+    );
+    sync_u64(
+        table,
+        &["replication", "min_replicas_max_lag"],
+        loaded.replication.min_replicas_max_lag.as_secs(),
+        effective.replication.min_replicas_max_lag.as_secs(),
     );
 
     if loaded.security.requirepass != effective.security.requirepass {

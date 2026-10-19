@@ -130,6 +130,47 @@ pub(super) fn fence_if_replaced(state: &ShardState) {
     }
 }
 
+/// `min-replicas-to-write`: a primary shard refuses writes while fewer replicas than that
+/// acknowledged within `min-replicas-max-lag`, and takes them again once enough do. Checked
+/// on the maintenance tick, so the write path reads only the gate.
+pub(super) fn gate_on_replicas(state: &ShardState) {
+    use crate::replication::WriteGate;
+
+    let gate = state.write_gate.get();
+
+    if !matches!(gate, WriteGate::Open | WriteGate::NoReplicas)
+        || state.published_config.replication.role != crate::config::ReplicationRole::Primary
+    {
+        return;
+    }
+
+    let (wanted, max_lag) = state.live.with(|live| {
+        (
+            live.replication.min_replicas_to_write,
+            live.replication.min_replicas_max_lag,
+        )
+    });
+    let next = if wanted == 0 || state.durable_acks.fresh(max_lag) >= wanted {
+        WriteGate::Open
+    } else {
+        WriteGate::NoReplicas
+    };
+
+    if next != gate {
+        warn!(
+            wanted,
+            max_lag_secs = max_lag.as_secs(),
+            "{}",
+            if next == WriteGate::Open {
+                "enough replicas acknowledge again; taking writes"
+            } else {
+                "too few replicas acknowledge; refusing writes (min-replicas-to-write)"
+            }
+        );
+        state.write_gate.set(next);
+    }
+}
+
 /// The lineage this shard writes as a writer, settled before it accepts its first write: a
 /// shard promoted from replica forks here, at its last logged sequence.
 fn writer_lineage(state: &ShardState, shard_id: u32) -> io::Result<crate::replication::Lineage> {

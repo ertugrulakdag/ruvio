@@ -1210,6 +1210,7 @@ async fn serve_async(
             },
             _ = maintenance.tick() => {
                 fence_if_replaced(&state);
+                gate_on_replicas(&state);
                 let mut store = state.store.borrow_mut();
 
                 if !state.replica_incomplete.get() {

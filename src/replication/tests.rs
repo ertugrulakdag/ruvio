@@ -2234,3 +2234,19 @@ fn a_replica_does_not_follow_a_primary_below_the_epoch_it_followed() {
     assert_eq!((sent.history, sent.epoch), (followed.history, 5));
     assert_eq!(upstream_origin(directory.path(), 0), followed);
 }
+
+#[test]
+fn fresh_counts_connected_replicas_that_acknowledged_within_the_lag() {
+    let acks = DurableAcks::new();
+
+    assert_eq!(acks.fresh(Duration::from_secs(10)), 0);
+    acks.reserve(0);
+    acks.reserve(1);
+    // A repeated acknowledgement of the same sequence still counts as a sign of life.
+    acks.observe(1, 0);
+    assert_eq!(acks.fresh(Duration::from_secs(10)), 2);
+    assert_eq!(acks.fresh(Duration::ZERO), 0);
+    acks.clear(0);
+    assert_eq!(acks.fresh(Duration::from_secs(10)), 1);
+    assert_eq!(acks.reached(1), 0);
+}
