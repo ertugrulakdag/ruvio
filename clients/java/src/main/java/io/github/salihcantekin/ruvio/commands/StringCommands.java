@@ -171,7 +171,7 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
 
     /**
      * Sends the Ruvio command {@code SET key value IFGT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is greater than the stored integer (a watermark, a version, the highest bid).
-     * Any TTL is cleared unless {@code expiry} keeps or replaces it.
+     * Any TTL is cleared; use the overload with {@code SetOptions} to set one.
      *
      * <pre>{@code
      * boolean advanced = client.setIfGreater("watermark", 1_700_000_000L);
@@ -179,7 +179,6 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
      *
      * @param key the key to write
      * @param value the new number
-     * @param expiry the expiry to apply; only its expiry part is sent, any {@code NX}/{@code XX} condition is ignored
      * @return {@code true} when the value was written, {@code false} when the stored number is greater or equal
      * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-string; an error when the stored string is not an integer
      */
@@ -189,8 +188,6 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
 
     /**
      * Sends the Ruvio command {@code SET key value IFGT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is greater than the stored integer (a watermark, a version, the highest bid).
-     * Any TTL is cleared unless {@code expiry} keeps or replaces it.
-     *
      *
      * @param key the key to write
      * @param value the new number
@@ -205,7 +202,7 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
 
     /**
      * Sends the Ruvio command {@code SET key value IFLT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is smaller than the stored integer (the lowest price, the earliest deadline).
-     * Any TTL is cleared unless {@code expiry} keeps or replaces it.
+     * Any TTL is cleared; use the overload with {@code SetOptions} to set one.
      *
      * <pre>{@code
      * boolean lowered = client.setIfLess("best:price", 4_99L);
@@ -213,7 +210,6 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
      *
      * @param key the key to write
      * @param value the new number
-     * @param expiry the expiry to apply; only its expiry part is sent, any {@code NX}/{@code XX} condition is ignored
      * @return {@code true} when the value was written, {@code false} when the stored number is smaller or equal
      * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-string; an error when the stored string is not an integer
      */
@@ -223,8 +219,6 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
 
     /**
      * Sends the Ruvio command {@code SET key value IFLT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is smaller than the stored integer (the lowest price, the earliest deadline).
-     * Any TTL is cleared unless {@code expiry} keeps or replaces it.
-     *
      *
      * @param key the key to write
      * @param value the new number
