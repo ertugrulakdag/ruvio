@@ -1633,12 +1633,14 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
             pattern,
             count,
             type_name,
+            slot,
         } => Ok(scan_keys(
             shard,
             cursor,
             pattern.as_deref(),
             count,
             type_name.as_deref(),
+            slot,
         )),
         Command::DbSize => Ok(Response::Integer(shard.database_len() as i64)),
         Command::FlushDb => {
