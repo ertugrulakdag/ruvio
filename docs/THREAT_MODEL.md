@@ -157,9 +157,12 @@ default in the sample configuration (`127.0.0.1`). The handshake uses
 `replication_password` when set, otherwise `requirepass`, compared in constant
 time (`security::constant_time_eq`). A public replication listen without
 either secret refuses to start. A failed handshake sends a status and no WAL
-bytes. The stream is not encrypted and `tls_cert` does not apply to it: the
-replication password and every written value cross the network in the clear, so
-the port belongs on a private network or a tunnel. Failover is not implemented,
+bytes. With `replication.tls = false` (default) the stream is not encrypted and
+`tls_cert` alone does not apply to it: the replication password and every
+written value cross the network in the clear, so the port belongs on a private
+network or a tunnel. With `replication.tls = true` the link is TLS: the replica
+verifies the primary against `replication.tls_ca` and may present a client
+certificate. Failover is not implemented,
 and this port is not a cluster bus.
 
 A replica's handshake carries the client address it announces, and the primary

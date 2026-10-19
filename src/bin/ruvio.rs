@@ -454,7 +454,7 @@ fn operational_checks(config: &ruvio::AppConfig) -> Result<(), String> {
 
         if config.replication.leaves_the_host() {
             tracing::warn!(
-                "tls covers client connections only: replication traffic, including the replication password, is not encrypted; keep it on a private network or a tunnel"
+                "tls covers client connections only: replication traffic, including the replication password, is not encrypted; set replication.tls or keep it on a private network or a tunnel"
             );
         }
     }
