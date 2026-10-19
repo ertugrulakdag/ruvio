@@ -191,7 +191,16 @@ fn read_endpoint(port: u16, host: &[u8]) -> Result<Option<Endpoint>, FrameError>
 
     let host = std::str::from_utf8(host).map_err(|_| "client host is not UTF-8")?;
 
-    Ok(announceable_host(host).then(|| Endpoint {
+    if !announceable_host(host) {
+        warn!(
+            host = host.escape_debug().to_string(),
+            "announced client host is not a host name or address; not listed"
+        );
+
+        return Ok(None);
+    }
+
+    Ok(Some(Endpoint {
         host: host.to_owned(),
         port,
     }))

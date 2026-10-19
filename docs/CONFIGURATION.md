@@ -496,7 +496,10 @@ sequence and repeats its last acknowledgement every second while idle. The shard
 checks this every 100 ms, so a lost replica is noticed up to that much after the
 lag runs out, and writes resume on the next check after enough replicas
 acknowledge. It bounds how long a primary cut off from its replicas keeps taking
-writes another primary will not have; it is not a synchronous write. Both change
+writes another primary will not have; it is not a synchronous write. A replica
+that installs a full copy acknowledges nothing until it has caught up, so with a
+single replica and `min-replicas-to-write 1` the primary refuses writes while that
+replica resyncs, as in Redis. Both change
 with `CONFIG SET`. Only role `primary` applies them.
 
 **Replicas in the topology.** A replica sends its primary the address clients

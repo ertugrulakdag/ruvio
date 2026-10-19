@@ -339,6 +339,11 @@ pub(super) fn promote(state: &ShardState, shard_id: u32, force: bool) -> io::Res
     *state.replica_reader.borrow_mut() = None;
     while drain_replicated_budget(state, REPLICA_DRAIN_BUDGET) > 0 {}
     *state.replica_frames.borrow_mut() = None;
+    // A full copy queued and dropped here never runs, so whether this shard still copies is
+    // what its incomplete flag says, not what the reader last announced.
+    state
+        .replica_link
+        .set_copying(state.replica_incomplete.get());
     state.replica_link.mark_down();
 
     if state.replica_incomplete.get() {
@@ -399,6 +404,11 @@ pub(super) fn demote(
     drop(state.replication.borrow_mut().take());
     *state.replica_reader.borrow_mut() = None;
     *state.replica_frames.borrow_mut() = None;
+    // A full copy queued and dropped here never runs, so whether this shard still copies is
+    // what its incomplete flag says, not what the reader last announced.
+    state
+        .replica_link
+        .set_copying(state.replica_incomplete.get());
 
     let data_dir = &state.published_config.persistence.data_dir;
 
