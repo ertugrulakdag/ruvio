@@ -30,6 +30,33 @@ What the six clients do when a cluster redirects, a command spans slots, or a so
 | Reconnect with seeds (standalone) | Each reconnect attempt tries every seed once, starting with the seed after the address that dropped and ending with that address; the reconnect backoff runs between attempts, as with one address. The command that hit the drop still fails. A subscriber socket opened later starts at the address the command socket is on |
 | Slot map reload (cluster) | `CLUSTER SLOTS` comes from the first reachable seed. A reload asks the nodes that have an open socket first; when none answers, it opens every other known node and then every seed, one connect attempt each, until one returns a slot map. A node that cannot be opened again (after its reconnect attempts) triggers that reload, and the command goes to the owner the new map names; a keyless command whose node is gone goes to the first reachable node of the new map. Seeds are never asked while the known nodes answer, so the routing path does not change |
 
+## Reads from replicas
+
+A cluster client can send read-only commands to replicas. The server lists each shard's replicas after its primary in `CLUSTER SLOTS` once they have finished copying (see [CONFIGURATION.md](CONFIGURATION.md)); the clients read them from there. Standalone connections ignore the policy.
+
+| Topic | Behavior |
+| --- | --- |
+| Policies | `primary` (the default): every command goes to the slot's primary, as before. `prefer-replica`: reads go to a replica of the slot's shard when one is known and reachable, otherwise to the primary. `replica`: reads go to a replica; with none known or reachable they fail with the client's own error and a message containing "no replica" |
+| Which commands are reads | Commands the server flags `readonly` and not `blocking` (from `testdata/commands.json`), such as `GET`, `MGET`, `HGETALL`, `ZRANGE`, `EXISTS`. Writes, keyless commands, transactions (`MULTI`/`EXEC`/`WATCH`), blocking commands, scripts, Pub/Sub, `SCAN` and the commands sent to every node stay on the primaries |
+| Which replica | When the slot map loads, the client picks one replica per shard at random and keeps it until the next load, so many clients spread over the replicas while each client reads from one per shard |
+| Split commands | Each per-slot part follows the same rule: `MGET` and `EXISTS` parts go to replicas, `DEL` and `MSET` parts to primaries |
+| Pipelines | A pipeline goes to replicas only when every command in it is a read; a pipeline with a write is routed as before, so it never reads its own writes from a replica that has not received them |
+| `READONLY` | Sent once on every replica connection right after it opens (and after a reconnect). Ruvio replicas serve reads without it; Redis replicas need it |
+| Fallback | A replica that cannot be connected, or answers `LOADING` (still copying), is skipped until the next slot map load; under `prefer-replica` the command goes to the primary, under `replica` it fails (a `LOADING` reply is returned). A socket that drops after a command was sent fails the command, as for every node |
+| Staleness | Replication is asynchronous: a read from a replica may miss writes the primary already acknowledged, including the caller's own. `CLIENT TRACKING` on a replica connection invalidates when the write reaches that replica |
+| Cost when unused | With `primary` the routing path does the same work as before plus one comparison of the policy; no replica connection is opened |
+
+| Client | Option |
+| --- | --- |
+| Rust | `ClientOptions::read_policy`, `ReadPolicy::{Primary, PreferReplica, Replica}` |
+| C# | `RuvioClientOptions.ReadPolicy`, `ReadPolicy.{Primary, PreferReplica, Replica}` |
+| Go | `Options.ReadPolicy`, `ReadPrimary`, `ReadPreferReplica`, `ReadReplica` |
+| Java | `RuvioOptions.Builder.readPolicy(ReadPolicy.{PRIMARY, PREFER_REPLICA, REPLICA})` |
+| Node | `readPolicy: "primary" \| "prefer-replica" \| "replica"` |
+| Python | `read_policy=ReadPolicy.{PRIMARY, PREFER_REPLICA, REPLICA}` or `"primary"`, `"prefer-replica"`, `"replica"` |
+
+The live tests start a 2-shard primary and its 2-shard replica (`RUVIO_REPLICATED_ADDR`, `RUVIO_REPLICA_ADDR` from `scripts/run_with_servers.sh`) and check through the replica's `INFO get_commands` that a read went to the replica.
+
 ## Differences
 
 | Topic | Rust | C# | Go | Java | Node | Python |
