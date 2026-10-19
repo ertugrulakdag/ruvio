@@ -30,7 +30,16 @@ pub fn execute_transaction<C: Clock, I: StorageIndex, S: MutationSink, W: ListWa
     commands: Vec<Command<'static>>,
     database: u8,
 ) -> Result<Response<'static>, S::Error> {
-    execute_transaction_in(shard, sink, waiters, conn, commands, database, true)
+    execute_transaction_in(shard, sink, waiters, conn, commands, database, true, None)
+}
+
+/// What a queued `EVAL`, `EVALSHA` or `FCALL` runs with: the connection's script cache, the
+/// running limits, and the ACL rules each script's calls are checked against (none when the
+/// user may run every command on every key).
+pub struct TransactionScripts<'a> {
+    pub cache: &'a mut crate::script::ScriptCache,
+    pub limits: crate::config::ScriptLimits,
+    pub rules: Option<std::sync::Arc<crate::acl::AclRules>>,
 }
 
 /// Runs a queued transaction. `enforce_slots` is off when this shard owns every slot, so
@@ -44,6 +53,7 @@ pub fn execute_transaction_in<C: Clock, I: StorageIndex, S: MutationSink, W: Lis
     commands: Vec<Command<'static>>,
     database: u8,
     enforce_slots: bool,
+    mut scripts: Option<TransactionScripts<'_>>,
 ) -> Result<Response<'static>, S::Error> {
     if shard.watches_dirty(conn) {
         shard.unwatch(conn);
@@ -86,6 +96,33 @@ pub fn execute_transaction_in<C: Clock, I: StorageIndex, S: MutationSink, W: Lis
         if rolls_back {
             capture_undo(shard, &command, &mut undo, database);
         }
+
+        // A script runs in its place, its writes joining the batch's one record; a script
+        // touches only the keys it declares, which the undo log copied above.
+        if let Command::Eval { .. } | Command::EvalSha { .. } | Command::FCall { .. } = command {
+            let response = match scripts.as_mut() {
+                Some(scripts) => {
+                    scripts.cache.restrict_next_script(scripts.rules.clone());
+                    match crate::script::execute_script_command(
+                        shard,
+                        &mut collected,
+                        waiters,
+                        scripts.cache,
+                        scripts.limits,
+                        command,
+                        database,
+                    ) {
+                        Ok(response) => response,
+                        Err(error) => match error {},
+                    }
+                }
+                None => Response::Error(b"ERR script command requires a connection"),
+            };
+
+            responses.push(response);
+            continue;
+        }
+
         match execute_in_database(shard, command, &mut collected, waiters, database) {
             Ok(response) => responses.push(response.into_owned()),
             Err(error) => match error {},
