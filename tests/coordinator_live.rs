@@ -1,0 +1,356 @@
+//! `ruvio coordinator` against real data nodes: three coordinators fail a replication group
+//! over when its primary dies, bring the old primary back as a replica, keep their agreement
+//! across a restart, and do nothing without a majority. Network partitions and loss under
+//! load are in `scripts/coordinator_faults.py`.
+
+#![cfg(feature = "coordinator")]
+
+mod common;
+
+use std::{
+    net::SocketAddr,
+    path::Path,
+    process::{Child, Command, Stdio},
+    time::{Duration, Instant},
+};
+
+use std::io::{BufRead, BufReader, Write};
+
+use common::test_ports;
+
+const PATIENCE: Duration = Duration::from_secs(30);
+const SECRET: &str = "coordinator-test-secret";
+
+struct Process(Child);
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+impl Process {
+    fn kill(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+struct Group {
+    resp: Vec<SocketAddr>,
+    replication: Vec<SocketAddr>,
+    coordinators: Vec<SocketAddr>,
+    _ports: (test_ports::PortBlock, test_ports::PortBlock),
+}
+
+impl Group {
+    fn new() -> Self {
+        let data = test_ports::reserve();
+        let replication = test_ports::reserve();
+
+        Self {
+            resp: (0..3).map(|index| data.address_at(index)).collect(),
+            replication: (0..3).map(|index| replication.address_at(index)).collect(),
+            coordinators: (3..6).map(|index| data.address_at(index)).collect(),
+            _ports: (data, replication),
+        }
+    }
+
+    fn node(&self, dir: &Path, index: usize, follow: Option<usize>) -> Process {
+        let data_dir = dir.join(format!("node{index}"));
+        let config = dir.join(format!("node{index}.toml"));
+
+        if !config.exists() {
+            std::fs::copy(
+                concat!(env!("CARGO_MANIFEST_DIR"), "/ruvio.example.toml"),
+                &config,
+            )
+            .unwrap();
+        }
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ruvio"));
+
+        command
+            .arg("--config")
+            .arg(&config)
+            .args(["--address", &self.resp[index].to_string()])
+            .args(["--durability", "always", "--data-dir"])
+            .arg(&data_dir)
+            .env(
+                "RUVIO_REPLICATION_LISTEN",
+                self.replication[index].to_string(),
+            )
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        match follow {
+            Some(primary) => command.env("RUVIO_REPLICATION_ROLE", "replica").env(
+                "RUVIO_REPLICATION_PRIMARY",
+                self.replication[primary].to_string(),
+            ),
+            None => command.env("RUVIO_REPLICATION_ROLE", "primary"),
+        };
+        let process = Process(command.spawn().unwrap());
+
+        wait_until("a data node to answer", || {
+            ping(&self.resp[index].to_string())
+        });
+        process
+    }
+
+    fn coordinator(&self, dir: &Path, index: usize) -> Process {
+        let config = dir.join(format!("coordinator{index}.toml"));
+        let peers = self
+            .coordinators
+            .iter()
+            .enumerate()
+            .map(|(id, address)| format!("\"{}@{address}\"", id + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let members = (0..3)
+            .map(|node| {
+                format!(
+                    "  {{ address = \"{}\", replication = \"{}\" }}",
+                    self.resp[node], self.replication[node]
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",\n");
+
+        std::fs::write(
+            &config,
+            format!(
+                "id = {}\nlisten = \"{}\"\ndata_dir = \"{}\"\npeers = [{peers}]\nsecret = \"{SECRET}\"\n\
+                 ping_interval_ms = 200\ndown_after_ms = 1000\n\n[[groups]]\nname = \"main\"\n\
+                 members = [\n{members}\n]\n",
+                index + 1,
+                self.coordinators[index],
+                dir.join(format!("coordinator{index}")).display(),
+            ),
+        )
+        .unwrap();
+
+        Process(
+            Command::new(env!("CARGO_BIN_EXE_ruvio"))
+                .arg("coordinator")
+                .arg("--config")
+                .arg(&config)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        )
+    }
+
+    /// The primary coordinator `index` names, as an index into the data nodes.
+    fn primary_by(&self, index: usize) -> Option<usize> {
+        let reply = call_with_secret(
+            &self.coordinators[index].to_string(),
+            &["SENTINEL", "get-master-addr-by-name", "main"],
+        )?;
+        let port: u16 = reply.split_whitespace().nth(1)?.parse().ok()?;
+
+        self.resp.iter().position(|address| address.port() == port)
+    }
+}
+
+/// One command on a fresh connection, its reply as text: simple strings, errors and bulk
+/// strings as they are, an array as its items joined by spaces; `None` when nothing answers.
+fn call(address: &str, args: &[&str]) -> Option<String> {
+    let mut stream =
+        std::net::TcpStream::connect_timeout(&address.parse().ok()?, Duration::from_millis(300))
+            .ok()?;
+    let mut frame = format!("*{}\r\n", args.len());
+
+    for arg in args {
+        frame.push_str(&format!("${}\r\n{arg}\r\n", arg.len()));
+    }
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    stream.write_all(frame.as_bytes()).ok()?;
+    read_reply(&mut BufReader::new(stream))
+}
+
+/// `AUTH` with the coordinators' secret, then `args`, on one connection.
+fn call_with_secret(address: &str, args: &[&str]) -> Option<String> {
+    let mut stream =
+        std::net::TcpStream::connect_timeout(&address.parse().ok()?, Duration::from_millis(300))
+            .ok()?;
+    let frame = |args: &[&str]| {
+        let mut frame = format!("*{}\r\n", args.len());
+
+        for arg in args {
+            frame.push_str(&format!("${}\r\n{arg}\r\n", arg.len()));
+        }
+        frame
+    };
+
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    stream
+        .write_all((frame(&["AUTH", SECRET]) + &frame(args)).as_bytes())
+        .ok()?;
+    let mut reader = BufReader::new(stream);
+
+    (read_reply(&mut reader)? == "OK").then_some(())?;
+    read_reply(&mut reader)
+}
+
+fn read_reply(reader: &mut impl BufRead) -> Option<String> {
+    let mut line = String::new();
+
+    reader.read_line(&mut line).ok()?;
+    let line = line.trim_end();
+    let rest = line.get(1..)?;
+
+    match line.as_bytes().first()? {
+        b'+' | b'-' | b':' => Some(rest.to_owned()),
+        b'$' if rest.starts_with('-') => Some("(nil)".into()),
+        b'$' => {
+            let mut body = vec![0; rest.parse::<usize>().ok()? + 2];
+
+            reader.read_exact(&mut body).ok()?;
+            body.truncate(body.len() - 2);
+            String::from_utf8(body).ok()
+        }
+        b'*' if rest.starts_with('-') => Some("(nil)".into()),
+        b'*' => (0..rest.parse::<usize>().ok()?)
+            .map(|_| read_reply(reader))
+            .collect::<Option<Vec<_>>>()
+            .map(|items| items.join(" ")),
+        _ => None,
+    }
+}
+
+fn ping(address: &str) -> bool {
+    call(address, &["PING"]).as_deref() == Some("PONG")
+}
+
+#[track_caller]
+fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + PATIENCE;
+
+    while Instant::now() < deadline {
+        if done() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("gave up after {PATIENCE:?} waiting for {what}");
+}
+
+#[test]
+fn coordinators_fail_over_a_dead_primary_and_bring_it_back_as_a_replica() {
+    let dir = tempfile::tempdir().unwrap();
+    let group = Group::new();
+    let mut nodes = [
+        group.node(dir.path(), 0, None),
+        group.node(dir.path(), 1, Some(0)),
+        group.node(dir.path(), 2, Some(0)),
+    ];
+    let primary = group.resp[0].to_string();
+
+    assert_eq!(
+        call(&primary, &["SET", "before", "1"]).as_deref(),
+        Some("OK")
+    );
+    wait_until("the replicas to copy the primary", || {
+        (1..3).all(|node| {
+            call(&group.resp[node].to_string(), &["GET", "before"]).as_deref() == Some("1")
+        })
+    });
+    let mut coordinators: Vec<Process> = (0..3)
+        .map(|index| group.coordinator(dir.path(), index))
+        .collect();
+
+    wait_until("the coordinators to agree on the primary", || {
+        (0..3).all(|index| group.primary_by(index) == Some(0))
+    });
+    // The Sentinel API needs the secret.
+    let coordinator = group.coordinators[0].to_string();
+
+    assert!(
+        call(&coordinator, &["SENTINEL", "masters"])
+            .unwrap()
+            .starts_with("NOAUTH")
+    );
+    assert!(
+        call(&coordinator, &["AUTH", "wrong"])
+            .unwrap()
+            .starts_with("WRONGPASS")
+    );
+
+    // The primary dies: a replica takes over and the other follows it.
+    nodes[0].kill();
+    let killed = Instant::now();
+
+    wait_until("a failover", || {
+        group.primary_by(0).is_some_and(|node| node != 0)
+    });
+    let promoted = group.primary_by(0).unwrap();
+    let other = 3 - promoted;
+
+    wait_until("the new primary to take writes", || {
+        call(&group.resp[promoted].to_string(), &["SET", "after", "1"]).as_deref() == Some("OK")
+    });
+    assert!(
+        killed.elapsed() < Duration::from_secs(15),
+        "failover took {:?}",
+        killed.elapsed()
+    );
+    wait_until("the other replica to follow the new primary", || {
+        call(&group.resp[other].to_string(), &["GET", "after"]).as_deref() == Some("1")
+    });
+    assert_eq!(group.primary_by(1), Some(promoted));
+    assert_eq!(group.primary_by(2), Some(promoted));
+
+    // The old primary returns as a writer and is made a replica of the new one.
+    nodes[0] = group.node(dir.path(), 0, None);
+    wait_until("the old primary to follow the new one", || {
+        call(&primary, &["GET", "after"]).as_deref() == Some("1")
+    });
+    assert!(
+        call(&primary, &["SET", "late", "1"])
+            .unwrap()
+            .starts_with("READONLY")
+    );
+
+    // The coordinators keep their agreement across a restart.
+    coordinators.clear();
+    let _coordinators: Vec<Process> = (0..3)
+        .map(|index| group.coordinator(dir.path(), index))
+        .collect();
+
+    wait_until(
+        "the restarted coordinators to report the new primary",
+        || (0..3).all(|index| group.primary_by(index) == Some(promoted)),
+    );
+}
+
+#[test]
+fn one_coordinator_without_a_majority_does_not_fail_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let group = Group::new();
+    let mut nodes = [
+        group.node(dir.path(), 0, None),
+        group.node(dir.path(), 1, Some(0)),
+        group.node(dir.path(), 2, Some(0)),
+    ];
+    let mut coordinators: Vec<Process> = (0..3)
+        .map(|index| group.coordinator(dir.path(), index))
+        .collect();
+
+    wait_until("the coordinators to agree on the primary", || {
+        (0..3).all(|index| group.primary_by(index) == Some(0))
+    });
+    coordinators[1].kill();
+    coordinators[2].kill();
+    nodes[0].kill();
+    // Several times down_after_ms: a lone coordinator must not act.
+    std::thread::sleep(Duration::from_secs(4));
+    assert_eq!(group.primary_by(0), Some(0));
+    for node in 1..3 {
+        assert!(
+            call(&group.resp[node].to_string(), &["SET", "x", "1"])
+                .unwrap()
+                .starts_with("READONLY")
+        );
+    }
+}

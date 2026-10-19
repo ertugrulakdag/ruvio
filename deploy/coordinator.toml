@@ -1,0 +1,22 @@
+# One coordinator of three (or five), for a binary install; see docs/COORDINATOR.md.
+# Copy to /etc/ruvio/coordinator.toml on each coordinator machine and change `id` and `listen`.
+# Run with: ruvio coordinator --config /etc/ruvio/coordinator.toml (deploy/ruvio-coordinator.service).
+id = 1
+listen = "10.0.0.1:26400"
+data_dir = "/var/lib/ruvio-coordinator"
+peers = ["1@10.0.0.1:26400", "2@10.0.0.2:26400", "3@10.0.0.3:26400"]
+# The same on every coordinator. RUVIO_COORDINATOR_SECRET overrides it.
+secret = "change-me"
+ping_interval_ms = 500
+down_after_ms = 3000
+# How coordinators log in to the data nodes (requirepass, or "user password").
+auth = "data-node-password"
+
+[[groups]]
+name = "main"
+# address: the RESP address clients use; replication: the node's replication.listen.
+members = [
+  { address = "10.0.0.1:6379", replication = "10.0.0.1:26379" },
+  { address = "10.0.0.2:6379", replication = "10.0.0.2:26379" },
+  { address = "10.0.0.3:6379", replication = "10.0.0.3:26379" },
+]
