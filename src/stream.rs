@@ -677,7 +677,11 @@ impl StreamValue {
             return (now_millis, 0);
         }
 
-        (self.last_millis, self.last_sequence.saturating_add(1))
+        match self.last_sequence.checked_add(1) {
+            Some(sequence) => (self.last_millis, sequence),
+            // The sequence is used up: continue in the next millisecond, as Redis does.
+            None => (self.last_millis.saturating_add(1), 0),
+        }
     }
 
     pub(crate) fn delete(&mut self, millis: u64, sequence: u64) -> bool {
