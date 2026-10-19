@@ -1161,3 +1161,44 @@ fn live_changes_apply_together_or_not_at_all() {
         assert!(message.contains(error), "{message}");
     }
 }
+
+/// Both tables of `docs/CONFIGURATION.md` agree with `LIVE_SETTINGS`: the `CONFIG SET` column
+/// of the environment table names each live setting once and says `no` for every other
+/// row, and the table under *Changing settings at runtime* lists each live setting once.
+#[test]
+fn the_configuration_tables_show_every_live_setting() {
+    let docs = include_str!("../../docs/CONFIGURATION.md");
+    let mut in_environment = Vec::new();
+    let mut in_runtime = Vec::new();
+
+    let runtime = docs
+        .split("## Changing settings at runtime")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .unwrap();
+
+    for row in docs.lines().filter(|line| line.starts_with("| `RUVIO_")) {
+        match row.split('|').nth(2).unwrap().trim() {
+            "no" => {}
+            cell => in_environment.push(cell.trim_matches('`')),
+        }
+    }
+
+    // Rows of the runtime table, after its header row.
+    for row in runtime
+        .lines()
+        .filter(|line| line.starts_with("| `"))
+        .skip(1)
+    {
+        in_runtime.push(row.split('|').nth(1).unwrap().trim().trim_matches('`'));
+    }
+
+    for shown in [&in_environment, &in_runtime] {
+        let mut sorted = shown.clone();
+        let mut live = super::LIVE_SETTINGS.to_vec();
+
+        sorted.sort_unstable();
+        live.sort_unstable();
+        assert_eq!(sorted, live);
+    }
+}

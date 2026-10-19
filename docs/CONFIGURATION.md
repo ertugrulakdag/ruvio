@@ -8,7 +8,10 @@ Ruvio resolves settings in this order:
 4. explicit command-line options.
 
 All merged settings and cross-field relationships are validated before a
-listener is opened. Unknown TOML fields are rejected.
+listener is opened. Unknown TOML fields are rejected. Which settings also
+change while the server runs, and under which `CONFIG SET` name, is listed in
+[Changing settings at runtime](#changing-settings-at-runtime) and in the
+`CONFIG SET` column of the [environment table](#environment-variables).
 
 ```toml
 address = "127.0.0.1:6379"
@@ -107,12 +110,12 @@ which writes the effective values back into it at startup, so a process started
 with `--shards 3` never changes what the next process reads. The file is not
 watched: an edit applies only on the next start.
 Shard count, bind address, and durability cannot change under a live process;
-the settings marked *Live* below can, with `CONFIG SET`.
+the settings listed under *Changing settings at runtime* can.
 
 ## Changing settings at runtime
 
-`CONFIG SET name value [name value ...]` changes the settings marked *Live* in
-the table below while the server runs. Names are the ones `CONFIG GET` shows
+`CONFIG SET name value [name value ...]` changes the settings in the table
+below while the server runs. Names are the ones `CONFIG GET` shows
 (`maxmemory`, `slowlog-log-slower-than`, `max-connections`, `script-max-time-ms`,
 `requirepass`, and so on); values follow the same rules as the file and the
 environment, so byte counts are plain numbers and booleans are `yes`/`no`.
@@ -122,6 +125,43 @@ CONFIG SET maxmemory 1073741824 maxmemory-policy allkeys-lru
 CONFIG GET maxmemory*
 CONFIG REWRITE
 ```
+
+These are all the settings that change while the server runs; every other
+setting takes a restart.
+
+| `CONFIG SET` name | File setting | Takes effect |
+| --- | --- | --- |
+| `maxmemory` | `memory.max_process_bytes` | at once |
+| `max-shard-bytes` | `memory.max_shard_bytes` | at once |
+| `memory-headroom-bytes` | `memory.reserved_headroom_bytes` | at once |
+| `maxmemory-policy` | `memory.maxmemory_policy` | at once |
+| `maxmemory-samples` | `memory.maxmemory_samples` | next eviction |
+| `active-expire-keys` | `memory.active_expire_keys` | next expiry cycle |
+| `active-expire-maintenance-keys` | `memory.active_expire_maintenance_keys` | next expiry cycle |
+| `hash-max-compact-entries` | `memory.hash_max_compact_entries` | when the collection next grows |
+| `hash-max-compact-value-bytes` | `memory.hash_max_compact_value_bytes` | when the collection next grows |
+| `set-max-intset-entries` | `memory.set_max_intset_entries` | when the collection next grows |
+| `list-max-compact-entries` | `memory.list_max_compact_entries` | when the collection next grows |
+| `list-max-compact-value-bytes` | `memory.list_max_compact_value_bytes` | when the collection next grows |
+| `notify-keyspace-events` | `notify_keyspace_events` | next write |
+| `slowlog-log-slower-than` | `slowlog_threshold_micros` | next command |
+| `slowlog-max-len` | `slowlog_max_len` | at once |
+| `key-stats` | `key_stats` | next command |
+| `latency-histograms` | `latency_histograms` | next command |
+| `idle-timeout-ms` | `timeouts.idle_ms` | new connections |
+| `read-timeout-ms` | `timeouts.read_ms` | new connections |
+| `write-timeout-ms` | `timeouts.write_ms` | new connections |
+| `max-connections` | `connections.max_global` | next accept |
+| `max-connections-per-ip` | `connections.max_per_ip` | next accept |
+| `max-connections-per-user` | `connections.max_per_user` | next login |
+| `max-commands-per-second` | `connections.max_commands_per_second` | new connections |
+| `max-output-buffer-bytes` | `requests.max_output_buffer_bytes` | new connections |
+| `script-max-bytes` | `scripts.max_bytes` | next script |
+| `script-max-cached` | `scripts.max_cached` | next script |
+| `script-max-calls` | `scripts.max_calls` | next script |
+| `script-max-instructions` | `scripts.max_instructions` | next script |
+| `script-max-time-ms` | `scripts.max_time_ms` | next script |
+| `requirepass` | `security.requirepass` | next login |
 
 - One call changes all its pairs or none. An unknown name, a name given twice,
   a restart-only name, or a value that does not parse or validate fails the
@@ -176,82 +216,82 @@ Persistence timing (`snapshot_interval_ms`, `snapshot_min_mutations`,
 
 Each variable overrides one file setting, and a command-line flag, where there is one, overrides the variable. Booleans accept `1`/`0`, `true`/`false`, `yes`/`no` and `on`/`off`; durations are milliseconds.
 
-| Variable | Flag | File setting | Live | Notes |
+| Variable | `CONFIG SET` | Flag | File setting | Notes |
 | --- | --- | --- | --- | --- |
-| `RUVIO_ADDR` | `--address` | `address` | | |
-| `RUVIO_SHARDS` | `--shards` | `shards` | | |
-| `RUVIO_PORT_MODE` | | `port_mode` | | |
-| `RUVIO_ADVERTISE_HOST` | `--advertised-host` | `advertised_host` | | |
-| `RUVIO_ADVERTISE_PORT` | `--advertised-port` | `advertised_port` | | |
-| `RUVIO_CPUSET` | `--cpu-set` | `cpu_set` | | |
-| `RUVIO_CORE` | | `cpu_set` | | Older name; read only when `RUVIO_CPUSET` is unset |
-| `RUVIO_SHUTDOWN_GRACE_MS` | `--shutdown-grace-ms` | `shutdown_grace_ms` | | |
-| `RUVIO_SLOWLOG_THRESHOLD_MICROS` | | `slowlog_threshold_micros` | yes | |
-| `RUVIO_SLOWLOG_MAX_LEN` | | `slowlog_max_len` | yes | |
-| `RUVIO_LATENCY_HISTOGRAMS` | | `latency_histograms` | yes | |
-| `RUVIO_KEY_STATS` | | `key_stats` | yes | |
-| `RUVIO_MAX_ARGUMENTS` | | `protocol.max_arguments` | | |
-| `RUVIO_MAX_KEY_BYTES` | | `protocol.max_key_bytes` | | |
-| `RUVIO_MAX_VALUE_BYTES` | | `protocol.max_value_bytes` | | |
-| `RUVIO_MAX_COMMAND_BYTES` | | `protocol.max_command_bytes` | | |
-| `RUVIO_MAX_PIPELINE_COMMANDS` | | `protocol.max_pipeline_commands` | | |
-| `RUVIO_MAX_CONNECTION_BUFFER_BYTES` | | `protocol.max_connection_buffer_bytes` | | |
-| `RUVIO_DATABASES` | | `protocol.databases` | | |
-| `RUVIO_IDLE_TIMEOUT_MS` | `--idle-timeout-ms` | `timeouts.idle_ms` | yes | |
-| `RUVIO_READ_TIMEOUT_MS` | `--read-timeout-ms` | `timeouts.read_ms` | yes | |
-| `RUVIO_WRITE_TIMEOUT_MS` | `--write-timeout-ms` | `timeouts.write_ms` | yes | |
-| `RUVIO_MAX_CONNECTIONS` | `--max-connections` | `connections.max_global` | yes | |
-| `RUVIO_MAX_CONNECTIONS_PER_IP` | `--max-connections-per-ip` | `connections.max_per_ip` | yes | |
-| `RUVIO_MAX_CONNECTIONS_PER_USER` | `--max-connections-per-user` | `connections.max_per_user` | yes | |
-| `RUVIO_MAX_COMMANDS_PER_SECOND` | `--max-commands-per-second` | `connections.max_commands_per_second` | yes | |
-| `RUVIO_MAX_QUEUED_REQUESTS` | `--max-queued-requests` | `requests.max_queued_requests` | | |
-| `RUVIO_MAX_OUTPUT_BUFFER_BYTES` | `--max-output-buffer-bytes` | `requests.max_output_buffer_bytes` | yes | |
-| `RUVIO_DURABILITY` | `--durability` | `persistence.profile` | | `memory`, `snapshot`, `everysec` or `always` |
-| `RUVIO_DATA_DIR` | `--data-dir` | `persistence.data_dir` | | |
-| `RUVIO_WAL_SEGMENT_BYTES` | `--wal-segment-bytes` | `persistence.wal_segment_bytes` | | |
-| `RUVIO_WAL_SYNC_INTERVAL_MS` | `--wal-sync-interval-ms` | `persistence.sync_interval_ms` | | |
-| `RUVIO_EXPERIMENTAL_SYNC_WORKER` | | `persistence.sync_worker` | | Older boolean form (`true` = `on`); `RUVIO_SYNC_WORKER` wins |
-| `RUVIO_SYNC_WORKER` | | `persistence.sync_worker` | | |
-| `RUVIO_WAL_PREFILL` | | | | `auto` (default), `on` or `off`. Linux only: zero-fill WAL segments ahead of the cursor on a helper thread. `auto` does it for `always` only; under `everysec` the zero-fill doubled the bytes a throughput-capped disk saw and halved SET throughput. `CONFIG GET wal-prefill` shows the mode |
-| `RUVIO_SNAPSHOT_MAX_BYTES` | `--snapshot-max-bytes` | `persistence.snapshot_max_bytes` | | |
-| `RUVIO_SNAPSHOT_JOURNAL_BYTES` | `--snapshot-journal-bytes` | `persistence.snapshot_journal_bytes` | | |
-| `RUVIO_SNAPSHOT_INTERVAL_MS` | `--snapshot-interval-ms` | `persistence.snapshot_interval_ms` | | |
-| `RUVIO_SNAPSHOT_MIN_MUTATIONS` | `--snapshot-min-mutations` | `persistence.snapshot_min_mutations` | | |
-| `RUVIO_CDC_RETAIN_BYTES` | | `persistence.cdc_retain_bytes` | | |
-| `RUVIO_REPLICA_RETAIN_MAX_BYTES` | | `persistence.replica_retain_max_bytes` | | |
-| `RUVIO_REQUIREPASS` | `--requirepass` | `security.requirepass` | yes | |
-| `RUVIO_TLS_CERT` | `--tls-cert` | `security.tls_cert` | | |
-| `RUVIO_TLS_KEY` | `--tls-key` | `security.tls_key` | | |
-| `RUVIO_TLS_CLIENT_CA` | `--tls-client-ca` | `security.tls_client_ca` | | |
-| `RUVIO_TLS_CLIENT_AUTH` | `--tls-client-auth` | `security.tls_client_auth` | | |
-| `RUVIO_ACL_FILE` | | `security.acl_file` | | |
-| `RUVIO_PROTECTED_MODE` | `--protected-mode` | `security.protected_mode` | | |
-| `RUVIO_ALLOW_UNAUTHENTICATED` | | `security.allow_unauthenticated_public` | | |
-| `RUVIO_METRICS_TOKEN` | | `security.metrics_token` | | |
-| `RUVIO_REPLICATION_PASSWORD` | | `security.replication_password` | | |
-| `RUVIO_MAXMEMORY` | `--maxmemory` | `memory.max_process_bytes` | yes | |
-| `RUVIO_MAX_SHARD_BYTES` | `--max-shard-bytes` | `memory.max_shard_bytes` | yes | |
-| `RUVIO_MEMORY_HEADROOM_BYTES` | `--memory-headroom-bytes` | `memory.reserved_headroom_bytes` | yes | |
-| `RUVIO_MAXMEMORY_POLICY` | `--maxmemory-policy` | `memory.maxmemory_policy` | yes | |
-| `RUVIO_MAXMEMORY_SAMPLES` | `--maxmemory-samples` | `memory.maxmemory_samples` | yes | |
-| `RUVIO_ACTIVE_EXPIRE_KEYS` | `--active-expire-keys` | `memory.active_expire_keys` | yes | |
-| `RUVIO_ACTIVE_EXPIRE_MAINTENANCE_KEYS` | `--active-expire-maintenance-keys` | `memory.active_expire_maintenance_keys` | yes | |
-| `RUVIO_HASH_MAX_COMPACT_ENTRIES` | `--hash-max-compact-entries` | `memory.hash_max_compact_entries` | yes | |
-| `RUVIO_HASH_MAX_COMPACT_VALUE_BYTES` | `--hash-max-compact-value-bytes` | `memory.hash_max_compact_value_bytes` | yes | |
-| `RUVIO_SET_MAX_INTSET_ENTRIES` | `--set-max-intset-entries` | `memory.set_max_intset_entries` | yes | |
-| `RUVIO_LIST_MAX_COMPACT_ENTRIES` | `--list-max-compact-entries` | `memory.list_max_compact_entries` | yes | |
-| `RUVIO_LIST_MAX_COMPACT_VALUE_BYTES` | `--list-max-compact-value-bytes` | `memory.list_max_compact_value_bytes` | yes | |
-| `RUVIO_NOTIFY_KEYSPACE_EVENTS` | | `notify_keyspace_events` | yes | |
-| `RUVIO_METRICS_ADDR` | `--metrics-address` | `metrics_address` | | |
-| `RUVIO_SCRIPT_MAX_BYTES` | | `scripts.max_bytes` | yes | |
-| `RUVIO_SCRIPT_MAX_CACHED` | | `scripts.max_cached` | yes | |
-| `RUVIO_SCRIPT_MAX_CALLS` | | `scripts.max_calls` | yes | |
-| `RUVIO_SCRIPT_MAX_INSTRUCTIONS` | | `scripts.max_instructions` | yes | |
-| `RUVIO_SCRIPT_MAX_TIME_MS` | | `scripts.max_time_ms` | yes | |
-| `RUVIO_HOT_KEYS` | | `hot_keys` | | Comma-separated globs |
-| `RUVIO_REPLICATION_ROLE` | | `replication.role` | | |
-| `RUVIO_REPLICATION_LISTEN` | | `replication.listen` | | |
-| `RUVIO_REPLICATION_PRIMARY` | | `replication.primary` | | |
+| `RUVIO_ADDR` | no | `--address` | `address` | |
+| `RUVIO_SHARDS` | no | `--shards` | `shards` | |
+| `RUVIO_PORT_MODE` | no | | `port_mode` | |
+| `RUVIO_ADVERTISE_HOST` | no | `--advertised-host` | `advertised_host` | |
+| `RUVIO_ADVERTISE_PORT` | no | `--advertised-port` | `advertised_port` | |
+| `RUVIO_CPUSET` | no | `--cpu-set` | `cpu_set` | |
+| `RUVIO_CORE` | no | | `cpu_set` | Older name; read only when `RUVIO_CPUSET` is unset |
+| `RUVIO_SHUTDOWN_GRACE_MS` | no | `--shutdown-grace-ms` | `shutdown_grace_ms` | |
+| `RUVIO_SLOWLOG_THRESHOLD_MICROS` | `slowlog-log-slower-than` | | `slowlog_threshold_micros` | |
+| `RUVIO_SLOWLOG_MAX_LEN` | `slowlog-max-len` | | `slowlog_max_len` | |
+| `RUVIO_LATENCY_HISTOGRAMS` | `latency-histograms` | | `latency_histograms` | |
+| `RUVIO_KEY_STATS` | `key-stats` | | `key_stats` | |
+| `RUVIO_MAX_ARGUMENTS` | no | | `protocol.max_arguments` | |
+| `RUVIO_MAX_KEY_BYTES` | no | | `protocol.max_key_bytes` | |
+| `RUVIO_MAX_VALUE_BYTES` | no | | `protocol.max_value_bytes` | |
+| `RUVIO_MAX_COMMAND_BYTES` | no | | `protocol.max_command_bytes` | |
+| `RUVIO_MAX_PIPELINE_COMMANDS` | no | | `protocol.max_pipeline_commands` | |
+| `RUVIO_MAX_CONNECTION_BUFFER_BYTES` | no | | `protocol.max_connection_buffer_bytes` | |
+| `RUVIO_DATABASES` | no | | `protocol.databases` | |
+| `RUVIO_IDLE_TIMEOUT_MS` | `idle-timeout-ms` | `--idle-timeout-ms` | `timeouts.idle_ms` | |
+| `RUVIO_READ_TIMEOUT_MS` | `read-timeout-ms` | `--read-timeout-ms` | `timeouts.read_ms` | |
+| `RUVIO_WRITE_TIMEOUT_MS` | `write-timeout-ms` | `--write-timeout-ms` | `timeouts.write_ms` | |
+| `RUVIO_MAX_CONNECTIONS` | `max-connections` | `--max-connections` | `connections.max_global` | |
+| `RUVIO_MAX_CONNECTIONS_PER_IP` | `max-connections-per-ip` | `--max-connections-per-ip` | `connections.max_per_ip` | |
+| `RUVIO_MAX_CONNECTIONS_PER_USER` | `max-connections-per-user` | `--max-connections-per-user` | `connections.max_per_user` | |
+| `RUVIO_MAX_COMMANDS_PER_SECOND` | `max-commands-per-second` | `--max-commands-per-second` | `connections.max_commands_per_second` | |
+| `RUVIO_MAX_QUEUED_REQUESTS` | no | `--max-queued-requests` | `requests.max_queued_requests` | |
+| `RUVIO_MAX_OUTPUT_BUFFER_BYTES` | `max-output-buffer-bytes` | `--max-output-buffer-bytes` | `requests.max_output_buffer_bytes` | |
+| `RUVIO_DURABILITY` | no | `--durability` | `persistence.profile` | `memory`, `snapshot`, `everysec` or `always` |
+| `RUVIO_DATA_DIR` | no | `--data-dir` | `persistence.data_dir` | |
+| `RUVIO_WAL_SEGMENT_BYTES` | no | `--wal-segment-bytes` | `persistence.wal_segment_bytes` | |
+| `RUVIO_WAL_SYNC_INTERVAL_MS` | no | `--wal-sync-interval-ms` | `persistence.sync_interval_ms` | |
+| `RUVIO_EXPERIMENTAL_SYNC_WORKER` | no | | `persistence.sync_worker` | Older boolean form (`true` = `on`); `RUVIO_SYNC_WORKER` wins |
+| `RUVIO_SYNC_WORKER` | no | | `persistence.sync_worker` | |
+| `RUVIO_WAL_PREFILL` | no | | | `auto` (default), `on` or `off`. Linux only: zero-fill WAL segments ahead of the cursor on a helper thread. `auto` does it for `always` only; under `everysec` the zero-fill doubled the bytes a throughput-capped disk saw and halved SET throughput. `CONFIG GET wal-prefill` shows the mode |
+| `RUVIO_SNAPSHOT_MAX_BYTES` | no | `--snapshot-max-bytes` | `persistence.snapshot_max_bytes` | |
+| `RUVIO_SNAPSHOT_JOURNAL_BYTES` | no | `--snapshot-journal-bytes` | `persistence.snapshot_journal_bytes` | |
+| `RUVIO_SNAPSHOT_INTERVAL_MS` | no | `--snapshot-interval-ms` | `persistence.snapshot_interval_ms` | |
+| `RUVIO_SNAPSHOT_MIN_MUTATIONS` | no | `--snapshot-min-mutations` | `persistence.snapshot_min_mutations` | |
+| `RUVIO_CDC_RETAIN_BYTES` | no | | `persistence.cdc_retain_bytes` | |
+| `RUVIO_REPLICA_RETAIN_MAX_BYTES` | no | | `persistence.replica_retain_max_bytes` | |
+| `RUVIO_REQUIREPASS` | `requirepass` | `--requirepass` | `security.requirepass` | |
+| `RUVIO_TLS_CERT` | no | `--tls-cert` | `security.tls_cert` | |
+| `RUVIO_TLS_KEY` | no | `--tls-key` | `security.tls_key` | |
+| `RUVIO_TLS_CLIENT_CA` | no | `--tls-client-ca` | `security.tls_client_ca` | |
+| `RUVIO_TLS_CLIENT_AUTH` | no | `--tls-client-auth` | `security.tls_client_auth` | |
+| `RUVIO_ACL_FILE` | no | | `security.acl_file` | |
+| `RUVIO_PROTECTED_MODE` | no | `--protected-mode` | `security.protected_mode` | |
+| `RUVIO_ALLOW_UNAUTHENTICATED` | no | | `security.allow_unauthenticated_public` | |
+| `RUVIO_METRICS_TOKEN` | no | | `security.metrics_token` | |
+| `RUVIO_REPLICATION_PASSWORD` | no | | `security.replication_password` | |
+| `RUVIO_MAXMEMORY` | `maxmemory` | `--maxmemory` | `memory.max_process_bytes` | |
+| `RUVIO_MAX_SHARD_BYTES` | `max-shard-bytes` | `--max-shard-bytes` | `memory.max_shard_bytes` | |
+| `RUVIO_MEMORY_HEADROOM_BYTES` | `memory-headroom-bytes` | `--memory-headroom-bytes` | `memory.reserved_headroom_bytes` | |
+| `RUVIO_MAXMEMORY_POLICY` | `maxmemory-policy` | `--maxmemory-policy` | `memory.maxmemory_policy` | |
+| `RUVIO_MAXMEMORY_SAMPLES` | `maxmemory-samples` | `--maxmemory-samples` | `memory.maxmemory_samples` | |
+| `RUVIO_ACTIVE_EXPIRE_KEYS` | `active-expire-keys` | `--active-expire-keys` | `memory.active_expire_keys` | |
+| `RUVIO_ACTIVE_EXPIRE_MAINTENANCE_KEYS` | `active-expire-maintenance-keys` | `--active-expire-maintenance-keys` | `memory.active_expire_maintenance_keys` | |
+| `RUVIO_HASH_MAX_COMPACT_ENTRIES` | `hash-max-compact-entries` | `--hash-max-compact-entries` | `memory.hash_max_compact_entries` | |
+| `RUVIO_HASH_MAX_COMPACT_VALUE_BYTES` | `hash-max-compact-value-bytes` | `--hash-max-compact-value-bytes` | `memory.hash_max_compact_value_bytes` | |
+| `RUVIO_SET_MAX_INTSET_ENTRIES` | `set-max-intset-entries` | `--set-max-intset-entries` | `memory.set_max_intset_entries` | |
+| `RUVIO_LIST_MAX_COMPACT_ENTRIES` | `list-max-compact-entries` | `--list-max-compact-entries` | `memory.list_max_compact_entries` | |
+| `RUVIO_LIST_MAX_COMPACT_VALUE_BYTES` | `list-max-compact-value-bytes` | `--list-max-compact-value-bytes` | `memory.list_max_compact_value_bytes` | |
+| `RUVIO_NOTIFY_KEYSPACE_EVENTS` | `notify-keyspace-events` | | `notify_keyspace_events` | |
+| `RUVIO_METRICS_ADDR` | no | `--metrics-address` | `metrics_address` | |
+| `RUVIO_SCRIPT_MAX_BYTES` | `script-max-bytes` | | `scripts.max_bytes` | |
+| `RUVIO_SCRIPT_MAX_CACHED` | `script-max-cached` | | `scripts.max_cached` | |
+| `RUVIO_SCRIPT_MAX_CALLS` | `script-max-calls` | | `scripts.max_calls` | |
+| `RUVIO_SCRIPT_MAX_INSTRUCTIONS` | `script-max-instructions` | | `scripts.max_instructions` | |
+| `RUVIO_SCRIPT_MAX_TIME_MS` | `script-max-time-ms` | | `scripts.max_time_ms` | |
+| `RUVIO_HOT_KEYS` | no | | `hot_keys` | Comma-separated globs |
+| `RUVIO_REPLICATION_ROLE` | no | | `replication.role` | |
+| `RUVIO_REPLICATION_LISTEN` | no | | `replication.listen` | |
+| `RUVIO_REPLICATION_PRIMARY` | no | | `replication.primary` | |
 
 Flags with no variable:
 

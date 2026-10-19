@@ -88,8 +88,12 @@ A single write larger than the shard budget is rejected without evicting.
 `allocation_events` / `allocation_bytes` count mutations that increased
 `charged_bytes`. Pool retention is `pooled_bytes`.
 
-`max_process_bytes` is validated against the per-shard budget at startup. Zero
-disables a budget.
+`max_process_bytes` is validated against the per-shard budget at startup, and
+again by `CONFIG SET maxmemory`. Zero disables a budget. The memory limits and
+`maxmemory-policy` change while the server runs (`CONFIG SET maxmemory`,
+`max-shard-bytes`, `memory-headroom-bytes`, `maxmemory-policy`,
+`maxmemory-samples`); a lower limit is reached by eviction as writes arrive,
+and a policy change resets every key's access bits once per shard.
 
 ## Active Expiration
 
