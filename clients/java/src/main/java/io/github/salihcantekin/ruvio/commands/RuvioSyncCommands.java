@@ -3078,6 +3078,34 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Sends {@code ZPOPBYSCORE key max MIN min COUNT count WITHSCORES}: removes and returns the members that are due, up to {@code count} of them with a score between {@code min} and {@code max}, lowest score first. With scores set to due times this takes the jobs that are ready.
+     *
+     * @param key the sorted set key
+     * @param min the lower score bound ({@code -inf}, {@code (5}, {@code 5})
+     * @param max the upper score bound ({@code +inf}, {@code (5}, {@code 5})
+     * @param count how many to remove, 1 to 10000
+     * @return members with scores, lowest first; empty when nothing is due
+     * @throws RuvioServerException {@code ERR} for a bad bound or a count outside 1 to 10000; {@code WRONGTYPE} for a non-sorted-set
+     */
+    public List<ScoredValue<V>> zpopbyscore(K key, String min, String max, long count) {
+        return await(async.zpopbyscore(key, min, max, count));
+    }
+
+    /**
+     * Sends {@code ZMOVEDUE source destination max COUNT count}: moves the members that are due from a sorted set to the tail of a list, up to {@code count} members with a score of at most {@code max}, lowest score first. Clients blocked on {@code destination} are served first.
+     *
+     * @param source the sorted set to take members from
+     * @param destination the list that receives them
+     * @param max the upper score bound ({@code +inf}, {@code (5}, {@code 5})
+     * @param count how many to move, 1 to 10000
+     * @return how many members moved
+     * @throws RuvioServerException {@code ERR} for a bad bound or a count outside 1 to 10000; {@code WRONGTYPE} when {@code source} is not a sorted set or {@code destination} is not a list; {@code CROSSSLOT} in a cluster
+     */
+    public Long zmovedue(K source, K destination, String max, long count) {
+        return await(async.zmovedue(source, destination, max, count));
+    }
+
+    /**
      * Sends {@code ZPOPMAX key}: removes and returns the member with the highest score.
      *
      * @param key the sorted set key

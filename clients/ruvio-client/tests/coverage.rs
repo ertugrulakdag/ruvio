@@ -473,6 +473,8 @@ fn methods_exist() {
     let _ = Client::zmscore;
     let _ = Client::zpopmax;
     let _ = Client::zpopmin;
+    let _ = Client::zpopbyscore;
+    let _ = Client::zmovedue;
     let _ = Client::zrandmember;
     let _ = Client::zrandmember_count;
     let _ = Client::zrandmember_with_scores;

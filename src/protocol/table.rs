@@ -1856,6 +1856,22 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         parse_zpopmax,
     ),
     CommandSpec::migrated(
+        "zpopbyscore",
+        -3,
+        WRITE | FAST,
+        (1, 1, 1),
+        &["write", "sortedset", "fast"],
+        parse_zpopbyscore,
+    ),
+    CommandSpec::migrated(
+        "zmovedue",
+        -4,
+        WRITE | DENYOOM,
+        (1, 2, 1),
+        &["write", "sortedset", "list", "slow"],
+        parse_zmovedue,
+    ),
+    CommandSpec::migrated(
         "bzpopmin",
         -3,
         WRITE | FAST | BLOCKING,

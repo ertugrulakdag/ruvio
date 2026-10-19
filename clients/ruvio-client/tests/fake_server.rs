@@ -447,6 +447,33 @@ fn blocking_pops_decode_pairs_and_timeouts() {
     let (reply, _) = probe(":1\r\n", |c| c.blpop_key("k", Duration::ZERO));
     assert!(protocol(reply).starts_with("BLPOP returned"));
 
+    let (reply, request) = probe("*2\r\n$1\r\nm\r\n$1\r\n2\r\n", |c| {
+        c.zpopbyscore("z", "-inf", "(5", 3)
+    });
+    assert_eq!(
+        reply.unwrap(),
+        vec![ruvio_client::SortedSetEntry::new("m", 2.0)]
+    );
+    assert_eq!(
+        request,
+        words(&[
+            "ZPOPBYSCORE",
+            "z",
+            "(5",
+            "MIN",
+            "-inf",
+            "COUNT",
+            "3",
+            "WITHSCORES"
+        ])
+    );
+    let (reply, request) = probe(":2\r\n", |c| c.zmovedue("{t}z", "{t}l", "+inf", 4));
+    assert_eq!(reply.unwrap(), 2);
+    assert_eq!(
+        request,
+        words(&["ZMOVEDUE", "{t}z", "{t}l", "+inf", "COUNT", "4"])
+    );
+
     let triple = "*3\r\n$1\r\nz\r\n$1\r\nm\r\n$3\r\n1.5\r\n";
     let (reply, request) = probe(triple, |c| c.bzpopmin(&["z"], Duration::from_secs(1)));
     let (key, entry) = reply.unwrap().unwrap();

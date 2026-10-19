@@ -1036,6 +1036,23 @@ pub enum Command<'a> {
         count: Option<usize>,
         max: bool,
     },
+    /// `ZPOPBYSCORE key max [MIN min] [COUNT n] [WITHSCORES]`: removes and returns up to
+    /// `count` members with `min <= score <= max`, lowest score first.
+    SortedSetPopByScore {
+        key: Bytes<'a>,
+        min: ScoreBound,
+        max: ScoreBound,
+        count: usize,
+        with_scores: bool,
+    },
+    /// `ZMOVEDUE source destination max [COUNT n]`: moves up to `count` members with
+    /// `score <= max`, lowest first, from a sorted set to the tail of a list.
+    SortedSetMoveDue {
+        source: Bytes<'a>,
+        destination: Bytes<'a>,
+        max: ScoreBound,
+        count: usize,
+    },
     /// `BZPOPMIN` or `BZPOPMAX`.
     SortedSetBlockPop {
         keys: Vec<Bytes<'a>>,

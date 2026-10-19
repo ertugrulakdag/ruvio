@@ -345,6 +345,22 @@ func (c *cmds) ZPopMax(ctx context.Context, key string, count int64) ([]Z, error
 	return c.zs(ctx, newCmd(3, cZPOPMAX).s(key).i(count))
 }
 
+// ZPopByScore removes and returns up to count members (1 to 10000) whose score is between
+// min and max, lowest score first (ZPOPBYSCORE ... WITHSCORES). With scores set to due times
+// this takes the jobs that are ready. Bounds use the ZCount syntax: -inf, +inf, and a ( prefix
+// for exclusive. The result is empty when nothing is due.
+func (c *cmds) ZPopByScore(ctx context.Context, key, min, max string, count int64) ([]Z, error) {
+	return c.zs(ctx, newCmd(8, cZPOPBYSCORE).s(key).s(max).s("MIN").s(min).t(tCOUNT).i(count).t(tWITHSCORES))
+}
+
+// ZMoveDue moves up to count members (1 to 10000) whose score is at most max from the sorted
+// set source to the tail of the list destination, lowest score first, and returns how many
+// moved (ZMOVEDUE). Clients blocked on destination are served first. In cluster mode both
+// keys must share a slot.
+func (c *cmds) ZMoveDue(ctx context.Context, source, destination, max string, count int64) (int64, error) {
+	return c.intR(ctx, newCmd(6, cZMOVEDUE).s(source).s(destination).s(max).t(tCOUNT).i(count))
+}
+
 // KeyZ is the reply of BZPopMin and BZPopMax: the sorted set the member came from, with
 // the member and its score (the embedded Z).
 type KeyZ struct {

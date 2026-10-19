@@ -6,6 +6,7 @@ Notable changes to the Go client `github.com/salihcantekin/ruvio/clients/go`. A 
 
 - TTL on create: `IncrWithTTL`, `DecrWithTTL`, `IncrByWithTTL`, `DecrByWithTTL`, `IncrByMaxWithTTL`, `IncrByFloatWithTTL`, `HIncrByWithTTL`, `ZIncrByWithTTL`, `SetBitWithTTL`, `JSONSetWithTTL` and `JSONSetModeWithTTL` send `EX` (whole seconds) or `PX` and set the deadline only when the call creates the key. New `TTL` field on `ZAddOptions`, `GeoAddOptions`, `XAddArgs` and `BFInsertOptions`. A zero or negative TTL returns the new `ErrInvalidTTL` without contacting the server.
 - Conditional expiry: typed `ExpireCondition` (`ExpireNx`, `ExpireXx`, `ExpireGt`, `ExpireLt`) and `ExpireIf`, `PExpireIf`, `ExpireAtIf`, `PExpireAtIf`.
+- `ZPopByScore` and `ZMoveDue` send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call.
 - New `Transfer`, `TransferMax`, `HTransfer` and `HTransferMax` for the server's `TRANSFER` and `HTRANSFER`: both balances after the move, and `ok == false` when nothing moved.
 
 ## v0.2.0 - 2026-10-17

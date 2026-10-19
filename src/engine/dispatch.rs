@@ -1160,6 +1160,19 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
             Err(_) => Ok(wrong_type()),
         },
         Command::SortedSetPop { key, count, max } => pop_sorted(shard, sink, key, count, max),
+        Command::SortedSetPopByScore {
+            key,
+            min,
+            max,
+            count,
+            with_scores,
+        } => pop_sorted_by_score(shard, sink, key, min, max, count, with_scores),
+        Command::SortedSetMoveDue {
+            source,
+            destination,
+            max,
+            count,
+        } => move_due_sorted(shard, sink, waiters, source, destination, max, count),
         Command::SortedSetBlockPop {
             keys,
             timeout_ms,

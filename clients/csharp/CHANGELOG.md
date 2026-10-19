@@ -6,6 +6,7 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 
 - TTL on create: overloads that take a `TimeSpan ttl` and set the deadline only when the call creates the key (an existing key keeps its deadline; whole seconds are sent as `EX`, otherwise `PX`): `IncrementAsync`, `DecrementAsync`, `IncrementByAsync`, `DecrementByAsync`, `IncrementWithLimitAsync`, `IncrementByFloatAsync`, `IncrementHashFieldAsync`, `IncrementSortedSetAsync`, `SetBitAsync`, `AddSortedSetAsync`, `AddGeoAsync`, `AddStreamEntryAsync` and `JsonSetAsync`; `BloomInsertOptions.Ttl` for `BF.INSERT`. A zero or negative `ttl` throws `ArgumentOutOfRangeException`.
 - New `ExpireCondition` (`Nx`, `Xx`, `Gt`, `Lt`) and `ExpireAsync` / `ExpireAtAsync` overloads that send it with `EXPIRE`, `PEXPIRE`, `EXPIREAT` or `PEXPIREAT`. The new `IRuvioClient` members have default implementations, so existing implementations keep compiling.
+- `PopSortedSetByScoreAsync` and `MoveDueSortedSetAsync` send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call. Not compiled or run in the cloud session that added them.
 - New `TransferAsync(source, destination, amount, max)` and `TransferHashFieldAsync(key, from, to, amount, max)` for the server's `TRANSFER` and `HTRANSFER`: they return the two balances after the move, or `null` when nothing moved. Not built or tested in the environment this was written in (no .NET SDK).
 
 ## 0.3.4 - 2026-10-17

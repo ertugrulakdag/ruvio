@@ -165,7 +165,7 @@ client, including `database(n)`. In cluster mode the database option is ignored 
 database 0). Every node gets its own lazily opened multiplexed connection with the same fast path as
 the standalone one; the standalone path itself only pays one `router == null` check per command.
 
-How it routes (the key table covers all 289 matrix commands, `CoverageTest` fails when one has no rule):
+How it routes (the key table covers all 291 matrix commands, `CoverageTest` fails when one has no rule):
 
 | Command shape | Routing |
 | --- | --- |

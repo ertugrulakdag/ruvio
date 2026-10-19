@@ -371,6 +371,11 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         Assert.Equal(1, await db.RemoveSortedSetMembersAsync("z", "c"));
         Assert.Equal("b", (await db.PopSortedSetMinAsync("z"))[0].Member);
         Assert.Equal("a", (await db.PopSortedSetMaxAsync("z"))[0].Member);
+        Assert.Equal(4, await db.AddSortedSetAsync("due", ("a", 1), ("b", 2), ("c", 3), ("d", 9)));
+        Assert.Equal("a", (await db.PopSortedSetByScoreAsync("due", "-inf", "1", 5))[0].Member);
+        Assert.Equal(2, await db.MoveDueSortedSetAsync("due", "ready", "3", 5));
+        Assert.Equal(["b", "c"], await db.GetListRangeAsync("ready", 0, -1));
+        Assert.Empty(await db.PopSortedSetByScoreAsync("due", "-inf", "3", 5));
         Assert.True(await db.AddSortedSetAsync("bz", "m", 1));
         Assert.Equal("m", (await db.PopSortedSetMinBlockingAsync("bz", TimeSpan.FromSeconds(1)))!.Value.Entry.Member);
         Assert.True(await db.AddSortedSetAsync("bz", "n", 1));

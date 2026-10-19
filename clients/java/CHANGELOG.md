@@ -6,6 +6,7 @@ Notable changes to the Java client `io.github.salihcantekin:ruvio-client`. New e
 
 - TTL on create: `Duration` overloads `incr`, `decr`, `incrby`, `decrby`, `incrbyMax`, `incrbyfloat`, `hincrby`, `zincrby`, `setbit` and `geoadd(key, nx, xx, ch, ttl, members)`, `jsonSet`/`jsonSetNx`/`jsonSetXx(key, path, json, ttl)`, and `ttl(Duration)` on `ZAddArgs`, `XAddArgs` and `BfInsertArgs`. The deadline is set only when the call creates the key; whole seconds are sent as `EX`, anything finer as `PX`.
 - `expire`, `pexpire`, `expireat` and `pexpireat` overloads take an `ExpireCondition` (`NX`, `XX`, `GT`, `LT`); `ExpireCondition` now also has `fragment()`, like the other keyword enums.
+- `zpopbyscore` and `zmovedue` (async and blocking) send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call.
 - New `transfer(source, destination, amount[, max])` and `htransfer(key, from, to, amount[, max])` for the server's `TRANSFER` and `HTRANSFER`: they return the two balances after the move, or `null` when nothing moved.
 
 ## 0.1.2 - 2026-10-17
