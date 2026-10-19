@@ -216,6 +216,19 @@ impl<'a> Command<'a> {
                 expected: owned(expected),
                 options,
             },
+            Self::SetIfCmp {
+                key,
+                value,
+                number,
+                greater,
+                options,
+            } => Command::SetIfCmp {
+                key: owned(key),
+                value: owned(value),
+                number,
+                greater,
+                options,
+            },
             Self::DelIfEq { key, expected } => Command::DelIfEq {
                 key: owned(key),
                 expected: owned(expected),

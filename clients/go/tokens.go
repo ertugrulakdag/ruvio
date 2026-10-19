@@ -313,6 +313,8 @@ var (
 	tIDLE              = preEnc("IDLE")
 	tIDLETIME          = preEnc("IDLETIME")
 	tIFEQ              = preEnc("IFEQ")
+	tIFGT              = preEnc("IFGT")
+	tIFLT              = preEnc("IFLT")
 	tINCR              = preEnc("INCR")
 	tINFO              = preEnc("INFO")
 	tITEMS             = preEnc("ITEMS")

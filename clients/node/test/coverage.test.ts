@@ -43,6 +43,7 @@ const TABLE = loadTable();
 /** Option forms that change what Ruvio does, with their dedicated methods. */
 const OPTIONS: [string, string][] = [
   ['SET ... IFEQ', 'set'],
+  ['SET ... IFGT/IFLT', 'set'],
   ['INCRBY ... MAX', 'incrbyMax'],
   ['FILLGET ... WAIT', 'fillget'],
   ['FILLSET ... SWR', 'fillset'],

@@ -13,6 +13,8 @@ import (
 // optionMethods are the typed forms of options that change what Ruvio does.
 var optionMethods = map[string]string{
 	"SET IFEQ":                 "SetIfEq",
+	"SET IFGT":                 "SetIfGreater",
+	"SET IFLT":                 "SetIfLess",
 	"SET GET":                  "SetGet",
 	"SET options":              "SetArgs",
 	"INCRBY MAX":               "IncrByMax",

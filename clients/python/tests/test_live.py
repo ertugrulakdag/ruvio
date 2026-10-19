@@ -108,6 +108,12 @@ async def test_strings(c):
     assert await c.set("s", "y", ifeq="nope") is False
     assert await c.set("s", "y", ifeq="x", px=50000) is True
     assert await c.get("s") == "y" and await c.pttl("s") > 0
+    # Ruvio: SET ... IFGT / IFLT
+    assert await c.set("wm", 10, ifgt=True) is True
+    assert await c.set("wm", 10, ifgt=True) is False
+    assert await c.set("wm", 11, ifgt=True, px=50000) is True and await c.pttl("wm") > 0
+    assert await c.set("wm", 12, iflt=True) is False
+    assert await c.set("wm", -1, iflt=True) is True and await c.get("wm") == "-1"
     # binary-safe through the raw view
     assert await c.set(b"bin", b"\x00\xff\x80") is True
     assert await c.raw.get(b"bin") == b"\x00\xff\x80"
