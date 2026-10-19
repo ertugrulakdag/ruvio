@@ -159,6 +159,11 @@ impl<'a> Command<'a> {
                 key: owned(key),
                 token,
             },
+            Self::Renew { key, token, ttl_ms } => Command::Renew {
+                key: owned(key),
+                token,
+                ttl_ms,
+            },
             Self::SetVersioned {
                 key,
                 value,

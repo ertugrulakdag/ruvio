@@ -22,7 +22,7 @@ export const C = {
   INCRBYFLOAT: cmd('INCRBYFLOAT'), GETRANGE: cmd('GETRANGE'), SUBSTR: cmd('SUBSTR'), SETRANGE: cmd('SETRANGE'),
   FILLGET: cmd('FILLGET'), FILLSET: cmd('FILLSET'),
   LIMIT: cmd('LIMIT'), IDEM: cmd('IDEM'), ONCE: cmd('ONCE'), LEASE: cmd('LEASE'), SEMAPHORE: cmd('SEMAPHORE'),
-  RELEASE: cmd('RELEASE'), CHANGES: cmd('CHANGES'),
+  RELEASE: cmd('RELEASE'), RENEW: cmd('RENEW'), CHANGES: cmd('CHANGES'),
   DEL: cmd('DEL'), UNLINK: cmd('UNLINK'), EXISTS: cmd('EXISTS'), TYPE: cmd('TYPE'), RENAME: cmd('RENAME'),
   RENAMENX: cmd('RENAMENX'), SCAN: cmd('SCAN'), DBSIZE: cmd('DBSIZE'), FLUSHDB: cmd('FLUSHDB'),
   FLUSHALL: cmd('FLUSHALL'), SWAPDB: cmd('SWAPDB'), MOVE: cmd('MOVE'), EXPIRE: cmd('EXPIRE'),

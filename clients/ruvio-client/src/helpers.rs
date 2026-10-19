@@ -162,6 +162,12 @@ impl LeaseGuard<'_> {
         self.token
     }
 
+    /// Extends the lease to now + `ttl_ms` (`RENEW key token ttl_ms`). `true` if this token still
+    /// held it; `false` if it had expired or moved to another holder. The fencing token stays the same.
+    pub fn renew(&mut self, ttl_ms: u64) -> Result<bool, Error> {
+        Ok(self.client.renew(&self.key, self.token as u64, ttl_ms)? > 0)
+    }
+
     /// Releases the lease now (`RELEASE key token`). `true` if it was still held by this token;
     /// `false` if it had expired or moved to another holder.
     pub fn release(mut self) -> Result<bool, Error> {

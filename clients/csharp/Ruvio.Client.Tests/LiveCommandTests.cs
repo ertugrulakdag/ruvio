@@ -115,9 +115,14 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         Assert.Null(await db.LimitAsync("lim", 2, 10000));
         long lease = (await db.LeaseAsync("lease", 10000))!.Value;
         Assert.Null(await db.LeaseAsync("lease", 10000));
+        Assert.Equal(0, await db.RenewAsync("lease", lease + 100, 20000));
+        Assert.Equal(1, await db.RenewAsync("lease", lease, 20000));
         Assert.Equal(1, await db.ReleaseAsync("lease", lease));
+        Assert.Equal(0, await db.RenewAsync("lease", lease, 20000));
         Assert.True(await db.LeaseAsync("lease", 10000) > lease);
         long slot = (await db.AcquireSemaphoreAsync("sem", 1, 10000))!.Value;
+        Assert.Null(await db.AcquireSemaphoreAsync("sem", 1, 10000));
+        Assert.Equal(1, await db.RenewAsync("sem", slot, 20000));
         Assert.Null(await db.AcquireSemaphoreAsync("sem", 1, 10000));
         Assert.Equal(1, await db.ReleaseAsync("sem", slot));
 

@@ -345,7 +345,10 @@ func TestLiveHelpers(t *testing.T) {
 	lh, ok, err := c.AcquireLease(ctx, "lease", time.Minute)
 	noErr(t, err)
 	eq(t, ok, true)
+	eq(t, must[bool](t)(lh.Renew(ctx, 2*time.Minute)), true)
+	eq(t, must[bool](t)(c.Renew(ctx, "lease", lh.Token+100, time.Minute)), false)
 	eq(t, must[bool](t)(lh.Release(ctx)), true)
+	eq(t, must[bool](t)(lh.Renew(ctx, time.Minute)), false)
 	noErr(t, c.WithLease(ctx, "lease", time.Minute, func(ctx context.Context, token int64) error {
 		if token <= lh.Token {
 			t.Errorf("fencing token did not grow: %d <= %d", token, lh.Token)
@@ -358,7 +361,9 @@ func TestLiveHelpers(t *testing.T) {
 	if err := c.WithPermit(ctx, "sem", 1, time.Minute, func(context.Context) error { return nil }); !errors.Is(err, ErrNotAcquired) {
 		t.Fatalf("permit: %v", err)
 	}
+	eq(t, must[bool](t)(p1.Renew(ctx, 2*time.Minute)), true)
 	eq(t, must[bool](t)(p1.Release(ctx)), true)
+	eq(t, must[bool](t)(p1.Renew(ctx, time.Minute)), false)
 	noErr(t, c.WithPermit(ctx, "sem", 1, time.Minute, func(context.Context) error { return nil }))
 
 	// rate limit

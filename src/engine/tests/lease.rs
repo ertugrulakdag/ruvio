@@ -1019,3 +1019,214 @@ fn release_during_a_snapshot_keeps_held_leases_and_semaphores_in_the_snapshot() 
     assert_ne!(shard.snapshot_entries(), before);
     assert_eq!(shard.finish_snapshot(), before);
 }
+
+#[test]
+fn renew_moves_a_live_holders_deadline_and_never_creates_one() {
+    // RENEW
+    let clock = crate::time::TestClock::new(1_000);
+    let mut shard = KvShard::with_clock(clock.clone());
+    let mut sink = DatabaseLog::default();
+    let renew = |key: &[u8], token: u64, ttl_ms: u64| Command::Renew {
+        key: owned(key),
+        token,
+        ttl_ms,
+    };
+
+    assert_eq!(
+        execute_with_sink(&mut shard, renew(b"lock", 1, 5_000), &mut sink).unwrap(),
+        Response::Integer(0),
+        "a missing key has no holder"
+    );
+    assert!(sink.records.is_empty());
+    assert_eq!(shard.value_kind(b"lock"), None);
+
+    assert_eq!(
+        execute_with_sink(
+            &mut shard,
+            Command::Lease {
+                key: owned(b"lock"),
+                ttl_ms: 1_000,
+            },
+            &mut sink,
+        )
+        .unwrap(),
+        Response::Integer(1)
+    );
+
+    let records = sink.records.len();
+
+    assert_eq!(
+        execute_with_sink(&mut shard, renew(b"lock", 2, 5_000), &mut sink).unwrap(),
+        Response::Integer(0),
+        "another token is not the holder"
+    );
+    assert_eq!(
+        sink.records.len(),
+        records,
+        "a refused renew writes nothing"
+    );
+
+    clock.set(1_500);
+
+    assert_eq!(
+        execute_with_sink(&mut shard, renew(b"lock", 1, 5_000), &mut sink).unwrap(),
+        Response::Integer(1)
+    );
+    assert_eq!(sink.records.len(), records + 1);
+
+    clock.set(3_000);
+
+    macro_rules! lease {
+        () => {
+            execute(
+                &mut shard,
+                Command::Lease {
+                    key: owned(b"lock"),
+                    ttl_ms: 1_000,
+                },
+            )
+        };
+    }
+
+    assert_eq!(
+        lease!(),
+        Response::Bulk(None),
+        "still held after the first TTL"
+    );
+
+    clock.set(6_500);
+
+    assert_eq!(
+        execute_with_sink(&mut shard, renew(b"lock", 1, 5_000), &mut sink).unwrap(),
+        Response::Integer(0),
+        "an expired holder cannot renew"
+    );
+    assert_eq!(
+        lease!(),
+        Response::Integer(2),
+        "the token sequence moved on"
+    );
+}
+
+#[test]
+fn renew_extends_one_semaphore_holder_without_taking_a_new_slot() {
+    let clock = crate::time::TestClock::new(1_000);
+    let mut shard = KvShard::with_clock(clock.clone());
+    let sem = |ttl_ms| Command::Semaphore {
+        key: owned(b"jobs"),
+        max: 2,
+        ttl_ms,
+    };
+    let Response::Integer(first) = execute(&mut shard, sem(1_000)) else {
+        panic!("first holder");
+    };
+    let Response::Integer(second) = execute(&mut shard, sem(10_000)) else {
+        panic!("second holder");
+    };
+
+    assert_eq!(
+        execute(
+            &mut shard,
+            Command::Renew {
+                key: owned(b"jobs"),
+                token: first as u64,
+                ttl_ms: 10_000,
+            },
+        ),
+        Response::Integer(1)
+    );
+    assert_eq!(
+        execute(&mut shard, sem(1_000)),
+        Response::Bulk(None),
+        "renewing did not free or add a slot"
+    );
+
+    clock.set(5_000);
+
+    assert!(
+        matches!(execute(&mut shard, sem(1_000)), Response::Bulk(None)),
+        "the renewed holder outlived its first TTL"
+    );
+    assert_eq!(
+        execute(
+            &mut shard,
+            Command::Release {
+                key: owned(b"jobs"),
+                token: first as u64,
+            },
+        ),
+        Response::Integer(1)
+    );
+    assert_eq!(
+        execute(
+            &mut shard,
+            Command::Release {
+                key: owned(b"jobs"),
+                token: second as u64,
+            },
+        ),
+        Response::Integer(1)
+    );
+    assert_eq!(shard.value_kind(b"jobs"), None);
+}
+
+#[test]
+fn renew_on_another_type_is_a_wrong_type_error() {
+    let mut shard = KvShard::with_clock(crate::time::TestClock::new(1_000));
+
+    execute(&mut shard, Command::set(owned(b"plain"), owned(b"v")));
+
+    assert_eq!(
+        execute(
+            &mut shard,
+            Command::Renew {
+                key: owned(b"plain"),
+                token: 1,
+                ttl_ms: 1_000,
+            },
+        ),
+        wrong_type()
+    );
+}
+
+#[test]
+fn renew_during_a_snapshot_keeps_held_leases_and_semaphores_in_the_snapshot() {
+    let mut shard = KvShard::with_clock(crate::time::TestClock::new(1_000));
+
+    execute(
+        &mut shard,
+        Command::Lease {
+            key: owned(b"lock"),
+            ttl_ms: 60_000,
+        },
+    );
+    let Response::Integer(holder) = execute(
+        &mut shard,
+        Command::Semaphore {
+            key: owned(b"sem"),
+            max: 2,
+            ttl_ms: 60_000,
+        },
+    ) else {
+        panic!("the semaphore was acquired");
+    };
+    let before = shard.snapshot_entries();
+    shard.begin_snapshot(1 << 20).unwrap();
+
+    for (key, token) in [(&b"sem"[..], holder as u64), (&b"lock"[..], 1)] {
+        assert_eq!(
+            execute(
+                &mut shard,
+                Command::Renew {
+                    key: owned(key),
+                    token,
+                    ttl_ms: 120_000,
+                },
+            ),
+            Response::Integer(1)
+        );
+    }
+
+    assert_ne!(shard.snapshot_entries(), before);
+    assert_eq!(shard.finish_snapshot(), before);
+}

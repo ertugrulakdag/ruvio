@@ -1056,6 +1056,14 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         commands::cmd_release,
     ),
     CommandSpec::migrated(
+        "renew",
+        4,
+        WRITE | FAST,
+        (1, 1, 1),
+        &["keyspace", "write", "fast"],
+        commands::cmd_renew,
+    ),
+    CommandSpec::migrated(
         "setv",
         -3,
         WRITE | DENYOOM | FAST,

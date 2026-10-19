@@ -175,6 +175,7 @@ COMMAND_KEY_RULES = {
     b"RELEASE": (1, 1, 1, 1, (), 5),
     b"RENAME": (1, 1, 2, 1, (), 5),
     b"RENAMENX": (1, 1, 2, 1, (), 5),
+    b"RENEW": (1, 1, 1, 1, (), 5),
     b"RESTORE": (1, 1, 1, 1, (), 9),
     b"RPOP": (1, 1, 1, 1, (), 5),
     b"RPOPLPUSH": (1, 1, 2, 1, (), 9),

@@ -4,6 +4,8 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+- New `RENEW key token ttl_ms`: extends a `LEASE` or `SEMAPHORE` holder by its token (1 when the token is a live holder, 0 otherwise) without releasing it, so a long job keeps its slot and its fencing token. All six clients have `renew`; lease and permit handles gain `renew` where they exist.
+
 ## 0.3.4 - 2026-10-17
 
 - `XADD ... MAXLEN` accepts `=` as well as `~` before the count, like `XTRIM` and `XADD ... MINID` already did.

@@ -183,12 +183,17 @@ async def test_lease_semaphore_release(c):
     assert isinstance(t1, int)
     assert await c.lease("lease", 10000) is None
     assert await c.release("lease", t1 + 100) is False
+    assert await c.renew("lease", t1 + 100, 10000) is False
+    assert await c.renew("lease", t1, 20000) is True
     assert await c.release("lease", t1) is True
+    assert await c.renew("lease", t1, 20000) is False
     t2 = await c.lease("lease", 10000)
     assert t2 > t1  # fencing tokens continue the sequence
     s1 = await c.semaphore("sem", 2, 10000)
     s2 = await c.semaphore("sem", 2, 10000)
     assert s1 is not None and s2 is not None
+    assert await c.semaphore("sem", 2, 10000) is None
+    assert await c.renew("sem", s1, 20000) is True
     assert await c.semaphore("sem", 2, 10000) is None
     assert await c.release("sem", s1) is True
     assert await c.semaphore("sem", 2, 10000) is not None

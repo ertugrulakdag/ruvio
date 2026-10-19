@@ -401,6 +401,14 @@ func (c *cmds) Semaphore(ctx context.Context, key string, max int64, ttl time.Du
 	return c.intNil(ctx, newCmd(4, cSEMAPHORE).s(key).i(max).i(ms(ttl)))
 }
 
+// Renew moves the deadline of a lease or semaphore slot you hold to now + ttl (Ruvio RENEW
+// key token ttl). It returns true when token was a live holder and false when it expired,
+// was released or belongs to someone else. ttl replaces the remaining time. The fencing
+// token does not change and no holder is ever created.
+func (c *cmds) Renew(ctx context.Context, key string, token int64, ttl time.Duration) (bool, error) {
+	return c.boolR(ctx, newCmd(4, cRENEW).s(key).i(token).i(ms(ttl)))
+}
+
 // Release frees a lease or a semaphore slot (Ruvio RELEASE key token). It returns true
 // when token was a live holder and false when the token is unknown, already released or
 // expired. It never releases someone else's hold.

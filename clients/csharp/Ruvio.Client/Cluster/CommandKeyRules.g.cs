@@ -180,6 +180,7 @@ internal static class CommandKeyRules
         ["RELEASE"] = new(1, 1, 1, 1, [], 5),
         ["RENAME"] = new(1, 1, 2, 1, [], 5),
         ["RENAMENX"] = new(1, 1, 2, 1, [], 5),
+        ["RENEW"] = new(1, 1, 1, 1, [], 5),
         ["RESTORE"] = new(1, 1, 1, 1, [], 9),
         ["RPOP"] = new(1, 1, 1, 1, [], 5),
         ["RPOPLPUSH"] = new(1, 1, 2, 1, [], 9),

@@ -338,6 +338,8 @@ public final class Cmd {
     public static final byte[] READWRITE = RespOut.fragment("READWRITE");
     /** The word {@code RELEASE}, pre-encoded as a RESP bulk string. */
     public static final byte[] RELEASE = RespOut.fragment("RELEASE");
+    /** The word {@code RENEW}, pre-encoded as a RESP bulk string. */
+    public static final byte[] RENEW = RespOut.fragment("RENEW");
     /** The word {@code RENAME}, pre-encoded as a RESP bulk string. */
     public static final byte[] RENAME = RespOut.fragment("RENAME");
     /** The word {@code RENAMENX}, pre-encoded as a RESP bulk string. */

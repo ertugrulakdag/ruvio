@@ -1358,6 +1358,26 @@ class Commands:
         """
         return self._c(None, "SEMAPHORE", key, max, ttl_ms)
 
+    def renew(self, key: KeyT, token: int, ttl_ms: int) -> Any:
+        """``RENEW key token ttl_ms`` - moves the deadline of a lease or semaphore slot you hold. Ruvio extension.
+
+        The new deadline is now + ``ttl_ms``; it replaces the remaining time. The fencing token does
+        not change and no holder is ever created.
+
+        Args:
+            key: The lease or semaphore key.
+            token: The token returned by :meth:`lease` or :meth:`semaphore`.
+            ttl_ms: The new lifetime in milliseconds (positive).
+
+        Returns:
+            ``True`` when the token was a current holder and its deadline moved, ``False`` when it
+            expired, was released or belongs to someone else.
+
+        Raises:
+            WrongTypeError: The key holds something other than a lease or semaphore.
+        """
+        return self._c(_bool, "RENEW", key, token, ttl_ms)
+
     def release(self, key: KeyT, token: int) -> Any:
         """``RELEASE key token`` - frees a lease or a semaphore slot. Ruvio extension.
 

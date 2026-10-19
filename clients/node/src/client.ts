@@ -140,6 +140,15 @@ export class Lease {
     readonly token: number,
   ) {}
   /**
+   * Extends the lease to now + `ttlMs` (`RENEW key token ttlMs`). The fencing token stays the same.
+   *
+   * @returns `true` when extended; `false` when the lease had already expired or was released.
+   */
+  async renew(ttlMs: number): Promise<boolean> {
+    if (this.released) return false;
+    return this.client.renew(this.key, this.token, ttlMs);
+  }
+  /**
    * Gives the lease back (`RELEASE key token`). Calling it again does nothing.
    *
    * @returns `true` when released; `false` when the lease had already expired or was released.
@@ -173,6 +182,15 @@ export class Permit {
     readonly key: Key,
     readonly token: string,
   ) {}
+  /**
+   * Extends this slot to now + `ttlMs` (`RENEW key token ttlMs`).
+   *
+   * @returns `true` when extended; `false` when the permit had already expired or was released.
+   */
+  async renew(ttlMs: number): Promise<boolean> {
+    if (this.released) return false;
+    return this.client.renew(this.key, this.token, ttlMs);
+  }
   /**
    * Frees this slot (`RELEASE key token`). Calling it again does nothing.
    *
