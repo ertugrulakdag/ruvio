@@ -631,6 +631,7 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         {
             await db.RewriteConfigAsync();
         }
+
         await db.SaveAsync();
         await db.SaveInBackgroundAsync();
         Assert.True(await db.GetSlowLogLengthAsync() >= 0);
