@@ -43,6 +43,82 @@ public sealed partial class RuvioClient
     }
 
     /// <inheritdoc />
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    public async ValueTask<long?> LimitSlidingAsync(
+        string key,
+        long max,
+        long windowMs,
+        CancellationToken cancellationToken = default)
+    {
+        RespValue reply = await ExecuteCommandAsync(
+            new RespCommand("LIMIT", key, max, windowMs, "SLIDING"),
+            cancellationToken);
+
+        return reply.Kind == RespKind.Null ? null : reply.Integer;
+    }
+
+    /// <inheritdoc />
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    public async ValueTask<long?> LimitTokensAsync(
+        string key,
+        long capacity,
+        long refillMs,
+        long cost = 1,
+        CancellationToken cancellationToken = default)
+    {
+        RespValue reply = await ExecuteCommandAsync(
+            new RespCommand("LIMIT", key, capacity, refillMs, "TOKENS", "COST").With(cost),
+            cancellationToken);
+
+        return reply.Kind == RespKind.Null ? null : reply.Integer;
+    }
+
+    /// <inheritdoc />
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    public async ValueTask<LimitOutcome> LimitSlidingWithRetryAsync(
+        string key,
+        long max,
+        long windowMs,
+        CancellationToken cancellationToken = default)
+    {
+        RespValue reply = await ExecuteCommandAsync(
+            new RespCommand("LIMIT", key, max, windowMs, "SLIDING", "WITHRETRY"),
+            cancellationToken);
+
+        return ReadLimitOutcome(reply);
+    }
+
+    /// <inheritdoc />
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    public async ValueTask<LimitOutcome> LimitTokensWithRetryAsync(
+        string key,
+        long capacity,
+        long refillMs,
+        long cost = 1,
+        CancellationToken cancellationToken = default)
+    {
+        RespValue reply = await ExecuteCommandAsync(
+            new RespCommand("LIMIT", key, capacity, refillMs, "TOKENS", "COST").With(cost).With("WITHRETRY"),
+            cancellationToken);
+
+        return ReadLimitOutcome(reply);
+    }
+
+    private static LimitOutcome ReadLimitOutcome(RespValue reply)
+    {
+        if (reply.Items is not { Count: 2 } items
+            || items[0].Kind != RespKind.Integer
+            || items[1].Kind != RespKind.Integer)
+        {
+            throw new RuvioException("Invalid LIMIT WITHRETRY response.");
+        }
+
+        long remaining = items[0].Integer;
+
+        return new LimitOutcome(remaining >= 0, Math.Max(remaining, 0), Math.Max(items[1].Integer, 0));
+    }
+
+    /// <inheritdoc />
     public ValueTask<long> OnceAsync(string key, long ttlMs, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("ONCE", key, ttlMs), cancellationToken);

@@ -1061,3 +1061,20 @@ fn helpers_cache_idempotency_recent() {
     assert_eq!(db.recent("recent", 2).unwrap(), ["d", "c"]);
     assert!(db.recent("recent", 0).unwrap().is_empty());
 }
+
+#[test]
+fn limit_sliding_and_tokens_modes() {
+    let Some(mut db) = connect(14) else { return };
+
+    assert_eq!(db.limit_sliding("rl:s", 2, 60_000).unwrap(), Some(1));
+    assert_eq!(db.limit_sliding("rl:s", 2, 60_000).unwrap(), Some(0));
+    let refused = db.limit_sliding_with_retry("rl:s", 2, 60_000).unwrap();
+    assert!(!refused.allowed && refused.remaining == 0 && refused.retry_after_ms > 0);
+    // A key keeps the mode it was created with.
+    assert!(db.limit_tokens("rl:s", 2, 60_000, 1).is_err());
+
+    assert_eq!(db.limit_tokens("rl:t", 5, 60_000, 2).unwrap(), Some(3));
+    let taken = db.limit_tokens_with_retry("rl:t", 5, 60_000, 3).unwrap();
+    assert!(taken.allowed && taken.remaining == 0 && taken.retry_after_ms == 0);
+    assert_eq!(db.limit_tokens("rl:t", 5, 60_000, 1).unwrap(), None);
+}

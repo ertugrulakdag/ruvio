@@ -176,6 +176,14 @@ async def test_versioned_take_once_limit(c):
     assert await c.limit("lim", 2, 10000) is None
     assert await c.rate_limit("rl", 1, 10000) == (True, 0)
     assert await c.rate_limit("rl", 1, 10000) == (False, 0)
+    assert await c.limit_sliding("sl", 2, 60000) == 1
+    assert await c.limit_sliding("sl", 2, 60000) == 0
+    refused = await c.limit_sliding_with_retry("sl", 2, 60000)
+    assert not refused.allowed and refused.remaining == 0 and refused.retry_after_ms > 0
+    assert await c.limit_tokens("tk", 5, 60000, 2) == 3
+    taken = await c.limit_tokens_with_retry("tk", 5, 60000, 3)
+    assert taken == (True, 0, 0)
+    assert await c.limit_tokens("tk", 5, 60000) is None
 
 
 async def test_lease_semaphore_release(c):

@@ -865,6 +865,19 @@ pub struct RateLimit {
     pub remaining: i64,
 }
 
+/// The answer of the `*_with_retry` limit calls ([`Client::limit_sliding_with_retry`](crate::Client::limit_sliding_with_retry),
+/// [`Client::limit_tokens_with_retry`](crate::Client::limit_tokens_with_retry)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LimitOutcome {
+    /// True when this call was let through.
+    pub allowed: bool,
+    /// Allowance left after this call (0 when refused).
+    pub remaining: i64,
+    /// Milliseconds until the same call would pass (0 when it was let through). Fit for a
+    /// `Retry-After` header.
+    pub retry_after_ms: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

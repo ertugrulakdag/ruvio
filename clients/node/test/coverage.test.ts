@@ -44,6 +44,10 @@ const TABLE = loadTable();
 const OPTIONS: [string, string][] = [
   ['SET ... IFEQ', 'set'],
   ['INCRBY ... MAX', 'incrbyMax'],
+  ['LIMIT ... SLIDING', 'limitSliding'],
+  ['LIMIT ... TOKENS', 'limitTokens'],
+  ['LIMIT ... SLIDING WITHRETRY', 'limitSlidingWithRetry'],
+  ['LIMIT ... TOKENS WITHRETRY', 'limitTokensWithRetry'],
   ['FILLGET ... WAIT', 'fillget'],
   ['FILLSET ... SWR', 'fillset'],
   ['GETEX key ms', 'getex'],

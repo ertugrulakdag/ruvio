@@ -71,6 +71,7 @@ from ._converters import (  # noqa: F401
     _key_value,
     _keys,
     _limit,
+    _limit_outcome,
     _limit_args,
     _list_of_dicts,
     _mpop,
@@ -1227,6 +1228,88 @@ class Commands:
                 ...   # over the limit, reject the request
         """
         return self._c(None, "LIMIT", key, max, window_ms)
+
+    def limit_sliding(self, key: KeyT, max: int, window_ms: int) -> Any:  # noqa: A002
+        """``LIMIT key max window_ms SLIDING`` - sliding-window rate limiter. Ruvio extension.
+
+        The previous window counts for the part of it that still overlaps the last ``window_ms``, so a
+        burst at a window edge is not doubled. The key keeps two counters, not one entry per call. A key
+        keeps the mode it was created with.
+
+        Args:
+            key: The limiter key.
+            max: Allowed calls per window (positive integer, at most 2147483647).
+            window_ms: Window length in milliseconds (positive integer).
+
+        Returns:
+            The remaining allowance after this call, or ``None`` when it did not fit (nothing is counted).
+
+        Raises:
+            WrongTypeError: The key holds something other than a limiter.
+            ResponseError: The key was created by another ``LIMIT`` mode, or an argument is out of range.
+
+        Example:
+            if client.limit_sliding("api:user:7", 100, 60000) is None:
+                ...   # over the limit
+        """
+        return self._c(None, "LIMIT", key, max, window_ms, "SLIDING")
+
+    def limit_tokens(self, key: KeyT, capacity: int, refill_ms: int, cost: int = 1) -> Any:
+        """``LIMIT key capacity refill_ms TOKENS COST cost`` - token bucket. Ruvio extension.
+
+        The bucket holds ``capacity`` tokens and refills completely over ``refill_ms``; a call takes
+        ``cost`` tokens. The key keeps one timestamp and disappears when the bucket is full again.
+
+        Args:
+            key: The limiter key.
+            capacity: Bucket size (1 to 1000000).
+            refill_ms: Time to refill an empty bucket in milliseconds (up to 4294967295).
+            cost: Tokens this call takes (1 to ``capacity``).
+
+        Returns:
+            The tokens left after this call, or ``None`` when the bucket held too few (nothing is taken).
+
+        Raises:
+            WrongTypeError: The key holds something other than a limiter.
+            ResponseError: The key was created by another ``LIMIT`` mode, or an argument is out of range.
+
+        Example:
+            left = client.limit_tokens("api:key:7", 10, 1000, 2)   # 10 per second, this call costs 2
+        """
+        return self._c(None, "LIMIT", key, capacity, refill_ms, "TOKENS", "COST", cost)
+
+    def limit_sliding_with_retry(self, key: KeyT, max: int, window_ms: int) -> Any:  # noqa: A002
+        """:meth:`limit_sliding` with ``WITHRETRY``: the answer also says how long to wait.
+
+        Args:
+            key: The limiter key.
+            max: Allowed calls per window.
+            window_ms: Window length in milliseconds.
+
+        Returns:
+            A :class:`LimitOutcome` ``(allowed, remaining, retry_after_ms)``.
+
+        Example:
+            allowed, remaining, retry_after_ms = client.limit_sliding_with_retry("api:user:7", 100, 60000)
+        """
+        return self._c(_limit_outcome, "LIMIT", key, max, window_ms, "SLIDING", "WITHRETRY")
+
+    def limit_tokens_with_retry(self, key: KeyT, capacity: int, refill_ms: int, cost: int = 1) -> Any:
+        """:meth:`limit_tokens` with ``WITHRETRY``: the answer also says how long to wait.
+
+        Args:
+            key: The limiter key.
+            capacity: Bucket size.
+            refill_ms: Time to refill an empty bucket in milliseconds.
+            cost: Tokens this call takes.
+
+        Returns:
+            A :class:`LimitOutcome` ``(allowed, remaining, retry_after_ms)``.
+
+        Example:
+            allowed, remaining, retry_after_ms = client.limit_tokens_with_retry("api:key:7", 10, 1000)
+        """
+        return self._c(_limit_outcome, "LIMIT", key, capacity, refill_ms, "TOKENS", "COST", cost, "WITHRETRY")
 
     def rate_limit(self, key: KeyT, max: int, window_ms: int) -> Any:  # noqa: A002
         """Rate-limit helper on ``LIMIT``: the same command as :meth:`limit`, returned as a tuple.

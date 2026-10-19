@@ -90,6 +90,12 @@ public sealed class BloomInsertOptions
 /// <param name="Remaining">The allowance left after this call; 0 when it was refused.</param>
 public readonly record struct RateLimitResult(bool Allowed, long Remaining);
 
+/// <summary>The answer of the <c>WITHRETRY</c> forms of <c>LIMIT ... SLIDING</c> and <c>LIMIT ... TOKENS</c>.</summary>
+/// <param name="Allowed">True when this call was let through.</param>
+/// <param name="Remaining">The allowance left after this call; 0 when it was refused.</param>
+/// <param name="RetryAfterMs">Milliseconds until the same call would pass; 0 when it was let through. Fit for a <c>Retry-After</c> header.</param>
+public readonly record struct LimitOutcome(bool Allowed, long Remaining, long RetryAfterMs);
+
 /// <summary>What <c>IDEM key BEGIN</c> decided.</summary>
 public enum IdempotencyState
 {

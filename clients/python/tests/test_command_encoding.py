@@ -247,3 +247,21 @@ def test_flush_variants_and_geo_without_hash():
     assert r.georadius("g", 1, 2, 3, withcoord=True, withdist=True) == [GeoResult("m", 2.5, None, (1.0, 2.0))]
     r.reply = [["m", ["1", "2"]]]
     assert r.georadius("g", 1, 2, 3, withcoord=True) == [GeoResult("m", None, None, (1.0, 2.0))]
+
+
+def test_limit_modes_encode_their_keywords_and_convert_the_retry_reply():
+    r = Rec(3)
+    assert r.limit_sliding("k", 5, 1000) == 3
+    assert r.args == ["LIMIT", "k", "5", "1000", "SLIDING"]
+    assert r.limit_tokens("k", 10, 2000, 2) == 3
+    assert r.args == ["LIMIT", "k", "10", "2000", "TOKENS", "COST", "2"]
+    assert r.limit_tokens("k", 10, 2000) == 3
+    assert r.args[-2:] == ["COST", "1"]
+
+    r = Rec([2, 0])
+    assert r.limit_sliding_with_retry("k", 5, 1000) == (True, 2, 0)
+    assert r.args == ["LIMIT", "k", "5", "1000", "SLIDING", "WITHRETRY"]
+    r = Rec([-1, 250])
+    out = r.limit_tokens_with_retry("k", 10, 2000)
+    assert (out.allowed, out.remaining, out.retry_after_ms) == (False, 0, 250)
+    assert r.args == ["LIMIT", "k", "10", "2000", "TOKENS", "COST", "1", "WITHRETRY"]

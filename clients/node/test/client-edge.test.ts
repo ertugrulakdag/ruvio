@@ -462,6 +462,36 @@ test('rateLimit maps LIMIT replies', async () => {
   });
 });
 
+test('limit modes send their keywords and read their replies', async () => {
+  let next: string = int(3);
+  const sent: string[][] = [];
+  await withClient(
+    (a) => {
+      if (a[0] !== 'LIMIT') return ok;
+      sent.push(a);
+      return next;
+    },
+    {},
+    async (c) => {
+      assert.equal(await c.limitSliding('k', 5, 1000), 3);
+      assert.deepEqual(sent.pop(), ['LIMIT', 'k', '5', '1000', 'SLIDING']);
+      assert.equal(await c.limitTokens('k', 10, 2000, 2), 3);
+      assert.deepEqual(sent.pop(), ['LIMIT', 'k', '10', '2000', 'TOKENS', 'COST', '2']);
+      assert.equal(await c.limitTokens('k', 10, 2000), 3);
+      assert.deepEqual(sent.pop(), ['LIMIT', 'k', '10', '2000', 'TOKENS', 'COST', '1']);
+      next = '$-1\r\n';
+      assert.equal(await c.limitSliding('k', 5, 1000), null);
+
+      next = '*2\r\n:2\r\n:0\r\n';
+      assert.deepEqual(await c.limitSlidingWithRetry('k', 5, 1000), { allowed: true, remaining: 2, retryAfterMs: 0 });
+      assert.deepEqual(sent.pop(), ['LIMIT', 'k', '5', '1000', 'SLIDING', 'WITHRETRY']);
+      next = '*2\r\n:-1\r\n:250\r\n';
+      assert.deepEqual(await c.limitTokensWithRetry('k', 10, 2000), { allowed: false, remaining: 0, retryAfterMs: 250 });
+      assert.deepEqual(sent.pop(), ['LIMIT', 'k', '10', '2000', 'TOKENS', 'COST', '1', 'WITHRETRY']);
+    },
+  );
+});
+
 // ---- getOrCreate / idempotent ---------------------------------------------------------------
 
 test('getOrCreate: hit, fill (with and without stale window), stale with and without refresher, busy timeout', async () => {

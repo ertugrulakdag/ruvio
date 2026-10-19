@@ -238,3 +238,54 @@ func TestCustomDialerIsUsed(t *testing.T) {
 		t.Fatalf("dial error must surface, got %v", err)
 	}
 }
+
+func TestLimitModesSendTheirKeywordsAndReadTheirReplies(t *testing.T) {
+	reply := ":3\r\n"
+	f := newFakeNode(t, func(f *fakeNode, args []string) string {
+		switch strings.ToUpper(args[0]) {
+		case "PING":
+			return "+PONG\r\n"
+		case "LIMIT":
+			return reply
+		}
+		return "+OK\r\n"
+	})
+	cl, err := Connect(context.Background(), Options{Addr: f.addr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	ctx := context.Background()
+	last := func() string {
+		got := f.commands()
+		return got[len(got)-1]
+	}
+
+	remaining, allowed, err := cl.LimitSliding(ctx, "k", 5, time.Second)
+	if err != nil || remaining != 3 || !allowed || last() != "LIMIT k 5 1000 SLIDING" {
+		t.Fatalf("sliding: %d %v %v %q", remaining, allowed, err, last())
+	}
+	remaining, allowed, err = cl.LimitTokens(ctx, "k", 10, 2*time.Second, 2)
+	if err != nil || remaining != 3 || !allowed || last() != "LIMIT k 10 2000 TOKENS COST 2" {
+		t.Fatalf("tokens: %d %v %v %q", remaining, allowed, err, last())
+	}
+	reply = "$-1\r\n"
+	if _, allowed, err = cl.LimitSliding(ctx, "k", 5, time.Second); err != nil || allowed {
+		t.Fatalf("refused sliding: %v %v", allowed, err)
+	}
+
+	reply = "*2\r\n:2\r\n:0\r\n"
+	out, err := cl.LimitSlidingWithRetry(ctx, "k", 5, time.Second)
+	if err != nil || out != (LimitOutcome{Allowed: true, Remaining: 2}) || last() != "LIMIT k 5 1000 SLIDING WITHRETRY" {
+		t.Fatalf("sliding retry: %+v %v %q", out, err, last())
+	}
+	reply = "*2\r\n:-1\r\n:250\r\n"
+	out, err = cl.LimitTokensWithRetry(ctx, "k", 10, 2*time.Second, 1)
+	if err != nil || out != (LimitOutcome{RetryAfter: 250 * time.Millisecond}) || last() != "LIMIT k 10 2000 TOKENS COST 1 WITHRETRY" {
+		t.Fatalf("tokens retry: %+v %v %q", out, err, last())
+	}
+	reply = "*1\r\n:1\r\n"
+	if _, err = cl.LimitTokensWithRetry(ctx, "k", 10, time.Second, 1); err == nil {
+		t.Fatal("a one-element reply must be an error")
+	}
+}

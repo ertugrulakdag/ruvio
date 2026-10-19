@@ -11,9 +11,9 @@ use crate::error::Error;
 use crate::keywords::{ClientType, InfoSection, StreamTrim};
 use crate::models::{
     BitFieldOffset, BitFieldOp, BitFieldText, FieldExpireCondition, FillOutcome, GeoOrder, GeoUnit,
-    HashScanPage, InsertPosition, KeyType, ListSide, PubSubMessage, ScanPage, SortedSetAddOptions,
-    SortedSetEntry, StreamClaimOptions, StreamEntry, StreamPendingEntry, StreamPendingFilter,
-    StreamReadOptions, StreamReadResult,
+    HashScanPage, InsertPosition, KeyType, LimitOutcome, ListSide, PubSubMessage, ScanPage,
+    SortedSetAddOptions, SortedSetEntry, StreamClaimOptions, StreamEntry, StreamPendingEntry,
+    StreamPendingFilter, StreamReadOptions, StreamReadResult,
 };
 
 use crate::args::Num;
@@ -101,6 +101,154 @@ impl Client {
             .as_integer()
             .map(Some)
             .ok_or_else(|| unexpected("LIMIT", &value))
+    }
+
+    /// Sends `LIMIT key max window_ms SLIDING` (Ruvio): a sliding-window limit.
+    ///
+    /// The previous window counts for the part of it that still overlaps the last
+    /// `window_ms`, so a burst at a window edge is not doubled. The key keeps two counters, not
+    /// one entry per call. A key keeps the mode it was created with.
+    ///
+    /// # Arguments
+    /// * `key` - limiter key (for example `"rl:user:42"`).
+    /// * `max` - calls allowed per window, at most 2147483647.
+    /// * `window_ms` - window length in milliseconds.
+    ///
+    /// # Returns
+    /// `Some(remaining)` when this call fit; `None` when it did not (nothing was counted).
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` if the key holds another type, or an error if the key was
+    /// created by another `LIMIT` mode.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// if client.limit_sliding("rl:user:42", 100, 60_000)?.is_none() {
+    ///     println!("slow down");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn limit_sliding(
+        &mut self,
+        key: &str,
+        max: u64,
+        window_ms: u64,
+    ) -> Result<Option<i64>, Error> {
+        let value = self.run([
+            "LIMIT",
+            key,
+            Num::uint(max).as_str(),
+            Num::uint(window_ms).as_str(),
+            "SLIDING",
+        ])?;
+
+        limit_remaining(&value)
+    }
+
+    /// Sends `LIMIT key capacity refill_ms TOKENS [COST cost]` (Ruvio): a token bucket.
+    ///
+    /// The bucket holds `capacity` tokens and refills completely over `refill_ms`; a call takes
+    /// `cost` tokens. The key keeps one timestamp and disappears when the bucket is full again.
+    ///
+    /// # Arguments
+    /// * `key` - limiter key.
+    /// * `capacity` - bucket size, 1 to 1000000.
+    /// * `refill_ms` - time to refill an empty bucket, up to 4294967295 ms.
+    /// * `cost` - tokens this call takes, 1 to `capacity`.
+    ///
+    /// # Returns
+    /// `Some(remaining)` tokens left when the call fit; `None` when the bucket held too few
+    /// (nothing was taken).
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` if the key holds another type, or an error if the key was
+    /// created by another `LIMIT` mode.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// // 10 tokens per second, this call takes 2.
+    /// let left = client.limit_tokens("rl:api:7", 10, 1_000, 2)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn limit_tokens(
+        &mut self,
+        key: &str,
+        capacity: u64,
+        refill_ms: u64,
+        cost: u64,
+    ) -> Result<Option<i64>, Error> {
+        let value = self.run([
+            "LIMIT",
+            key,
+            Num::uint(capacity).as_str(),
+            Num::uint(refill_ms).as_str(),
+            "TOKENS",
+            "COST",
+            Num::uint(cost).as_str(),
+        ])?;
+
+        limit_remaining(&value)
+    }
+
+    /// [`Client::limit_sliding`] with `WITHRETRY`: the answer also says how long to wait.
+    ///
+    /// # Returns
+    /// A [`LimitOutcome`]; `retry_after_ms` is the wait until the same call would pass.
+    ///
+    /// # Errors
+    /// As [`Client::limit_sliding`].
+    pub fn limit_sliding_with_retry(
+        &mut self,
+        key: &str,
+        max: u64,
+        window_ms: u64,
+    ) -> Result<LimitOutcome, Error> {
+        let value = self.run([
+            "LIMIT",
+            key,
+            Num::uint(max).as_str(),
+            Num::uint(window_ms).as_str(),
+            "SLIDING",
+            "WITHRETRY",
+        ])?;
+
+        limit_outcome(&value)
+    }
+
+    /// [`Client::limit_tokens`] with `WITHRETRY`: the answer also says how long to wait.
+    ///
+    /// # Returns
+    /// A [`LimitOutcome`]; `retry_after_ms` is the wait until the same call would pass.
+    ///
+    /// # Errors
+    /// As [`Client::limit_tokens`].
+    pub fn limit_tokens_with_retry(
+        &mut self,
+        key: &str,
+        capacity: u64,
+        refill_ms: u64,
+        cost: u64,
+    ) -> Result<LimitOutcome, Error> {
+        let value = self.run([
+            "LIMIT",
+            key,
+            Num::uint(capacity).as_str(),
+            Num::uint(refill_ms).as_str(),
+            "TOKENS",
+            "COST",
+            Num::uint(cost).as_str(),
+            "WITHRETRY",
+        ])?;
+
+        limit_outcome(&value)
     }
 
     /// Sends `ONCE key ttl_ms` (Ruvio): a "do this only once until the deadline" marker.
@@ -3715,6 +3863,34 @@ fn pubsub_message(reply: &RespValue) -> Result<Option<PubSubMessage>, Error> {
         channel: channel.as_string()?.unwrap_or_default(),
         payload,
     }))
+}
+
+fn limit_remaining(value: &RespValue) -> Result<Option<i64>, Error> {
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    value
+        .as_integer()
+        .map(Some)
+        .ok_or_else(|| unexpected("LIMIT", value))
+}
+
+fn limit_outcome(value: &RespValue) -> Result<LimitOutcome, Error> {
+    let [remaining, retry_after_ms] = value.as_array().unwrap_or_default() else {
+        return Err(unexpected("LIMIT", value));
+    };
+    let (Some(remaining), Some(retry_after_ms)) =
+        (remaining.as_integer(), retry_after_ms.as_integer())
+    else {
+        return Err(unexpected("LIMIT", value));
+    };
+
+    Ok(LimitOutcome {
+        allowed: remaining >= 0,
+        remaining: remaining.max(0),
+        retry_after_ms: retry_after_ms.max(0) as u64,
+    })
 }
 
 #[cfg(test)]

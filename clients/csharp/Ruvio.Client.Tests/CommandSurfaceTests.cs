@@ -726,6 +726,30 @@ public partial class CommandSurfaceTests
         await session.Reply(":4\r\n");
         Assert.Equal(4, await limited);
 
+        ValueTask<long?> sliding = session.Client.LimitSlidingAsync("login", 5, 60000);
+
+        await session.Expect("LIMIT", "login", "5", "60000", "SLIDING");
+        await session.Reply(":3\r\n");
+        Assert.Equal(3, await sliding);
+
+        ValueTask<long?> tokens = session.Client.LimitTokensAsync("api", 10, 2000, 2);
+
+        await session.Expect("LIMIT", "api", "10", "2000", "TOKENS", "COST", "2");
+        await session.Reply("$-1\r\n");
+        Assert.Null(await tokens);
+
+        ValueTask<LimitOutcome> slidingRetry = session.Client.LimitSlidingWithRetryAsync("login", 5, 60000);
+
+        await session.Expect("LIMIT", "login", "5", "60000", "SLIDING", "WITHRETRY");
+        await session.Reply("*2\r\n:2\r\n:0\r\n");
+        Assert.Equal(new LimitOutcome(true, 2, 0), await slidingRetry);
+
+        ValueTask<LimitOutcome> tokensRetry = session.Client.LimitTokensWithRetryAsync("api", 10, 2000);
+
+        await session.Expect("LIMIT", "api", "10", "2000", "TOKENS", "COST", "1", "WITHRETRY");
+        await session.Reply("*2\r\n:-1\r\n:250\r\n");
+        Assert.Equal(new LimitOutcome(false, 0, 250), await tokensRetry);
+
         ValueTask<long> once = session.Client.OnceAsync("pay", 60000);
 
         await session.Expect("ONCE", "pay", "60000");

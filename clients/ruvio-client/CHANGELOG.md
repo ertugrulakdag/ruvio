@@ -4,6 +4,8 @@ Notable changes to the Rust client crate `ruvio-client`. New entries go under "U
 
 ## Unreleased
 
+- `limit_sliding`, `limit_tokens`, `limit_sliding_with_retry` and `limit_tokens_with_retry` for the `SLIDING` and `TOKENS` modes of `LIMIT`, and the `LimitOutcome` result (needs a server that has them).
+
 ## 0.4.0 - 2026-10-17
 
 - New typed trim, `INFO`, `CLIENT LIST` and change-feed keywords (all constant strings, nothing formatted per call).

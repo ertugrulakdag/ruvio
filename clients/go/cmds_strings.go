@@ -372,6 +372,77 @@ func (c *cmds) Limit(ctx context.Context, key string, max int64, window time.Dur
 	return c.intNil(ctx, newCmd(4, cLIMIT).s(key).i(max).i(ms(window)))
 }
 
+// LimitOutcome is the reply of LimitSlidingWithRetry and LimitTokensWithRetry.
+type LimitOutcome struct {
+	// Allowed is true when the call was let through.
+	Allowed bool
+	// Remaining is the allowance left after the call (0 when refused).
+	Remaining int64
+	// RetryAfter is the wait until the same call would pass (0 when it was let through),
+	// rounded up to whole milliseconds. Fit for a Retry-After header.
+	RetryAfter time.Duration
+}
+
+// LimitSliding counts one call against a sliding-window limit (Ruvio LIMIT key max
+// window_ms SLIDING).
+//
+// The previous window counts for the part of it that still overlaps the last window, so a
+// burst at a window edge is not doubled. The key keeps two counters, not one entry per
+// call. It returns allowed == true with remaining = the allowance left after this call;
+// when the call does not fit, allowed is false and nothing is counted. max must be from 1
+// to 2147483647. A key keeps the mode it was created with: another mode on it returns a
+// server error. The key must not hold another type (WRONGTYPE).
+func (c *cmds) LimitSliding(ctx context.Context, key string, max int64, window time.Duration) (remaining int64, allowed bool, err error) {
+	return c.intNil(ctx, newCmd(5, cLIMIT).s(key).i(max).i(ms(window)).t(tSLIDING))
+}
+
+// LimitTokens takes cost tokens from a token bucket (Ruvio LIMIT key capacity refill_ms
+// TOKENS COST cost).
+//
+// The bucket holds capacity tokens (1 to 1000000) and refills completely over refill (up
+// to 4294967295 ms). It returns allowed == true with the tokens left; when the bucket
+// holds fewer than cost tokens, allowed is false and nothing is taken. The key keeps one
+// timestamp and disappears when the bucket is full again. cost is from 1 to capacity. A
+// key keeps the mode it was created with. The key must not hold another type (WRONGTYPE).
+func (c *cmds) LimitTokens(ctx context.Context, key string, capacity int64, refill time.Duration, cost int64) (remaining int64, allowed bool, err error) {
+	return c.intNil(ctx, newCmd(7, cLIMIT).s(key).i(capacity).i(ms(refill)).t(tTOKENS).t(tCOST).i(cost))
+}
+
+// LimitSlidingWithRetry is LimitSliding with WITHRETRY: the outcome also says how long to
+// wait before the same call would pass.
+func (c *cmds) LimitSlidingWithRetry(ctx context.Context, key string, max int64, window time.Duration) (LimitOutcome, error) {
+	return c.limitOutcome(ctx, newCmd(6, cLIMIT).s(key).i(max).i(ms(window)).t(tSLIDING).t(tWITHRETRY))
+}
+
+// LimitTokensWithRetry is LimitTokens with WITHRETRY: the outcome also says how long to
+// wait before the same call would pass.
+func (c *cmds) LimitTokensWithRetry(ctx context.Context, key string, capacity int64, refill time.Duration, cost int64) (LimitOutcome, error) {
+	return c.limitOutcome(ctx, newCmd(8, cLIMIT).s(key).i(capacity).i(ms(refill)).t(tTOKENS).t(tCOST).i(cost).t(tWITHRETRY))
+}
+
+func (c *cmds) limitOutcome(ctx context.Context, r *request) (LimitOutcome, error) {
+	v, err := c.ex.exec(ctx, r)
+	if err != nil {
+		return LimitOutcome{}, err
+	}
+	if !v.isAgg() || len(v.Array) != 2 {
+		return LimitOutcome{}, unexpected(v)
+	}
+	remaining, err := v.Array[0].AsInt64()
+	if err != nil {
+		return LimitOutcome{}, err
+	}
+	retry, err := v.Array[1].AsInt64()
+	if err != nil {
+		return LimitOutcome{}, err
+	}
+	return LimitOutcome{
+		Allowed:    remaining >= 0,
+		Remaining:  max(remaining, 0),
+		RetryAfter: time.Duration(max(retry, 0)) * time.Millisecond,
+	}, nil
+}
+
 // Once returns true for the first caller and false for every other call until ttl has
 // passed (Ruvio ONCE key ttl_ms). It is a deduplication marker: the key is created for
 // ttl (at least 1 ms) and then disappears. ttl <= 0 returns a server error. The key must

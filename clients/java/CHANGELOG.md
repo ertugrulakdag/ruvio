@@ -4,6 +4,8 @@ Notable changes to the Java client `io.github.salihcantekin:ruvio-client`. New e
 
 ## Unreleased
 
+- `limitSliding`, `limitTokens`, `limitSlidingWithRetry` and `limitTokensWithRetry` for the `SLIDING` and `TOKENS` modes of `LIMIT`, and the `LimitOutcome` record (needs a server that has them).
+
 ## 0.1.2 - 2026-10-17
 
 - Typed keyword constants: new enums `InsertPosition` (`linsert`), `BitUnit` (`bitcount`), `GeoOrder` (`GeoSearchArgs.order`) and `KeyType` (`ScanArgs.type`), and `BitFieldArgs.Type.signed(n)` / `unsigned(n)` for BITFIELD types. The existing boolean and string overloads still work. Every enum, including `GeoUnit`, `ListDirection`, `BitOp`, `Overflow` and `Aggregate`, writes a pre-encoded constant, so the keyword costs no per-call encoding.

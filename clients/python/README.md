@@ -159,6 +159,8 @@ to `on_push=callback` and never reach a command's reply.
 | `r.lease_scope(key, ttl_ms)` | `LEASE` / `RELEASE` | Yields the fencing token and releases it on exit |
 | `r.semaphore_scope(key, max, ttl_ms)` | `SEMAPHORE` / `RELEASE` | Raises `LockError` when full |
 | `r.rate_limit(key, max, window_ms)` | `LIMIT` | `(allowed, remaining)` |
+| `r.limit_sliding(key, max, window_ms)`, `r.limit_tokens(key, capacity, refill_ms, cost=1)` | `LIMIT ... SLIDING`, `LIMIT ... TOKENS` | remaining, or `None` |
+| `r.limit_sliding_with_retry(...)`, `r.limit_tokens_with_retry(...)` | `LIMIT ... WITHRETRY` | `(allowed, remaining, retry_after_ms)` |
 | `r.get_or_create(key, factory, ttl_ms, fill_ms=…, swr_ms=…)` | `FILLGET` / `FILLSET` | Exactly one caller runs `factory` (sync or async). Waiters poll plain `FILLGET` with backoff from 5 ms up to 100 ms instead of `WAIT`, which would park the shared connection |
 | `r.idempotent(key, fingerprint, ttl_ms, fn)` | `IDEM BEGIN` / `COMPLETE` | `("executed", result)`, `("completed", stored)`, `("pending", None)` or `("conflict", None)` |
 | `r.scan_iter()` / `hscan_iter` / `sscan_iter` / `zscan_iter` | `SCAN` family | Lazy and driven by the cursor; async iterators on the asyncio client |

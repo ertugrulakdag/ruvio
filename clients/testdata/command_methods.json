@@ -141,7 +141,7 @@
     "KEYS": {"rust": "keys", "csharp": "GetKeysAsync", "go": "Keys", "java": "keys", "node": "keys", "python": "keys"},
     "LATENCY": {"rust": "latency_latest", "csharp": "GetLatencyLatestAsync", "go": "LatencyLatest", "java": "latencyLatest", "node": "latencyLatest", "python": "latency_latest"},
     "LEASE": {"rust": ["lease", "lease_guard"], "csharp": "LeaseAsync", "go": "Lease", "java": "lease", "node": "lease", "python": "lease"},
-    "LIMIT": {"rust": ["limit", "rate_limit"], "csharp": "LimitAsync", "go": "Limit", "java": "limit", "node": "limit", "python": "limit"},
+    "LIMIT": {"rust": ["limit", "rate_limit", "limit_sliding", "limit_tokens", "limit_sliding_with_retry", "limit_tokens_with_retry"], "csharp": "LimitAsync", "go": "Limit", "java": "limit", "node": "limit", "python": "limit"},
     "LINDEX": {"rust": "lindex", "csharp": "GetListItemAsync", "go": "LIndex", "java": "lindex", "node": "lindex", "python": "lindex"},
     "LINSERT": {"rust": "linsert", "csharp": "InsertListAsync", "go": "LInsert", "java": "linsert", "node": "linsert", "python": "linsert"},
     "LLEN": {"rust": "llen", "csharp": "GetListLengthAsync", "go": "LLen", "java": "llen", "node": "llen", "python": "llen"},

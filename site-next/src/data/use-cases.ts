@@ -13,9 +13,14 @@ export const cases: UseCase[] = [
     problem: "A fixed window per API key, per user, or per tenant, in one command on the shard that owns the key.",
     code: `LIMIT api:key-7 100 60000
 # 99    -> 99 calls left in this 60 s window
-# (nil) -> window is full, nothing was counted`,
-    body: "<code>LIMIT key max window_ms</code> returns the remaining allowance, or a null bulk when the window is full. A rejected call is not counted. The window is the key's deadline, so a quiet key disappears by itself. In WAL-backed modes the accepted call is a log record.",
-    note: "Fixed window, not sliding. If you need per-second smoothing on top, keep a short second window next to the long one.",
+# (nil) -> window is full, nothing was counted
+
+LIMIT api:key-7 100 60000 SLIDING
+LIMIT api:key-7 10 1000 TOKENS COST 2 WITHRETRY
+# [8, 0]   -> 8 tokens left, go ahead
+# [-1, 150] -> refused, retry in 150 ms`,
+    body: "<code>LIMIT key max window_ms</code> returns the remaining allowance, or a null bulk when the window is full. A rejected call is not counted. The window is the key's deadline, so a quiet key disappears by itself. <code>SLIDING</code> weighs the previous window by how much of it still overlaps, so a burst at a window edge is not doubled. <code>TOKENS</code> is a token bucket that refills continuously and takes <code>COST</code> tokens per call. Both keep a few bytes per key, and <code>WITHRETRY</code> adds the wait to the reply for a <code>Retry-After</code> header. In WAL-backed modes the accepted call is a log record.",
+    note: "A key keeps the mode it was created with. The sliding window is an estimate from two counters, not an exact log of calls.",
     refs: [{ label: "LIMIT", href: commands }],
   },
   {

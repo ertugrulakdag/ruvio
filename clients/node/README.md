@@ -77,6 +77,8 @@ including the Ruvio options: `set(k, v, { ifEq })`, `incrbyMax`, `fillget`/`fill
 | `c.acquireLease(key, ttl)` (`lease.token` is the fencing token) | `LEASE` / `RELEASE` |
 | `c.acquireSemaphore(key, max, ttl)` | `SEMAPHORE` / `RELEASE` |
 | `c.rateLimit(key, max, windowMs)` -> `{ allowed, remaining }` | `LIMIT` |
+| `c.limitSliding(key, max, windowMs)`, `c.limitTokens(key, capacity, refillMs, cost?)` -> remaining or `null` | `LIMIT ... SLIDING`, `LIMIT ... TOKENS` |
+| `c.limitSlidingWithRetry(...)`, `c.limitTokensWithRetry(...)` -> `{ allowed, remaining, retryAfterMs }` | `LIMIT ... WITHRETRY` |
 | `c.getOrCreate(key, ttlMs, factory, { staleMs })` | `FILLGET`/`FILLSET`; waiters poll plain `FILLGET` with backoff (never `WAIT`) |
 | `c.idempotent(key, fingerprint, ttlMs, fn)` | `IDEM BEGIN/COMPLETE` |
 | `c.scanIterator()`, `hscanIterator`, `sscanIterator`, `zscanIterator` | cursor-driven async generators |
