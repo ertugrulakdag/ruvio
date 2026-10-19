@@ -64,6 +64,11 @@ class StringsLiveTest {
         assertFalse(c.setIfEq("s:o", "8", "nope"));
         assertTrue(c.setIfEq("s:o", "8", "7"));
         assertTrue(c.setIfEq("s:o", "9", "8", SetOptions.px(50_000)));
+        assertTrue(c.setIfGreater("s:wm", 10));
+        assertFalse(c.setIfGreater("s:wm", 10));
+        assertTrue(c.setIfGreater("s:wm", 11, SetOptions.px(50_000)));
+        assertFalse(c.setIfLess("s:wm", 12));
+        assertTrue(c.setIfLess("s:wm", -1));
         assertEquals("9", c.get("s:o"));
         assertTrue(c.pttl("s:o") <= 50_000);
         c.setex("s:ex", 100, "v");

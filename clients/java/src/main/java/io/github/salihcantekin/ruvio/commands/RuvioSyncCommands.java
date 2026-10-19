@@ -239,6 +239,52 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Synchronous form of {@code StringCommands#setIfGreater(Object, long)}: {@code true} when written.
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @return {@code true} when written, {@code false} when refused
+     */
+    public Boolean setIfGreater(K key, long value) {
+        return await(async.setIfGreater(key, value));
+    }
+
+    /**
+     * Like {@code setIfGreater(Object, long)} with an expiry for the new value.
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @param expiry the expiry to apply
+     * @return {@code true} when written, {@code false} when refused
+     */
+    public Boolean setIfGreater(K key, long value, SetOptions expiry) {
+        return await(async.setIfGreater(key, value, expiry));
+    }
+
+    /**
+     * Synchronous form of {@code StringCommands#setIfLess(Object, long)}: {@code true} when written.
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @return {@code true} when written, {@code false} when refused
+     */
+    public Boolean setIfLess(K key, long value) {
+        return await(async.setIfLess(key, value));
+    }
+
+    /**
+     * Like {@code setIfLess(Object, long)} with an expiry for the new value.
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @param expiry the expiry to apply
+     * @return {@code true} when written, {@code false} when refused
+     */
+    public Boolean setIfLess(K key, long value, SetOptions expiry) {
+        return await(async.setIfLess(key, value, expiry));
+    }
+
+    /**
      * Sends the Ruvio command {@code SETV key value}: starts a versioned string and returns its version.
      * It works on a missing key or a plain string (the key becomes versioned, version 1). Once a key is
      * versioned, later writes must use {@link #setv(Object, Object, long)} with the current version.

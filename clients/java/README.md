@@ -98,7 +98,7 @@ Anything without a typed method: `c.async().execute("COMMAND", arg, ...)`.
 ## Coverage
 
 All 287 commands of `docs/compatibility-matrix.json` have a typed method (`CoverageTest` maps every
-matrix name to a method and fails otherwise), including the Ruvio options: `SET ... IFEQ`,
+matrix name to a method and fails otherwise), including the Ruvio options: `SET ... IFEQ`, `SET ... IFGT/IFLT` (`setIfGreater`, `setIfLess`),
 `INCRBY ... MAX`, `FILLGET ... WAIT`, `FILLSET ... SWR`, `GETEX`, `DELEX key IFEQ v`, `LPUSHCAP/RPUSHCAP`,
 `BF.*`, `JSON.*` incl. `JSON.INDEX/FIND`, `IDEM BEGIN/COMPLETE`, `LEASE/RELEASE`, `SEMAPHORE`, `ONCE`,
 `TAKE`, `SETV`, `CHANGES`, `LIMIT`. Not typed (use `execute`): `FLUSHDB ASYNC`, `HELLO ... SETNAME`.

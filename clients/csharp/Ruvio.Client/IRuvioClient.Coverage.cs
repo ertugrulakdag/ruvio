@@ -22,6 +22,36 @@ public partial interface IRuvioClient
     ValueTask<bool> SetIfEqualAsync(string key, string value, string expected, TimeSpan? expiry = null, CancellationToken cancellationToken = default)
         => RespRead.NotNull(ExecuteAsync(CoverageCommands.SetIfEqual(key, value, expected, expiry).AsList(), cancellationToken));
 
+    /// <summary>Sends <c>SET key value IFGT [PX ms]</c>: writes when the key is missing or the value is greater than the stored integer (watermark, version, highest bid). A Ruvio extension.</summary>
+    /// <param name="key">The key.</param>
+    /// <param name="value">The new number.</param>
+    /// <param name="expiry">New time to live, rounded to milliseconds. Null removes any TTL.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns><see langword="true"/> when written; <see langword="false"/> when the stored number is greater or equal.</returns>
+    /// <exception cref="RuvioException">The key holds a value that is not a string (<c>WRONGTYPE</c>), or the stored string is not an integer.</exception>
+    /// <example>
+    /// <code>
+    /// bool advanced = await db.SetIfGreaterAsync("watermark", 1_700_000_000L);
+    /// </code>
+    /// </example>
+    ValueTask<bool> SetIfGreaterAsync(string key, long value, TimeSpan? expiry = null, CancellationToken cancellationToken = default)
+        => RespRead.NotNull(ExecuteAsync(CoverageCommands.SetIfGreater(key, value, expiry).AsList(), cancellationToken));
+
+    /// <summary>Sends <c>SET key value IFLT [PX ms]</c>: writes when the key is missing or the value is smaller than the stored integer (lowest price, earliest deadline). A Ruvio extension.</summary>
+    /// <param name="key">The key.</param>
+    /// <param name="value">The new number.</param>
+    /// <param name="expiry">New time to live, rounded to milliseconds. Null removes any TTL.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns><see langword="true"/> when written; <see langword="false"/> when the stored number is smaller or equal.</returns>
+    /// <exception cref="RuvioException">The key holds a value that is not a string (<c>WRONGTYPE</c>), or the stored string is not an integer.</exception>
+    /// <example>
+    /// <code>
+    /// bool lowered = await db.SetIfLessAsync("best:price", 499L);
+    /// </code>
+    /// </example>
+    ValueTask<bool> SetIfLessAsync(string key, long value, TimeSpan? expiry = null, CancellationToken cancellationToken = default)
+        => RespRead.NotNull(ExecuteAsync(CoverageCommands.SetIfLess(key, value, expiry).AsList(), cancellationToken));
+
     /// <summary>Sends <c>SET key value IFEQ expected KEEPTTL</c>: compare-and-set that keeps the current expiry.</summary>
     /// <param name="key">The key.</param>
     /// <param name="value">The new value.</param>

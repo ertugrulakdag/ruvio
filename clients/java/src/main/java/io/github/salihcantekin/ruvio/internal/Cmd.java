@@ -196,6 +196,10 @@ public final class Cmd {
     public static final byte[] IDEM = RespOut.fragment("IDEM");
     /** The word {@code IFEQ}, pre-encoded as a RESP bulk string. */
     public static final byte[] IFEQ = RespOut.fragment("IFEQ");
+    /** The word {@code IFGT}, pre-encoded as a RESP bulk string. */
+    public static final byte[] IFGT = RespOut.fragment("IFGT");
+    /** The word {@code IFLT}, pre-encoded as a RESP bulk string. */
+    public static final byte[] IFLT = RespOut.fragment("IFLT");
     /** The word {@code INCR}, pre-encoded as a RESP bulk string. */
     public static final byte[] INCR = RespOut.fragment("INCR");
     /** The word {@code INCRBY}, pre-encoded as a RESP bulk string. */

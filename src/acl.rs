@@ -1043,7 +1043,7 @@ pub fn command_acl_name(command: &Command<'_>) -> &'static str {
         Command::Once { .. } => "once",
         Command::IdempotencyBegin { .. } | Command::IdempotencyComplete { .. } => "idem",
         Command::Take { .. } => "take",
-        Command::SetIfEq { .. } => "set",
+        Command::SetIfEq { .. } | Command::SetIfCmp { .. } => "set",
         Command::DelIfEq { .. } => "delex",
         Command::ListPushCapped { back: false, .. } => "lpushcap",
         Command::ListPushCapped { back: true, .. } => "rpushcap",

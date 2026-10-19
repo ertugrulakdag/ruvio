@@ -4,6 +4,8 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+- New: `SET key value IFGT|IFLT [EX|PX|EXAT|PXAT|KEEPTTL]` writes an integer only when the key is missing or the number is greater (`IFGT`) or smaller (`IFLT`) than the stored one, so a watermark, version or best price needs no script. It answers `OK` or a null bulk; a non-integer argument or stored string is an error and writes nothing. Typed options in all six clients.
+
 ## 0.3.4 - 2026-10-17
 
 - `XADD ... MAXLEN` accepts `=` as well as `~` before the count, like `XTRIM` and `XADD ... MINID` already did.

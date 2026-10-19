@@ -609,6 +609,15 @@ pub enum Command<'a> {
         expected: Bytes<'a>,
         options: SetOptions,
     },
+    /// `SET key value IFGT|IFLT [EX|PX|EXAT|PXAT|KEEPTTL]`: writes when the key is missing or
+    /// `number` (the parsed `value`) is greater (`greater`) or smaller than the stored integer.
+    SetIfCmp {
+        key: Bytes<'a>,
+        value: Bytes<'a>,
+        number: i64,
+        greater: bool,
+        options: SetOptions,
+    },
     /// `DELEX key IFEQ expected`: deletes the string at `key` only when it equals `expected`.
     DelIfEq {
         key: Bytes<'a>,

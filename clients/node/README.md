@@ -56,7 +56,7 @@ await c.quit();
 ## API
 
 Typed methods for every command in `docs/compatibility-matrix.json` (287/287, enforced by `test/coverage.test.ts`),
-including the Ruvio options: `set(k, v, { ifEq })`, `incrbyMax`, `fillget`/`fillset` (`WAIT`, `SWR`), `getex(k, ms)`,
+including the Ruvio options: `set(k, v, { ifEq })`, `set(k, n, { ifGt })` / `{ ifLt }`, `incrbyMax`, `fillget`/`fillset` (`WAIT`, `SWR`), `getex(k, ms)`,
 `delex(k, ifEq)`, `lpushcap`/`rpushcap`, `bf*`, `json*` (incl. `jsonIndexCreate`, `jsonFind`), `idemBegin`/`idemComplete`,
 `lease`/`semaphore`/`release`, `once`, `take`, `setv`, `changes*`, `limit`. Anything else: `c.call('CMD', ...args)`.
 

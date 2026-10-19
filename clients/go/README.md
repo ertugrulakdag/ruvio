@@ -70,6 +70,7 @@ v, ok, err := c.Get(ctx, "greeting")           // ok=false when the key is missi
 
 ok, err = c.SetArgs(ctx, "k", "v", ruvio.SetOptions{NX: true, TTL: 30 * time.Second})
 ok, err = c.SetIfEq(ctx, "k", "v2", "v", ruvio.SetOptions{})   // Ruvio IFEQ
+ok, err = c.SetIfGreater(ctx, "watermark", 1700000000, ruvio.SetOptions{}) // Ruvio IFGT: keep the highest number
 n, ok, err := c.IncrByMax(ctx, "quota", 1, 100)                 // nil (ok=false) past 100
 
 // anything else: the escape hatch (string, []byte, ints, floats, bool)

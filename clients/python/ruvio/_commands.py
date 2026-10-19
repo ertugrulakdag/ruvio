@@ -635,14 +635,18 @@ class Commands:
         xx: bool = False,
         get: bool = False,
         ifeq: Optional[Arg] = None,
+        ifgt: bool = False,
+        iflt: bool = False,
     ) -> Any:
-        """``SET key value [IFEQ x] [EX|PX|EXAT|PXAT|KEEPTTL] [NX|XX] [GET]`` - writes a string.
+        """``SET key value [IFEQ x|IFGT n|IFLT n] [EX|PX|EXAT|PXAT|KEEPTTL] [NX|XX] [GET]`` - writes a string.
 
         ``SET`` replaces a value of any type. Without ``keepttl`` it clears an existing TTL.
         ``nx``, ``xx`` and ``ifeq`` are conditions: when one is not met nothing is written.
         ``ifeq`` is a Ruvio extension: it writes only when the current string equals the given value,
-        which makes compare-and-set and lock renewal a single command; it cannot be combined with
-        ``nx``, ``xx`` or ``get``.
+        which makes compare-and-set and lock renewal a single command. ``ifgt`` / ``iflt`` (also Ruvio
+        extensions) write ``value`` (an integer) only when the key is missing or it is greater / smaller than the
+        stored integer, to keep a watermark, version or highest bid. None of them can be combined with
+        ``nx``, ``xx`` or ``get``, and only one of the three can be used per call.
 
         Args:
             key: The key.
@@ -656,9 +660,11 @@ class Commands:
             xx: Write only when the key already exists.
             get: Return the previous string value instead of a success flag.
             ifeq: Write only when the key holds a string equal to this value (Ruvio extension).
+            ifgt: Write ``value`` only when the key is missing or ``value`` is greater than the stored integer.
+            iflt: Write ``value`` only when the key is missing or ``value`` is smaller than the stored integer.
 
         Returns:
-            ``True`` when written, ``False`` when ``nx``/``xx``/``ifeq`` refused the write. With
+            ``True`` when written, ``False`` when ``nx``/``xx``/``ifeq``/``ifgt``/``iflt`` refused the write. With
             ``get=True``: the previous value, or ``None`` when there was none (a refused write then
             also gives the previous value or ``None``).
 
@@ -670,9 +676,10 @@ class Commands:
             client.set("k", "v", ex=60)             # -> True, expires in a minute
             client.set("k", "w", nx=True)           # -> False (already exists)
             client.set("k", "x", ifeq="v")          # -> True only if the value is still "v"
+            client.set("wm", 1700000000, ifgt=True) # -> True only if greater than the stored number
             client.set("k", "y", get=True)          # -> previous value
         """
-        if ex is None and px is None and exat is None and pxat is None and not (keepttl or nx or xx or get) and ifeq is None:
+        if ex is None and px is None and exat is None and pxat is None and not (keepttl or nx or xx or get or ifgt or iflt) and ifeq is None:
             t = type(key)
             if t is str:
                 key = key.encode("utf-8", "surrogateescape")  # type: ignore[union-attr]
@@ -702,6 +709,10 @@ class Commands:
         args: List[Any] = [key, value]
         if ifeq is not None:
             args += ["IFEQ", ifeq]
+        if ifgt:
+            args.append("IFGT")
+        if iflt:
+            args.append("IFLT")
         if ex is not None:
             args += ["EX", ex]
         if px is not None:

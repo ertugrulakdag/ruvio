@@ -298,7 +298,7 @@
       "family": "strings",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Supports EX, PX, EXAT, PXAT, KEEPTTL, NX, XX, and GET. GET returns the previous string and refuses a non-string. `SET key value IFEQ expected [EX|PX|EXAT|PXAT|KEEPTTL]` (Ruvio extension) writes only when the string equals `expected` and answers nil otherwise; it does not combine with NX, XX or GET.",
+      "limitations": "Supports EX, PX, EXAT, PXAT, KEEPTTL, NX, XX, and GET. GET returns the previous string and refuses a non-string. `SET key value IFEQ expected [EX|PX|EXAT|PXAT|KEEPTTL]` (Ruvio extension) writes only when the string equals `expected` and answers nil otherwise; it does not combine with NX, XX or GET. `SET key value IFGT|IFLT [EX|PX|EXAT|PXAT|KEEPTTL]` (Ruvio extension) writes when the key is missing or `value` is greater (`IFGT`) or smaller (`IFLT`) than the stored signed 64-bit integer, and answers nil otherwise; a `value` or stored string that is not an integer is an error and writes nothing; it does not combine with NX, XX, GET or IFEQ.",
       "coverage": [
         "scripts/resp_conformance.py",
         "scripts/redis_differential.py",

@@ -344,6 +344,14 @@ fn set_variants_build_the_right_arguments() {
     assert_eq!(request, words(&["SET", "k", "v", "IFEQ", "old"]));
     let (_, request) = probe("+OK\r\n", |c| c.set_if_eq_keep_ttl("k", "v", "old"));
     assert_eq!(request, words(&["SET", "k", "v", "IFEQ", "old", "KEEPTTL"]));
+    let (reply, request) = probe("+OK\r\n", |c| c.set_if_greater("k", -7, None));
+    assert!(reply.unwrap());
+    assert_eq!(request, words(&["SET", "k", "-7", "IFGT"]));
+    let (reply, request) = probe("$-1\r\n", |c| {
+        c.set_if_less("k", 9, Some(Duration::from_millis(5)))
+    });
+    assert!(!reply.unwrap());
+    assert_eq!(request, words(&["SET", "k", "9", "IFLT", "PX", "5"]));
 }
 
 #[test]
