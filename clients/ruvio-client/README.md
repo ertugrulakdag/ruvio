@@ -22,7 +22,7 @@
 
 ---
 
-Blocking RESP2 client for [Ruvio](https://ruviodb.com/). Connecting does not send `CLIENT SETINFO` or `HELLO`. Give the client one address; it sends `CLUSTER SLOTS` and, on a sharded server, opens one socket per shard and routes by hash slot. `MOVED` is followed up to three times per command. `MGET` / `MSET` / `DEL` / `EXISTS` / `UNLINK` / `TOUCH` split across slots; other commands whose keys span slots fail with `CROSSSLOT` before anything is sent. Methods take `&mut self` and are named after the command they send. They cover every command in [`docs/compatibility-matrix.json`](../../docs/compatibility-matrix.json) (287/287, checked by `tests/coverage.rs`) plus the options that change what Ruvio does. `execute` and `execute_many` send any argument list, as `redis-cli` would; `execute_binary` does the same with raw byte arguments.
+Blocking RESP2 client for [Ruvio](https://ruviodb.com/). Connecting does not send `CLIENT SETINFO` or `HELLO`. Give the client one address; it sends `CLUSTER SLOTS` and, on a sharded server, opens one socket per shard and routes by hash slot. `MOVED` is followed up to three times per command. `MGET` / `MSET` / `DEL` / `EXISTS` / `UNLINK` / `TOUCH` split across slots; other commands whose keys span slots fail with `CROSSSLOT` before anything is sent. Methods take `&mut self` and are named after the command they send. They cover every command in [`docs/compatibility-matrix.json`](../../docs/compatibility-matrix.json) (289/289, checked by `tests/coverage.rs`) plus the options that change what Ruvio does. `execute` and `execute_many` send any argument list, as `redis-cli` would; `execute_binary` does the same with raw byte arguments.
 
 ```rust
 use std::time::Duration;
@@ -84,7 +84,7 @@ external effects; see [the native contract](../../docs/IDEM.md).
 
 | Family | Methods |
 | --- | --- |
-| Ruvio jobs | `lease`, `release`, `semaphore`, `setv`, `limit`, `once`, `take`, `getex`, `incr_by_max`, `changes_start`, `changes`, `idem_begin`, `idem_complete`, `idempotency_begin`, `idempotency_complete`, `fill_get`, `fill_get_wait` (`WAIT`), `fill_set` (`SWR`) |
+| Ruvio jobs | `lease`, `release`, `semaphore`, `setv`, `limit`, `once`, `take`, `transfer`, `htransfer`, `getex`, `incr_by_max`, `changes_start`, `changes`, `idem_begin`, `idem_complete`, `idempotency_begin`, `idempotency_complete`, `fill_get`, `fill_get_wait` (`WAIT`), `fill_set` (`SWR`) |
 | Ruvio extensions | `delex` (`DELEX key IFEQ v`), `set_if_eq`, `set_if_eq_keep_ttl` (`SET ... IFEQ`), `set_if_greater`, `set_if_less` (`SET ... IFGT` / `IFLT`), `lpushcap`, `rpushcap`, `json_index_create`, `json_index_drop`, `json_index_list`, `json_find`, `ruvio` |
 | Strings | `get`, `get_string`, `set`, `set_with`, `set_ex`, `set_exat`, `set_expires_at`, `set_keep_ttl`, `set_and_get`, `set_bytes`, `setex`, `psetex`, `setnx`, `getdel`, `mget`, `mset`, `msetnx`, `getset`, `append`, `strlen`, `incr`, `incr_by`, `incr_by_float`, `decr`, `decr_by`, `getrange`, `substr`, `setrange` |
 | Bitmaps / HyperLogLog | `setbit`, `getbit`, `bitcount`, `bitcount_range` (`BYTE`/`BIT`), `bitpos`, `bitpos_range`, `bitop`, `bitfield`, `bitfield_ro` (typed `BitFieldOp`, `BitFieldType`, `BitFieldOverflow`), `pfadd`, `pfcount`, `pfmerge` |

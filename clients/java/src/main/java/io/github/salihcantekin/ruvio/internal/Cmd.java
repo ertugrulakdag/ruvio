@@ -188,6 +188,8 @@ public final class Cmd {
     public static final byte[] HSETNX = RespOut.fragment("HSETNX");
     /** The word {@code HSTRLEN}, pre-encoded as a RESP bulk string. */
     public static final byte[] HSTRLEN = RespOut.fragment("HSTRLEN");
+    /** The word {@code HTRANSFER}, pre-encoded as a RESP bulk string. */
+    public static final byte[] HTRANSFER = RespOut.fragment("HTRANSFER");
     /** The word {@code HTTL}, pre-encoded as a RESP bulk string. */
     public static final byte[] HTTL = RespOut.fragment("HTTL");
     /** The word {@code HVALS}, pre-encoded as a RESP bulk string. */
@@ -436,6 +438,8 @@ public final class Cmd {
     public static final byte[] TAKE = RespOut.fragment("TAKE");
     /** The word {@code TOUCH}, pre-encoded as a RESP bulk string. */
     public static final byte[] TOUCH = RespOut.fragment("TOUCH");
+    /** The word {@code TRANSFER}, pre-encoded as a RESP bulk string. */
+    public static final byte[] TRANSFER = RespOut.fragment("TRANSFER");
     /** The word {@code TTL}, pre-encoded as a RESP bulk string. */
     public static final byte[] TTL = RespOut.fragment("TTL");
     /** The word {@code TYPE}, pre-encoded as a RESP bulk string. */

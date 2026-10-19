@@ -212,6 +212,8 @@ var (
 	cSUNSUBSCRIBE      = preEnc("SUNSUBSCRIBE")
 	cSWAPDB            = preEnc("SWAPDB")
 	cTAKE              = preEnc("TAKE")
+	cTRANSFER          = preEnc("TRANSFER")
+	cHTRANSFER         = preEnc("HTRANSFER")
 	cTOUCH             = preEnc("TOUCH")
 	cTTL               = preEnc("TTL")
 	cTYPE              = preEnc("TYPE")

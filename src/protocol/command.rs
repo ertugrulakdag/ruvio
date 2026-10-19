@@ -248,6 +248,30 @@ impl<'a> Command<'a> {
                 key: owned(key),
                 count,
             },
+            Self::Transfer {
+                source,
+                destination,
+                amount,
+                max,
+            } => Command::Transfer {
+                source: owned(source),
+                destination: owned(destination),
+                amount,
+                max,
+            },
+            Self::HashTransfer {
+                key,
+                from,
+                to,
+                amount,
+                max,
+            } => Command::HashTransfer {
+                key: owned(key),
+                from: owned(from),
+                to: owned(to),
+                amount,
+                max,
+            },
             Self::GetEx { key, ttl_ms } => Command::GetEx {
                 key: owned(key),
                 ttl_ms,

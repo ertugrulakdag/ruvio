@@ -37,6 +37,8 @@ export const T = {
   },
   float: (v: unknown): number | null => (v === null ? null : toFloat(v)),
   floatArr: (v: unknown[]): (number | null)[] => v.map((x) => (x === null ? null : toFloat(x))),
+  balances: (v: unknown): [number, number] | null =>
+    v === null ? null : [T.int((v as unknown[])[0]), T.int((v as unknown[])[1])],
   int: (v: unknown): number => (typeof v === 'number' ? v : Number(str(v))),
   intOrNull: (v: unknown): number | null => (v === null ? null : typeof v === 'number' ? v : Number(str(v))),
   token: (v: unknown): string | null => (v === null ? null : String(typeof v === 'bigint' || typeof v === 'number' ? v : str(v))),

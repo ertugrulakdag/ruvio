@@ -252,3 +252,16 @@ def test_flush_variants_and_geo_without_hash():
     assert r.georadius("g", 1, 2, 3, withcoord=True, withdist=True) == [GeoResult("m", 2.5, None, (1.0, 2.0))]
     r.reply = [["m", ["1", "2"]]]
     assert r.georadius("g", 1, 2, 3, withcoord=True) == [GeoResult("m", None, None, (1.0, 2.0))]
+
+
+def test_transfer_commands_encode_the_optional_cap_and_return_a_pair():
+    r = Rec(reply=[6, 4])
+    assert r.transfer("a", "b", 4) == (6, 4)
+    assert r.args == ["TRANSFER", "a", "b", "4"]
+    assert r.transfer("a", "b", 4, max=9) == (6, 4)
+    assert r.args == ["TRANSFER", "a", "b", "4", "MAX", "9"]
+    assert r.htransfer("h", "f", "g", 1, max=5) == (6, 4)
+    assert r.args == ["HTRANSFER", "h", "f", "g", "1", "MAX", "5"]
+    r.reply = None
+    assert r.transfer("a", "b", 4) is None
+    assert r.htransfer("h", "f", "g", 1) is None

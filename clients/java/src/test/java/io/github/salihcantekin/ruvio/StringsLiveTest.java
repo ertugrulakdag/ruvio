@@ -110,6 +110,15 @@ class StringsLiveTest {
         assertEquals(2L, c.take("s:t", 3));
         assertNull(c.take("s:t", 3));
         assertEquals("2", c.get("s:t"));
+        // TRANSFER / HTRANSFER
+        c.set("{w}a", "10");
+        assertEquals(java.util.Arrays.asList(6L, 4L), c.transfer("{w}a", "{w}b", 4));
+        assertNull(c.transfer("{w}a", "{w}b", 7));
+        assertNull(c.transfer("{w}a", "{w}b", 3, 6));
+        assertEquals(java.util.Arrays.asList(4L, 6L), c.transfer("{w}a", "{w}b", 2, 6));
+        c.hset("s:th", "f", "10");
+        assertEquals(java.util.Arrays.asList(6L, 4L), c.htransfer("s:th", "f", "g", 4));
+        assertNull(c.htransfer("s:th", "f", "g", 3, 5));
     }
 
     @Test

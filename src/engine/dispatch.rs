@@ -541,6 +541,25 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
             Ok(Response::Integer(updated))
         }
 
+        Command::Transfer {
+            source,
+            destination,
+            amount,
+            max,
+        } => transfer(shard, sink, source, destination, amount, max),
+
+        Command::HashTransfer {
+            key,
+            from,
+            to,
+            amount,
+            max,
+        } => {
+            shard.expire_hash_fields(&key);
+
+            hash_transfer(shard, sink, key, from, to, amount, max)
+        }
+
         Command::GetEx { key, ttl_ms } => {
             let bytes = match shard.copy_string(&key) {
                 Ok(Some(bytes)) => bytes,
