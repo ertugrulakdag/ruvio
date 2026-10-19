@@ -70,6 +70,7 @@ listen = "127.0.0.1:26379"    # primary base address; shard i uses port + i
 primary = "127.0.0.1:26379"   # replica dials this base address; a hostname is allowed
 min_replicas_to_write = 0     # a primary refuses writes with fewer good replicas; 0 = off
 min_replicas_max_lag = 10     # seconds since a replica's last acknowledgement
+announced = true              # a replica tells its primary where clients reach it
 
 [security]
 requirepass = ""
@@ -298,6 +299,7 @@ Each variable overrides one file setting, and a command-line flag, where there i
 | `RUVIO_REPLICATION_PRIMARY` | no | | `replication.primary` | |
 | `RUVIO_MIN_REPLICAS_TO_WRITE` | `min-replicas-to-write` | | `replication.min_replicas_to_write` | |
 | `RUVIO_MIN_REPLICAS_MAX_LAG` | `min-replicas-max-lag` | | `replication.min_replicas_max_lag` | Seconds, as in Redis |
+| `RUVIO_REPLICA_ANNOUNCED` | no | | `replication.announced` | `CONFIG GET replica-announced` |
 
 Flags with no variable:
 
@@ -494,8 +496,36 @@ sequence and repeats its last acknowledgement every second while idle. The shard
 checks this every 100 ms, so a lost replica is noticed up to that much after the
 lag runs out, and writes resume on the next check after enough replicas
 acknowledge. It bounds how long a primary cut off from its replicas keeps taking
-writes another primary will not have; it is not a synchronous write. Both change
+writes another primary will not have; it is not a synchronous write. A replica
+that installs a full copy acknowledges nothing until it has caught up, so with a
+single replica and `min-replicas-to-write 1` the primary refuses writes while that
+replica resyncs, as in Redis. Both change
 with `CONFIG SET`. Only role `primary` applies them.
+
+**Replicas in the topology.** A replica sends its primary the address clients
+reach it on: `advertised_host`, and `advertised_port` (else the bind port) plus
+the shard index in `per-shard` mode. A replica that announces a loopback host
+but connects from another machine is listed at the address it connected from,
+so the default `advertised_host` works on a flat network; set `advertised_host`
+behind NAT, a proxy or in containers. A host is announced only when it is a
+host name or an IP address of at most 255 characters (letters, digits and
+`. - _ : % [ ]`); anything else is not announced. A replica sends no
+acknowledgement while it installs a full copy and catches up, so it is not
+listed, and not counted by `WAIT` or `min-replicas-to-write`, until its copy is
+complete. Once it acknowledges, the primary lists it after its own shard in
+`CLUSTER SLOTS`, `CLUSTER SHARDS` and `CLUSTER NODES`, in `ROLE`, and as
+`slave0:ip=…,port=…,state=online,offset=…,lag=…` lines in `INFO replication`;
+a replica that disconnects, or sends no acknowledgement for 10 seconds (it
+repeats one every second), leaves the list. The same loopback rule applies to the
+primary's own address as its replicas see it. A replica answers the cluster
+commands with the primary it follows first and itself second, so a client that
+knows only a replica's address still sends writes to the primary.
+`replication.announced = false` (`RUVIO_REPLICA_ANNOUNCED=no`,
+`CONFIG GET replica-announced`, Redis's `replica-announced`) keeps a replica out
+of these answers; it still replicates. Node ids are the SHA-1 of the announced
+`host:port`, so they differ between processes and stay the same across restarts
+on the same address. Clients choose whether to read from replicas; see
+[CLIENT_BEHAVIOR.md](CLIENT_BEHAVIOR.md#reads-from-replicas).
 
 `INFO` reports `replication_role`, `wal_last_sequence`, and
 `wal_durable_sequence` on every shard. A primary also reports

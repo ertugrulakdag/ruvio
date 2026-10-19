@@ -68,10 +68,29 @@ fn replicaof_promotes_repoints_and_demotes_without_a_restart() {
     assert_eq!(command(primary_address, &[b"SET", b"k", b"v"]), b"+OK\r\n");
     wait_for_reply(promoted_address, &[b"GET", b"k"], b"$1\r\nv\r\n");
     wait_for_reply(sibling_address, &[b"GET", b"k"], b"$1\r\nv\r\n");
-    assert_eq!(
-        command(primary_address, &[b"ROLE"]),
-        b"*3\r\n$6\r\nmaster\r\n:1\r\n*0\r\n"
+    // Both replicas announce their client address and are listed once they acknowledge.
+    let listed = |port: u16| {
+        format!(
+            "*3\r\n$9\r\n127.0.0.1\r\n${}\r\n{port}\r\n",
+            port.to_string().len()
+        )
+    };
+    let deadline = std::time::Instant::now() + PATIENCE;
+    let role = loop {
+        let role = String::from_utf8(command(primary_address, &[b"ROLE"])).unwrap();
+
+        if role.contains("*2\r\n*3") || std::time::Instant::now() >= deadline {
+            break role;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+
+    assert!(
+        role.starts_with("*3\r\n$6\r\nmaster\r\n:1\r\n*2\r\n"),
+        "{role}"
     );
+    assert!(role.contains(&listed(promoted_address.port())), "{role}");
+    assert!(role.contains(&listed(sibling_address.port())), "{role}");
     assert!(command(promoted_address, &[b"ROLE"]).starts_with(b"*5\r\n$5\r\nslave\r\n"));
     assert!(command(promoted_address, &[b"SET", b"x", b"1"]).starts_with(b"-READONLY"));
 

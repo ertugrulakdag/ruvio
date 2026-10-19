@@ -77,6 +77,7 @@ pub const RESTART_ONLY_SETTINGS: &[&str] = &[
     "metrics-token",
     "port-mode",
     "protected-mode",
+    "replica-announced",
     "replica-retain-max-bytes",
     "replication-listen",
     "replication-password",

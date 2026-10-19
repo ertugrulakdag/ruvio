@@ -514,6 +514,26 @@ Connect tries the seeds in order, one attempt each, and keeps the first that ans
 
 On a cluster, `CLUSTER SLOTS` comes from the first reachable seed. A slot map reload (after a `MOVED` to an unknown node, or when a node cannot be opened again) asks the nodes with an open socket first; when none answers, it opens every other known node and then every seed, one attempt each, until one returns a slot map. The command goes to the owner the new map names, and a command without a key goes to the first reachable node of the new map. Seeds are never asked while the known nodes answer. A pipeline that hits a node that cannot be opened fails; the next command reloads the map.
 
+### Reads from replicas
+
+`RuvioClientOptions.ReadPolicy` (`ReadPolicy.Primary`, `PreferReplica` or `Replica`) chooses where a cluster client sends reads. A standalone connection ignores it. `CLUSTER SLOTS` lists each shard's replicas after its primary; when the slot map is loaded, the client picks one replica per shard at random and keeps it until the next load. Each replica socket sends `READONLY` once, right after it is opened.
+
+```csharp
+await using var connection = await RuvioConnection.ConnectAsync(new RuvioClientOptions
+{
+    Host = "10.0.0.5",
+    ReadPolicy = ReadPolicy.PreferReplica,
+});
+```
+
+- `Primary` (the default): every command goes to the slot's primary, and no replica socket is opened.
+- `PreferReplica`: a read goes to the shard's replica when one is known and reachable, otherwise to the primary.
+- `Replica`: a read goes to the shard's replica; with none known or reachable it throws a `RuvioException` ("no replica ...").
+
+Replication is asynchronous: a read from a replica may miss recent writes, including your own. A command is a read when the server flags it `readonly` and not blocking (`GET`, `MGET`, `EXISTS`, `HGETALL`, `ZRANGE`, ...). Writes, commands without a key, transactions, Pub/Sub, `SCAN` and the commands that go to every shard, and blocking commands go to the primaries as before. The parts of a split `MGET` or `EXISTS` are reads; the parts of `DEL` or `MSET` are writes. A pipeline goes to replicas only when every command in it is a read; otherwise the whole pipeline is routed as before.
+
+A replica that cannot be opened, or that answers a read with `LOADING` (it is still copying its primary), is skipped until the next slot map load. Under `PreferReplica` the command goes to the primary (a `LOADING` read is sent again there); under `Replica` the open error is thrown, or the `LOADING` error is returned as a `RuvioException`. A socket that drops after a command was sent still fails that command; it is not sent again.
+
 ### Concurrent commands
 
 Command sockets multiplex concurrent calls: one writer sends complete RESP frames

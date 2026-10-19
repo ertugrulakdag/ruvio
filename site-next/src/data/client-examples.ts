@@ -592,6 +592,53 @@ c.on('push', (event) => {
 const start = await c.call('CHANGES', 'SUBSCRIBE', 'FROM', 'NOW', 'MATCH', 'user:*', 'TYPES', 'put,del');
 // the cursor the stream begins after, '<shard>:<seq>'`,
   },
+  "replica-reads": {
+    rust: `use ruvio_client::{Client, ClientOptions, ReadPolicy};
+
+let mut db = Client::connect_with(ClientOptions {
+    host: "10.0.0.5".into(),
+    port: 7000,
+    read_policy: ReadPolicy::PreferReplica,
+    ..ClientOptions::default()
+})?;
+db.set("user:1", "Ada")?;            // primary
+let name = db.get_string("user:1")?; // a replica; may not have the write yet`,
+    csharp: `await using var connection = await RuvioConnection.ConnectAsync(new RuvioClientOptions
+{
+    Host = "10.0.0.5",
+    Port = 7000,
+    ReadPolicy = ReadPolicy.PreferReplica,
+});
+var db = await connection.GetDefaultDatabaseAsync();
+
+await db.SetAsync("user:1", "Ada");              // primary
+string? name = await db.GetStringAsync("user:1"); // a replica; may not have the write yet`,
+    go: `c, err := ruvio.Connect(ctx, ruvio.Options{
+	Addr:       "10.0.0.5:7000",
+	ReadPolicy: ruvio.ReadPreferReplica,
+})
+if err != nil { return err }
+
+err = c.Set(ctx, "user:1", "Ada")        // primary
+name, ok, err := c.Get(ctx, "user:1")    // a replica; may not have the write yet`,
+    java: `var c = RuvioClient.connect(RuvioOptions.builder()
+        .host("10.0.0.5").port(7000).cluster(true)
+        .readPolicy(ReadPolicy.PREFER_REPLICA)
+        .build());
+
+c.set("user:1", "Ada");        // primary
+String name = c.get("user:1"); // a replica; may not have the write yet`,
+    python: `from ruvio import ClusterRuvio, ReadPolicy
+
+r = ClusterRuvio("10.0.0.5", 7000, read_policy=ReadPolicy.PREFER_REPLICA)
+r.set("user:1", "Ada")   # primary
+name = r.get("user:1")   # a replica; may not have the write yet`,
+    node: `import { createClusterClient } from 'ruvio-client';
+
+const c = createClusterClient({ host: '10.0.0.5', port: 7000, readPolicy: 'prefer-replica' });
+await c.set('user:1', 'Ada');          // primary
+const name = await c.get('user:1');    // a replica; may not have the write yet`,
+  },
   data: {
     rust: `use ruvio_client::{Client, GeoFrom, GeoSearch, JsonIndexType};
 

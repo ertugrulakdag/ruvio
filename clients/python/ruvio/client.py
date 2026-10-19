@@ -26,6 +26,7 @@ import uuid
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 from urllib.parse import unquote, urlparse
 
+from ._cluster import ReadPolicy, policy_code
 from ._commands import Commands, Conv, KeyT, KeyTypeT, _s
 from ._models import Message
 from ._pipeline import PipelineBase
@@ -128,10 +129,11 @@ class _Options:
         "unix_socket_path",
         "parser",
         "on_push",
+        "read_policy",
     )
 
     def __init__(self, **kw: Any) -> None:
-        for name in self.__slots__:
+        for name in _Options.__slots__:  # not self.__slots__: a subclass adds no fields
             setattr(self, name, kw.get(name))
 
     def handshake(self) -> List[Tuple[Conv, bytes]]:
@@ -148,7 +150,16 @@ class _Options:
         return cmds
 
     def as_dict(self) -> Dict[str, Any]:
-        return {n: getattr(self, n) for n in self.__slots__}
+        return {n: getattr(self, n) for n in _Options.__slots__}
+
+
+class _ReplicaOptions(_Options):
+    """Options of a replica connection of a cluster client: ``READONLY`` follows the handshake, on every open."""
+
+    __slots__ = ()
+
+    def handshake(self) -> List[Tuple[Conv, bytes]]:
+        return [*super().handshake(), (None, encode("READONLY", ()))]
 
 
 class _Conn:
@@ -290,6 +301,9 @@ class Ruvio(Commands):
             cannot be reached is skipped, while a refused ``AUTH`` or ``SELECT`` raises at once. After a
             dropped connection the next reconnect starts with the seed after the one that dropped. With
             ``cluster=True`` the seeds are also asked for the slot table when no known node answers.
+        read_policy: Cluster clients only: where reads go. A :class:`ruvio.ReadPolicy` or its string value:
+            ``"primary"`` (default), ``"prefer-replica"`` or ``"replica"``. See :class:`ruvio.ClusterRuvio`.
+            Ignored by a standalone server and by a client without ``cluster=True``.
 
     Example:
         from ruvio import Ruvio
@@ -327,6 +341,7 @@ class Ruvio(Commands):
         lazy: bool = True,
         cluster: bool = False,
         seeds: Optional[Sequence[Union[str, Tuple[str, int]]]] = None,
+        read_policy: Union[None, str, ReadPolicy] = None,
     ) -> None:
         """Creates the client. See the class docstring for the meaning of every argument.
 
@@ -347,9 +362,10 @@ class Ruvio(Commands):
             cluster: Route by key over several shards (see :class:`ruvio.ClusterRuvio`).
             seeds: ``"host:port"`` strings or ``(host, port)`` tuples tried in order in place of
                 ``host``/``port``.
+            read_policy: ``"primary"`` (default), ``"prefer-replica"`` or ``"replica"``; cluster clients only.
 
         Raises:
-            ValueError: A seed has an empty host or a port outside 1-65535.
+            ValueError: A seed has an empty host or a port outside 1-65535, or ``read_policy`` is unknown.
             ConnectionError: ``lazy=False`` and the server cannot be reached or rejects the handshake.
         """
         seed_list = _parse_seeds(seeds)
@@ -357,6 +373,7 @@ class Ruvio(Commands):
             if unix_socket_path:
                 raise ValueError("seeds cannot be combined with unix_socket_path")
             host, port = seed_list[0]
+        policy_code(read_policy)  # rejects an unknown value now rather than at the first command
         opts = _Options(
             host=host,
             port=port,
@@ -370,6 +387,7 @@ class Ruvio(Commands):
             unix_socket_path=unix_socket_path,
             parser=parser,
             on_push=on_push,
+            read_policy=read_policy,
         )
         self._conn = _Conn(opts)
         self._decode = decode_responses

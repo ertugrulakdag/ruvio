@@ -239,6 +239,32 @@ them. `SSubscribe` opens one extra connection per node owning a channel's slot (
 demand, one `SSUBSCRIBE` per slot); `SPublish` routes by channel. Messages from all nodes
 arrive on the one `Channel()`. Losing any of these connections closes the subscription.
 
+### Reads from replicas
+
+`Options.ReadPolicy` (type `ReadPolicy`) chooses where a cluster client sends reads. Replicas
+come from `CLUSTER SLOTS`, which lists them after each primary; a standalone connection
+ignores the option.
+
+| Value | Reads go to |
+|---|---|
+| `ReadPrimary` (default) | the slot's primary, as before; no replica connection is opened |
+| `ReadPreferReplica` | one replica of the slot's shard, the primary when it has none or the replica is unusable |
+| `ReadReplica` | a replica only; with none known or usable the read fails (the error says "no replica") |
+
+Replication is asynchronous, so a read from a replica can miss recent writes, including your
+own. A command is a read when the server's command table flags it `readonly` and not blocking
+(`GET`, `HGETALL`, `ZRANGE`, ...); the parts of a split `MGET` or `EXISTS` are reads, those of
+`DEL` or `MSET` are writes. Writes, keyless commands, transactions, Pub/Sub, `SCAN`, fan-out
+and blocking commands always go to the primaries. A pipeline goes to replicas only when every
+command in it is a read; otherwise it is routed as with `ReadPrimary`.
+
+When the slot map is loaded, each primary gets one replica picked at random, kept until the
+next load; each connection to it sends `READONLY` first. A replica that cannot be connected,
+or answers a read with `LOADING`, is skipped until the next load: `ReadPreferReplica` sends the
+read to the primary (for `LOADING`, again), `ReadReplica` returns the error. A replica socket
+that drops after a command was sent fails that command, which is not sent again. A `LOADING`
+reply inside a pipeline is returned as that command's error.
+
 Helpers (lock, lease, semaphore, rate limit, `GetOrCreate`, idempotency, scan iterators, JSON,
 capped lists, Bloom) only issue single-key commands and work unchanged.
 
@@ -355,8 +381,9 @@ client tracking, pipelines, transactions, every helper). `TestCoverage` reads
 
 - Cluster, verified against a 3-shard per-shard-port Ruvio server and a scripted fake server:
   topology, routing, split, pipelines, `MOVED`, transactions, Pub/Sub, helpers, fallback.
-  **Not done / not verified:** replicas and `READONLY` reads (the client routes to the slot's
-  primary only; `READONLY`/`READWRITE` just send the command), `-ASK` (the server has no live
+  Reads from replicas (`Options.ReadPolicy`) are verified with scripted fake nodes and a live
+  2-shard primary with its replica. **Not done / not verified:** replicas that change address
+  between slot map loads while a read is in flight, `-ASK` (the server has no live
   slot migration), `RENAME`/`COPY`/`SMOVE`/`LMOVE` across slots (fail with `ErrCrossSlot`; no
   copy-and-delete emulation), split `MSETNX`/`BITOP`/`SUNION`... (all-or-nothing or
   non-decomposable commands fail across slots), automatic topology refresh in the background

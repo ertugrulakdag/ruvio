@@ -196,6 +196,15 @@ impl ShardState {
         self.forwarding.is_some() || self.route.is_some()
     }
 
+    /// Every shard's replicas or followed primary, for the cluster answers. Empty without
+    /// forwarding, where there are no cluster answers.
+    fn shard_peers(&self) -> Vec<crate::runtime::cluster::ShardPeers> {
+        self.forwarding
+            .as_ref()
+            .map(|forwarding| forwarding.fabric.shard_peers())
+            .unwrap_or_default()
+    }
+
     /// The route as cluster clients see it: absent in single-port mode.
     fn cluster_view(&self) -> Option<&ClusterRoute> {
         if self.single_port {
@@ -1040,6 +1049,11 @@ async fn serve_async(
         publish_fanout: Arc::new(crate::replication::PublishFanout::new()),
         durable_acks: Arc::new(crate::replication::DurableAcks::new()),
     });
+
+    // A replica that starts with an unfinished copy acknowledges nothing until it has one.
+    state
+        .replica_link
+        .set_copying(state.replica_incomplete.get());
 
     if let Some(coordinator) = &state.cluster {
         coordinator.register_wal(shard_id, &state.persistence);

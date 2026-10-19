@@ -40,7 +40,7 @@ export { Commands } from './commands.js';
 export { Cmds } from './command-names.js';
 export type { Pipeline, Transaction } from './pipeline.js';
 export { ClusterClient, ClusterNode, createClusterClient, hashSlot, SLOT_COUNT } from './cluster.js';
-export type { ClusterOptions } from './cluster.js';
+export type { ClusterOptions, ReadPolicy } from './cluster.js';
 export { Subscriber } from './subscriber.js';
 export type { PubSubMessage, SubscriberOptions } from './subscriber.js';
 export type { ConnectionOptions } from './connection.js';

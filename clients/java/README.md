@@ -204,7 +204,39 @@ pipelined commands; use `{hashtag}` keys to keep related keys in one slot.
   connection per node and subscribes one slot per command.
 * **Helpers** (locks, leases, semaphores, rate limit, `getOrCreate`, idempotency, capped list, Bloom, typed JSON)
   only issue single-key commands, so they work unchanged; `ClusterLiveTest` runs them on the cluster.
-* Replicas, `ASK` redirects, `READONLY` reads and `CLUSTERDOWN` handling: not implemented.
+* `ASK` redirects and `CLUSTERDOWN` handling: not implemented. Reads from replicas: see below.
+
+## Reads from replicas
+
+`RuvioOptions.Builder.readPolicy(ReadPolicy)` sets where a cluster client sends read-only commands. A standalone
+connection ignores it.
+
+```java
+RuvioOptions options = RuvioOptions.builder()
+        .host("10.0.0.1").cluster(true)
+        .readPolicy(ReadPolicy.PREFER_REPLICA)
+        .build();
+```
+
+* `PRIMARY` (default): every command goes to the slot's primary, as before. No replica connection is opened.
+* `PREFER_REPLICA`: reads go to a replica of the slot's shard when one is known and reachable, else to the primary.
+* `REPLICA`: reads go to a replica; with none known or reachable they fail with a `RuvioException` ("no replica ...").
+
+Replication is asynchronous, so a read from a replica may miss recent writes, including your own.
+
+* Replicas come from `CLUSTER SLOTS` (listed after the primary). Each time the slot map loads, the client picks one
+  replica per primary at random and keeps it until the next load. Each replica connection sends `READONLY` right
+  after it is opened.
+* A read is a command the server flags `readonly` and not blocking (`GET`, `HGETALL`, `ZRANGE`, ...). Writes, keyless
+  commands, transactions, Pub/Sub, scans and blocking commands go to the primaries. `MGET`/`EXISTS`-style calls that
+  split by slot send each part by the same rule.
+* A pipeline goes to replicas only when every command in it is a read; otherwise the whole pipeline goes to the
+  primaries as before.
+* A replica that cannot be opened, or answers `LOADING`, is skipped until the next slot map load. Under
+  `PREFER_REPLICA` the read goes to the primary (a `LOADING` read is sent again there); under `REPLICA` the call
+  fails. A connection that drops after a command was sent still fails the command; nothing is replayed.
+* `ReplicaReadsFakeTest` covers the routing against scripted nodes; `ReplicaReadsLiveTest` runs against
+  `RUVIO_REPLICATED_ADDR` / `RUVIO_REPLICA_ADDR` (set by `scripts/run_with_servers.sh`) and skips without them.
 
 ## Seed addresses
 

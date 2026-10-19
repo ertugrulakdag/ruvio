@@ -770,8 +770,8 @@ func (c *cmds) ClusterKeySlot(ctx context.Context, key string) (int64, error) {
 	return c.intR(ctx, newCmd(3, cCLUSTER).t(tKEYSLOT).s(key))
 }
 
-// ReadOnly sends READONLY. Every Ruvio shard is a primary with no replicas, so it only
-// returns OK and has no effect.
+// ReadOnly sends READONLY. A Ruvio server answers OK and serves reads on any connection, so
+// it has no effect; a cluster client with Options.ReadPolicy sends it to replicas by itself.
 func (c *cmds) ReadOnly(ctx context.Context) error { return c.ok(ctx, newCmd(1, cREADONLY)) }
 
 // ReadWrite sends READWRITE. It only returns OK; there are no replicas to read from.
