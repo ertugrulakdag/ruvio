@@ -229,6 +229,20 @@ members = [
     }
 
     #[test]
+    fn the_compose_example_configs_parse() {
+        for (id, text) in [
+            (1, include_str!("../../deploy/coordinator/coordinator-1.toml")),
+            (2, include_str!("../../deploy/coordinator/coordinator-2.toml")),
+            (3, include_str!("../../deploy/coordinator/coordinator-3.toml")),
+        ] {
+            let config = CoordinatorConfig::parse(text).unwrap();
+
+            assert_eq!(config.id, id);
+            assert_eq!(config.groups[0].members[0].address.host, "ruvio-1");
+        }
+    }
+
+    #[test]
     fn endpoints_take_names_and_addresses() {
         let named = Endpoint::parse("ruvio-1:6379").unwrap();
 

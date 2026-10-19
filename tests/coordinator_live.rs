@@ -240,7 +240,7 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
 fn coordinators_fail_over_a_dead_primary_and_bring_it_back_as_a_replica() {
     let dir = tempfile::tempdir().unwrap();
     let group = Group::new();
-    let mut nodes = vec![
+    let mut nodes = [
         group.node(dir.path(), 0, None),
         group.node(dir.path(), 1, Some(0)),
         group.node(dir.path(), 2, Some(0)),
@@ -328,7 +328,7 @@ fn coordinators_fail_over_a_dead_primary_and_bring_it_back_as_a_replica() {
 fn one_coordinator_without_a_majority_does_not_fail_over() {
     let dir = tempfile::tempdir().unwrap();
     let group = Group::new();
-    let mut nodes = vec![
+    let mut nodes = [
         group.node(dir.path(), 0, None),
         group.node(dir.path(), 1, Some(0)),
         group.node(dir.path(), 2, Some(0)),
