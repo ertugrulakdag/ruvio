@@ -304,7 +304,7 @@ internal sealed class ClusterRouter : IDisposable
     }
 
     private static bool IsLoading(RespValue reply) =>
-        reply is { Kind: RespKind.Error, Text: { } text } && text.StartsWith("LOADING", StringComparison.Ordinal);
+        reply is { Kind: RespKind.Error, Text: { } text } && (text.StartsWith("LOADING", StringComparison.Ordinal) || text.StartsWith("MASTERDOWN", StringComparison.Ordinal));
 
     /// <summary>
     /// The replica <paramref name="slot"/>'s reads go to, opened; the primary when it has none or it cannot be

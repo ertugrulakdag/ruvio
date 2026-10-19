@@ -775,7 +775,7 @@ public final class ClusterRouter implements AutoCloseable {
             return false;
         }
         String m = error.getMessage();
-        return m != null && m.startsWith("LOADING");
+        return m != null && (m.startsWith("LOADING") || m.startsWith("MASTERDOWN"));
     }
 
     /**

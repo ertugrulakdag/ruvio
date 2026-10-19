@@ -1903,7 +1903,7 @@ fn reads(name: &str) -> bool {
 }
 
 fn loading(reply: &RespValue) -> bool {
-    matches!(reply, RespValue::Error(message) if message.starts_with("LOADING"))
+    matches!(reply, RespValue::Error(message) if message.starts_with("LOADING") || message.starts_with("MASTERDOWN"))
 }
 
 /// A number that differs between clients, to spread their reads over a shard's replicas.

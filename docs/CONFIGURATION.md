@@ -504,11 +504,17 @@ reach it on: `advertised_host`, and `advertised_port` (else the bind port) plus
 the shard index in `per-shard` mode. A replica that announces a loopback host
 but connects from another machine is listed at the address it connected from,
 so the default `advertised_host` works on a flat network; set `advertised_host`
-behind NAT, a proxy or in containers. Once a replica shard has finished any full
-copy and acknowledged, the primary lists it after its own shard in
+behind NAT, a proxy or in containers. A host is announced only when it is a
+host name or an IP address of at most 255 characters (letters, digits and
+`. - _ : % [ ]`); anything else is not announced. A replica sends no
+acknowledgement while it installs a full copy and catches up, so it is not
+listed, and not counted by `WAIT` or `min-replicas-to-write`, until its copy is
+complete. Once it acknowledges, the primary lists it after its own shard in
 `CLUSTER SLOTS`, `CLUSTER SHARDS` and `CLUSTER NODES`, in `ROLE`, and as
 `slave0:ip=…,port=…,state=online,offset=…,lag=…` lines in `INFO replication`;
-a replica that disconnects leaves the list. A replica answers the cluster
+a replica that disconnects, or sends no acknowledgement for 10 seconds (it
+repeats one every second), leaves the list. The same loopback rule applies to the
+primary's own address as its replicas see it. A replica answers the cluster
 commands with the primary it follows first and itself second, so a client that
 knows only a replica's address still sends writes to the primary.
 `replication.announced = false` (`RUVIO_REPLICA_ANNOUNCED=no`,

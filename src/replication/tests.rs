@@ -2432,3 +2432,58 @@ fn dial_address_adds_the_shard_id_to_the_port_and_refuses_an_overflow() {
     link.shard_id = 70_000;
     assert!(dial_address(&link).is_err());
 }
+
+#[test]
+fn a_replica_still_copying_sends_no_acknowledgement() {
+    let directory = tempfile::tempdir().unwrap();
+    let primary = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut replica_side = TcpStream::connect(primary.local_addr().unwrap()).unwrap();
+    let (mut primary_side, _) = primary.accept().unwrap();
+    let (link, _deliveries) = link_to(primary.local_addr().unwrap(), directory.path());
+    let mut acks = AckSend {
+        status: Arc::clone(&link.status),
+        last: 0,
+        sent_at: std::time::Instant::now() - ACK_HEARTBEAT,
+        offset: 0,
+        bytes: [0; ACK_LEN],
+        queued: false,
+    };
+
+    link.status.set_copying(true);
+    acks.poll(&mut replica_side, &link.wal);
+    primary_side
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .unwrap();
+    let mut byte = [0; 1];
+
+    assert!(primary_side.read(&mut byte).is_err(), "an ack was sent");
+
+    link.status.set_copying(false);
+    acks.poll(&mut replica_side, &link.wal);
+    assert_eq!(read_socket(&mut primary_side, ACK_LEN).len(), ACK_LEN);
+}
+
+#[test]
+fn only_host_names_and_addresses_are_announced() {
+    for host in [
+        "10.0.0.1",
+        "db-1.example.com",
+        "fe80::1%en0",
+        "[::1]",
+        "replica_2",
+    ] {
+        assert!(announceable_host(host), "{host}");
+    }
+
+    for host in [
+        "",
+        "a b",
+        "1.2.3.4\nx",
+        "1.2.3.4\r\nrole:master",
+        "h,ip=1",
+        &"a".repeat(256),
+    ] {
+        assert!(!announceable_host(host), "{host:?}");
+        assert_eq!(read_endpoint(7000, host.as_bytes()), Ok(None));
+    }
+}

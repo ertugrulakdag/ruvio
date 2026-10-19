@@ -1056,7 +1056,7 @@ let B_OFF = new Int32Array(257);
 
 /** A reply or error that makes a read sent to a replica go elsewhere: the replica could not be opened, or answered `-LOADING`. */
 function replicaFault(v: unknown): boolean {
-  return (v instanceof ConnectionError && v.unreachable) || (v instanceof RuvioError && v.code === 'LOADING');
+  return (v instanceof ConnectionError && v.unreachable) || (v instanceof RuvioError && (v.code === 'LOADING' || v.code === 'MASTERDOWN'));
 }
 
 /** Receives a pipeline's replies at the caller's indexes and follows MOVED per command. */

@@ -111,9 +111,11 @@ pub(super) fn client_endpoint(
         base
     };
 
-    Some(crate::replication::Endpoint {
-        host: config.advertised_host.clone(),
-        port,
+    crate::replication::announceable_host(&config.advertised_host).then(|| {
+        crate::replication::Endpoint {
+            host: config.advertised_host.clone(),
+            port,
+        }
     })
 }
 
@@ -348,6 +350,7 @@ pub(super) fn promote(state: &ShardState, shard_id: u32, force: bool) -> io::Res
             "promoting an incomplete replica: writes it never received are lost"
         );
         state.replica_incomplete.set(false);
+        state.replica_link.set_copying(false);
     }
 
     // A primary lists its own replicas, not the one it used to follow.
@@ -589,6 +592,7 @@ pub(super) fn install_replica_snapshot(
         .as_ref()
         .map_or(0, |route| route.shard_id as u32);
     state.replica_incomplete.set(true);
+    state.replica_link.set_copying(true);
     state.replica_caught_up.set(false);
     state.catchup_wait_started.set(Instant::now());
     if replica_guard::write(data_dir, shard_id, CatchupMarker::Preparing).is_err() {
@@ -705,6 +709,7 @@ pub(super) fn finish_replica_catchup(state: &ShardState) -> io::Result<()> {
     replica_guard::clear(data_dir, shard_id)?;
     state.replica_catchup_through.set(0);
     state.replica_incomplete.set(false);
+    state.replica_link.set_copying(false);
     state.replica_caught_up.set(false);
     Ok(())
 }
@@ -902,6 +907,7 @@ fn drain_replicated_budget(state: &ShardState, budget: usize) -> usize {
                         CatchupMarker::Preparing,
                     );
                     state.replica_incomplete.set(true);
+                    state.replica_link.set_copying(true);
                     state.replica_caught_up.set(false);
                     state
                         .replica_resync_sequence

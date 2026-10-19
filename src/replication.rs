@@ -53,6 +53,9 @@ pub const NOREPLICAS_LINE: &[u8] = b"NOREPLICAS Not enough good replicas to writ
 /// A replica that has nothing new to acknowledge repeats its last acknowledgement this
 /// often, so a primary can tell a quiet replica from a lost one (`min-replicas-max-lag`).
 pub const ACK_HEARTBEAT: Duration = Duration::from_secs(1);
+/// A replica silent for longer than this (ten missed heartbeats) is no longer listed for
+/// reads, even while its connection looks open: a host that lost power sends no reset.
+pub const LISTED_REPLICA_LAG: Duration = Duration::from_secs(10);
 
 /// Whether a shard takes writes, and the error it answers when it does not. Read for every
 /// write command as one byte, like the role check it replaced.
@@ -166,6 +169,21 @@ fn put_endpoint(bytes: &mut Vec<u8>, endpoint: Option<&Endpoint>) -> Result<(), 
     Ok(())
 }
 
+/// Longest host a node announces; longer ones are not announced.
+pub const MAX_ANNOUNCED_HOST: usize = 255;
+
+/// Whether `host` may be written into `CLUSTER NODES` and `INFO`: a host name or an IP
+/// address (with an IPv6 zone or brackets), nothing that could split a line or a field.
+pub fn announceable_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= MAX_ANNOUNCED_HOST
+        && host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".-_:%[]".contains(&byte))
+}
+
+/// An announced endpoint; a host that is not [`announceable_host`] is treated as no
+/// announcement, so a peer cannot write arbitrary text into the cluster answers.
 fn read_endpoint(port: u16, host: &[u8]) -> Result<Option<Endpoint>, FrameError> {
     if port == 0 || host.is_empty() {
         return Ok(None);
@@ -173,7 +191,7 @@ fn read_endpoint(port: u16, host: &[u8]) -> Result<Option<Endpoint>, FrameError>
 
     let host = std::str::from_utf8(host).map_err(|_| "client host is not UTF-8")?;
 
-    Ok(Some(Endpoint {
+    Ok(announceable_host(host).then(|| Endpoint {
         host: host.to_owned(),
         port,
     }))
@@ -1118,14 +1136,15 @@ impl DurableAcks {
         }
     }
 
-    /// Connected replicas that announced an address and have acknowledged, in slot order.
+    /// Connected replicas that announced an address and acknowledged within
+    /// [`LISTED_REPLICA_LAG`], in slot order.
     pub fn replicas(&self) -> Vec<ReplicaPeer> {
         let slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
 
         slots
             .iter()
             .flatten()
-            .filter(|slot| slot.acknowledged)
+            .filter(|slot| slot.acknowledged && slot.at.elapsed() <= LISTED_REPLICA_LAG)
             .filter_map(|slot| {
                 Some(ReplicaPeer {
                     endpoint: slot.endpoint.clone()?,
@@ -1552,9 +1571,21 @@ pub enum ReplicaDelivery {
 pub struct LinkStatus {
     up: AtomicBool,
     last_io_millis: AtomicU64,
+    /// Set from the moment a full copy is queued until the shard has installed it and
+    /// caught up: the replica then sends no acknowledgement, so its primary neither lists
+    /// it for reads nor counts it for `WAIT` and `min-replicas-to-write`.
+    copying: AtomicBool,
 }
 
 impl LinkStatus {
+    pub(crate) fn set_copying(&self, copying: bool) {
+        self.copying.store(copying, Ordering::Release);
+    }
+
+    pub fn is_copying(&self) -> bool {
+        self.copying.load(Ordering::Acquire)
+    }
+
     fn mark_up(&self) {
         self.up.store(true, Ordering::Release);
         self.touch();
@@ -2024,9 +2055,9 @@ fn serve_replica(
     )
 }
 
-/// The address a replica announced, with its host replaced by the address it connected from
-/// when it announced a loopback host but is not on this machine: a replica left at the
-/// default `advertised-host` is still listed where clients can reach it.
+/// The address a peer announced, with its host replaced by the address of the connection
+/// when it announced a loopback host but is not on this machine: a node left at the default
+/// `advertised-host` is still listed where clients can reach it.
 fn reachable_endpoint(
     announced: Option<Endpoint>,
     peer: Option<std::net::IpAddr>,
@@ -2111,6 +2142,8 @@ fn poll_acks(stream: &mut TcpStream, hold: &CursorHold, pending: &mut Vec<u8>) -
 }
 
 struct AckSend {
+    /// While it reports a copy in progress, nothing is sent.
+    status: Arc<LinkStatus>,
     last: u64,
     /// When `last` was sent: it is sent again after [`ACK_HEARTBEAT`].
     sent_at: std::time::Instant,
@@ -2121,6 +2154,11 @@ struct AckSend {
 
 impl AckSend {
     fn poll(&mut self, stream: &mut TcpStream, wal: &Mutex<WalSink>) {
+        // The log of a replica still copying belongs to the history it is replacing.
+        if !self.queued && self.status.is_copying() {
+            return;
+        }
+
         if !self.queued {
             let durable = wal
                 .lock()
@@ -2418,7 +2456,10 @@ fn read_primary(
     }
 
     if matches!(status, HandshakeStatus::Ok | HandshakeStatus::Snapshot) {
-        link.peers.set_primary(primary_endpoint);
+        link.peers.set_primary(reachable_endpoint(
+            primary_endpoint,
+            stream.peer_addr().ok().map(|peer| peer.ip()),
+        ));
     }
 
     if status == HandshakeStatus::History {
@@ -2475,6 +2516,9 @@ fn read_primary(
             }
             _ => return (true, false),
         };
+        // Before the shard sees the copy, so not one acknowledgement of the log it replaces
+        // goes out in between.
+        link.status.set_copying(true);
         if link
             .inbound
             .send(ReplicaDelivery::Snapshot {
@@ -2524,6 +2568,7 @@ fn read_primary(
     let _ = stream.set_read_timeout(Some(SHIPPER_POLL));
     let _ = stream.set_write_timeout(Some(SHIPPER_POLL));
     let mut acks = AckSend {
+        status: Arc::clone(&link.status),
         last: 0,
         sent_at: std::time::Instant::now(),
         offset: 0,

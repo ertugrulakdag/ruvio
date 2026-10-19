@@ -495,7 +495,7 @@ class ClusterRuvio(Ruvio):
     def _loading(self, node: _Node, reply: Any) -> bool:
         """Whether a replica's reply is ``-LOADING`` (it is still copying its primary); it is then skipped
         until the next load."""
-        if not isinstance(reply, ResponseError) or not str(reply).startswith("LOADING"):
+        if not isinstance(reply, ResponseError) or not str(reply).startswith(("LOADING", "MASTERDOWN")):
             return False
         c = self._cl
         if 0 <= node.primary < len(c.reps) and c.reps[node.primary] is node:

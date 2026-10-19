@@ -168,7 +168,9 @@ and `INFO replication`, where cluster clients with a replica read policy send
 reads. Whoever knows the replication password can therefore steer those reads to
 an address of their choice, so treat that password like `requirepass`. The
 announced host is replaced by the connection's address only when it is a
-loopback name from another machine; it is not checked otherwise.
+loopback name from another machine. A host that is not a host name or an IP
+address (letters, digits and `. - _ : % [ ]`, at most 255 characters) is not
+listed, so a peer cannot add lines or fields to `CLUSTER NODES` or `INFO`.
 `replication.announced = false` keeps a replica out of the answers.
 
 ## Denial of service

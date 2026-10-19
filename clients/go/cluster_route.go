@@ -3,6 +3,7 @@
 package ruvio
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -83,9 +84,10 @@ func (cl *cluster) replicaFor(ctx context.Context, t *topology, slot int) (*repl
 	return nil, nil
 }
 
-// isLoading reports whether an error reply says the server is still loading its data.
+// isLoading reports whether an error reply says a replica is still copying its primary
+// (LOADING) or its copy stalled (MASTERDOWN).
 func isLoading(msg []byte) bool {
-	return len(msg) >= 7 && string(msg[:7]) == "LOADING"
+	return bytes.HasPrefix(msg, []byte("LOADING")) || bytes.HasPrefix(msg, []byte("MASTERDOWN"))
 }
 
 // runRead sends the read r for slot to the slot's replica. A replica that answers LOADING
