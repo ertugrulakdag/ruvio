@@ -2202,9 +2202,10 @@ fn refresh_fails_when_the_seed_connection_has_dropped_mid_redirect() {
     );
 
     client.get(&key).unwrap();
-    // The second MOVED reloads the map, and every node hangs up on CLUSTER SLOTS.
+    // The second MOVED reloads the map. Both open sockets hang up on CLUSTER SLOTS, and so do
+    // the two nodes the reload then opens again, so no source is left.
     cluster.script("GET", moved.as_bytes(), 2);
-    cluster.hang_up("CLUSTER", 2);
+    cluster.hang_up("CLUSTER", 4);
 
     assert!(matches!(client.get(&key), Err(Error::Io(_))));
 }

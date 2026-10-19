@@ -2245,7 +2245,10 @@ mod tests {
         ];
         let connecting = thread::spawn(move || {
             Client::connect_with(ClientOptions {
-                seeds: ports.iter().map(|port| ("127.0.0.1".to_owned(), *port)).collect(),
+                seeds: ports
+                    .iter()
+                    .map(|port| ("127.0.0.1".to_owned(), *port))
+                    .collect(),
                 discover_cluster: false,
                 reconnect_base_delay: Duration::ZERO,
                 reconnect_max_delay: Duration::ZERO,

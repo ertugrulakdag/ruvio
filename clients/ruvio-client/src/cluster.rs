@@ -1483,7 +1483,10 @@ impl ClusterRouter {
                 continue;
             }
 
-            let (host, port) = (self.endpoints[index].host.clone(), self.endpoints[index].port);
+            let (host, port) = (
+                self.endpoints[index].host.clone(),
+                self.endpoints[index].port,
+            );
 
             let mut connection = match Connection::open(&host, port, &self.options) {
                 Ok(connection) => connection,
@@ -1980,7 +1983,8 @@ mod tests {
             ..ClientOptions::default()
         };
         let connection = Connection::open("127.0.0.1", seed_port, &options).unwrap();
-        let Discovery::Cluster(mut router) = ClusterRouter::discover(connection, options, Vec::new()).unwrap()
+        let Discovery::Cluster(mut router) =
+            ClusterRouter::discover(connection, options, Vec::new()).unwrap()
         else {
             panic!("expected cluster topology");
         };
@@ -3043,7 +3047,9 @@ mod more_tests {
         let script = Script::start(vec![Step::Reply(
             b"-ERR cluster support disabled\r\n".to_vec(),
         )]);
-        let result = ClusterRouter::discover(script.connect(), ClientOptions::default(), Vec::new()).unwrap();
+        let result =
+            ClusterRouter::discover(script.connect(), ClientOptions::default(), Vec::new())
+                .unwrap();
 
         assert!(matches!(result, Discovery::Standalone(_)));
         drop(result);
@@ -3274,7 +3280,11 @@ mod more_tests {
     }
 
     fn closed_port() -> u16 {
-        TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+        TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
     }
 
     fn router_for_topology(script: &Script) -> ClusterRouter {
