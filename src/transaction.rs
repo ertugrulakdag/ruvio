@@ -291,7 +291,6 @@ fn queueable(command: &Command<'_>) -> bool {
             | Command::ShardPublish { .. }
             | Command::ShardSubscribe(_)
             | Command::ShardUnsubscribe(_)
-            | Command::Publish { .. }
             | Command::Subscribe(_)
             | Command::Unsubscribe(_)
             | Command::PSubscribe(_)
@@ -306,8 +305,6 @@ fn queueable(command: &Command<'_>) -> bool {
             | Command::ClusterKeySlot(_)
             | Command::ReadOnly
             | Command::ReadWrite
-            | Command::Eval { .. }
-            | Command::EvalSha { .. }
             | Command::ScriptLoad(_)
             | Command::ScriptExists(_)
             | Command::ScriptFlush
@@ -315,7 +312,6 @@ fn queueable(command: &Command<'_>) -> bool {
             | Command::FunctionLoad { .. }
             | Command::FunctionList
             | Command::FunctionDelete(_)
-            | Command::FCall { .. }
     )
 }
 

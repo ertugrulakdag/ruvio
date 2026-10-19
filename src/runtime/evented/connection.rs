@@ -832,15 +832,12 @@ pub(super) async fn handle_client(
 
                                 // SWAPDB would swap the home shard's databases only, and a
                                 // queued fan command would run on the other shards at once
-                                // and on this one at EXEC; a queued PUBLISH could only reach
-                                // the other shards at queue time, before DISCARD or a failed
-                                // EXEC, so it is refused too.
+                                // and on this one at EXEC. A queued PUBLISH is sent at EXEC,
+                                // after the batch is recorded.
                                 let unsupported: Option<&[u8]> =
                                     if matches!(command, Command::SwapDb(..)) {
                                         Some(SWAPDB_SHARDS_REPLY)
-                                    } else if (fan || matches!(command, Command::Publish { .. }))
-                                        && session.is_multi()
-                                    {
+                                    } else if fan && session.is_multi() {
                                         Some(FAN_IN_MULTI_REPLY)
                                     } else {
                                         None
@@ -2379,12 +2376,25 @@ async fn dispatch_inner<'s>(
             let mut commands = session.take_exec_commands();
             // The engine does not see the running settings or the server's counters: these
             // are answered here, in their place among the replies.
+            // PUBLISH is set aside the same way and sent once the batch is recorded, so a
+            // subscriber never hears of a transaction that DISCARD or a refused write undid.
             let server_queries: Vec<(usize, Command<'static>)> = commands
                 .iter_mut()
                 .enumerate()
-                .filter(|(_, command)| matches!(command, Command::ConfigGet(_) | Command::Info(_)))
+                .filter(|(_, command)| {
+                    matches!(
+                        command,
+                        Command::ConfigGet(_) | Command::Info(_) | Command::Publish { .. }
+                    )
+                })
                 .map(|(index, command)| (index, std::mem::replace(command, Command::Ping(None))))
                 .collect();
+            let scripted = commands.iter().any(|command| {
+                matches!(
+                    command,
+                    Command::Eval { .. } | Command::EvalSha { .. } | Command::FCall { .. }
+                )
+            });
             let track_plan = crate::tracking::TrackPlan::batch(&commands, session.database);
             let flushes_hot = commands
                 .iter()
@@ -2400,6 +2410,18 @@ async fn dispatch_inner<'s>(
                     .lock()
                     .unwrap_or_else(|error| error.into_inner());
                 let mut waiters = state.waiters.borrow_mut();
+                let mut cache = scripted.then(|| state.scripts.borrow_mut());
+                let scripts = cache.as_deref_mut().map(|cache| {
+                    let rules = &auth.rules;
+
+                    crate::engine::TransactionScripts {
+                        cache,
+                        limits: state.live.with(|live| live.scripts),
+                        rules: (!(rules.all_commands && rules.all_keys))
+                            .then(|| std::sync::Arc::clone(rules)),
+                    }
+                });
+
                 crate::engine::execute_transaction_in(
                     &mut store,
                     &mut *persistence,
@@ -2408,6 +2430,7 @@ async fn dispatch_inner<'s>(
                     commands,
                     session.database,
                     state.enforces_slots(),
+                    scripts,
                 )
                 .unwrap_or_else(|error| Response::Error(refused_write(&error)))
             };
@@ -2421,7 +2444,17 @@ async fn dispatch_inner<'s>(
                             Command::Info(section) => Response::Bulk(Some(
                                 super::info::evented_info(state, section.as_deref())?.into(),
                             )),
-                            _ => unreachable!("only CONFIG GET and INFO are set aside"),
+                            Command::Publish { channel, message } => {
+                                let delivered = publish_classic(state, channel, message);
+
+                                if let Some(forwarding) = state.forwarding.as_ref() {
+                                    super::forward::publish_everywhere(
+                                        forwarding, channel, message,
+                                    );
+                                }
+                                Response::Integer(delivered)
+                            }
+                            _ => unreachable!("only CONFIG GET, INFO and PUBLISH are set aside"),
                         };
 
                         if let Some(reply) = replies.get_mut(index) {
