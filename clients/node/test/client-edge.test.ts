@@ -257,6 +257,23 @@ test('connect timeout destroys the socket and rejects the command', async () => 
   }
 });
 
+test('commandTimeoutMs fails the connection when a peer never answers, and the next command reconnects', async () => {
+  let silent = true;
+  await withClient(
+    () => (silent ? null : '+PONG\r\n'),
+    { commandTimeoutMs: 100 },
+    async (c) => {
+      const started = Date.now();
+      const e = await rejects(c.ping());
+      assert.ok(e instanceof ConnectionError && /command timeout/.test(String(e.cause ?? e.message)), String(e));
+      assert.ok(Date.now() - started < 3000);
+      silent = false;
+      assert.ok(await c.ping());
+      c.disconnect();
+    },
+  );
+});
+
 test('TLS options: a server that does not speak TLS fails the connection', async () => {
   const open = new Set<net.Socket>();
   const srv = net.createServer((s) => {

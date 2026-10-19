@@ -24,14 +24,16 @@ internal sealed class RuvioSocket : IDisposable
     private bool _independentIo;
     private readonly object _multiplexerGate = new();
     private readonly int _maxInFlight;
+    private readonly TimeSpan _commandTimeout;
     private CommandMultiplexer? _multiplexer;
     private bool _initialized;
 
     private volatile bool _broken;
     private volatile bool _disposed;
 
-    private RuvioSocket(TcpClient tcp, string host, int port, int maxInFlight, bool dedicatedReader)
+    private RuvioSocket(TcpClient tcp, string host, int port, int maxInFlight, bool dedicatedReader, TimeSpan commandTimeout)
     {
+        _commandTimeout = commandTimeout;
         _tcp = tcp;
         _dedicatedReader = dedicatedReader;
         _stream = dedicatedReader ? new BlockingSocketStream(tcp.Client) : tcp.GetStream();
@@ -89,7 +91,7 @@ internal sealed class RuvioSocket : IDisposable
             throw;
         }
 
-        var connection = new RuvioSocket(tcp, host, port, options.MaxInFlightRequests, dedicatedReader);
+        var connection = new RuvioSocket(tcp, host, port, options.MaxInFlightRequests, dedicatedReader, options.CommandTimeout);
 
         if (options.Password is null)
         {
@@ -380,7 +382,7 @@ internal sealed class RuvioSocket : IDisposable
                 if (existing is not null)
                     return existing;
 
-                existing = new CommandMultiplexer(_stream, _reader, _maxInFlight, coalesceWrites: true, dedicatedReader: _dedicatedReader);
+                existing = new CommandMultiplexer(_stream, _reader, _maxInFlight, coalesceWrites: true, dedicatedReader: _dedicatedReader, commandTimeout: _commandTimeout);
                 Volatile.Write(ref _multiplexer, existing);
 
                 return existing;

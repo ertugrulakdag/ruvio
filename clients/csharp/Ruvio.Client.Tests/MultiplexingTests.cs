@@ -165,6 +165,28 @@ public class MultiplexingTests
     }
 
     [Fact(Timeout = 15000)]
+    public async Task CommandTimeoutFailsACallWhoseReplyNeverComes()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        using var tcp = new TcpClient { NoDelay = true };
+        Task connecting = tcp.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+        using TcpClient server = await TestDeadlines.AcceptAsync(listener);
+        await connecting;
+        using NetworkStream stream = tcp.GetStream();
+        var mux = new CommandMultiplexer(stream, new RespReader(stream), 2, commandTimeout: TimeSpan.FromMilliseconds(200));
+        try
+        {
+            await Assert.ThrowsAsync<TimeoutException>(async () => await mux.SendAsync(
+                new IReadOnlyList<string>[] { new[] { "GET", "k" } }, CancellationToken.None));
+        }
+        finally
+        {
+            await mux.StopAsync();
+        }
+    }
+
+    [Fact(Timeout = 15000)]
     public async Task CancelsQueuedWriteWithoutSendingOrEncodingIt()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);

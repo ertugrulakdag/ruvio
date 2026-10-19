@@ -4,6 +4,7 @@ Notable changes to the Python client `ruvio-client` on PyPI. New entries go unde
 
 ## Unreleased
 
+- Docs: `socket_timeout` is the command timeout, default `None` (no limit); the README timeout table lists the matching option of every client (issue #48).
 - Added `read_policy=` (`ReadPolicy.PRIMARY`, `PREFER_REPLICA`, `REPLICA`, or the strings `"primary"`, `"prefer-replica"`, `"replica"`) to the sync and asyncio cluster clients: commands the server flags read-only and not blocking go to one replica of the key's shard, picked when the slot table loads; a pipeline goes to replicas only when every command in it reads. A replica that cannot be connected or answers `LOADING` is skipped until the next load. Reads may miss recent writes (replication is asynchronous). The default keeps today's routing.
 - `replicaof(host, port)`, `replicaof_no_one(force=False)` and `role()` for `REPLICAOF` and `ROLE`, sync and asyncio.
 - Added `seeds=` (`"host:port"` strings or `(host, port)` tuples) to the sync and asyncio clients, `ClusterRuvio` and `from_url`: tried in order instead of `host`/`port`. A dropped connection reconnects starting with the next seed; a cluster reloads its slot map from the other known nodes and then the seeds when no open socket answers.
