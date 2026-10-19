@@ -2149,3 +2149,78 @@ fn a_shard_that_never_followed_continues_the_directory_history() {
         }
     );
 }
+
+#[test]
+fn a_primary_refuses_a_replica_that_followed_a_newer_epoch() {
+    let directory = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+
+    listener.set_nonblocking(true).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut shipment = idle_shipment(directory.path(), [7; HISTORY_LEN]);
+
+    shipment.lineage.origin.epoch = 2;
+    let shipment = Arc::new(shipment);
+    let accept_stop = Arc::clone(&stop);
+    let primary = thread::spawn(move || accept_replicas(listener, shipment, accept_stop));
+    let handshake = |epoch| Handshake {
+        version: VERSION_RESYNC,
+        shard_id: 0,
+        after_sequence: 0,
+        password: Vec::new(),
+        history: [7; HISTORY_LEN],
+        shard_count: 1,
+        epoch,
+    };
+
+    // A replica that followed the primary which replaced this one.
+    let mut stream = connect_replication(address);
+
+    stream
+        .write_all(&encode_handshake(&handshake(3)).unwrap())
+        .unwrap();
+    assert_eq!(
+        decode_reply(&read_socket(&mut stream, REPLY_LEN))
+            .unwrap()
+            .0,
+        HandshakeStatus::Stale
+    );
+
+    stop.store(true, Ordering::Release);
+    join_within(primary).unwrap();
+}
+
+#[test]
+fn a_replica_does_not_follow_a_primary_below_the_epoch_it_followed() {
+    let directory = tempfile::tempdir().unwrap();
+    let followed = Origin {
+        history: [1; HISTORY_LEN],
+        epoch: 5,
+    };
+
+    record_upstream_history(directory.path(), 0, &followed).unwrap();
+
+    // A replaced primary (epoch 3) accepts the resume; the replica still does not follow it.
+    let (address, server) = answer_once(encode_reply_with_history(
+        HandshakeStatus::Ok,
+        1,
+        &Origin {
+            history: [9; HISTORY_LEN],
+            epoch: 3,
+        },
+    ));
+    let (link, _deliveries) = link_to(address, directory.path());
+    let mut stream = connect_replication(address);
+    let (retry, _) = read_primary(
+        &mut stream,
+        &link,
+        &mut VecDeque::new(),
+        &AtomicBool::new(false),
+    );
+    let sent = join_within(server).unwrap();
+
+    assert!(retry);
+    assert_eq!((sent.history, sent.epoch), (followed.history, 5));
+    assert_eq!(upstream_origin(directory.path(), 0), followed);
+}
