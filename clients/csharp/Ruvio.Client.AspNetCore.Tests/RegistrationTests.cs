@@ -67,6 +67,25 @@ public class RegistrationTests
     }
 
     [Fact]
+    public void AddRuvioClientBindsTheSeedList()
+    {
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Seeds:0"] = "10.1.2.3:6379",
+                ["Seeds:1"] = "[::1]:6380",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        services.AddRuvioClient(configuration);
+        using ServiceProvider provider = services.BuildServiceProvider();
+        RuvioClientOptions options = provider.GetRequiredService<IOptions<RuvioClientOptions>>().Value;
+
+        Assert.Equal(["10.1.2.3:6379", "[::1]:6380"], options.Seeds);
+    }
+
+    [Fact]
     public void AddRuvioClientBindsReconnectSettings()
     {
         IConfiguration configuration = new ConfigurationBuilder()

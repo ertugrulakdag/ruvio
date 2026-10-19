@@ -5,7 +5,9 @@ package ruvio
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,6 +23,15 @@ type Options struct {
 	// Addr is host:port. Default 127.0.0.1:6379. With Cluster it is the seed: the
 	// address of any shard.
 	Addr string
+	// Seeds is a list of host:port addresses (IPv6 as "[::1]:6379") used in place of
+	// Addr when not empty. Connecting tries them in order, one attempt each, and keeps the
+	// first that answers; a seed that cannot be reached is skipped, while a refused AUTH
+	// or SELECT stops at once. After the connection drops, the next command's reconnect
+	// tries every seed once, starting with the one after the address that dropped. With
+	// Cluster, CLUSTER SLOTS comes from the first reachable seed and the seeds are asked
+	// again when no known node answers a slot map reload. A malformed entry makes every
+	// command fail with an error that names it. Default empty.
+	Seeds []string
 	// Username and Password send AUTH on every new connection when Password is set.
 	// An empty Username authenticates the default user.
 	Username string
@@ -38,8 +49,8 @@ type Options struct {
 	// deadline. Default 5 seconds.
 	DialTimeout time.Duration
 	// Dial overrides the dialer (for TLS, unix sockets, tests). The network argument
-	// is always "tcp" and addr is Options.Addr (or the node address in cluster
-	// mode). Return a *tls.Conn here when the server requires TLS.
+	// is always "tcp" and addr is the address being tried: Options.Addr, the seed (with
+	// Seeds) or the node address in cluster mode. Return a *tls.Conn here when the server requires TLS.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 	// MaxIdleDedicated is how many dedicated connections (blocking commands,
 	// transactions) are kept for reuse. Default 4.
@@ -73,6 +84,13 @@ type Client struct {
 	db     atomic.Int64
 
 	cl *cluster // non-nil when Options.Cluster is set
+
+	// addrs is the list of addresses to dial: Options.Seeds, or Options.Addr alone. at is
+	// the index of the address of the last successful dial, where a dedicated or Pub/Sub
+	// connection starts. cfgErr is set when Options.Seeds has a malformed entry.
+	addrs  []string
+	at     atomic.Int32
+	cfgErr error
 }
 
 // NewClient returns a Client without connecting. The first command opens the connection,
@@ -91,12 +109,52 @@ func NewClient(opts Options) *Client {
 		opts.MaxIdleDedicated = 4
 	}
 	c := &Client{opts: opts}
+	if len(opts.Seeds) > 0 {
+		c.cfgErr = checkSeeds(opts.Seeds)
+		c.addrs = append([]string(nil), opts.Seeds...)
+		c.opts.Addr = c.addrs[0]
+		c.opts.Seeds = c.addrs
+	} else {
+		c.addrs = []string{opts.Addr}
+	}
 	c.db.Store(int64(opts.DB))
 	c.cmds.ex = c
 	if opts.Cluster {
 		c.cl = newCluster(c)
 	}
 	return c
+}
+
+// checkSeeds reports the first entry of seeds that is not host:port with a port from 1 to
+// 65535.
+func checkSeeds(seeds []string) error {
+	for _, s := range seeds {
+		host, port, err := net.SplitHostPort(s)
+		if err == nil && host == "" {
+			err = errors.New("empty host")
+		}
+		if err == nil {
+			if n, perr := strconv.Atoi(port); perr != nil || n < 1 || n > 65535 {
+				err = errors.New("bad port")
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("ruvio: invalid seed %q: %w", s, err)
+		}
+	}
+	return nil
+}
+
+// connectError is a failure to open a connection (the address could not be reached or
+// the handshake broke off), as opposed to a server reply. It prints as the error it wraps.
+type connectError struct{ err error }
+
+func (e *connectError) Error() string { return e.err.Error() }
+func (e *connectError) Unwrap() error { return e.err }
+
+func isConnectError(err error) bool {
+	var ce *connectError
+	return errors.As(err, &ce)
 }
 
 // Connect is NewClient followed by Ping. It returns the connect, authentication or
@@ -150,7 +208,12 @@ func (c *Client) shared(ctx context.Context) (*conn, error) {
 	if cn := c.cur.Load(); cn != nil && !cn.dead.Load() {
 		return cn, nil
 	}
-	cn, err := c.dial(ctx, c.opts.OnPush)
+	// A dropped connection moves on to the address after the one that dropped.
+	start := int(c.at.Load())
+	if old := c.cur.Load(); old != nil {
+		start = int(old.addr) + 1
+	}
+	cn, err := c.dialAt(ctx, c.opts.OnPush, start)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +221,40 @@ func (c *Client) shared(ctx context.Context) (*conn, error) {
 	return cn, nil
 }
 
+// dial opens a connection starting at the address the last successful dial used.
 func (c *Client) dial(ctx context.Context, onPush func(Value)) (*conn, error) {
+	return c.dialAt(ctx, onPush, int(c.at.Load()))
+}
+
+// dialAt tries the addresses in order from start, wrapping around, one attempt each. An
+// address that cannot be reached is skipped; a refused handshake step is returned at once.
+// With one address (the default) this is a single attempt. In cluster mode the seed client
+// is one node and never moves to another address; the cluster asks the other seeds itself.
+func (c *Client) dialAt(ctx context.Context, onPush func(Value), start int) (*conn, error) {
+	if c.cfgErr != nil {
+		return nil, c.cfgErr
+	}
+	n := len(c.addrs)
+	if n == 1 || (c.cl != nil && !c.cl.standalone.Load()) {
+		return c.dialAddr(ctx, onPush, 0, c.opts.Addr)
+	}
+	start %= n
+	var last error
+	for step := 0; step < n; step++ {
+		i := (start + step) % n
+		cn, err := c.dialAddr(ctx, onPush, i, c.addrs[i])
+		if err == nil {
+			return cn, nil
+		}
+		if !isConnectError(err) || ctx.Err() != nil {
+			return nil, err
+		}
+		last = err
+	}
+	return nil, last
+}
+
+func (c *Client) dialAddr(ctx context.Context, onPush func(Value), idx int, addr string) (*conn, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.opts.DialTimeout)
@@ -167,25 +263,30 @@ func (c *Client) dial(ctx context.Context, onPush func(Value)) (*conn, error) {
 	var nc net.Conn
 	var err error
 	if c.opts.Dial != nil {
-		nc, err = c.opts.Dial(ctx, "tcp", c.opts.Addr)
+		nc, err = c.opts.Dial(ctx, "tcp", addr)
 	} else {
 		var d net.Dialer
-		nc, err = d.DialContext(ctx, "tcp", c.opts.Addr)
+		nc, err = d.DialContext(ctx, "tcp", addr)
 	}
 	if err != nil {
-		return nil, err
+		return nil, &connectError{err}
 	}
 	if tc, ok := nc.(*net.TCPConn); ok {
 		tc.SetNoDelay(true)
 	}
 	cn := newConn(nc, onPush)
+	cn.addr = int32(idx)
 	if onPush != nil || c.opts.Protocol == 3 {
 		cn.keepReading() // push frames can arrive with no call pending
 	}
 	if err := c.handshake(ctx, cn); err != nil {
 		cn.close()
-		return nil, err
+		if isServerErr(err) {
+			return nil, err
+		}
+		return nil, &connectError{err}
 	}
+	c.at.Store(int32(idx))
 	return cn, nil
 }
 

@@ -42,9 +42,10 @@ class _Node:
 class _State:
     """Routing state, shared by a client and its ``raw`` view."""
 
-    __slots__ = ("mode", "slots", "nodes", "by_addr", "seed", "watch", "targets", "bufs")
+    __slots__ = ("mode", "slots", "nodes", "by_addr", "seed", "watch", "targets", "bufs", "seeds")
 
-    def __init__(self, seed: _Node) -> None:
+    def __init__(self, seed: _Node, seeds: Optional[List[Tuple[str, int]]] = None) -> None:
+        self.seeds = seeds  # configured seed addresses, asked for the slot table when no known node answers
         self.mode = 0  # 0 = not discovered yet, 1 = cluster, 2 = standalone fallback
         self.slots: List[int] = []
         self.nodes: List[_Node] = []
@@ -119,7 +120,7 @@ class ClusterRuvio(Ruvio):
         o = self._conn.opts
         if o.unix_socket_path:
             raise ValueError("cluster mode needs host:port, not a unix socket")
-        self._cl = _State(_Node(o.host, o.port, self._conn))
+        self._cl = _State(_Node(o.host, o.port, self._conn), o.seeds)
         if self._conn.sock is not None:  # lazy=False connected the seed already
             self._discover()
 
@@ -181,17 +182,30 @@ class ClusterRuvio(Ruvio):
         o = _Options(**self._conn.opts.as_dict())
         o.host = host
         o.port = port
+        o.seeds = None
         return _Node(host, port, _Conn(o))
 
     def _discover(self) -> None:
         c = self._cl
         reply = self._rt(c.seed.conn, cl.CLUSTER_SLOTS, True)
+        self._follow_seed(c.seed)
         topo = cl.parse_slots(reply, c.seed.host) if not isinstance(reply, ResponseError) else None
         if topo is None or len(topo.nodes) < 2:
             c.mode = 2  # standalone (or a one-node map): plain single-connection behavior
             return
+        c.seed.conn.opts.seeds = None  # from now on this socket is the node it connected to
         self._apply(topo)
         c.mode = 1
+
+    def _follow_seed(self, node: _Node) -> None:
+        """Points the seed node at the address its socket connected to (the first reachable seed)."""
+        o = node.conn.opts
+        if (o.host, o.port) != (node.host, node.port):
+            by = self._cl.by_addr
+            if by.get((node.host, node.port)) is node:
+                del by[(node.host, node.port)]
+            node.host, node.port = o.host, o.port
+            by[(node.host, node.port)] = node
 
     def _apply(self, topo: cl.Topology) -> None:
         c = self._cl
@@ -220,21 +234,51 @@ class ClusterRuvio(Ruvio):
         c.bufs = [[] for _ in c.targets]
 
     def _refresh(self) -> bool:
+        """Reloads the slot table. Nodes with an open socket are asked first; when none answers, every
+        other known node and then every seed is opened (one connect attempt each) until one returns a
+        slot table. A seed that was only opened for this reload does not stay in the node list."""
         c = self._cl
         tried = set()
-        for node in [c.seed, *c.nodes]:
-            if id(node) in tried:
-                continue
-            tried.add(id(node))
-            try:
-                reply = self._rt(node.conn, cl.CLUSTER_SLOTS, True)
-            except (ConnectionError, OSError):
-                continue
-            topo = None if isinstance(reply, ResponseError) else cl.parse_slots(reply, c.seed.host)
-            if topo is not None and len(topo.nodes) >= 1:
-                self._apply(topo)
+        known: List[_Node] = []
+        for node in [c.seed, *c.nodes, *c.by_addr.values()]:
+            if id(node) not in tried:
+                tried.add(id(node))
+                known.append(node)
+        for node in known:
+            if node.conn.sock is not None and self._ask_slots(node):
                 return True
+        for node in known:
+            if node.conn.sock is None and self._open_and_ask(node):
+                return True
+        for host, port in c.seeds or ():
+            if (host, port) in c.by_addr:
+                continue
+            node = self._new_node(host, port)
+            c.by_addr[(host, port)] = node
+            if self._open_and_ask(node):
+                return True
+            node.conn.close()
+            if c.by_addr.get((host, port)) is node:
+                del c.by_addr[(host, port)]
         return False
+
+    def _ask_slots(self, node: _Node) -> bool:
+        try:
+            reply = self._rt(node.conn, cl.CLUSTER_SLOTS, True)
+        except (ConnectionError, OSError):
+            return False
+        topo = None if isinstance(reply, ResponseError) else cl.parse_slots(reply, node.host)
+        if topo is None or len(topo.nodes) < 1:
+            return False
+        self._apply(topo)
+        return True
+
+    def _open_and_ask(self, node: _Node) -> bool:
+        try:
+            node.conn.open()
+        except (ConnectionError, ResponseError):
+            return False
+        return self._ask_slots(node)
 
     def refresh_slots(self) -> None:
         """Re-reads ``CLUSTER SLOTS`` and rebuilds the slot table.
@@ -290,7 +334,7 @@ class ClusterRuvio(Ruvio):
             # the common case: an ordinary command, routed from its frame with no copy kept for MOVED
             conn = c.targets[ni].conn
             if conn.sock is None:
-                conn.open()
+                conn = self._open_target(ni, data)
             p = conn.parser
             if p.decode is not dec:
                 p.decode = dec
@@ -307,6 +351,59 @@ class ClusterRuvio(Ruvio):
         if isinstance(reply, ResponseError):
             raise reply
         return reply if conv is None else conv(reply)
+
+    def _open_target(self, ni: int, data: bytes) -> _Conn:
+        """Opens the socket of target ``ni`` for an ordinary command. When the node cannot be
+        reached the slot table is reloaded and the command goes to the owner the new table names (a
+        keyless one to the first reachable node)."""
+        c = self._cl
+        conn = c.targets[ni].conn
+        try:
+            conn.open()
+            return conn
+        except ConnectionError as exc:
+            error = exc
+        if not self._refresh():
+            raise error
+        ni2 = cl.node_index(data, c.slots)
+        if ni2 is None or ni2 < 0:
+            return self._first_reachable(error)
+        return self._ensure_open(c.targets[ni2].conn)
+
+    def _open_owner(self, slot: Optional[int]) -> _Conn:
+        """Like :meth:`_open_target` for a slot (``None`` = keyless)."""
+        c = self._cl
+        conn = self._owner(slot).conn
+        try:
+            conn.open()
+            return conn
+        except ConnectionError as exc:
+            error = exc
+        if not self._refresh():
+            raise error
+        if slot is None or c.slots[slot] < 0:
+            return self._first_reachable(error)
+        return self._ensure_open(self._owner(slot).conn)
+
+    @staticmethod
+    def _ensure_open(conn: _Conn) -> _Conn:
+        if conn.sock is None:
+            conn.open()
+        return conn
+
+    def _first_reachable(self, error: BaseException) -> _Conn:
+        """The first node of the reloaded table that opens becomes the keyless-command node."""
+        c = self._cl
+        for node in c.nodes:
+            if node.conn.sock is None:
+                try:
+                    node.conn.open()
+                except (ConnectionError, ResponseError):
+                    continue
+            c.seed = node
+            c.targets[-1] = node
+            return node.conn
+        raise error
 
     def _redirect(self, err: MovedError, data: bytes, dec: bool) -> Any:
         """``-MOVED``: re-sends the command to the node the reply names, at most
@@ -339,7 +436,10 @@ class ClusterRuvio(Ruvio):
         return node
 
     def _single(self, slot: Optional[int], data: bytes, dec: bool) -> Any:
-        reply = self._rt(self._owner(slot).conn, data, dec)
+        conn = self._owner(slot).conn
+        if conn.sock is None:
+            conn = self._open_owner(slot)
+        reply = self._rt(conn, data, dec)
         if reply.__class__ is MovedError:
             reply = self._redirect(reply, data, dec)
         return reply
@@ -596,6 +696,7 @@ class ClusterRuvio(Ruvio):
             A new :class:`ClusterRuvio`; close it when done.
         """
         opts = self._conn.opts.as_dict()
+        opts["seeds"] = self._cl.seeds
         return ClusterRuvio(decode_responses=self._decode, cluster=True, **opts)
 
     def pubsub(self, ignore_subscribe_messages: bool = False) -> "ClusterPubSub":
@@ -637,7 +738,13 @@ Classic subscriptions live on the owner of slot 0, sharded ones on the channel's
         node = client._owner(0) if c.mode == 1 else c.seed
         opts = _Options(**client._conn.opts.as_dict())
         opts.host, opts.port = node.host, node.port
+        if c.mode == 1:
+            opts.seeds = None
+        else:
+            opts.seeds = c.seeds
         super().__init__(opts, client._decode, ignore_subscribe_messages)
+        if c.mode != 1:
+            self._conn.pos = client._conn.resume()
         self._client = client
 
     def ssubscribe(self, *channels: Any) -> None:

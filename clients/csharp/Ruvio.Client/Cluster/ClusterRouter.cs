@@ -29,7 +29,9 @@ internal sealed class ClusterRouter : IDisposable
     private readonly SemaphoreSlim _connectGate = new(1, 1);
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private readonly List<IReadOnlyList<string>> _queued = [];
+    private readonly (string Host, int Port)[] _seeds;
     private ClusterTopology _topology;
+    private Tuple<string, int> _home;
     private RuvioSocket? _pinned;
     private bool _multiPending;
     private bool _inMulti;
@@ -43,10 +45,24 @@ internal sealed class ClusterRouter : IDisposable
         _seed = seed;
         _options = options;
         _topology = topology;
+        _seeds = SeedAddresses.Parse(options);
+        _home = Tuple.Create(seed.Host, seed.Port);
         _connections[Endpoint(seed.Host, seed.Port)] = seed;
     }
 
     public int NodeCount => _topology.Nodes.Count;
+
+    /// <summary>How many node endpoints have a socket entry, open or broken.</summary>
+    internal int EndpointCount
+    {
+        get
+        {
+            lock (_connections)
+            {
+                return _connections.Count;
+            }
+        }
+    }
 
     internal bool HasLiveConnection()
     {
@@ -714,7 +730,9 @@ internal sealed class ClusterRouter : IDisposable
             ? ClusterKeys.Slot(arguments[1])
             : 0;
 
-        return _topology.Owner(slot) ?? (_seed.Host, _seed.Port);
+        Tuple<string, int> home = _home;
+
+        return _topology.Owner(slot) ?? (home.Item1, home.Item2);
     }
 
     private async Task<RespValue> TransactionAsync(
@@ -1185,7 +1203,12 @@ internal sealed class ClusterRouter : IDisposable
         return (slot, parts[2][..colon], port);
     }
 
-    private async Task RefreshAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Reloads the slot map. Nodes with an open socket are asked first; when none of them answers
+    /// (the usual case after a node went away), every other known node and then every seed is opened
+    /// in turn, one connect attempt each, until one returns a slot map. False when none did.
+    /// </summary>
+    private async Task<bool> RefreshAsync(CancellationToken cancellationToken)
     {
         await _refreshGate.WaitAsync(cancellationToken);
 
@@ -1200,21 +1223,104 @@ internal sealed class ClusterRouter : IDisposable
 
             foreach (RuvioSocket connection in live)
             {
-                RespValue reply = await connection.SendAsync(["CLUSTER", "SLOTS"], cancellationToken);
-
-                if (ClusterTopology.Parse(reply) is { } topology)
+                if (await AskSlotsAsync(connection, cancellationToken) is { } topology)
                 {
                     _topology = topology;
 
-                    return;
+                    return true;
                 }
             }
+
+            return await ReloadFromUnopenedAsync(cancellationToken);
         }
 
         finally
         {
             _refreshGate.Release();
         }
+    }
+
+    private static async Task<ClusterTopology?> AskSlotsAsync(RuvioSocket connection, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return ClusterTopology.Parse(await connection.SendAsync(["CLUSTER", "SLOTS"], cancellationToken));
+        }
+
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Opens the known nodes without a live socket and then the seeds, one connect attempt each, and
+    /// asks each for the slot map. A seed that could not be opened, or did not answer, is not kept.
+    /// </summary>
+    private async Task<bool> ReloadFromUnopenedAsync(CancellationToken cancellationToken)
+    {
+        var tried = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var candidates = new List<(string Host, int Port)>(_topology.Nodes);
+
+        candidates.AddRange(_seeds);
+
+        foreach ((string host, int port) in candidates)
+        {
+            string endpoint = Endpoint(host, port);
+
+            if (!tried.Add(endpoint))
+            {
+                continue;
+            }
+
+            lock (_connections)
+            {
+                if (_connections.TryGetValue(endpoint, out RuvioSocket? existing) && !existing.IsBroken)
+                {
+                    continue;
+                }
+            }
+
+            RuvioSocket opened;
+
+            try
+            {
+                opened = await RuvioSocket.OpenAsync(host, port, _options, cancellationToken);
+            }
+
+            catch (Exception error) when (error is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                continue;
+            }
+
+            ClusterTopology? topology = await AskSlotsAsync(opened, cancellationToken);
+
+            if (topology is null)
+            {
+                opened.Dispose();
+
+                continue;
+            }
+
+            RuvioSocket? stale;
+
+            lock (_connections)
+            {
+                _connections.TryGetValue(endpoint, out stale);
+                _connections[endpoint] = opened;
+            }
+
+            if (stale is not null)
+            {
+                stale.Dispose();
+            }
+
+            _topology = topology;
+
+            return true;
+        }
+
+        return false;
     }
 
     private ValueTask<RuvioSocket> TargetAsync(IReadOnlyList<string> keys, CancellationToken cancellationToken)
@@ -1229,8 +1335,52 @@ internal sealed class ClusterRouter : IDisposable
             return ForSlotAsync(ClusterKeys.Slot(key), cancellationToken);
         }
 
-        return new ValueTask<RuvioSocket>(ConnectionAsync(_seed.Host, _seed.Port, cancellationToken));
+        return new ValueTask<RuvioSocket>(KeylessAsync(cancellationToken));
     }
+
+    /// <summary>
+    /// The socket for a command without a key: the home node. When that node is gone, the slot map is
+    /// reloaded and the first node of the new map that opens becomes the home node.
+    /// </summary>
+    private async Task<RuvioSocket> KeylessAsync(CancellationToken cancellationToken)
+    {
+        Tuple<string, int> home = _home;
+
+        try
+        {
+            return await ConnectionAsync(home.Item1, home.Item2, cancellationToken);
+        }
+
+        catch (Exception error) when (CanReload(error, cancellationToken))
+        {
+            if (!await RefreshAsync(cancellationToken))
+            {
+                throw;
+            }
+
+            foreach ((string host, int port) in _topology.Nodes)
+            {
+                try
+                {
+                    RuvioSocket opened = await ConnectionAsync(host, port, cancellationToken);
+
+                    _home = Tuple.Create(host, port);
+
+                    return opened;
+                }
+
+                catch (Exception next) when (CanReload(next, cancellationToken))
+                {
+                }
+            }
+
+            throw;
+        }
+    }
+
+    private bool CanReload(Exception error, CancellationToken cancellationToken) =>
+        !_disposed && error is not ObjectDisposedException
+        && (error is not OperationCanceledException || !cancellationToken.IsCancellationRequested);
 
     private async Task<RuvioSocket> FirstKeyedTargetAsync(
         IReadOnlyList<IReadOnlyList<string>> commands,
@@ -1262,7 +1412,43 @@ internal sealed class ClusterRouter : IDisposable
             return new ValueTask<RuvioSocket>(cached);
         }
 
-        return OpenForNodeAsync(topology, node, cancellationToken);
+        return OpenSlotAsync(slot, topology, node, cancellationToken);
+    }
+
+    /// <summary>
+    /// Opens the owner of a slot. A node that cannot be opened (after the reconnect attempts)
+    /// triggers a slot map reload, and the command goes to the owner the new map names.
+    /// </summary>
+    private async ValueTask<RuvioSocket> OpenSlotAsync(
+        int slot, ClusterTopology topology, int node, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await OpenForNodeAsync(topology, node, cancellationToken);
+        }
+
+        catch (Exception error) when (CanReload(error, cancellationToken))
+        {
+            if (!await RefreshAsync(cancellationToken))
+            {
+                throw;
+            }
+
+            ClusterTopology reloaded = _topology;
+            int owner = reloaded.NodeOf(slot);
+
+            if (owner < 0)
+            {
+                throw;
+            }
+
+            if (reloaded.Sockets[owner] is { IsBroken: false } cached)
+            {
+                return cached;
+            }
+
+            return await OpenForNodeAsync(reloaded, owner, cancellationToken);
+        }
     }
 
     private async ValueTask<RuvioSocket> OpenForNodeAsync(

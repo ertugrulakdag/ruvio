@@ -32,8 +32,20 @@ export interface ConnectionOptions {
   host?: string;
   /** Server port (default `6379`). */
   port?: number;
-  /** Unix socket path, used instead of host/port. Not combined with `tls`. */
+  /** Unix socket path, used instead of host/port. Not combined with `tls` or `seeds`. */
   path?: string;
+  /**
+   * Seed addresses as `host:port` strings (IPv6 as `[::1]:6379`). When not empty they replace
+   * `host` and `port`; with none, `host` and `port` are used as before. Connecting tries the
+   * seeds in order, one connect attempt each, and keeps the first that answers: a seed that
+   * cannot be reached (refused, timed out) is skipped, while a refused `AUTH` or `SELECT` stops
+   * at once. After a dropped connection the next connect starts with the seed after the one that
+   * dropped and goes round the whole list. The command that hit the drop still rejects. A
+   * {@link ClusterClient} asks the first reachable seed for the slot table, and asks the seeds
+   * again when no known node answers a slot table reload. Cannot be combined with `path`.
+   * An empty host or an invalid port throws a `TypeError` when the client is created.
+   */
+  seeds?: string[];
   /** Use TLS: `true` for defaults, or Node's `tls.ConnectionOptions` (CA, client certificate, `servername`, ...). Default: plain TCP. */
   tls?: boolean | tls.ConnectionOptions;
   /** ACL user name sent with the password on connect (default user when omitted). Needs `password`. */
@@ -80,6 +92,18 @@ export type MovedHandler = (
   rej: (e: unknown) => void,
 ) => void;
 
+/** Receives a kept frame whose node could not be opened, together with its pending reply slot. */
+export type UnreachableHandler = (
+  e: ConnectionError,
+  buf: Buffer,
+  off: number,
+  len: number,
+  tf: Tf | null,
+  fl: number,
+  res: (v: unknown) => void,
+  rej: (e: unknown) => void,
+) => void;
+
 /** Batch receiver: one slot per frame of a pipeline or transaction. */
 export interface BatchSink {
   set(index: number, value: unknown): void;
@@ -95,6 +119,54 @@ function EXEC(resolve: (v: unknown) => void, reject: (e: unknown) => void): void
   xConn!.enqueue(resolve, reject, xTf, xFl);
 }
 
+interface SeedAddr {
+  readonly host: string;
+  readonly port: number;
+}
+
+/** @internal Parses `host:port` / `[v6]:port` seed strings; throws `TypeError` on an empty host or a bad port. */
+export function parseSeeds(seeds: readonly string[]): SeedAddr[] {
+  return seeds.map((seed) => {
+    const bad = (why: string): never => {
+      throw new TypeError('ruvio: invalid seed ' + JSON.stringify(seed) + ': ' + why);
+    };
+    if (typeof seed !== 'string') return bad('expected "host:port"');
+    let host: string;
+    let portText: string;
+    if (seed.startsWith('[')) {
+      const close = seed.indexOf(']');
+      if (close < 0 || seed[close + 1] !== ':') return bad('expected "[host]:port"');
+      host = seed.slice(1, close);
+      portText = seed.slice(close + 2);
+    } else {
+      const colon = seed.lastIndexOf(':');
+      if (colon < 0) return bad('expected "host:port"');
+      host = seed.slice(0, colon);
+      portText = seed.slice(colon + 1);
+      if (host.includes(':')) return bad('write an IPv6 host as "[host]:port"');
+    }
+    if (host === '') return bad('host is empty');
+    const port = /^\d{1,5}$/.test(portText) ? Number(portText) : 0;
+    if (port < 1 || port > 65535) return bad('port must be 1 to 65535');
+    return { host, port };
+  });
+}
+
+/** Stand-in for the socket while the seeds are tried: keeps the bytes written so far for the seed that answers. */
+class Dial {
+  held: Buffer[] = [];
+  pending: net.Socket | null = null;
+  last: Error | null = null;
+  dead = false;
+  write(chunk: Buffer): void {
+    this.held.push(chunk);
+  }
+  destroy(err?: Error): void {
+    this.dead = true;
+    this.pending?.destroy(err);
+  }
+}
+
 const C_AUTH = cmd('AUTH');
 const C_SELECT = cmd('SELECT');
 const C_SETNAME = cmd('CLIENT', 'SETNAME');
@@ -104,6 +176,13 @@ const C_HELLO = cmd('HELLO');
 export class Connection extends EventEmitter {
   readonly opts: ConnectionOptions;
   readonly enc: Encoder;
+  // Seed list (two or more addresses); null with a single address. `start` is where the next
+  // connect begins, `cur` the seed the socket is on.
+  private readonly addrs: SeedAddr[] | null = null;
+  private start = 0;
+  private cur = 0;
+  // Receives the kept frames of commands that failed because the node could not be opened.
+  private onUnreachable: UnreachableHandler | null = null;
   private socket: net.Socket | null = null;
   private readonly parser = new Parser();
   private readonly readBuf: Buffer;
@@ -139,6 +218,15 @@ export class Connection extends EventEmitter {
 
   constructor(opts: ConnectionOptions) {
     super();
+    if (opts.seeds !== undefined && opts.seeds.length > 0) {
+      if (opts.path !== undefined) throw new TypeError('ruvio: seeds cannot be combined with path');
+      const addrs = parseSeeds(opts.seeds);
+      if (addrs.length === 1) {
+        opts = { ...opts, host: addrs[0]!.host, port: addrs[0]!.port };
+      } else {
+        this.addrs = addrs;
+      }
+    }
     this.opts = opts;
     this.db = opts.db ?? 0;
     this.enc = new Encoder((chunk) => this.write(chunk));
@@ -205,9 +293,13 @@ export class Connection extends EventEmitter {
     this.schedule();
   }
 
-  /** Turns on frame keeping for {@link trackKept}; `h` receives every `-MOVED` reply of such a command. */
-  keepFrames(h: MovedHandler): void {
+  /**
+   * Turns on frame keeping for {@link trackKept}; `h` receives every `-MOVED` reply of such a command.
+   * `unreachable` receives the kept commands that were waiting when opening the socket failed.
+   */
+  keepFrames(h: MovedHandler, unreachable: UnreachableHandler | null = null): void {
     this.onMoved = h;
+    this.onUnreachable = unreachable;
     this.rFB = new Array(this.mask + 1).fill(null);
     this.rFO = new Int32Array(this.mask + 1);
     this.rFN = new Int32Array(this.mask + 1);
@@ -352,8 +444,7 @@ export class Connection extends EventEmitter {
     return this.track(null, 0).then(() => undefined);
   }
 
-  private open(): void {
-    if (this.closed) return;
+  private newSocket(host: string, port: number): net.Socket {
     const o = this.opts;
     const onread = {
       buffer: this.readBuf,
@@ -365,18 +456,32 @@ export class Connection extends EventEmitter {
     let socket: net.Socket;
     if (o.tls) {
       const topts: tls.ConnectionOptions = o.tls === true ? {} : { ...o.tls };
-      socket = tls.connect({ host: o.host ?? '127.0.0.1', port: o.port ?? 6379, servername: o.host, ...topts });
+      socket = tls.connect({ host, port, servername: host, ...topts });
       socket.on('data', (d: Buffer) => this.onData(d, d.length));
     } else if (o.path !== undefined) {
       socket = net.connect({ path: o.path, onread } as net.NetConnectOpts);
     } else {
-      socket = net.connect({ host: o.host ?? '127.0.0.1', port: o.port ?? 6379, onread } as net.NetConnectOpts);
+      socket = net.connect({ host, port, onread } as net.NetConnectOpts);
     }
-    this.socket = socket;
-    this.connected = false;
-    this.parser.reset();
     socket.setNoDelay(o.noDelay ?? true);
     if (o.keepAlive ?? true) socket.setKeepAlive(true, 30000);
+    return socket;
+  }
+
+  private open(): void {
+    if (this.closed) return;
+    const o = this.opts;
+    this.connected = false;
+    this.parser.reset();
+    if (this.addrs !== null) {
+      const dial = new Dial();
+      this.socket = dial as unknown as net.Socket;
+      this.handshake();
+      this.dialNext(dial, 0);
+      return;
+    }
+    const socket = this.newSocket(o.host ?? '127.0.0.1', o.port ?? 6379);
+    this.socket = socket;
     let timer: NodeJS.Timeout | null = null;
     if (o.connectTimeoutMs !== undefined && o.connectTimeoutMs > 0) {
       timer = setTimeout(() => socket.destroy(new ConnectionError('ruvio: connect timeout')), o.connectTimeoutMs);
@@ -395,6 +500,66 @@ export class Connection extends EventEmitter {
       if (this.socket === socket) this.onClose();
     });
     this.handshake();
+  }
+
+  /** One connect attempt at the seed `step` places after `start`; a failed attempt moves on to the next seed. */
+  private dialNext(dial: Dial, step: number): void {
+    const addrs = this.addrs!;
+    const o = this.opts;
+    const index = (this.start + step) % addrs.length;
+    const addr = addrs[index]!;
+    const socket = this.newSocket(addr.host, addr.port);
+    dial.pending = socket;
+    let timer: NodeJS.Timeout | null = null;
+    if (o.connectTimeoutMs !== undefined && o.connectTimeoutMs > 0) {
+      timer = setTimeout(() => socket.destroy(new ConnectionError('ruvio: connect timeout')), o.connectTimeoutMs);
+    }
+    socket.once(o.tls ? 'secureConnect' : 'connect', () => {
+      if (timer !== null) clearTimeout(timer);
+      if (this.current() !== dial || dial.pending !== socket) return;
+      dial.pending = null;
+      this.socket = socket;
+      this.cur = index;
+      this.connected = true;
+      for (const chunk of dial.held) socket.write(chunk);
+      dial.held = [];
+      this.emit('connect');
+    });
+    socket.on('error', (err) => {
+      if (this.socket === socket) this.lastError = err;
+      else if (dial.pending === socket) dial.last = err;
+    });
+    socket.on('close', () => {
+      if (timer !== null) clearTimeout(timer);
+      if (this.socket === socket) {
+        this.onClose();
+        return;
+      }
+      if (this.current() !== dial || dial.pending !== socket) return;
+      dial.pending = null;
+      if (!dial.dead && step + 1 < addrs.length) {
+        this.dialNext(dial, step + 1);
+        return;
+      }
+      this.lastError = dial.last;
+      this.onClose();
+    });
+  }
+
+  private current(): unknown {
+    return this.socket;
+  }
+
+  /** The seeds as `host:port` strings starting with the one the socket is on; `undefined` with a single address. */
+  seedsFromCurrent(): string[] | undefined {
+    const a = this.addrs;
+    if (a === null) return undefined;
+    const out: string[] = [];
+    for (let i = 0; i < a.length; i++) {
+      const x = a[(this.cur + i) % a.length]!;
+      out.push((x.host.includes(':') ? '[' + x.host + ']' : x.host) + ':' + x.port);
+    }
+    return out;
   }
 
   private lastError: Error | null = null;
@@ -444,23 +609,36 @@ export class Connection extends EventEmitter {
     this.socket = null;
     const wasConnected = this.connected;
     this.connected = false;
+    // The next connect starts with the seed after the one that dropped.
+    if (wasConnected && this.addrs !== null) this.start = (this.cur + 1) % this.addrs.length;
+    if (!wasConnected) (err as ConnectionError).unreachable = true;
     // Drop unsent bytes; their callers are rejected with everyone else.
     this.enc.pos = this.enc.start = this.enc.frameStart = 0;
     this.parser.reset();
-    this.rejectAll(err);
+    this.rejectAll(err, !wasConnected);
     if (wasConnected) this.emit('disconnect', err);
     else this.emit('connectError', err);
     if (this.listenerCount('error') > 0) this.emit('error', err);
     if (this.opts.reconnect === false) this.closed = true;
   }
 
-  private rejectAll(err: Error): void {
+  private rejectAll(err: Error, unreachable = false): void {
     while (this.count > 0) {
       const i = this.head;
       const res = this.rRes[i];
       const rej = this.rRej[i];
+      const tf = this.rTf[i]!;
       this.rRes[i] = this.rRej[i] = this.rTf[i] = null;
-      if (this.rFB !== null) this.rFB[i] = null;
+      if (this.rFB !== null) {
+        const fb = this.rFB[i]!;
+        this.rFB[i] = null;
+        if (unreachable && fb !== null && this.onUnreachable !== null && typeof res === 'function') {
+          this.head = (i + 1) & this.mask;
+          this.count--;
+          this.onUnreachable(err as ConnectionError, fb, this.rFO![i]!, this.rFN![i]!, tf, this.rFl[i]!, res as (v: unknown) => void, rej as (e: unknown) => void);
+          continue;
+        }
+      }
       this.head = (i + 1) & this.mask;
       this.count--;
       if (typeof res === 'function') (rej as (e: unknown) => void)(err);

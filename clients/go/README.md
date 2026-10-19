@@ -159,6 +159,26 @@ n, _ = c.ZCount(ctx, "board", ruvio.ScoreExclusive(5), ruvio.ScorePosInf)
 | `SeenBefore`, `MaybeSeen` | `BF.MADD`, `BF.MEXISTS` | One round trip per batch. |
 | `KeySlot(key)` | local CRC16 | `{hashtag}` aware; matches `CLUSTER KEYSLOT`. |
 
+## Seed addresses
+
+```go
+c, err := ruvio.Connect(ctx, ruvio.Options{
+    Seeds: []string{"10.0.0.5:6379", "10.0.0.6:6379", "[::1]:6379"},
+})
+```
+
+`Seeds` (`host:port`, IPv6 in brackets) replaces `Addr` when it is not empty; with no seeds
+`Addr` works as before. Connecting tries the seeds in order, one connect attempt each, and keeps
+the first that answers. A seed that cannot be reached is skipped, a refused `AUTH` or `SELECT`
+stops at once, and when none answers the last connect error is returned. After the connection
+drops, the next command reconnects by trying every seed once, starting with the one after the
+address that dropped; the command that hit the drop still fails. Dedicated and Pub/Sub
+connections start at the address of the last successful connection. A custom `Options.Dial`
+receives the seed being tried. With `Cluster: true`, `CLUSTER SLOTS` comes from the first
+reachable seed; when a node cannot be opened again, the slot map is reloaded from the nodes
+that still have a connection and then from the other known nodes and the seeds, and the
+command goes to the owner the new map names. No cost is added to the per-command path.
+
 ## Cluster
 
 ```go

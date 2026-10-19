@@ -4,6 +4,7 @@ Notable changes to the Rust client crate `ruvio-client`. New entries go under "U
 
 ## Unreleased
 
+- `ClientOptions::seeds`: a list of `(host, port)` seed addresses tried in order. A dropped standalone connection reconnects starting with the next seed, and a cluster slot map reload asks the other known nodes and the seeds when no open socket answers. `ClientOptions` built with a struct literal needs `..Default::default()`.
 - TTL on create: a deadline set only when the call creates the key (an existing key keeps its deadline), sent as `EX` for whole seconds and `PX` otherwise.
   - New methods `incr_with_ttl`, `decr_with_ttl`, `incr_by_with_ttl`, `decr_by_with_ttl`, `incr_by_max_with_ttl`, `incr_by_float_with_ttl`, `hincr_by_with_ttl`, `zincr_by_with_ttl`, `setbit_with_ttl`, `xadd_with_ttl`, `xadd_trim_with_ttl`, `json_set_with_ttl` and, with `serde`, `json_set_value_with_ttl`.
   - `SortedSetAddOptions` (`zadd_with`, `zadd_incr`, `geo_add_with`) and `BloomInsertOptions` (`bf_insert`) gain `ttl: Option<Duration>`. Code that builds them with a struct literal needs `..Default::default()`.

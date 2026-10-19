@@ -313,6 +313,30 @@ Short benchmark (`RUVIO_TEST_ADDR` plain 1-shard server vs `RUVIO_CLUSTER_ADDR` 
 coroutine: the node connection's pending-reply future is returned directly, and only a `MOVED`
 reply is intercepted.
 
+## Seed addresses
+
+`seeds=` takes the place of `host`/`port` (both clients, plain and `cluster=True`): `"host:port"` strings
+(IPv6 as `"[::1]:6379"`) or `(host, port)` tuples. Without it nothing changes.
+
+```python
+from ruvio import Ruvio
+
+client = Ruvio(seeds=["10.0.0.1:6379", ("10.0.0.2", 6379), "[::1]:6379"])
+```
+
+- Connecting tries the seeds in order, one connect attempt each, and keeps the first that answers. A seed
+  that cannot be reached is skipped; a refused `AUTH` or `SELECT` raises at once. When none answers, the
+  last `ConnectionError` is raised.
+- After a dropped connection the command that hit the drop still raises. The next reconnect tries every seed
+  once, starting with the seed after the one that dropped and ending with it. A `pubsub()` session opened
+  later starts at the address the command connection is on.
+- With `cluster=True`, `CLUSTER SLOTS` comes from the first reachable seed. A table reload asks the nodes that
+  have an open socket first; when none answers it opens every other known node and then every seed, one
+  connect attempt each, until one returns a table. A node that cannot be opened triggers that reload and the
+  command goes to the owner the new table names (a keyless command to the first reachable node of the new
+  table). Pipelines, fan-out commands and transactions do not trigger the reload on their own; they fail as
+  before and the next single-key or keyless command reloads. Seeds are never asked while the known nodes answer.
+
 ## Tests
 
 ```bash

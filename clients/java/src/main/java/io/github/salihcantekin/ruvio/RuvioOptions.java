@@ -3,6 +3,12 @@ package io.github.salihcantekin.ruvio;
 
 import io.github.salihcantekin.ruvio.internal.Connection;
 
+import io.github.salihcantekin.ruvio.internal.Address;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.function.Consumer;
 
 /**
@@ -21,6 +27,11 @@ public final class RuvioOptions {
     public final String host;
     /** Server TCP port (default 6379). */
     public final int port;
+    /**
+     * Seed addresses as {@code host:port} strings (an IPv6 address as {@code [::1]:6379}), immutable. When not
+     * empty they are used instead of {@link #host} and {@link #port}; empty by default.
+     */
+    public final List<String> seeds;
     /** ACL user name sent with {@code AUTH} on every (re)connect, or {@code null} to authenticate as the default user. */
     public final String username;
     /** Password sent with {@code AUTH} on every (re)connect, or {@code null} for no authentication. */
@@ -43,6 +54,7 @@ public final class RuvioOptions {
     private RuvioOptions(Builder b) {
         this.host = b.host;
         this.port = b.port;
+        this.seeds = Collections.unmodifiableList(new ArrayList<>(b.seeds));
         this.username = b.username;
         this.password = b.password;
         this.database = b.database;
@@ -99,6 +111,15 @@ public final class RuvioOptions {
     }
 
     /**
+     * Returns the seed addresses.
+     *
+     * @return the {@code host:port} seeds; empty when only {@link #host()} and {@link #port()} are used
+     */
+    public List<String> seeds() {
+        return seeds;
+    }
+
+    /**
      * Returns the database index.
      *
      * @return the logical database selected on connect
@@ -126,6 +147,7 @@ public final class RuvioOptions {
         Builder b = new Builder();
         b.host = host;
         b.port = port;
+        b.seeds = new ArrayList<>(seeds);
         b.username = username;
         b.password = password;
         b.database = database;
@@ -146,6 +168,7 @@ public final class RuvioOptions {
 
         private String host = "127.0.0.1";
         private int port = 6379;
+        private List<String> seeds = new ArrayList<>();
         private String username;
         private String password;
         private int database;
@@ -175,6 +198,35 @@ public final class RuvioOptions {
          */
         public Builder port(int port) {
             this.port = port;
+            return this;
+        }
+
+        /**
+         * Sets seed addresses, tried in order and used instead of {@link #host} and {@link #port}. Connecting
+         * keeps the first seed that can be reached (one attempt each; a refused {@code AUTH} or {@code SELECT}
+         * stops at once). After a dropped connection a standalone client reconnects to the next seed first,
+         * trying every seed once per attempt. In cluster mode {@code CLUSTER SLOTS} comes from the first reachable
+         * seed, and the seeds are asked again when no known node answers a slot map reload. Calling it with no
+         * address clears the list.
+         *
+         * @param addresses {@code host:port} strings; an IPv6 address is written {@code [::1]:6379}
+         * @return this builder
+         * @throws IllegalArgumentException when an address has no host or the port is not a number from 1 to 65535
+         */
+        public Builder seeds(String... addresses) {
+            return seeds(Arrays.asList(addresses));
+        }
+
+        /**
+         * Sets seed addresses; see {@link #seeds(String...)}.
+         *
+         * @param addresses {@code host:port} strings; an IPv6 address is written {@code [::1]:6379}
+         * @return this builder
+         * @throws IllegalArgumentException when an address has no host or the port is not a number from 1 to 65535
+         */
+        public Builder seeds(List<String> addresses) {
+            Address.parseAll(addresses);
+            this.seeds = new ArrayList<>(addresses);
             return this;
         }
 

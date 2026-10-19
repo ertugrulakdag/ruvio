@@ -100,7 +100,7 @@ public static class RuvioServiceCollectionExtensions
     /// Binds <see cref="RuvioClientOptions"/> from configuration and registers a singleton <see cref="RuvioClient"/>.
     /// </summary>
     /// <param name="services">The service collection.</param>
-    /// <param name="configuration">A configuration section whose keys are option names: <c>Host</c>, <c>Port</c>, <c>Username</c>, <c>Password</c>, <c>Database</c>, <c>ConnectTimeout</c>, <c>MaxInFlightRequests</c>, <c>DedicatedReaderThread</c>, <c>DiscoverCluster</c>, <c>Reconnect</c>, <c>MaxReconnectAttempts</c>, <c>ReconnectBaseDelay</c> and <c>ReconnectMaxDelay</c>. Missing keys keep the defaults. Time spans use the <c>hh:mm:ss</c> form.</param>
+    /// <param name="configuration">A configuration section whose keys are option names: <c>Host</c>, <c>Port</c>, <c>Seeds</c> (an array of <c>host:port</c> strings), <c>Username</c>, <c>Password</c>, <c>Database</c>, <c>ConnectTimeout</c>, <c>MaxInFlightRequests</c>, <c>DedicatedReaderThread</c>, <c>DiscoverCluster</c>, <c>Reconnect</c>, <c>MaxReconnectAttempts</c>, <c>ReconnectBaseDelay</c> and <c>ReconnectMaxDelay</c>. Missing keys keep the defaults. Time spans use the <c>hh:mm:ss</c> form.</param>
     /// <returns>The same collection, for chaining.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="services"/> or <paramref name="configuration"/> is null.</exception>
     /// <exception cref="FormatException">A numeric, boolean or time value in the section cannot be parsed (raised when the options are first read).</exception>
@@ -129,6 +129,17 @@ public static class RuvioServiceCollectionExtensions
 
         if (Number(configuration, "Port") is { } port)
             options.Port = port;
+
+        List<string>? seeds = null;
+
+        foreach (IConfigurationSection seed in configuration.GetSection("Seeds").GetChildren())
+        {
+            if (seed.Value is { Length: > 0 } entry)
+                (seeds ??= []).Add(entry);
+        }
+
+        if (seeds is not null)
+            options.Seeds = seeds;
 
         if (configuration["Username"] is { } username)
             options.Username = username;
