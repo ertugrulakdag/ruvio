@@ -100,12 +100,24 @@ impl TlsAcceptor {
             || key_mtime != loaded.key_mtime
             || client_ca_mtime != loaded.client_ca_mtime
         {
-            *loaded = load_material(
+            // A half-rotated pair (new certificate, old key) or a half-written file must not
+            // take the listener down: keep serving the last good material and try again when
+            // a file changes next. The attempted times are remembered so the same bad files
+            // are not parsed again on every connection.
+            match load_material(
                 &self.cert_path,
                 &self.key_path,
                 self.client_ca.as_deref(),
                 self.client_auth,
-            )?;
+            ) {
+                Ok(fresh) => *loaded = fresh,
+                Err(error) => {
+                    tracing::warn!(%error, "tls reload failed, keeping the previous certificate");
+                    loaded.cert_mtime = cert_mtime;
+                    loaded.key_mtime = key_mtime;
+                    loaded.client_ca_mtime = client_ca_mtime;
+                }
+            }
         }
 
         Ok(Arc::clone(&loaded.config))
@@ -263,6 +275,41 @@ mod tests {
         let second = acceptor.current_config().unwrap();
 
         assert!(!Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn a_failed_reload_keeps_the_previous_certificate() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_self_signed_pair(dir.path(), "one");
+        let acceptor = TlsAcceptor::load(&cert, &key).unwrap();
+        let first = acceptor.current_config().unwrap();
+        let loaded_at = mtime(&cert).unwrap();
+
+        fs::write(&cert, b"not a certificate").unwrap();
+        let broken = fs::OpenOptions::new().append(true).open(&cert).unwrap();
+
+        broken
+            .set_modified(loaded_at + std::time::Duration::from_secs(60))
+            .unwrap();
+        drop(broken);
+
+        let second = acceptor.current_config().unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
+        // The same bad file is not parsed again, and a repaired pair is picked up.
+        assert!(Arc::ptr_eq(&first, &acceptor.current_config().unwrap()));
+        let (cert2, key2) = write_self_signed_pair(dir.path(), "two");
+
+        fs::copy(&cert2, &cert).unwrap();
+        fs::copy(&key2, &key).unwrap();
+        let fixed = fs::OpenOptions::new().append(true).open(&cert).unwrap();
+
+        fixed
+            .set_modified(loaded_at + std::time::Duration::from_secs(120))
+            .unwrap();
+        drop(fixed);
+
+        assert!(!Arc::ptr_eq(&first, &acceptor.current_config().unwrap()));
     }
 
     #[test]
