@@ -4,6 +4,8 @@ Notable changes to `ruvio-ui`, the web console (Docker image and host binaries).
 
 ## Unreleased
 
+- New workbench form for `SET … IFGT` and `IFLT` (keep the highest or lowest number). The forms for TRANSFER, HTRANSFER, RENEW, ZPOPBYSCORE, ZMOVEDUE, LIMIT SLIDING and TOKENS, and the lifetime on INCR were already there.
+
 ## 0.1.9 - 2026-10-17
 
 - New Dusk Rust theme, matching the project site. Every color and font is in `web/src/tokens.css`.

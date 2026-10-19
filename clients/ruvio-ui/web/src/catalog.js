@@ -50,6 +50,7 @@ export const families = [
     label: "Conditional writes",
     description: "Update a value only at the expected version.",
     commands: [
+      { name: "SET IFGT / IFLT", blurb: "Keep the highest or lowest number", help: "Writes the whole number only when the key is missing or the number is greater (IFGT) or smaller (IFLT) than the stored one. Replies OK when written and nil when the stored number wins. A value or stored string that is not a whole number is an error and nothing is written. Use it for watermarks, versions and best prices.", fields: [key("Number key"), { name: "number", label: "Number", inputmode: "numeric" }, { name: "when", label: "Write only when", choices: [{ value: "IFGT", label: "The number is greater (IFGT)" }, { value: "IFLT", label: "The number is smaller (IFLT)" }] }], build: (f) => ["SET", f.key, f.number, f.when || "IFGT"] },
       { name: "SETV", blurb: "Write with a version", help: "Leave the version empty to create version 1. Later writes must supply the current version and return the next one. A mismatch leaves the value unchanged. Plain SET remains unconditional.", fields: [key(), value(), { name: "version", label: "Expected version", optional: true, inputmode: "numeric", placeholder: "Empty for first write" }], build: (f) => ["SETV", f.key, f.value, ...(f.version ? [f.version] : [])] },
     ],
   },
