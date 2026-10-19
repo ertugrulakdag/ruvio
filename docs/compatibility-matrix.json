@@ -1859,7 +1859,7 @@
       "family": "replication",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Per shard (each shard is a node): a primary, or a server that does not replicate, answers master, its WAL sequence and an empty replica list (INFO replication_replicas has the count); a replica answers slave, the address it dials, connect or connected, and its synced sequence.",
+      "limitations": "Per shard (each shard is a node): a primary, or a server that does not replicate, answers master, its WAL sequence and its replicas that announced an address and finished copying ([host, port, acknowledged sequence], as strings); a replica answers slave, the address it dials, connect or connected, and its synced sequence.",
       "coverage": [
         "src/runtime/evented/tests/role_change.rs"
       ]
@@ -2076,7 +2076,7 @@
       "family": "cluster",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Static topology of the shards in one process. Hosts and ports come from advertised_host and advertised_port.",
+      "limitations": "Static topology of the shards in one process. Hosts and ports come from advertised_host and advertised_port. Each range lists the primary shard, then its replicas that announced an address and finished copying; a replica lists the primary it follows first and itself second. Node ids are the SHA-1 of the announced host:port.",
       "coverage": [
         "scripts/cluster_smoke.py"
       ]
@@ -2086,7 +2086,7 @@
       "family": "cluster",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Static topology of the shards in one process. Hosts and ports come from advertised_host and advertised_port.",
+      "limitations": "Static topology of the shards in one process. Hosts and ports come from advertised_host and advertised_port. Replicas that announced an address and finished copying appear as slave lines naming their primary's id.",
       "coverage": [
         "scripts/cluster_smoke.py"
       ]
@@ -2096,7 +2096,7 @@
       "family": "cluster",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Static topology of the shards in one process. Every shard is a primary.",
+      "limitations": "Static topology of the shards in one process. Each shard lists its primary, then its replicas (role replica, replication-offset = acknowledged sequence).",
       "coverage": [
         "scripts/cluster_smoke.py"
       ]
@@ -2136,7 +2136,7 @@
       "family": "cluster",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Returns OK in cluster mode. There are no replicas to read from.",
+      "limitations": "Returns OK in cluster mode. Replicas serve reads with or without it; clients send it to replica connections for Redis compatibility.",
       "coverage": [
         "scripts/cluster_smoke.py"
       ]
@@ -2146,7 +2146,7 @@
       "family": "cluster",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Returns OK in cluster mode.",
+      "limitations": "Returns OK in cluster mode; replicas refuse writes either way.",
       "coverage": [
         "scripts/cluster_smoke.py"
       ]

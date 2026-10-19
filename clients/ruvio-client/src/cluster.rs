@@ -7,7 +7,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 
 use std::time::Duration;
 
-use crate::client::{ClientOptions, NoticeHook};
+use crate::client::{ClientOptions, NoticeHook, ReadPolicy};
 use crate::codec::read_value;
 use crate::command_keys::{COMMAND_KEY_RULES, KeyRule};
 
@@ -617,6 +617,8 @@ pub(crate) enum Discovery {
 struct Topology {
     owners: Vec<Option<usize>>,
     nodes: Vec<(String, u16)>,
+    /// Per node of `nodes`: the replicas `CLUSTER SLOTS` lists after it, by address.
+    replicas: Vec<Vec<(String, u16)>>,
 }
 
 impl Topology {
@@ -631,6 +633,7 @@ impl Topology {
 
         let mut owners = vec![None; SLOT_COUNT as usize];
         let mut nodes = Vec::new();
+        let mut replicas: Vec<Vec<(String, u16)>> = Vec::new();
         let mut ordered = ranges.clone();
 
         ordered.sort_by_key(|range| match range {
@@ -665,9 +668,30 @@ impl Topology {
                 Some(index) => index,
                 None => {
                     nodes.push((host, port));
+                    replicas.push(Vec::new());
                     nodes.len() - 1
                 }
             };
+
+            // Replicas follow the primary; one that cannot be read is skipped, not fatal.
+            for replica in &fields[3..] {
+                let RespValue::Array(replica) = replica else {
+                    continue;
+                };
+                let (Some(Ok(Some(host))), Some(port)) = (
+                    replica.first().map(RespValue::as_string),
+                    replica
+                        .get(1)
+                        .and_then(RespValue::as_integer)
+                        .and_then(|port| u16::try_from(port).ok()),
+                ) else {
+                    continue;
+                };
+
+                if !replicas[node].contains(&(host.clone(), port)) {
+                    replicas[node].push((host, port));
+                }
+            }
 
             let first = usize::try_from(fields[0].as_integer()?).ok()?;
             let last = usize::try_from(fields[1].as_integer()?).ok()?;
@@ -678,7 +702,11 @@ impl Topology {
             next = last + 1;
         }
 
-        (next == SLOT_COUNT as usize).then_some(Self { owners, nodes })
+        (next == SLOT_COUNT as usize).then_some(Self {
+            owners,
+            nodes,
+            replicas,
+        })
     }
 
     fn node_index(&self, host: &str, port: u16) -> Option<usize> {
@@ -700,6 +728,8 @@ struct Endpoint {
     host: String,
     port: u16,
     connection: Option<Connection>,
+    /// A replica chosen for reads: `READONLY` is sent each time its socket is opened.
+    replica: bool,
 }
 
 pub(crate) struct ClusterRouter {
@@ -711,6 +741,9 @@ pub(crate) struct ClusterRouter {
     topology: Topology,
     /// The endpoint of each topology node, rebuilt with the topology.
     routes: Vec<usize>,
+    /// Per topology node, the replica endpoint its reads go to; `None` when it has none or
+    /// the chosen one could not be used. Empty with [`ReadPolicy::Primary`].
+    read_routes: Vec<Option<usize>>,
     /// Pipeline scratch kept between calls: each command's endpoint, and the endpoints in use.
     targets: Vec<usize>,
     used: Vec<usize>,
@@ -757,12 +790,15 @@ impl ClusterRouter {
                 host: seed.host.clone(),
                 port: seed.port,
                 connection: Some(seed),
+                replica: false,
             }],
             topology: Topology {
                 owners: Vec::new(),
                 nodes: Vec::new(),
+                replicas: Vec::new(),
             },
             routes: Vec::new(),
+            read_routes: Vec::new(),
             targets: Vec::new(),
             used: Vec::new(),
             queued: Vec::new(),
@@ -783,11 +819,30 @@ impl ClusterRouter {
     /// Makes `topology` current and points each of its nodes at an endpoint.
     fn install(&mut self, topology: Topology) {
         self.routes.clear();
+        self.read_routes.clear();
 
         for (host, port) in &topology.nodes {
             let endpoint = self.endpoint_index(host, *port);
 
             self.routes.push(endpoint);
+        }
+
+        // Each shard's reads go to one of its replicas, picked at random per client so many
+        // clients spread over the replicas, and kept until the next reload.
+        if self.options.read_policy != ReadPolicy::Primary {
+            let pick = random_index();
+
+            for replicas in &topology.replicas {
+                let read = (!replicas.is_empty()).then(|| {
+                    let (host, port) = &replicas[pick % replicas.len()];
+                    let endpoint = self.endpoint_index(host, *port);
+
+                    self.endpoints[endpoint].replica = true;
+                    endpoint
+                });
+
+                self.read_routes.push(read);
+            }
         }
 
         self.topology = topology;
@@ -807,6 +862,7 @@ impl ClusterRouter {
             host: host.to_owned(),
             port,
             connection: None,
+            replica: false,
         });
 
         self.endpoints.len() - 1
@@ -886,13 +942,13 @@ impl ClusterRouter {
         }
 
         let target = match single_key(name, arguments) {
-            Some(key) => self.for_slot(hash_slot(key))?,
+            Some(key) => self.slot_target(name, hash_slot(key))?,
             None => {
                 let keys = command_keys(name, arguments);
 
                 match slots_of(&keys) {
                     Slots::None => self.seed_target()?,
-                    Slots::One(slot) => self.for_slot(slot)?,
+                    Slots::One(slot) => self.slot_target(name, slot)?,
                     Slots::Many if listed(SPLIT, name) => {
                         return self.split(name, arguments, &keys);
                     }
@@ -901,7 +957,97 @@ impl ClusterRouter {
             }
         };
 
-        self.send_routed(target, arguments)
+        let reply = self.send_routed(target, arguments)?;
+
+        if self.options.read_policy != ReadPolicy::Primary
+            && self.endpoints[target].replica
+            && loading(&reply)
+        {
+            return self
+                .read_again_from_primary(target, reply, |connection| connection.send(arguments));
+        }
+
+        Ok(reply)
+    }
+
+    /// The endpoint for a command on `slot`: a replica for a read under a replica read policy,
+    /// the slot's primary otherwise.
+    fn slot_target(&mut self, name: &str, slot: u16) -> Result<usize, Error> {
+        if self.options.read_policy != ReadPolicy::Primary && reads(name) {
+            return self.read_target(slot);
+        }
+
+        self.for_slot(slot)
+    }
+
+    /// The replica `slot`'s reads go to, opened; the primary when it has none or it cannot be
+    /// opened under [`ReadPolicy::PreferReplica`], an error under [`ReadPolicy::Replica`].
+    fn read_target(&mut self, slot: u16) -> Result<usize, Error> {
+        let node = self
+            .topology
+            .owners
+            .get(usize::from(slot))
+            .copied()
+            .flatten();
+        let replica = node.and_then(|node| self.read_routes.get(node).copied().flatten());
+
+        if let (Some(node), Some(endpoint)) = (node, replica) {
+            match self.open(endpoint, false) {
+                Ok(()) => return Ok(endpoint),
+                Err(error) => {
+                    self.read_routes[node] = None;
+
+                    if self.options.read_policy == ReadPolicy::Replica {
+                        return Err(error);
+                    }
+                }
+            }
+        } else if self.options.read_policy == ReadPolicy::Replica {
+            return Err(Error::Protocol(format!(
+                "no replica is known for slot {slot} (read policy Replica)"
+            )));
+        }
+
+        self.for_slot(slot)
+    }
+
+    /// A replica answered `LOADING`: it is still copying its primary. It is skipped until the
+    /// next reload, and the read goes to the primary (or the reply is returned under
+    /// [`ReadPolicy::Replica`]).
+    fn read_again_from_primary(
+        &mut self,
+        replica: usize,
+        reply: RespValue,
+        mut send: impl FnMut(&mut Connection) -> Result<RespValue, Error>,
+    ) -> Result<RespValue, Error> {
+        for read in &mut self.read_routes {
+            if *read == Some(replica) {
+                *read = None;
+            }
+        }
+
+        if self.options.read_policy == ReadPolicy::Replica {
+            return Ok(reply);
+        }
+
+        let primary = self
+            .routes
+            .iter()
+            .zip(&self.topology.replicas)
+            .find(|(_, replicas)| {
+                let endpoint = &self.endpoints[replica];
+
+                replicas.contains(&(endpoint.host.clone(), endpoint.port))
+            })
+            .map(|(primary, _)| *primary);
+        let Some(primary) = primary else {
+            return Ok(reply);
+        };
+
+        self.open(primary, false)?;
+        let reply = send(self.connection(primary)?)?;
+
+        self.follow_moved(reply, send)
     }
 
     /// Binary-safe command. Routed by its second argument (the key) unless the command is
@@ -909,13 +1055,25 @@ impl ClusterRouter {
     pub(crate) fn execute_binary(&mut self, arguments: &[&[u8]]) -> Result<RespValue, Error> {
         let name = CommandName::from_bytes(arguments.first().copied().unwrap_or_default());
         let current = match arguments.get(1) {
-            Some(key) if !keyless(name.as_str()) => self.for_slot(hash_slot_bytes(key))?,
+            Some(key) if !keyless(name.as_str()) => {
+                self.slot_target(name.as_str(), hash_slot_bytes(key))?
+            }
             _ => self.seed_target()?,
         };
 
         let reply = self.connection(current)?.send_bytes(arguments)?;
+        let reply = self.follow_moved(reply, |connection| connection.send_bytes(arguments))?;
 
-        self.follow_moved(reply, |connection| connection.send_bytes(arguments))
+        if self.options.read_policy != ReadPolicy::Primary
+            && self.endpoints[current].replica
+            && loading(&reply)
+        {
+            return self.read_again_from_primary(current, reply, |connection| {
+                connection.send_bytes(arguments)
+            });
+        }
+
+        Ok(reply)
     }
 
     pub(crate) fn execute_many(&mut self, commands: &[&[&str]]) -> Result<Vec<RespValue>, Error> {
@@ -960,13 +1118,22 @@ impl ClusterRouter {
         targets.clear();
         used.clear();
 
+        // A pipeline goes to replicas only when every command in it is a read, so it never
+        // reads its own writes from a replica that has not received them.
+        let replica_reads = self.options.read_policy != ReadPolicy::Primary
+            && commands
+                .iter()
+                .all(|command| reads(CommandName::of(command).as_str()));
+
         for command in commands {
             let name = CommandName::of(command);
             let name = name.as_str();
             let target = match single_key(name, command) {
+                Some(key) if replica_reads => self.read_target(hash_slot(key))?,
                 Some(key) => self.for_slot(hash_slot(key))?,
                 None => match slots_of(&command_keys(name, command)) {
                     Slots::None => self.seed_target()?,
+                    Slots::One(slot) if replica_reads => self.read_target(slot)?,
                     Slots::One(slot) => self.for_slot(slot)?,
                     Slots::Many => return Ok(false),
                 },
@@ -1364,8 +1531,18 @@ impl ClusterRouter {
         let mut replies = Vec::with_capacity(parts.len());
 
         for (slot, command) in &parts {
-            let target = self.for_slot(*slot)?;
-            let reply = self.send_routed(target, &borrowed(command))?;
+            let target = self.slot_target(name, *slot)?;
+            let command = borrowed(command);
+            let mut reply = self.send_routed(target, &command)?;
+
+            if self.options.read_policy != ReadPolicy::Primary
+                && self.endpoints[target].replica
+                && loading(&reply)
+            {
+                reply = self.read_again_from_primary(target, reply, |connection| {
+                    connection.send(&command)
+                })?;
+            }
 
             // The first error stops the remaining parts, as one command would have failed.
             if matches!(reply, RespValue::Error(_)) {
@@ -1429,7 +1606,11 @@ impl ClusterRouter {
                 let endpoint = self.endpoint_index(host, port);
 
                 self.topology.nodes.push((host.to_owned(), port));
+                self.topology.replicas.push(Vec::new());
                 self.routes.push(endpoint);
+                if !self.read_routes.is_empty() {
+                    self.read_routes.push(None);
+                }
                 self.topology.nodes.len() - 1
             }
         };
@@ -1649,7 +1830,13 @@ impl ClusterRouter {
         }
 
         let delay = self.reconnect_delay.clone();
-        let opened = Connection::open_with_retry(&host, port, &self.options, delay.as_ref())?;
+        let mut opened = Connection::open_with_retry(&host, port, &self.options, delay.as_ref())?;
+
+        // Redis replicas serve reads only to connections that sent READONLY; Ruvio replicas
+        // serve them anyway and answer OK.
+        if self.endpoints[endpoint].replica {
+            opened.send(&["READONLY"])?;
+        }
 
         self.endpoints[endpoint].connection = Some(opened);
 
@@ -1698,6 +1885,34 @@ impl ClusterRouter {
             ))),
         }
     }
+}
+
+/// Server flag bits from the command table (see `scripts/gen_client_keys.py`).
+const FLAG_READONLY: u8 = 2;
+const FLAG_BLOCKING: u8 = 16;
+
+/// Whether a command only reads and may go to a replica: flagged `readonly`, not blocking.
+fn reads(name: &str) -> bool {
+    COMMAND_KEY_RULES
+        .binary_search_by(|(entry, ..)| (*entry).cmp(name))
+        .is_ok_and(|index| {
+            let flags = COMMAND_KEY_RULES[index].2;
+
+            flags & FLAG_READONLY != 0 && flags & FLAG_BLOCKING == 0
+        })
+}
+
+fn loading(reply: &RespValue) -> bool {
+    matches!(reply, RespValue::Error(message) if message.starts_with("LOADING") || message.starts_with("MASTERDOWN"))
+}
+
+/// A number that differs between clients, to spread their reads over a shard's replicas.
+fn random_index() -> usize {
+    use std::hash::{BuildHasher, Hasher};
+
+    std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish() as usize
 }
 
 fn borrowed(command: &[String]) -> Vec<&str> {
@@ -2616,6 +2831,7 @@ mod more_tests {
         let topology = Topology::parse(&RespValue::Array(vec![second, with_replica])).unwrap();
 
         assert_eq!(topology.nodes, [("h".to_owned(), 1)]);
+        assert_eq!(topology.replicas, [vec![("replica".to_owned(), 2)]]);
         assert_eq!(topology.owner(0), Some(&("h".to_owned(), 1)));
         assert_eq!(topology.owner(16_383), Some(&("h".to_owned(), 1)));
         assert_eq!(topology.owner(16_384), None);
@@ -2774,6 +2990,171 @@ mod more_tests {
 
             requests.lock().unwrap().clone()
         }
+    }
+
+    /// A router on one primary, with `replica` listed as its replica.
+    fn replicated_router(primary: &Script, replica: u16, policy: ReadPolicy) -> ClusterRouter {
+        ClusterRouter::new(
+            primary.connect(),
+            Topology {
+                owners: vec![Some(0); SLOT_COUNT as usize],
+                nodes: vec![("127.0.0.1".to_owned(), primary.port)],
+                replicas: vec![vec![("127.0.0.1".to_owned(), replica)]],
+            },
+            ClientOptions {
+                read_policy: policy,
+                reconnect_base_delay: Duration::ZERO,
+                max_reconnect_attempts: 1,
+                connect_timeout: Duration::from_millis(200),
+                ..ClientOptions::default()
+            },
+            Vec::new(),
+        )
+    }
+
+    fn sent(requests: &[Vec<u8>]) -> String {
+        requests
+            .iter()
+            .map(|request| String::from_utf8_lossy(request).into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn reads_go_to_a_replica_and_writes_and_mixed_pipelines_to_the_primary() {
+        let primary = Script::start(vec![
+            Step::Reply(b"+OK\r\n".to_vec()),
+            Step::Reply(b"+OK\r\n$1\r\n1\r\n".to_vec()),
+        ]);
+        let replica = Script::start(vec![
+            Step::Reply(b"+OK\r\n".to_vec()),
+            Step::Reply(b"$1\r\nr\r\n".to_vec()),
+            Step::Reply(b"$1\r\nr\r\n$1\r\ns\r\n".to_vec()),
+        ]);
+        let mut router = replicated_router(&primary, replica.port, ReadPolicy::PreferReplica);
+
+        assert_eq!(
+            router.execute(&["GET", "k"]).unwrap(),
+            RespValue::Bulk(b"r".to_vec())
+        );
+        assert_eq!(
+            router.execute(&["SET", "k", "v"]).unwrap(),
+            RespValue::Simple("OK".to_owned())
+        );
+        assert_eq!(
+            router
+                .execute_many(&[&["GET", "k"], &["STRLEN", "k"]])
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            router
+                .execute_many(&[&["SET", "a", "1"], &["GET", "a"]])
+                .unwrap()[1],
+            RespValue::Bulk(b"1".to_vec())
+        );
+        drop(router);
+
+        let to_replica = sent(&replica.finish());
+        let to_primary = sent(&primary.finish());
+
+        assert!(
+            to_replica.starts_with("*1\r\n$8\r\nREADONLY\r\n"),
+            "{to_replica}"
+        );
+        assert!(
+            to_replica.contains("$3\r\nGET\r\n$1\r\nk\r\n"),
+            "{to_replica}"
+        );
+        assert!(to_replica.contains("STRLEN"), "{to_replica}");
+        assert!(!to_replica.contains("SET"), "{to_replica}");
+        assert!(
+            to_primary.contains("$3\r\nSET\r\n$1\r\nk\r\n"),
+            "{to_primary}"
+        );
+        assert!(
+            to_primary.contains("$3\r\nGET\r\n$1\r\na\r\n"),
+            "{to_primary}"
+        );
+    }
+
+    #[test]
+    fn an_unreachable_or_loading_replica_sends_reads_to_the_primary() {
+        let closed = closed_port();
+        let primary = Script::start(vec![Step::Reply(b"$1\r\np\r\n".to_vec())]);
+        let mut router = replicated_router(&primary, closed, ReadPolicy::PreferReplica);
+
+        assert_eq!(
+            router.execute(&["GET", "k"]).unwrap(),
+            RespValue::Bulk(b"p".to_vec())
+        );
+        drop(router);
+        primary.finish();
+
+        let primary = Script::start(vec![
+            Step::Reply(b"$1\r\np\r\n".to_vec()),
+            Step::Reply(b"$1\r\nq\r\n".to_vec()),
+        ]);
+        let replica = Script::start(vec![
+            Step::Reply(b"+OK\r\n".to_vec()),
+            Step::Reply(b"-LOADING Ruvio is loading the dataset in memory\r\n".to_vec()),
+        ]);
+        let mut router = replicated_router(&primary, replica.port, ReadPolicy::PreferReplica);
+
+        assert_eq!(
+            router.execute(&["GET", "k"]).unwrap(),
+            RespValue::Bulk(b"p".to_vec())
+        );
+        // The loading replica is skipped until the slot map is reloaded.
+        assert_eq!(
+            router.execute(&["GET", "k"]).unwrap(),
+            RespValue::Bulk(b"q".to_vec())
+        );
+        drop(router);
+        replica.finish();
+        primary.finish();
+    }
+
+    #[test]
+    fn replica_policy_fails_without_a_reachable_replica() {
+        let primary = Script::start(Vec::new());
+        let mut router = replicated_router(&primary, closed_port(), ReadPolicy::Replica);
+
+        assert!(router.execute(&["GET", "k"]).is_err());
+        drop(router);
+        primary.finish();
+
+        let primary = Script::start(Vec::new());
+        let mut router = ClusterRouter::new(
+            primary.connect(),
+            Topology {
+                owners: vec![Some(0); SLOT_COUNT as usize],
+                nodes: vec![("127.0.0.1".to_owned(), primary.port)],
+                replicas: vec![Vec::new()],
+            },
+            ClientOptions {
+                read_policy: ReadPolicy::Replica,
+                ..ClientOptions::default()
+            },
+            Vec::new(),
+        );
+
+        assert!(matches!(
+            router.execute(&["GET", "k"]),
+            Err(Error::Protocol(message)) if message.contains("no replica")
+        ));
+        drop(router);
+        primary.finish();
+    }
+
+    #[test]
+    fn only_non_blocking_readonly_commands_count_as_reads() {
+        assert!(reads("GET"));
+        assert!(reads("HGETALL"));
+        assert!(!reads("SET"));
+        assert!(!reads("BLPOP"));
+        assert!(!reads("EVAL"));
+        assert!(!reads("NOSUCH"));
     }
 
     fn slots_to(port: u16) -> Vec<u8> {
@@ -3134,6 +3515,7 @@ mod more_tests {
             Topology {
                 owners: vec![Some(0); SLOT_COUNT as usize],
                 nodes: vec![("127.0.0.1".to_owned(), port)],
+                replicas: Vec::new(),
             },
             ClientOptions {
                 reconnect_base_delay: Duration::ZERO,
@@ -3228,6 +3610,7 @@ mod more_tests {
             Topology {
                 owners: vec![Some(0); SLOT_COUNT as usize],
                 nodes: vec![("127.0.0.1".to_owned(), gone_port)],
+                replicas: Vec::new(),
             },
             ClientOptions {
                 reconnect_base_delay: Duration::ZERO,
@@ -3262,6 +3645,7 @@ mod more_tests {
             Topology {
                 owners: vec![Some(0); SLOT_COUNT as usize],
                 nodes: vec![("127.0.0.1".to_owned(), gone_port)],
+                replicas: Vec::new(),
             },
             ClientOptions {
                 reconnect_base_delay: Duration::ZERO,
@@ -3293,6 +3677,7 @@ mod more_tests {
             Topology {
                 owners: vec![Some(0); SLOT_COUNT as usize],
                 nodes: vec![("127.0.0.1".to_owned(), script.port)],
+                replicas: Vec::new(),
             },
             ClientOptions::default(),
             Vec::new(),

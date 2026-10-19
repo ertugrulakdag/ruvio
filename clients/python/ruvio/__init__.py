@@ -68,7 +68,7 @@ from ._models import (
     PendingSummary,
     StreamEntry,
 )
-from ._cluster import key_slot
+from ._cluster import ReadPolicy, key_slot
 from .client import Lock, Pipeline, PubSub, Ruvio, parse_url
 from .cluster import ClusterRuvio
 from .errors import (
@@ -93,6 +93,7 @@ __version__ = "0.1.2"
 __all__ = [
     "Ruvio",
     "ClusterRuvio",
+    "ReadPolicy",
     "key_slot",
     "Pipeline",
     "PubSub",
