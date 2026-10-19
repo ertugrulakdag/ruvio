@@ -266,10 +266,12 @@ pub(super) fn limit<'a, C: Clock, I: StorageIndex, S: MutationSink>(
     }
 
     if with_retry {
-        return Ok(retry_reply(remaining as i64, 0));
+        return Ok(retry_reply(i64::try_from(remaining).unwrap_or(i64::MAX), 0));
     }
 
-    Ok(Response::Integer(remaining as i64))
+    Ok(Response::Integer(
+        i64::try_from(remaining).unwrap_or(i64::MAX),
+    ))
 }
 
 /// `[remaining, retry_after_ms]`; `remaining` is -1 for a refused call.
