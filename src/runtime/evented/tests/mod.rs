@@ -496,6 +496,7 @@ mod hangups;
 mod maintenance;
 mod misc;
 mod replica;
+mod replica_reads;
 mod role_change;
 mod single_port;
 mod wal;

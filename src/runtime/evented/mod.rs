@@ -197,6 +197,15 @@ impl ShardState {
     }
 
     /// The route as cluster clients see it: absent in single-port mode.
+    /// Every shard's replicas or followed primary, for the cluster answers. Empty without
+    /// forwarding, where there are no cluster answers.
+    fn shard_peers(&self) -> Vec<crate::runtime::cluster::ShardPeers> {
+        self.forwarding
+            .as_ref()
+            .map(|forwarding| forwarding.fabric.shard_peers())
+            .unwrap_or_default()
+    }
+
     fn cluster_view(&self) -> Option<&ClusterRoute> {
         if self.single_port {
             None

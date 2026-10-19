@@ -46,6 +46,9 @@ pub struct ReplicationConfig {
     /// `min_replicas_max_lag`; 0 turns the check off.
     pub min_replicas_to_write: usize,
     pub min_replicas_max_lag: Duration,
+    /// A replica announces its client address to its primary, which lists it in
+    /// `CLUSTER SLOTS`, `ROLE` and `INFO`; off keeps it out of the topology.
+    pub announced: bool,
 }
 
 impl Default for ReplicationConfig {
@@ -57,6 +60,7 @@ impl Default for ReplicationConfig {
             primary_name: None,
             min_replicas_to_write: 0,
             min_replicas_max_lag: Duration::from_secs(10),
+            announced: true,
         }
     }
 }
@@ -496,6 +500,10 @@ impl AppConfig {
 
         apply_u64(&get, "RUVIO_MIN_REPLICAS_MAX_LAG", &mut max_lag)?;
         self.replication.min_replicas_max_lag = Duration::from_secs(max_lag);
+
+        if let Some(value) = get("RUVIO_REPLICA_ANNOUNCED") {
+            self.replication.announced = parse_bool(&value, "RUVIO_REPLICA_ANNOUNCED")?;
+        }
 
         Ok(())
     }
@@ -1007,6 +1015,10 @@ impl AppConfig {
                 self.replication.min_replicas_max_lag.as_secs().to_string(),
             ),
             (
+                "replica-announced".into(),
+                yes_no(self.replication.announced),
+            ),
+            (
                 "replication-listen".into(),
                 self.replication
                     .listen
@@ -1458,6 +1470,7 @@ struct ReplicationFileConfig {
     min_replicas_to_write: Option<usize>,
     /// Seconds, as Redis's `min-replicas-max-lag`.
     min_replicas_max_lag: Option<u64>,
+    announced: Option<bool>,
 }
 
 impl ReplicationFileConfig {
@@ -1491,6 +1504,10 @@ impl ReplicationFileConfig {
 
         if let Some(seconds) = self.min_replicas_max_lag {
             replication.min_replicas_max_lag = Duration::from_secs(seconds);
+        }
+
+        if let Some(announced) = self.announced {
+            replication.announced = announced;
         }
 
         Ok(())
@@ -2349,6 +2366,13 @@ fn overlay_config(table: &mut toml::Table, loaded: &AppConfig, effective: &AppCo
         loaded.replication.min_replicas_to_write,
         effective.replication.min_replicas_to_write,
     );
+    if loaded.replication.announced != effective.replication.announced {
+        set_toml(
+            table,
+            &["replication", "announced"],
+            toml::Value::Boolean(effective.replication.announced),
+        );
+    }
     sync_u64(
         table,
         &["replication", "min_replicas_max_lag"],
