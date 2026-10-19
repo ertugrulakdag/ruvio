@@ -271,6 +271,7 @@ Each variable overrides one file setting, and a command-line flag, where there i
 | `RUVIO_ACL_FILE` | no | | `security.acl_file` | |
 | `RUVIO_PROTECTED_MODE` | no | `--protected-mode` | `security.protected_mode` | |
 | `RUVIO_ALLOW_UNAUTHENTICATED` | no | | `security.allow_unauthenticated_public` | |
+| `RUVIO_METRICS_TOKEN` | no | | `security.metrics_token` | |
 | `RUVIO_REPLICATION_PASSWORD` | no | | `security.replication_password` | |
 | `RUVIO_MAXMEMORY` | `maxmemory` | `--maxmemory` | `memory.max_process_bytes` | |
 | `RUVIO_MAX_SHARD_BYTES` | `max-shard-bytes` | `--max-shard-bytes` | `memory.max_shard_bytes` | |
@@ -285,6 +286,7 @@ Each variable overrides one file setting, and a command-line flag, where there i
 | `RUVIO_LIST_MAX_COMPACT_ENTRIES` | `list-max-compact-entries` | `--list-max-compact-entries` | `memory.list_max_compact_entries` | |
 | `RUVIO_LIST_MAX_COMPACT_VALUE_BYTES` | `list-max-compact-value-bytes` | `--list-max-compact-value-bytes` | `memory.list_max_compact_value_bytes` | |
 | `RUVIO_NOTIFY_KEYSPACE_EVENTS` | `notify-keyspace-events` | | `notify_keyspace_events` | |
+| `RUVIO_METRICS_ADDR` | no | `--metrics-address` | `metrics_address` | |
 | `RUVIO_SCRIPT_MAX_BYTES` | `script-max-bytes` | | `scripts.max_bytes` | |
 | `RUVIO_SCRIPT_MAX_CACHED` | `script-max-cached` | | `scripts.max_cached` | |
 | `RUVIO_SCRIPT_MAX_CALLS` | `script-max-calls` | | `scripts.max_calls` | |
