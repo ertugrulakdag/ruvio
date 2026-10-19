@@ -1,10 +1,87 @@
 # Frequently asked questions
 
-Short answers about shards and slots. Details are in the
-[connection model](CONNECTION_MODEL.md) and the
-[compatibility notes](COMPATIBILITY.md#sharding-semantics).
+Short answers to what people ask first. Details are in the linked pages.
 
-## What is a slot?
+## The basics
+
+### What is Ruvio?
+
+A key-value server that speaks the Redis protocol (RESP2). `redis-cli` and
+the Redis clients of most languages connect to it, and there are
+[first-party clients](CLIENT_BEHAVIOR.md) for Rust, C#, Go, Java, Python and Node.js.
+Data lives in memory and can be made durable with a write-ahead log.
+
+### Is it a drop-in replacement for Redis?
+
+No. It supports many Redis commands and adds its own, but it is not a
+complete Redis. The [compatibility notes](COMPATIBILITY.md) list what is
+supported and what differs.
+
+### How do I start it and connect?
+
+Run the binary or the Docker image, then connect to `127.0.0.1:6379`:
+
+```
+redis-cli PING
+```
+
+A server reached from other machines needs a password
+(`--requirepass`); a public bind without one is refused. See [setup](SETUP.md).
+
+### Is my data still there after a restart?
+
+It depends on the durability profile. The default, `memory`, keeps nothing on
+disk, so a restart starts empty. `snapshot` writes periodic checkpoints;
+`everysec` and `always` also keep a write-ahead log, losing about one second
+or nothing on a crash. Choose with `--durability` or `persistence.profile`.
+See [recovery](RECOVERY.md) and [configuration](CONFIGURATION.md).
+
+### Are there limits on keys and values?
+
+By default a key may be up to 1 MiB and a value up to 16 MiB
+(`max_key_bytes`, `max_value_bytes`). Memory is not limited unless you set a
+budget (see below).
+
+### What is a logical database?
+
+A numbered key space chosen with `SELECT n`. A server with one shard has 16 by
+default. See [logical databases](LOGICAL_DATABASES.md).
+
+## Expiry and eviction
+
+### When does a key expire?
+
+Only when you give it a time to live, for example `SET key value EX 60` or
+`EXPIRE key 60`. A key without a TTL never expires. From the deadline on, the
+key is gone for every command: reads treat it as absent even before the memory
+is released. The server also removes expired keys in the background (about
+every 25 ms and a few before each command), so memory is freed shortly after.
+`TTL key` shows what is left, `PERSIST key` removes the TTL.
+
+### When is a key evicted?
+
+Only when you configure a memory budget (`max_shard_bytes`) and an eviction
+policy other than the default. Eviction removes keys to make room; expiry
+removes keys whose time is up. They are different things.
+
+### What happens when memory is full?
+
+With the default policy, `noeviction`, a write that would exceed the budget
+fails with `OOM command not allowed when used memory > 'maxmemory'`. Deletes
+and other commands that only free memory still work. With `allkeys-lru`,
+`allkeys-lfu`, `volatile-lru` or `volatile-ttl`, the server deletes keys to
+make room. The `volatile` policies only consider keys that have a TTL. The
+default budget is unlimited, so nothing is evicted until you set one. Eviction
+is per shard. See [memory accounting](MEMORY_ACCOUNTING.md).
+
+### Can I find out that a key expired or was evicted?
+
+Yes. Enable keyspace notifications (`notify_keyspace_events`) and subscribe to
+the `expired` and `evicted` events. See [configuration](CONFIGURATION.md).
+
+## Shards and slots
+
+### What is a slot?
 
 A slot is a bucket number from 0 to 16,383. Every key belongs to exactly one
 slot, and the slot is computed from the key name alone:
@@ -16,7 +93,7 @@ slot, and the slot is computed from the key name alone:
 
 The same key gives the same slot on every server, every client and every run.
 
-## What is a shard, and how does a key get to one?
+### What is a shard, and how does a key get to one?
 
 A shard is one worker inside a Ruvio process with its own data and its own
 port. The 16,384 slots are split into consecutive ranges, one per shard. With
@@ -25,7 +102,7 @@ shard of a slot is `slot * shards / 16384`. So a key's place is decided by its
 name: key to slot to shard. Nothing is stored about where a key lives and
 nothing moves a key between shards while the server runs.
 
-## Who decides this, and where?
+### Who decides this, and where?
 
 The rule is in `src/routing.rs` of the server (`hash_slot` and
 `shard_for_slot`). Every client library has its own copy, checked against the
@@ -34,7 +111,7 @@ same test vectors. The client asks the server for the slot ranges with
 reaches the wrong shard anyway, the server forwards it to the owner and answers
 on the same connection.
 
-## How do I find out which shard holds a key?
+### How do I find out which shard holds a key?
 
 Ask the server for the slot, then look it up in the slot ranges:
 
@@ -45,34 +122,34 @@ CLUSTER SLOTS
 
 You rarely need this. The clients do it for you.
 
-## Why do `MGET`, `MSET`, `DEL` or `EVAL` return `CROSSSLOT`?
+### Why do `MGET`, `MSET`, `DEL` or `EVAL` return `CROSSSLOT`?
 
 Their keys are in different slots. A command that reads or writes several keys
 must see them all in one place to stay correct, so the server refuses it, as
 Redis Cluster does, and changes nothing. This holds even when both slots
 happen to be on the same shard.
 
-## How do I make several keys work together?
+### How do I make several keys work together?
 
 Give them a common hash tag: `{order:7}:items` and `{order:7}:total` share the
 slot of `order:7`, so they share a shard. Then `MGET`, `MULTI`/`EXEC`, `EVAL`
 and the like work on them. Do not put one tag on all your keys, or one shard
 gets all the load.
 
-## Do the clients handle keys in several slots for me?
+### Do the clients handle keys in several slots for me?
 
 For `MGET`, `MSET`, `DEL`, `EXISTS`, `UNLINK` and `TOUCH`, yes: the client
 splits the command per slot and merges the replies. It is not atomic. Other
 commands, including `EVAL`, fail with `CROSSSLOT` before anything is sent. See
 [client behavior](CLIENT_BEHAVIOR.md).
 
-## What may a script touch?
+### What may a script touch?
 
 Only the keys declared with `EVAL`, `EVALSHA` or `FCALL`, and those keys must
 be in one slot. A script that declares no keys runs on the shard of the
 connection that sent it.
 
-## Examples
+### Examples
 
 Slots below are for a server with 2 shards (first shard 0-8191, second
 8192-16383). `CLUSTER KEYSLOT` returns the slot number for any key.
