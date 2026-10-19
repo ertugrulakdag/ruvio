@@ -384,6 +384,12 @@ fn apply_cli(config: &mut ruvio::AppConfig, cli: Cli) -> Result<(), String> {
 }
 
 fn operational_checks(config: &ruvio::AppConfig) -> Result<(), String> {
+    if config.metrics_address.is_some() {
+        tracing::warn!(
+            "metrics_address is set but no HTTP metrics endpoint is served yet; read metrics with INFO prometheus"
+        );
+    }
+
     if !ruvio::bind_is_loopback(&config.address) {
         if config.security.authentication_enabled() {
             tracing::warn!(

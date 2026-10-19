@@ -95,14 +95,9 @@ Prometheus text is available without adding hot-path atomics or a global lock:
 redis-cli INFO prometheus
 ```
 
-Optional HTTP scrape binds a separate listener. Set `metrics_address` /
-`RUVIO_METRICS_ADDR` / `--metrics-address`. Multi-shard processes increment
-that port by shard id (`9121`, `9122`, …). A scrape is a control-plane read on
-the owning shard; it does not update command counters.
-
-```bash
-curl http://127.0.0.1:9121/metrics
-```
+There is no HTTP scrape endpoint yet; `INFO prometheus` over the RESP port is the
+only way to read the metrics. A scrape is a control-plane read on the owning
+shard; it does not update command counters.
 
 Expiration and eviction counters live on the owning shard. Linux updates them
 as ordinary local integers; portable scrapes read the same shard fields. A

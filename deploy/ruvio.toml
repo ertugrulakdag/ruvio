@@ -3,7 +3,6 @@
 
 address = "127.0.0.1:6379"
 shards = 1
-metrics_address = "127.0.0.1:9121"
 
 [connections]
 max_global = 10000

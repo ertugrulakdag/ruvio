@@ -39,7 +39,7 @@ topology.
 
 ## Attackers
 
-- Unauthenticated network client on the RESP or metrics port.
+- Unauthenticated network client on the RESP port.
 - Authenticated client with a restricted ACL user.
 - Local process that can read or write the data directory but does not hold
   `LOCK`.
@@ -151,7 +151,7 @@ Tests: `protocol::parses_cluster_discovery_commands`,
 
 ## Replication port
 
-The replication port is a separate listener from RESP and from metrics. Role
+The replication port is a separate listener from RESP. Role
 `off` does not open it. A primary binds `replication.listen`, loopback by
 default in the sample configuration (`127.0.0.1`). The handshake uses
 `replication_password` when set, otherwise `requirepass`, compared in constant
@@ -222,10 +222,8 @@ the default quota).
   Plaintext clients are closed. `tls_client_ca` checks a presented client
   certificate. `tls_client_auth` requires one. A plaintext listener does not
   ask for a certificate.
-- HTTP `/metrics` is optional and scrape-only. Loopback with an empty
-  `metrics_token` is open. Any other bind requires `Authorization: Bearer`
-  matching `metrics_token` (`RUVIO_METRICS_TOKEN`). Startup refuses a public
-  metrics bind without that token.
+- There is no HTTP metrics endpoint yet; metrics are read with `INFO prometheus`
+  over the RESP port, under its ACL.
 
 ## Residual risks (accepted for this milestone)
 
@@ -236,8 +234,7 @@ the default quota).
 3. No signed SLSA provenance on release artifacts yet. Checksums and a
    CycloneDX SBOM are produced; see `docs/SUPPLY_CHAIN.md`.
 4. Experimental static cluster discovery is not an authenticated cluster.
-5. Unauthenticated metrics HTTP on loopback when no token is set. A public
-   metrics bind requires `metrics_token`.
+5. (Removed: there is no HTTP metrics endpoint.)
 6. `CONFIG GET` path disclosure to anyone allowed `config` (`@admin`). Anyone
    allowed `config` can also raise memory and connection limits or change the
    default password with `CONFIG SET`; deny `config|set` and `config|rewrite`
@@ -260,5 +257,4 @@ the default quota).
    mean unlimited.
 5. Protect the data directory and TLS key with host permissions. Treat
    backups as secret material.
-6. Keep metrics and RESP binds off the public internet unless a scrape
-   identity sits in front.
+6. Keep the RESP bind off the public internet.

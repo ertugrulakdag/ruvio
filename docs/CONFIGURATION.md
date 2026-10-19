@@ -21,7 +21,6 @@ advertised_host = "127.0.0.1"  # host in CLUSTER SLOTS/SHARDS/NODES
 # advertised_port = 6379       # shard 0's announced port; omitted = bind port
 hot_keys = []          # Redis globs; empty keeps every key on its shard
 shutdown_grace_ms = 30000
-metrics_address = "127.0.0.1:9121"  # empty/omitted disables HTTP scrape
 
 # key_stats = true            # RUVIO HOTKEYS (1/1024 sampled, 128 entries) and RUVIO BIGKEYS (SET values >= 1 MiB, last 64)
 # slowlog_threshold_micros = 10000  # SLOWLOG: commands slower than this (negative = off, 0 = all); only the generic dispatcher is timed
@@ -271,7 +270,6 @@ Each variable overrides one file setting, and a command-line flag, where there i
 | `RUVIO_ACL_FILE` | no | | `security.acl_file` | |
 | `RUVIO_PROTECTED_MODE` | no | `--protected-mode` | `security.protected_mode` | |
 | `RUVIO_ALLOW_UNAUTHENTICATED` | no | | `security.allow_unauthenticated_public` | |
-| `RUVIO_METRICS_TOKEN` | no | | `security.metrics_token` | |
 | `RUVIO_REPLICATION_PASSWORD` | no | | `security.replication_password` | |
 | `RUVIO_MAXMEMORY` | `maxmemory` | `--maxmemory` | `memory.max_process_bytes` | |
 | `RUVIO_MAX_SHARD_BYTES` | `max-shard-bytes` | `--max-shard-bytes` | `memory.max_shard_bytes` | |
@@ -286,7 +284,6 @@ Each variable overrides one file setting, and a command-line flag, where there i
 | `RUVIO_LIST_MAX_COMPACT_ENTRIES` | `list-max-compact-entries` | `--list-max-compact-entries` | `memory.list_max_compact_entries` | |
 | `RUVIO_LIST_MAX_COMPACT_VALUE_BYTES` | `list-max-compact-value-bytes` | `--list-max-compact-value-bytes` | `memory.list_max_compact_value_bytes` | |
 | `RUVIO_NOTIFY_KEYSPACE_EVENTS` | `notify-keyspace-events` | | `notify_keyspace_events` | |
-| `RUVIO_METRICS_ADDR` | no | `--metrics-address` | `metrics_address` | |
 | `RUVIO_SCRIPT_MAX_BYTES` | `script-max-bytes` | | `scripts.max_bytes` | |
 | `RUVIO_SCRIPT_MAX_CACHED` | `script-max-cached` | | `scripts.max_cached` | |
 | `RUVIO_SCRIPT_MAX_CALLS` | `script-max-calls` | | `scripts.max_calls` | |
@@ -450,10 +447,8 @@ and copies `CURRENT`, `CLOCK`, `checkpoints/`, `wal/`, and any per-shard
 already has those files or markers unless `--force` is set. Integrity checks
 do not certify replica catch-up completeness. See [RECOVERY.md](RECOVERY.md).
 
-`INFO prometheus` returns Prometheus text for the receiving shard. When
-`metrics_address` is set, that shard also serves `GET /metrics` on a separate
-listener. Multi-shard layouts use consecutive metrics ports starting at the
-configured address. The metrics range must not overlap the RESP port range.
+`INFO prometheus` returns Prometheus text for the receiving shard. There is no
+HTTP metrics endpoint yet.
 
 `hot_keys` / `RUVIO_HOT_KEYS` is a list of Redis-style `*` / `?` globs
 (`hot_keys = ["lock:*", "session:*"]` or `RUVIO_HOT_KEYS=lock:*,session:*`).
@@ -558,8 +553,7 @@ refuses to start. Container images set `RUVIO_PROTECTED_MODE=false` because
 published ports are not loopback inside the namespace, so they need
 `RUVIO_REQUIREPASS` or an ACL password. `RUVIO_ALLOW_UNAUTHENTICATED=true`
 is the explicit exception for a network that is already private.
-`RUVIO_METRICS_TOKEN` is required when `metrics_address` is not loopback;
-scrape requests then send `Authorization: Bearer`. `RUVIO_REPLICATION_PASSWORD`
+`RUVIO_REPLICATION_PASSWORD`
 is the replication handshake secret (Garnet's cluster password). When it is
 empty the handshake uses `requirepass`. A public replication listen needs one
 of those secrets. See [THREAT_MODEL.md](THREAT_MODEL.md). `AUTH` uses
