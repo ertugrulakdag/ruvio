@@ -130,6 +130,19 @@ final class FakeNode implements AutoCloseable {
         return out;
     }
 
+    /**
+     * The number of accepted sockets once it reaches {@code count}, or after two seconds. The
+     * client's connect returns before this node's accept loop records the socket, so a count
+     * read straight after a connect can still be one short.
+     */
+    int awaitSockets(int count) throws InterruptedException {
+        long deadline = System.nanoTime() + 2_000_000_000L;
+        while (sockets.size() < count && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        return sockets.size();
+    }
+
     void dropConnections() {
         synchronized (sockets) {
             for (Socket s : sockets) {
