@@ -14,6 +14,22 @@ type Entry = {
 };
 type Day = { date: string; entries: Entry[] };
 const days: Day[] = data.available ? (data as { days: Day[] }).days : [];
+const releaseNotes: { title: string; date: string | null; items: string[] }[] = data.notes ?? [];
+
+// CHANGELOG.md lines use only `code`, **bold** and [links](url); everything else is escaped.
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const inline = (md: string) =>
+  md
+    .split(/(`[^`]+`)/)
+    .map((part) =>
+      part.startsWith("`") && part.endsWith("`") && part.length > 1
+        ? `<code>${esc(part.slice(1, -1))}</code>`
+        : esc(part)
+            .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+            .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2">$1</a>'),
+    )
+    .join("");
+const isVersion = (t: string) => /^\d/.test(t);
 
 const notes = [
   { label: "Server", path: "CHANGELOG.md" },
@@ -34,20 +50,47 @@ const commits = (n: number) => `${n} ${n === 1 ? "commit" : "commits"}`;
 
 <Page title="Changelog" description="Every change merged into Ruvio's main and dev branches, by day, read from the git history when the site is built.">
   <PageIntro title="Changelog" kicker="What changed, day by day">
-    Every change merged into <code>main</code> and <code>dev</code>, read from the repository's history each time
-    the site is built. <code>main</code> is what the releases are cut from; <code>dev</code> is ahead of it. The
-    per-package release notes say what each published version changed.
+    What each server release changed, then every change merged into <code>main</code> and <code>dev</code>, read
+    from the repository's history each time the site is built. <code>main</code> is what the releases are cut from;
+    <code>dev</code> is ahead of it.
   </PageIntro>
 
   <div class="reading">
     <div class="wrap">
+      {releaseNotes.length > 0 && (
+        <section class="server-notes" aria-labelledby="server-notes-h">
+          <h2 id="server-notes-h" class="section-h">Server release notes</h2>
+          <p class="section-sub">
+            The newest sections of <a href={`${site.github}/blob/main/CHANGELOG.md`}>CHANGELOG.md</a>. "Unreleased" is
+            on <code>dev</code> and goes out with the next version.
+          </p>
+          <div class="versions">
+            {releaseNotes.map((n, i) => (
+              <details class="version panel" open={i < 2}>
+                <summary>
+                  <span class="v-title">{isVersion(n.title) ? `Ruvio ${n.title}` : n.title}</span>
+                  {n.date && <time datetime={n.date}>{longDate(n.date)}</time>}
+                  <span class="v-count">{n.items.length} {n.items.length === 1 ? "change" : "changes"}</span>
+                  {isVersion(n.title) && <a class="v-link" href={`${site.github}/releases/tag/ruvio-${n.title}`}>Release</a>}
+                </summary>
+                <ul>
+                  {n.items.map((item) => <li set:html={inline(item)} />)}
+                </ul>
+              </details>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section class="panel notes" aria-labelledby="notes-h">
-        <h2 id="notes-h">Release notes</h2>
+        <h2 id="notes-h">Release notes by package</h2>
         <div class="note-links">
           {notes.map((n) => <a class="chip" href={`${site.github}/blob/main/${n.path}`}>{n.label}</a>)}
           <a class="chip" href={`${site.github}/releases`}>All releases</a>
         </div>
       </section>
+
+      {data.available && <h2 class="section-h history-h">Every change on main and dev</h2>}
 
       {data.available ? (
         <>
@@ -137,13 +180,32 @@ const commits = (n: number) => `${n} ${n === 1 ? "commit" : "commits"}`;
 </script>
 
 <style>
+  .section-h { margin: 0; font-size: 24px; }
+  .section-sub { margin: 6px 0 16px; color: var(--mute); font-size: 15.5px; }
+  .section-sub a { color: var(--ink); }
+  .server-notes { margin-bottom: 28px; }
+  .versions { display: grid; gap: 12px; }
+  .version { padding: 0; }
+  .version summary {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 16px 20px; cursor: pointer; list-style: none;
+  }
+  .version summary::-webkit-details-marker { display: none; }
+  .version summary::before { content: "▸"; color: var(--faint); transition: transform .15s ease; }
+  .version[open] summary::before { transform: rotate(90deg); }
+  .v-title { font-weight: 600; font-size: 18px; color: var(--ink); }
+  .version time, .v-count { font-size: 14.5px; color: var(--faint); }
+  .v-link { margin-left: auto; font-size: 14.5px; color: var(--mute); }
+  .version ul { margin: 0; padding: 0 22px 18px 44px; display: grid; gap: 8px; color: var(--ink-body); font-size: 16px; line-height: 1.6; }
+  .version li :global(code) { font-size: 14px; }
+  .version li :global(strong) { color: var(--ink); }
+  .history-h { margin-top: 40px; }
   .notes { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
   .notes h2 { margin: 0; font-size: 18px; }
   .note-links { display: flex; flex-wrap: wrap; gap: 8px; }
   .note-links .chip { font-family: var(--f-sans); font-size: 14.5px; text-decoration: none; }
   .note-links .chip:hover { border-color: color-mix(in srgb, var(--ink) 35%, var(--line)); }
 
-  .toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; margin: 32px 0 8px; }
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; margin: 16px 0 8px; }
   .tips { margin: 0; font-size: 14.5px; color: var(--faint); }
   .tips a { color: var(--mute); font-family: var(--f-mono); }
 

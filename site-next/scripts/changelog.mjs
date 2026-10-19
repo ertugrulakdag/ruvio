@@ -6,7 +6,7 @@
 // links to GitHub instead, so the build never fails on it. Plain Node, no dependencies.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,6 +16,7 @@ const OUT = path.join(SITE_ROOT, "src/data/changelog.json");
 const BRANCHES = ["main", "dev"];
 const DAYS = 90; // how far back the page goes
 const MAX_ENTRIES = 400;
+const NOTE_SECTIONS = 5; // newest sections of the server CHANGELOG.md shown at the top of the page
 
 const git = (...args) => execFileSync("git", args, { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 << 20 }).trim();
 const tryGit = (...args) => {
@@ -133,6 +134,22 @@ function releaseLabel(tag) {
   return tag;
 }
 
+/** The newest sections of the server's CHANGELOG.md: { title, date, items } with items as Markdown lines. */
+function releaseNotes() {
+  let text;
+  try { text = readFileSync(path.join(REPO_ROOT, "CHANGELOG.md"), "utf8"); } catch { return []; }
+  const sections = [];
+  for (const line of text.split("\n")) {
+    const h = /^## (.+?)(?:\s+-\s+(\d{4}-\d{2}-\d{2}))?\s*$/.exec(line);
+    if (h) { sections.push({ title: h[1], date: h[2] ?? null, items: [] }); continue; }
+    const cur = sections.at(-1);
+    if (!cur) continue;
+    if (line.startsWith("- ")) cur.items.push(line.slice(2).trim());
+    else if (/^\s+\S/.test(line) && cur.items.length) cur.items[cur.items.length - 1] += ` ${line.trim()}`;
+  }
+  return sections.filter((s) => s.items.length).slice(0, NOTE_SECTIONS);
+}
+
 let data;
 try {
   const r = build();
@@ -140,6 +157,7 @@ try {
 } catch (err) {
   data = { available: false, reason: String(err.message ?? err).split("\n")[0] };
 }
+data.notes = releaseNotes();
 mkdirSync(path.dirname(OUT), { recursive: true });
 writeFileSync(OUT, JSON.stringify(data));
 console.log(
