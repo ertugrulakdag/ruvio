@@ -466,46 +466,67 @@ fn record_begin(state: &ShardState, session: &MoveSession) -> Result<(), String>
 /// Target: logs and applies each key as the source holds it. A key absent from a database
 /// there is removed here too.
 fn apply_copies(state: &ShardState, session: &MoveSession, batch: CopyBatch) {
+    use crate::mutation::MutationSink;
+
     let Some(keys) = batch.entries() else {
         session.fail("target received a damaged copy");
         return;
     };
     let mut store = state.store.borrow_mut();
     let databases = store.database_ids();
+    let active = store.active_database();
+    let mut persistence = state
+        .persistence
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let logging = persistence.persists();
 
-    for (key, frames) in keys {
-        let mut entries = Vec::with_capacity(frames.len());
-
-        for frame in &frames {
-            match crate::persistence::decode_entry_frame(frame) {
-                Ok(entry) => entries.push(entry),
-                Err(error) => {
-                    drop(store);
-                    session.fail(format!("target received a damaged copy: {error}"));
-                    return;
-                }
-            }
-        }
-
-        let logged = log_copy(state, &store, &databases, key, &frames, &entries);
-
-        if let Err(error) = logged {
-            drop(store);
-            session.fail(format!("target could not log the copy: {error}"));
-            return;
-        }
-        for database in &databases {
-            store.forget_key(*database, key);
-        }
-        for entry in entries {
-            if let Err(error) = store.restore_snapshot_entry(entry) {
-                drop(store);
-                session.fail(format!("target could not take a key: {error}"));
-                return;
-            }
-        }
+    // One record group for the whole batch, as one client batch shares one write.
+    if logging {
+        persistence.begin_group();
     }
+    let applied = (|| {
+        for (key, frames) in keys {
+            let mut entries = Vec::with_capacity(frames.len());
 
+            for frame in &frames {
+                let entry = crate::persistence::decode_entry_frame(frame)
+                    .map_err(|error| format!("target received a damaged copy: {error}"))?;
+
+                entries.push(entry);
+            }
+            if logging {
+                log_copy(&mut persistence, &store, &databases, key, &frames, &entries)
+                    .map_err(|error| format!("target could not log the copy: {error}"))?;
+            }
+            for database in &databases {
+                store.forget_key(*database, key);
+            }
+            for entry in entries {
+                store
+                    .restore_snapshot_entry(entry)
+                    .map_err(|error| format!("target could not take a key: {error}"))?;
+            }
+        }
+        Ok::<(), String>(())
+    })();
+    let applied = if logging {
+        persistence.select_database(active);
+        let ended = persistence
+            .end_group()
+            .map_err(|error| format!("target could not log the copy: {error}"));
+
+        applied.and(ended)
+    } else {
+        applied
+    };
+
+    drop(persistence);
+    if let Err(reason) = applied {
+        drop(store);
+        session.fail(reason);
+        return;
+    }
     if store.memory_admission_would_fail(0) {
         drop(store);
         session.fail("the range does not fit under the target shard's memory limit");
@@ -520,7 +541,7 @@ fn apply_copies(state: &ShardState, session: &MoveSession, batch: CopyBatch) {
 /// One `SlotCopy` record per database that holds `key` on either side, carrying the
 /// source's frame as it came.
 fn log_copy(
-    state: &ShardState,
+    persistence: &mut crate::persistence::WalSink,
     store: &KvShard,
     databases: &[u8],
     key: &[u8],
@@ -529,40 +550,23 @@ fn log_copy(
 ) -> Result<(), crate::PersistenceError> {
     use crate::mutation::{Mutation, MutationSink};
 
-    let mut persistence = state
-        .persistence
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-
-    if !persistence.persists() {
-        return Ok(());
+    for (frame, entry) in frames.iter().zip(entries) {
+        persistence.select_database(entry.database);
+        persistence.record(Mutation::SlotCopy {
+            key,
+            entry: Some(frame),
+        })?;
     }
-
-    let active = store.active_database();
-
-    persistence.begin_group();
-    let logged = (|| {
-        for (frame, entry) in frames.iter().zip(entries) {
-            persistence.select_database(entry.database);
-            persistence.record(Mutation::SlotCopy {
-                key,
-                entry: Some(frame),
-            })?;
+    // Held here, gone there: replay removes it as the apply does.
+    for database in databases {
+        if entries.iter().all(|entry| entry.database != *database)
+            && store.holds_key_in(*database, key)
+        {
+            persistence.select_database(*database);
+            persistence.record(Mutation::SlotCopy { key, entry: None })?;
         }
-        // Held here, gone there: replay removes it as the apply does.
-        for database in databases {
-            if entries.iter().all(|entry| entry.database != *database)
-                && store.holds_key_in(*database, key)
-            {
-                persistence.select_database(*database);
-                persistence.record(Mutation::SlotCopy { key, entry: None })?;
-            }
-        }
-        Ok(())
-    })();
-
-    persistence.select_database(active);
-    persistence.end_group().and(logged)
+    }
+    Ok(())
 }
 
 /// Target, in the hand-over: takes the range unless the source gave up meanwhile.
