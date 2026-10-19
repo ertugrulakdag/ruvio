@@ -704,6 +704,8 @@ struct Endpoint {
 
 pub(crate) struct ClusterRouter {
     options: ClientOptions,
+    /// The configured seed addresses, asked for the slot map when no known node answers.
+    seeds: Vec<(String, u16)>,
     seed: usize,
     endpoints: Vec<Endpoint>,
     topology: Topology,
@@ -726,6 +728,7 @@ impl ClusterRouter {
     pub(crate) fn discover(
         mut seed: Connection,
         options: ClientOptions,
+        seeds: Vec<(String, u16)>,
     ) -> Result<Discovery, Error> {
         let reply = seed.send(&["CLUSTER", "SLOTS"])?;
         let Some(topology) = Topology::parse(&reply) else {
@@ -736,13 +739,19 @@ impl ClusterRouter {
         };
 
         Ok(Discovery::Cluster(Box::new(Self::new(
-            seed, topology, options,
+            seed, topology, options, seeds,
         ))))
     }
 
-    fn new(seed: Connection, topology: Topology, options: ClientOptions) -> Self {
+    fn new(
+        seed: Connection,
+        topology: Topology,
+        options: ClientOptions,
+        seeds: Vec<(String, u16)>,
+    ) -> Self {
         let mut router = Self {
             options,
+            seeds,
             seed: 0,
             endpoints: vec![Endpoint {
                 host: seed.host.clone(),
@@ -1434,6 +1443,9 @@ impl ClusterRouter {
         Ok(endpoint)
     }
 
+    /// Reloads the slot map. Nodes with an open socket are asked first; when none of them
+    /// answers (the usual case after a node went away), every other known node and then every
+    /// seed is opened in turn, one connect attempt each, until one returns a slot map.
     fn refresh(&mut self) -> Result<(), Error> {
         let mut last_error = None;
 
@@ -1442,19 +1454,79 @@ impl ClusterRouter {
                 continue;
             };
 
-            match connection.send(&["CLUSTER", "SLOTS"]) {
-                Ok(reply) => {
-                    if let Some(topology) = Topology::parse(&reply) {
-                        self.install(topology);
-                        return Ok(());
-                    }
-                    last_error = Some(Error::Protocol("invalid CLUSTER SLOTS topology".to_owned()));
+            if connection.is_broken() {
+                continue;
+            }
+
+            match Self::ask_slots(connection) {
+                Ok(topology) => {
+                    self.install(topology);
+                    return Ok(());
                 }
                 Err(error) => last_error = Some(error),
             }
         }
 
+        let known = self.endpoints.len();
+
+        for (host, port) in self.seeds.clone() {
+            self.endpoint_index(&host, port);
+        }
+
+        for index in 0..self.endpoints.len() {
+            let live = self.endpoints[index]
+                .connection
+                .as_ref()
+                .is_some_and(|connection| !connection.is_broken());
+
+            if live {
+                continue;
+            }
+
+            let (host, port) = (self.endpoints[index].host.clone(), self.endpoints[index].port);
+
+            let mut connection = match Connection::open(&host, port, &self.options) {
+                Ok(connection) => connection,
+                Err(error) => {
+                    last_error = Some(error);
+                    continue;
+                }
+            };
+
+            let answer = Self::ask_slots(&mut connection);
+
+            self.endpoints[index].connection = Some(connection);
+
+            match answer {
+                Ok(topology) => {
+                    self.install(topology);
+                    return Ok(());
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+
+        // Seeds that are not cluster nodes stay out of the endpoint list once they failed.
+        if self.endpoints.len() > known {
+            let mut index = self.endpoints.len();
+
+            while index > known {
+                index -= 1;
+
+                if self.endpoints[index].connection.is_none() {
+                    self.endpoints.remove(index);
+                }
+            }
+        }
+
         Err(last_error.unwrap_or_else(|| Error::Protocol("no cluster topology source".to_owned())))
+    }
+
+    fn ask_slots(connection: &mut Connection) -> Result<Topology, Error> {
+        let reply = connection.send(&["CLUSTER", "SLOTS"])?;
+
+        Topology::parse(&reply)
+            .ok_or_else(|| Error::Protocol("invalid CLUSTER SLOTS topology".to_owned()))
     }
 
     fn target(&mut self, keys: &[&str]) -> Result<usize, Error> {
@@ -1468,9 +1540,26 @@ impl ClusterRouter {
     /// The seed node for commands without a key. Goes through `open` so a seed whose socket broke
     /// is opened again (when `reconnect` is on) instead of failing every keyless command for good.
     fn seed_target(&mut self) -> Result<usize, Error> {
-        self.open(self.seed, false)?;
+        let error = match self.open(self.seed, false) {
+            Ok(()) => return Ok(self.seed),
+            Err(error) => error,
+        };
 
-        Ok(self.seed)
+        // The seed node is gone: reload the map from another known node and use the first node
+        // of the new map that has an open socket.
+        self.refresh().map_err(|_| error)?;
+
+        for node in 0..self.routes.len() {
+            let endpoint = self.routes[node];
+
+            if self.open(endpoint, false).is_ok() {
+                self.seed = endpoint;
+
+                return Ok(endpoint);
+            }
+        }
+
+        Err(closed_socket())
     }
 
     fn first_keyed_target(&mut self, commands: &[&[&str]]) -> Result<usize, Error> {
@@ -1891,7 +1980,7 @@ mod tests {
             ..ClientOptions::default()
         };
         let connection = Connection::open("127.0.0.1", seed_port, &options).unwrap();
-        let Discovery::Cluster(mut router) = ClusterRouter::discover(connection, options).unwrap()
+        let Discovery::Cluster(mut router) = ClusterRouter::discover(connection, options, Vec::new()).unwrap()
         else {
             panic!("expected cluster topology");
         };
@@ -2954,7 +3043,7 @@ mod more_tests {
         let script = Script::start(vec![Step::Reply(
             b"-ERR cluster support disabled\r\n".to_vec(),
         )]);
-        let result = ClusterRouter::discover(script.connect(), ClientOptions::default()).unwrap();
+        let result = ClusterRouter::discover(script.connect(), ClientOptions::default(), Vec::new()).unwrap();
 
         assert!(matches!(result, Discovery::Standalone(_)));
         drop(result);
@@ -2987,7 +3076,7 @@ mod more_tests {
         });
         let connection = Connection::open("127.0.0.1", port, &ClientOptions::default()).unwrap();
         let Discovery::Cluster(mut router) =
-            ClusterRouter::discover(connection, ClientOptions::default()).unwrap()
+            ClusterRouter::discover(connection, ClientOptions::default(), Vec::new()).unwrap()
         else {
             panic!("cluster expected");
         };
@@ -3046,6 +3135,7 @@ mod more_tests {
                 connect_timeout: Duration::from_millis(200),
                 ..ClientOptions::default()
             },
+            Vec::new(),
         );
         let events = Arc::new(Mutex::new(Vec::new()));
         let lost = Arc::clone(&events);
@@ -3109,6 +3199,84 @@ mod more_tests {
         script.finish();
     }
 
+    #[test]
+    fn a_lost_node_reloads_the_slot_map_from_a_seed() {
+        let gone = Script::start(vec![Step::Close]);
+        let gone_port = gone.port;
+        let live = TcpListener::bind("127.0.0.1:0").unwrap();
+        let live_port = live.local_addr().unwrap().port();
+        let live_thread = thread::spawn(move || {
+            let (mut socket, _) = crate::test_support::accept(&live);
+            let mut buffer = [0_u8; 512];
+
+            for reply in [slots_to(live_port), b"$5\r\nvalue\r\n".to_vec()] {
+                let _request_len = socket.read(&mut buffer).unwrap();
+
+                socket.write_all(&reply).unwrap();
+            }
+
+            let _ = socket.read(&mut buffer);
+        });
+        let mut router = ClusterRouter::new(
+            gone.connect(),
+            Topology {
+                owners: vec![Some(0); SLOT_COUNT as usize],
+                nodes: vec![("127.0.0.1".to_owned(), gone_port)],
+            },
+            ClientOptions {
+                reconnect_base_delay: Duration::ZERO,
+                max_reconnect_attempts: 1,
+                connect_timeout: Duration::from_millis(200),
+                ..ClientOptions::default()
+            },
+            vec![
+                ("127.0.0.1".to_owned(), gone_port),
+                ("127.0.0.1".to_owned(), live_port),
+            ],
+        );
+
+        assert!(router.execute(&["GET", "key"]).is_err());
+        gone.finish();
+
+        assert_eq!(
+            router.execute(&["GET", "key"]).unwrap(),
+            RespValue::Bulk(b"value".to_vec())
+        );
+        assert_eq!(router.node_count(), 1);
+        drop(router);
+        live_thread.join().unwrap();
+    }
+
+    #[test]
+    fn a_failed_reload_leaves_no_seed_endpoints_behind() {
+        let gone = Script::start(vec![Step::Close]);
+        let gone_port = gone.port;
+        let mut router = ClusterRouter::new(
+            gone.connect(),
+            Topology {
+                owners: vec![Some(0); SLOT_COUNT as usize],
+                nodes: vec![("127.0.0.1".to_owned(), gone_port)],
+            },
+            ClientOptions {
+                reconnect_base_delay: Duration::ZERO,
+                max_reconnect_attempts: 1,
+                connect_timeout: Duration::from_millis(200),
+                ..ClientOptions::default()
+            },
+            vec![("127.0.0.1".to_owned(), closed_port())],
+        );
+
+        assert!(router.execute(&["GET", "key"]).is_err());
+        gone.finish();
+
+        assert!(matches!(router.execute(&["GET", "key"]), Err(Error::Io(_))));
+        assert_eq!(router.endpoints.len(), 1);
+    }
+
+    fn closed_port() -> u16 {
+        TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    }
+
     fn router_for_topology(script: &Script) -> ClusterRouter {
         ClusterRouter::new(
             script.connect(),
@@ -3117,6 +3285,7 @@ mod more_tests {
                 nodes: vec![("127.0.0.1".to_owned(), script.port)],
             },
             ClientOptions::default(),
+            Vec::new(),
         )
     }
 
@@ -3157,7 +3326,7 @@ mod more_tests {
         });
         let connection = Connection::open("127.0.0.1", port, &ClientOptions::default()).unwrap();
         let Discovery::Cluster(router) =
-            ClusterRouter::discover(connection, ClientOptions::default()).unwrap()
+            ClusterRouter::discover(connection, ClientOptions::default(), Vec::new()).unwrap()
         else {
             panic!("cluster expected");
         };

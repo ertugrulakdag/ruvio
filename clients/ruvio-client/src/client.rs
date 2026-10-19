@@ -56,6 +56,12 @@ pub struct ClientOptions {
     /// Server RESP port. Defaults to 6379. On a sharded server with `port_mode = "per-shard"`
     /// this is the seed port (any shard); the other shards are found with `CLUSTER SLOTS`.
     pub port: u16,
+    /// Seed addresses as `(host, port)` pairs. When not empty they are used instead of
+    /// [`Self::host`] and [`Self::port`]: connecting tries them in order and keeps the first one
+    /// that answers, and after a dropped connection the reconnect starts with the next seed. In
+    /// cluster mode `CLUSTER SLOTS` comes from the first reachable seed, and the seeds are asked
+    /// again when no known node answers a slot map reload. Defaults to empty.
+    pub seeds: Vec<(String, u16)>,
     /// ACL user name. When set together with [`Self::password`] the client sends
     /// `AUTH user password`; with only a password it sends the one-argument `AUTH password`.
     /// Defaults to `None`.
@@ -97,11 +103,47 @@ pub struct ClientOptions {
     pub reconnect_max_delay: Duration,
 }
 
+impl ClientOptions {
+    /// The addresses to connect to, in order: [`Self::seeds`] when set, otherwise `host:port`.
+    pub(crate) fn addresses(&self) -> Vec<(String, u16)> {
+        if self.seeds.is_empty() {
+            vec![(self.host.clone(), self.port)]
+        } else {
+            self.seeds.clone()
+        }
+    }
+}
+
+/// Opens the first address of `addresses` that can be reached, trying them in order from
+/// `start` and wrapping around. Only a connect failure (refused, timed out) moves on to the next
+/// address; a refused `AUTH` is returned at once. Returns the connection and its address index.
+pub(crate) fn open_first(
+    addresses: &[(String, u16)],
+    start: usize,
+    options: &ClientOptions,
+) -> Result<(Connection, usize), Error> {
+    let mut last_error = None;
+
+    for step in 0..addresses.len() {
+        let index = (start + step) % addresses.len();
+        let (host, port) = &addresses[index];
+
+        match Connection::open(host, *port, options) {
+            Ok(connection) => return Ok((connection, index)),
+            Err(error @ Error::Io(_)) => last_error = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| Error::Protocol("no address to connect to".to_owned())))
+}
+
 impl Default for ClientOptions {
     fn default() -> Self {
         Self {
             host: "127.0.0.1".to_owned(),
             port: 6379,
+            seeds: Vec::new(),
             username: None,
             password: None,
             database: 0,
@@ -168,6 +210,9 @@ pub struct Client {
     reconnect_delay: Option<Arc<dyn Fn(u32) -> Option<Duration> + Send + Sync>>,
     subscriptions: Vec<Vec<String>>,
     read_timeout: Option<Option<Duration>>,
+    /// The addresses from [`ClientOptions::addresses`] and the one the socket is connected to.
+    addresses: Vec<(String, u16)>,
+    current: usize,
 }
 
 enum Transport {
@@ -314,17 +359,19 @@ impl Client {
     /// # }
     /// ```
     pub fn connect_with(options: ClientOptions) -> Result<Self, Error> {
-        if options.host.is_empty() {
+        let addresses = options.addresses();
+
+        if addresses.iter().any(|(host, _)| host.is_empty()) {
             return Err(Error::Protocol("host is required".to_owned()));
         }
 
-        let seed = Connection::open(&options.host, options.port, &options)?;
+        let (seed, current) = open_first(&addresses, 0, &options)?;
 
         if !options.discover_cluster {
-            return finish_standalone(seed, options);
+            return finish_standalone(seed, options, addresses, current);
         }
 
-        match ClusterRouter::discover(seed, options.clone())? {
+        match ClusterRouter::discover(seed, options.clone(), addresses.clone())? {
             Discovery::Cluster(_) if options.database != 0 => Err(Error::Protocol(
                 "SELECT is not supported in cluster mode".to_owned(),
             )),
@@ -345,10 +392,12 @@ impl Client {
                     on_restored,
                     reconnect_delay: None,
                     subscriptions: Vec::new(),
+                    addresses,
+                    current,
                 })
             }
 
-            Discovery::Standalone(seed) => finish_standalone(seed, options),
+            Discovery::Standalone(seed) => finish_standalone(seed, options, addresses, current),
         }
     }
 
@@ -1471,6 +1520,11 @@ impl Client {
 
             options.host = host;
             options.port = port;
+            options.seeds.clear();
+        } else if self.addresses.len() > 1 {
+            // The subscriber starts at the address the command socket is on.
+            options.seeds = self.addresses.clone();
+            options.seeds.rotate_left(self.current);
         }
 
         let mut client = Client::connect_with(options)?;
@@ -1514,18 +1568,20 @@ impl Client {
     }
 
     fn reopen(&mut self) -> Result<(), Error> {
-        let host = self.options.host.clone();
-        let port = self.options.port;
+        let (host, port) = self.addresses[self.current].clone();
 
-        self.notify_lost(host.clone(), port);
+        self.notify_lost(host, port);
 
+        // Each attempt tries every address once, starting with the one after the address that
+        // dropped, so a single address behaves as before and a moved primary is found.
+        let start = (self.current + 1) % self.addresses.len();
         let mut attempt = 0_u32;
 
-        let mut opened = loop {
+        let (mut opened, current) = loop {
             attempt += 1;
 
-            match crate::cluster::Connection::open(&host, port, &self.options) {
-                Ok(connection) => break connection,
+            match open_first(&self.addresses, start, &self.options) {
+                Ok(found) => break found,
                 Err(error) => match self.next_delay(attempt) {
                     Some(delay) => std::thread::sleep(delay),
                     None => return Err(error),
@@ -1546,6 +1602,10 @@ impl Client {
         }
 
         self.transport = Transport::Single(opened);
+        self.current = current;
+
+        let (host, port) = self.addresses[current].clone();
+
         self.notify_restored(host, port);
 
         Ok(())
@@ -1735,7 +1795,12 @@ fn read_ping(reply: RespValue) -> Result<String, Error> {
         .ok_or_else(|| Error::Protocol("PING returned a null reply".to_owned()))
 }
 
-fn finish_standalone(mut seed: Connection, options: ClientOptions) -> Result<Client, Error> {
+fn finish_standalone(
+    mut seed: Connection,
+    options: ClientOptions,
+    addresses: Vec<(String, u16)>,
+    current: usize,
+) -> Result<Client, Error> {
     if options.database != 0 {
         let index = options.database.to_string();
 
@@ -1753,6 +1818,8 @@ fn finish_standalone(mut seed: Connection, options: ClientOptions) -> Result<Cli
         on_restored: Arc::new(Mutex::new(None)),
         reconnect_delay: None,
         subscriptions: Vec::new(),
+        addresses,
+        current,
     })
 }
 
@@ -2126,6 +2193,98 @@ mod tests {
         again.write_all(b"+PONG\r\n").unwrap();
 
         assert_eq!(failed.join().unwrap(), "PONG");
+    }
+
+    fn closed_port() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+
+        listener.local_addr().unwrap().port()
+    }
+
+    fn answer_ping(listener: &TcpListener) {
+        let mut socket = bound(crate::test_support::accept(listener).0);
+        let mut got = [0_u8; 14];
+
+        socket.read_exact(&mut got).unwrap();
+        assert_eq!(&got, b"*1\r\n$4\r\nPING\r\n");
+        socket.write_all(b"+PONG\r\n").unwrap();
+    }
+
+    #[test]
+    fn connect_skips_a_seed_that_cannot_be_reached() {
+        let dead = closed_port();
+        let live = TcpListener::bind("127.0.0.1:0").unwrap();
+        let live_port = live.local_addr().unwrap().port();
+        let connecting = thread::spawn(move || {
+            let mut client = Client::connect_with(ClientOptions {
+                seeds: vec![
+                    ("127.0.0.1".to_owned(), dead),
+                    ("127.0.0.1".to_owned(), live_port),
+                ],
+                discover_cluster: false,
+                connect_timeout: Duration::from_millis(500),
+                ..ClientOptions::default()
+            })
+            .unwrap();
+
+            client.ping().unwrap()
+        });
+
+        answer_ping(&live);
+
+        assert_eq!(connecting.join().unwrap(), "PONG");
+    }
+
+    #[test]
+    fn a_dropped_connection_moves_on_to_the_next_seed() {
+        let first = TcpListener::bind("127.0.0.1:0").unwrap();
+        let second = TcpListener::bind("127.0.0.1:0").unwrap();
+        let ports = [
+            first.local_addr().unwrap().port(),
+            second.local_addr().unwrap().port(),
+        ];
+        let connecting = thread::spawn(move || {
+            Client::connect_with(ClientOptions {
+                seeds: ports.iter().map(|port| ("127.0.0.1".to_owned(), *port)).collect(),
+                discover_cluster: false,
+                reconnect_base_delay: Duration::ZERO,
+                reconnect_max_delay: Duration::ZERO,
+                ..ClientOptions::default()
+            })
+            .unwrap()
+        });
+
+        drop(bound(crate::test_support::accept(&first).0));
+
+        let mut client = connecting.join().unwrap();
+        let restored = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = std::sync::Arc::clone(&restored);
+
+        client.on_connection_restored(move |notice| seen.lock().unwrap().push(notice.port));
+
+        let failed = thread::spawn(move || {
+            assert!(client.ping().is_err());
+
+            client.ping().unwrap()
+        });
+
+        // The first seed still accepts, but the reconnect must go to the second one.
+        answer_ping(&second);
+
+        assert_eq!(failed.join().unwrap(), "PONG");
+        assert_eq!(*restored.lock().unwrap(), vec![ports[1]]);
+    }
+
+    #[test]
+    fn an_empty_seed_host_is_refused() {
+        let error = Client::connect_with(ClientOptions {
+            seeds: vec![(String::new(), 6379)],
+            ..ClientOptions::default()
+        })
+        .err()
+        .unwrap();
+
+        assert!(matches!(error, crate::Error::Protocol(_)));
     }
 
     #[test]

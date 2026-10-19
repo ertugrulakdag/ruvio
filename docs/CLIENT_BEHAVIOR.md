@@ -26,6 +26,9 @@ What the six clients do when a cluster redirects, a command spans slots, or a so
 | `ASK` | Not followed; no client sends `ASKING`. Ruvio has no online slot migration, so the server does not send `ASK` |
 | Socket dropped before any reply byte | The command fails and is never sent again, reads included. The socket is opened again for the next command |
 | Pipelines in a cluster | Grouped per node, replies returned in the original order |
+| Seed addresses | A list of seed addresses can be given in place of the single host and port; with no list the host and port are used as before. Connecting tries the seeds in order, one connect attempt each, and keeps the first that answers. A seed that cannot be reached (refused, timed out) is skipped; a refused `AUTH` or `SELECT` stops at once. When none answers, the last connect error is returned |
+| Reconnect with seeds (standalone) | Each reconnect attempt tries every seed once, starting with the seed after the address that dropped and ending with that address; the reconnect backoff runs between attempts, as with one address. The command that hit the drop still fails. A subscriber socket opened later starts at the address the command socket is on |
+| Slot map reload (cluster) | `CLUSTER SLOTS` comes from the first reachable seed. A reload asks the nodes that have an open socket first; when none answers, it opens every other known node and then every seed, one connect attempt each, until one returns a slot map. A node that cannot be opened again (after its reconnect attempts) triggers that reload, and the command goes to the owner the new map names; a keyless command whose node is gone goes to the first reachable node of the new map. Seeds are never asked while the known nodes answer, so the routing path does not change |
 
 ## Differences
 
@@ -33,6 +36,7 @@ What the six clients do when a cluster redirects, a command spans slots, or a so
 | --- | --- | --- | --- | --- | --- | --- |
 | **differs**: a non-split command whose keys span slots, inside a pipeline | `CROSSSLOT` error at its index; the rest runs | sent to the first key's shard; the server answers | the whole pipeline fails with `ErrCrossSlot` before sending | `CROSSSLOT` error at its index; the rest runs | `CROSSSLOT` error at its index; the rest runs | the pipeline is refused before sending |
 | **differs**: the `CROSSSLOT` error | `Error::Server` with the server's text | `RuvioException`, text ends "(checked by the client, nothing was sent)" | `ErrCrossSlot` | `RuvioServerException`, text ends "(checked by the client, nothing was sent)" | `RuvioError`, code `CROSSSLOT` | `CrossSlotError` |
+| seed option | `ClientOptions::seeds`, `(host, port)` pairs | `RuvioClientOptions.Seeds`, `host:port` strings | `Options.Seeds`, `host:port` strings | `RuvioOptions.Builder.seeds`, `host:port` strings | `seeds`, `host:port` strings | `seeds=`, `host:port` strings or `(host, port)` tuples |
 | **differs**: reconnect option | `ClientOptions::reconnect` (default on), attempts and backoff settings | `RuvioClientOptions.Reconnect` (default on), attempts and backoff settings | always on, no option | always on, no option | `reconnect` (default on) | always on, no option |
 
 ## Where it lives
