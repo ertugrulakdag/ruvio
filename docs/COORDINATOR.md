@@ -85,6 +85,12 @@ members = [
 ruvio coordinator --config coordinator.toml
 ```
 
+The coordinator is part of the `ruvio` binary in every release (Linux, macOS, Windows) and in the Docker
+image; there is nothing extra to download. For a binary install,
+[deploy/coordinator.toml](../deploy/coordinator.toml) is a starting config and
+[deploy/ruvio-coordinator.service](../deploy/ruvio-coordinator.service) a systemd unit next to
+`ruvio.service`: on each of three machines run one data node and one coordinator.
+
 - `address` is the member's RESP address (shard 0's port), the one clients use. `replication` is its
   `replication.listen` base address, the one `REPLICAOF` names. Host names are resolved on every
   connection, so container names work.

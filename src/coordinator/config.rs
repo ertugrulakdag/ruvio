@@ -229,6 +229,17 @@ members = [
     }
 
     #[test]
+    fn the_binary_install_example_parses() {
+        let config =
+            CoordinatorConfig::parse(include_str!("../../deploy/coordinator.toml")).unwrap();
+
+        assert_eq!(
+            (config.id, config.peers.len(), config.groups.len()),
+            (1, 3, 1)
+        );
+    }
+
+    #[test]
     fn the_compose_example_configs_parse() {
         for (id, text) in [
             (
