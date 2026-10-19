@@ -67,6 +67,14 @@ time. Backend failures propagate to the application's exception handler; configu
 that handler to return an appropriate 503. The middleware never silently fails open
 or retries a possibly-applied `LIMIT`.
 
+Fixed window is the default. To avoid the burst at a window edge, pick another
+algorithm: `[RuvioRateLimit("api", 100, 60, Algorithm = RuvioRateLimitAlgorithm.SlidingWindow)]`
+weighs the previous window, and `TokenBucket` treats the permits as a bucket that
+refills over the window (`.WithRuvioRateLimit("api", 100, TimeSpan.FromMinutes(1), RuvioRateLimitAlgorithm.TokenBucket)`).
+Both keep a fixed amount of state per key and return an exact `Retry-After`. A policy
+keeps the algorithm it was created with, so a new algorithm needs a new policy name.
+These two need a Ruvio server with the `LIMIT` modes.
+
 Eviction, data loss, deletion and failover can reset a budget. Use suitable memory
 and durability policies; this is not a billing/quota ledger. Fixed windows allow
 bursts around window boundaries.

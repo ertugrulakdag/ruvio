@@ -4,6 +4,8 @@ Notable changes to the NuGet package `Ruvio.AspNetCore.RateLimiting`. New entrie
 
 ## Unreleased
 
+- `Algorithm` on `[RuvioRateLimit]` and an `algorithm` argument on `WithRuvioRateLimit`: fixed window (default, unchanged), `SlidingWindow` or `TokenBucket`. The other two send `LIMIT ... WITHRETRY`, so `Retry-After` is the exact wait. Needs a Ruvio server with the LIMIT modes.
+
 ## 0.1.2 - 2026-10-17
 
 - `WithRuvioRateLimit(policy, permits, window)` endpoint extension, an alternative to the attribute for minimal APIs and groups.
