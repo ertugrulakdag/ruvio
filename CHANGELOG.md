@@ -4,6 +4,7 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+- WAL (issue #32): a segment longer than `wal_segment_bytes` (written before the setting was lowered, or above `ruvio-ctl`'s 256 MiB default) is read with a warning instead of being reported as corrupt, so startup, `ruvio-ctl check/inspect/backup/restore` work on such a data directory.
 - ACL (issue #38): a `+parent|sub` / `-parent|sub` rule must name a subcommand Ruvio checks (`config|get`, `acl|setuser`, `client|kill`, ...); any other is refused. Such a rule could never match a command, and each distinct name was kept in memory for the life of the process.
 - `EVAL`, `EVALSHA`, `FCALL` and `PUBLISH` can be queued in `MULTI` (they aborted the transaction before). Scripts run in their place at `EXEC` and their writes join the transaction's WAL record; a queued `PUBLISH` is sent after `EXEC` is recorded, so `DISCARD` or a refused write sends nothing. `SELECT` stays refused inside `MULTI` (issue #41).
 - Client tracking table (issue #43): the readers of a tracked key are kept inline when there is one (no allocation), in a small vector up to 32, and in a set above that, so a connection leaving no longer scans every other reader of a hot key (O(N²) before) and the common one-reader key uses less memory. Measured on 1M tracked keys: 238 → 190 bytes per key with one reader (-20%), 310 → 288 with two, about the same at four, 796 → 757 at twelve. Tracking off still costs nothing.

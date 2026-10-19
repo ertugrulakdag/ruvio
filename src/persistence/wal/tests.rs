@@ -873,6 +873,46 @@ fn failed_prefill_sync_is_a_failed_sync_of_the_segment() {
     assert!(mutations.is_empty());
 }
 
+/// Segments written with a larger `wal_segment_bytes` still recover after the setting is
+/// lowered (issue #32: they were reported as corrupt, which also broke `ruvio-ctl` on a data
+/// directory written with segments above its 256 MiB default), and new records go on.
+#[test]
+fn segments_longer_than_a_lowered_setting_still_recover() {
+    let directory = tempdir().unwrap();
+    let large = PersistenceConfig {
+        wal_segment_bytes: 1 << 20,
+        ..config(directory.path(), DurabilityProfile::Always)
+    };
+    let limits = ProtocolLimits::default();
+    let (mut sink, _, _) = WalSink::open(large, 0, limits).unwrap();
+
+    set(&mut sink, b"one", b"v").unwrap();
+    set(&mut sink, b"two", b"v").unwrap();
+    // Fill past the smaller size so the segment is longer even without preallocation.
+    for index in 0..64u32 {
+        set(&mut sink, format!("pad{index}").as_bytes(), &[7; 96]).unwrap();
+    }
+    drop(sink);
+
+    let small = config(directory.path(), DurabilityProfile::Always);
+    let shard_wal = shard_wal_directory(directory.path(), 0);
+    let longest = fs::read_dir(&shard_wal)
+        .unwrap()
+        .map(|entry| entry.unwrap().metadata().unwrap().len())
+        .max()
+        .unwrap();
+
+    assert!(longest > small.wal_segment_bytes, "{longest}");
+    let (mut sink, mutations, _) = WalSink::open(small.clone(), 0, limits).unwrap();
+
+    assert_eq!(mutations.len(), 66);
+    set(&mut sink, b"three", b"v").unwrap();
+    drop(sink);
+
+    let (_sink, mutations, _) = WalSink::open(small, 0, limits).unwrap();
+    assert_eq!(mutations.len(), 67);
+}
+
 #[test]
 fn always_group_refused_by_a_failed_sync_is_not_replayed() {
     let directory = tempdir().unwrap();
