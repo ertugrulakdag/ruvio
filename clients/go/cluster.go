@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +33,19 @@ type topology struct {
 	owner [slotCount]uint16 // index into nodes, noOwner when the slot is unassigned
 	nodes []*Client
 	addrs []string
+
+	// replicas lists, per node, the replica addresses CLUSTER SLOTS gave after it. read
+	// holds, per node, the replica its reads go to (nil when it has none); empty with
+	// ReadPrimary. The routes are shared by the copies a MOVED makes, so a replica marked
+	// unusable stays so until the next load.
+	replicas [][]string
+	read     []*replicaRoute
+}
+
+// replicaRoute is the replica chosen for one node's reads.
+type replicaRoute struct {
+	node *Client
+	bad  atomic.Bool // could not be connected, or answered LOADING: skipped until the next load
 }
 
 func (t *topology) nodeAt(slot int, seed *Client) *Client {
@@ -56,6 +71,7 @@ type cluster struct {
 	seed       *Client
 	t          atomic.Pointer[topology]
 	standalone atomic.Bool // the seed answered "cluster mode is disabled"
+	policy     ReadPolicy  // Options.ReadPolicy
 
 	mu    sync.Mutex // guards nodes, refresh and slot patches
 	nodes map[string]*Client
@@ -66,7 +82,7 @@ type cluster struct {
 }
 
 func newCluster(seed *Client) *cluster {
-	cl := &cluster{seed: seed, nodes: map[string]*Client{seed.opts.Addr: seed}}
+	cl := &cluster{seed: seed, policy: seed.opts.ReadPolicy, nodes: map[string]*Client{seed.opts.Addr: seed}}
 	if len(seed.addrs) > 1 {
 		cl.seeds = seed.addrs
 	}
@@ -84,6 +100,17 @@ func (cl *cluster) node(addr string) *Client {
 	o.Cluster = false
 	n := NewClient(o)
 	cl.nodes[addr] = n
+	return n
+}
+
+// replicaNode returns the Client for the replica at addr, creating it (no connection yet);
+// it sends READONLY on every connection it opens. Caller holds cl.mu.
+func (cl *cluster) replicaNode(addr string) *Client {
+	if n := cl.nodes[addr]; n != nil {
+		return n
+	}
+	n := cl.node(addr)
+	n.readOnly = true
 	return n
 }
 
@@ -249,9 +276,39 @@ func (cl *cluster) build(v Value, fromAddr string) (*topology, error) {
 			idx = len(t.addrs)
 			t.addrs = append(t.addrs, addr)
 			t.nodes = append(t.nodes, cl.node(addr))
+			t.replicas = append(t.replicas, nil)
+		}
+		// Replicas follow the primary; one that cannot be read is skipped, not fatal.
+		for _, rep := range rg.Array[3:] {
+			if rep.Kind != KindArray || len(rep.Array) < 2 {
+				continue
+			}
+			rport, err := rep.Array[1].AsInt64()
+			if err != nil || rport < 1 || rport > 65535 {
+				continue
+			}
+			rhost := rep.Array[0].Str()
+			if rhost == "" {
+				rhost = seedHost
+			}
+			raddr := net.JoinHostPort(rhost, strconv.FormatInt(rport, 10))
+			if !slices.Contains(t.replicas[idx], raddr) {
+				t.replicas[idx] = append(t.replicas[idx], raddr)
+			}
 		}
 		for s := lo; s <= hi; s++ {
 			t.owner[s] = uint16(idx)
+		}
+	}
+	if cl.policy != ReadPrimary {
+		// Each node's reads go to one of its replicas, picked at random per load so many
+		// clients spread over the replicas, and kept until the next load.
+		pick := rand.Uint64()
+		t.read = make([]*replicaRoute, len(t.nodes))
+		for i, reps := range t.replicas {
+			if len(reps) > 0 {
+				t.read[i] = &replicaRoute{node: cl.replicaNode(reps[pick%uint64(len(reps))])}
+			}
 		}
 	}
 	return t, nil

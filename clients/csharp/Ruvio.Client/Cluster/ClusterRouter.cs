@@ -44,6 +44,7 @@ internal sealed class ClusterRouter : IDisposable
     {
         _seed = seed;
         _options = options;
+        PickReplicas(topology);
         _topology = topology;
         _seeds = SeedAddresses.Parse(options);
         _home = Tuple.Create(seed.Host, seed.Port);
@@ -51,6 +52,24 @@ internal sealed class ClusterRouter : IDisposable
     }
 
     public int NodeCount => _topology.Nodes.Count;
+
+    /// <summary>
+    /// Makes <paramref name="topology"/> current. Under a replica read policy each shard's reads go to
+    /// one of its replicas, picked at random so many clients spread over them, and kept until the next load.
+    /// </summary>
+    private void Install(ClusterTopology topology)
+    {
+        PickReplicas(topology);
+        _topology = topology;
+    }
+
+    private void PickReplicas(ClusterTopology topology)
+    {
+        if (_options.ReadPolicy != ReadPolicy.Primary)
+        {
+            topology.PickReplicas(Random.Shared.Next());
+        }
+    }
 
     /// <summary>How many node endpoints have a socket entry, open or broken.</summary>
     internal int EndpointCount
@@ -159,6 +178,11 @@ internal sealed class ClusterRouter : IDisposable
                 : CrossSlot();
         }
 
+        if (_options.ReadPolicy != ReadPolicy.Primary && keys.Count > 0 && ClusterKeys.Reads(name))
+        {
+            return await SendReadAsync(ClusterKeys.Slot(keys[0]), arguments, cancellationToken, redirects);
+        }
+
         RuvioSocket connection = await TargetAsync(keys, cancellationToken);
 
         return await SendRoutedAsync(connection, arguments, cancellationToken, redirects);
@@ -177,7 +201,11 @@ internal sealed class ClusterRouter : IDisposable
 
             if (ClusterKeys.IsSingleKey(name))
             {
-                return SendToSlotAsync(command, ClusterKeys.Slot(key), redirects, cancellationToken);
+                int slot = ClusterKeys.Slot(key);
+
+                return _options.ReadPolicy != ReadPolicy.Primary && ClusterKeys.Reads(name)
+                    ? SendReadToSlotAsync(command, slot, redirects, cancellationToken)
+                    : SendToSlotAsync(command, slot, redirects, cancellationToken);
             }
         }
 
@@ -208,6 +236,131 @@ internal sealed class ClusterRouter : IDisposable
 
             connection = await FollowMovedAsync(moved, redirect, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// A read for <paramref name="slot"/>: sent to the slot's replica, or to the primary when it has none.
+    /// A replica that answers <c>LOADING</c> is skipped until the next load and, under
+    /// <see cref="ReadPolicy.PreferReplica"/>, the read is sent again to the primary.
+    /// </summary>
+    private async ValueTask<RespValue> SendReadToSlotAsync(
+        RespCommand command, int slot, int redirects, CancellationToken cancellationToken)
+    {
+        ReadTarget target = await ReadSocketAsync(slot, cancellationToken).ConfigureAwait(false);
+        RespValue reply = await target.Socket.SendAsync(command, cancellationToken).ConfigureAwait(false);
+
+        if (target.Replica && IsLoading(reply))
+        {
+            target.Skip();
+
+            return _options.ReadPolicy == ReadPolicy.Replica
+                ? reply
+                : await SendToSlotAsync(command, slot, redirects, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (redirects >= MaxRedirects || MovedTarget(reply) is not { } moved)
+        {
+            return reply;
+        }
+
+        await FollowMovedAsync(moved, redirects, cancellationToken).ConfigureAwait(false);
+
+        return await SendToSlotAsync(command, slot, redirects + 1, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The string-list form of <see cref="SendReadToSlotAsync"/>.</summary>
+    private async Task<RespValue> SendReadAsync(
+        int slot, IReadOnlyList<string> arguments, CancellationToken cancellationToken, int redirects)
+    {
+        ReadTarget target = await ReadSocketAsync(slot, cancellationToken).ConfigureAwait(false);
+        RespValue reply = await target.Socket.SendAsync(arguments, cancellationToken).ConfigureAwait(false);
+
+        if (target.Replica && IsLoading(reply))
+        {
+            target.Skip();
+
+            return _options.ReadPolicy == ReadPolicy.Replica
+                ? reply
+                : await SendRoutedAsync(await ForSlotAsync(slot, cancellationToken), arguments, cancellationToken, redirects);
+        }
+
+        if (redirects >= MaxRedirects || MovedTarget(reply) is not { } moved)
+        {
+            return reply;
+        }
+
+        RuvioSocket owner = await FollowMovedAsync(moved, redirects, cancellationToken).ConfigureAwait(false);
+
+        return await SendRoutedAsync(owner, arguments, cancellationToken, redirects + 1);
+    }
+
+    /// <summary>The socket a read goes to; <c>Topology</c> and <c>Node</c> name the replica when it is one.</summary>
+    private readonly record struct ReadTarget(RuvioSocket Socket, ClusterTopology? Topology = null, int Node = -1)
+    {
+        public bool Replica => Topology is not null;
+
+        /// <summary>Stops using this replica until the next slot map load.</summary>
+        public void Skip() => Topology?.SkipReplica(Node);
+    }
+
+    private static bool IsLoading(RespValue reply) =>
+        reply is { Kind: RespKind.Error, Text: { } text } && (text.StartsWith("LOADING", StringComparison.Ordinal) || text.StartsWith("MASTERDOWN", StringComparison.Ordinal));
+
+    /// <summary>
+    /// The replica <paramref name="slot"/>'s reads go to, opened; the primary when it has none or it cannot be
+    /// opened under <see cref="ReadPolicy.PreferReplica"/>, an error under <see cref="ReadPolicy.Replica"/>.
+    /// </summary>
+    private ValueTask<ReadTarget> ReadSocketAsync(int slot, CancellationToken cancellationToken)
+    {
+        ClusterTopology topology = _topology;
+        int node = topology.NodeOf(slot);
+
+        if (node >= 0 && topology.ReadReplica(node) is not null)
+        {
+            if (topology.ReplicaSockets[node] is { IsBroken: false } cached)
+            {
+                return new ValueTask<ReadTarget>(new ReadTarget(cached, topology, node));
+            }
+
+            return OpenReplicaAsync(slot, topology, node, cancellationToken);
+        }
+
+        if (_options.ReadPolicy == ReadPolicy.Replica)
+        {
+            throw new RuvioException($"no replica is known for slot {slot} (read policy Replica)");
+        }
+
+        return PrimaryReadAsync(slot, cancellationToken);
+    }
+
+    private async ValueTask<ReadTarget> PrimaryReadAsync(int slot, CancellationToken cancellationToken) =>
+        new(await ForSlotAsync(slot, cancellationToken).ConfigureAwait(false));
+
+    private async ValueTask<ReadTarget> OpenReplicaAsync(
+        int slot, ClusterTopology topology, int node, CancellationToken cancellationToken)
+    {
+        (string host, int port) = topology.ReadReplica(node)!.Value;
+
+        try
+        {
+            RuvioSocket opened = await ConnectionAsync(host, port, cancellationToken, replica: true).ConfigureAwait(false);
+
+            topology.ReplicaSockets[node] = opened;
+
+            return new ReadTarget(opened, topology, node);
+        }
+
+        catch (Exception error) when (CanReload(error, cancellationToken))
+        {
+            topology.SkipReplica(node);
+
+            if (_options.ReadPolicy == ReadPolicy.Replica)
+            {
+                throw;
+            }
+        }
+
+        return new ReadTarget(await ForSlotAsync(slot, cancellationToken).ConfigureAwait(false));
     }
 
     internal async Task<RespValue> ExecuteBinaryAsync(
@@ -252,6 +405,7 @@ internal sealed class ClusterRouter : IDisposable
         }
 
         int slot = count == 0 ? 0 : ClusterKeys.Slot(arguments[first].Span);
+        bool read = count > 0 && _options.ReadPolicy != ReadPolicy.Primary && ClusterKeys.Reads(name);
 
         for (int index = 1; index < count; index++)
         {
@@ -259,12 +413,40 @@ internal sealed class ClusterRouter : IDisposable
             {
                 // DEL, UNLINK and EXISTS are split like their string form; a script cannot be.
                 return first == 1
-                    ? await SplitBinaryAsync(arguments, cancellationToken).ConfigureAwait(false)
+                    ? await SplitBinaryAsync(arguments, read, cancellationToken).ConfigureAwait(false)
                     : CrossSlot();
             }
         }
 
-        return await SendBinaryToSlotAsync(arguments, slot, redirects, cancellationToken).ConfigureAwait(false);
+        return read
+            ? await SendBinaryReadAsync(arguments, slot, redirects, cancellationToken).ConfigureAwait(false)
+            : await SendBinaryToSlotAsync(arguments, slot, redirects, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The binary form of <see cref="SendReadToSlotAsync"/>.</summary>
+    private async Task<RespValue> SendBinaryReadAsync(
+        IReadOnlyList<ReadOnlyMemory<byte>> arguments, int slot, int redirects, CancellationToken cancellationToken)
+    {
+        ReadTarget target = await ReadSocketAsync(slot, cancellationToken).ConfigureAwait(false);
+        RespValue reply = await target.Socket.SendBinaryAsync(arguments, cancellationToken).ConfigureAwait(false);
+
+        if (target.Replica && IsLoading(reply))
+        {
+            target.Skip();
+
+            return _options.ReadPolicy == ReadPolicy.Replica
+                ? reply
+                : await SendBinaryToSlotAsync(arguments, slot, redirects, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (redirects >= MaxRedirects || MovedTarget(reply) is not { } moved)
+        {
+            return reply;
+        }
+
+        await FollowMovedAsync(moved, redirects, cancellationToken).ConfigureAwait(false);
+
+        return await SendBinaryToSlotAsync(arguments, slot, redirects + 1, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<RespValue> SendBinaryToSlotAsync(
@@ -285,9 +467,9 @@ internal sealed class ClusterRouter : IDisposable
         }
     }
 
-    /// <summary>Sends a binary <c>DEL</c>, <c>UNLINK</c> or <c>EXISTS</c> once per slot and sums the counts.</summary>
+    /// <summary>Sends a binary <c>DEL</c>, <c>UNLINK</c> or <c>EXISTS</c> once per slot and sums the counts; <c>EXISTS</c> parts are reads.</summary>
     private async Task<RespValue> SplitBinaryAsync(
-        IReadOnlyList<ReadOnlyMemory<byte>> arguments, CancellationToken cancellationToken)
+        IReadOnlyList<ReadOnlyMemory<byte>> arguments, bool read, CancellationToken cancellationToken)
     {
         var bySlot = new Dictionary<int, List<ReadOnlyMemory<byte>>>();
 
@@ -309,7 +491,9 @@ internal sealed class ClusterRouter : IDisposable
 
         foreach ((int slot, List<ReadOnlyMemory<byte>> part) in bySlot)
         {
-            sends[next++] = SendBinaryToSlotAsync(part, slot, 0, cancellationToken);
+            sends[next++] = read
+                ? SendBinaryReadAsync(part, slot, 0, cancellationToken)
+                : SendBinaryToSlotAsync(part, slot, 0, cancellationToken);
         }
 
         long total = 0;
@@ -340,6 +524,13 @@ internal sealed class ClusterRouter : IDisposable
         if (_pinned is not null || _multiPending)
         {
             return await ExecuteManyGroupedAsync(commands, cancellationToken);
+        }
+
+        // A pipeline goes to replicas only when every command in it is a read, so it never
+        // reads its own writes from a replica that has not received them.
+        if (_options.ReadPolicy != ReadPolicy.Primary && AllReads(commands))
+        {
+            return await ExecuteManyGroupedAsync(commands, cancellationToken, reads: true);
         }
 
         ClusterTopology topology = _topology;
@@ -593,7 +784,8 @@ internal sealed class ClusterRouter : IDisposable
     /// <summary>The grouped path: split commands and transactions, one dictionary entry per connection.</summary>
     private async Task<IReadOnlyList<RespValue>> ExecuteManyGroupedAsync(
         IReadOnlyList<IReadOnlyList<string>> commands,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool reads = false)
     {
         if (_pinned is not null || _multiPending || HasTransactionCommand(commands))
         {
@@ -603,6 +795,9 @@ internal sealed class ClusterRouter : IDisposable
         }
 
         var groups = new Dictionary<RuvioSocket, List<int>>();
+
+        // With reads, the replica sockets in use: a LOADING answer sends that group's commands to the primaries.
+        Dictionary<RuvioSocket, ReadTarget>? replicas = reads ? [] : null;
 
         // Per-slot parts of split commands get positions after the pipeline's own commands.
         List<IReadOnlyList<string>>? extra = null;
@@ -624,14 +819,24 @@ internal sealed class ClusterRouter : IDisposable
 
                 foreach (SplitPart part in parts)
                 {
-                    AddToGroup(groups, await ForSlotAsync(part.Slot, cancellationToken), commands.Count + extra.Count);
+                    AddToGroup(
+                        groups,
+                        reads ? await GroupReadSocketAsync(part.Slot, replicas!, cancellationToken) : await ForSlotAsync(part.Slot, cancellationToken),
+                        commands.Count + extra.Count);
                     extra.Add(part.Command);
                 }
 
                 continue;
             }
 
-            AddToGroup(groups, await TargetKeyAsync(ClusterKeys.First(name, command), cancellationToken), index);
+            string? key = ClusterKeys.First(name, command);
+
+            AddToGroup(
+                groups,
+                reads && key is not null
+                    ? await GroupReadSocketAsync(ClusterKeys.Slot(key), replicas!, cancellationToken)
+                    : await TargetKeyAsync(key, cancellationToken),
+                index);
         }
 
         var replies = new RespValue[commands.Count + (extra?.Count ?? 0)];
@@ -670,6 +875,11 @@ internal sealed class ClusterRouter : IDisposable
             await Task.WhenAll(sends);
         }
 
+        if (replicas is { Count: > 0 })
+        {
+            await ReadAgainFromPrimariesAsync(groups, replicas, commands, extra, replies, cancellationToken);
+        }
+
         for (int index = 0; index < replies.Length; index++)
         {
             // A split command's own index stays empty until its parts are merged below.
@@ -693,6 +903,73 @@ internal sealed class ClusterRouter : IDisposable
         }
 
         return replies[..commands.Count];
+    }
+
+    private static bool AllReads(IReadOnlyList<IReadOnlyList<string>> commands)
+    {
+        for (int index = 0; index < commands.Count; index++)
+        {
+            if (!ClusterKeys.Reads(ClusterKeys.Name(commands[index])))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private async ValueTask<RuvioSocket> GroupReadSocketAsync(
+        int slot, Dictionary<RuvioSocket, ReadTarget> replicas, CancellationToken cancellationToken)
+    {
+        ReadTarget target = await ReadSocketAsync(slot, cancellationToken);
+
+        if (target.Replica)
+        {
+            replicas[target.Socket] = target;
+        }
+
+        return target.Socket;
+    }
+
+    /// <summary>
+    /// A replica that answered <c>LOADING</c> to a pipelined read is skipped until the next load, and under
+    /// <see cref="ReadPolicy.PreferReplica"/> those commands are sent again to their primaries.
+    /// </summary>
+    private async Task ReadAgainFromPrimariesAsync(
+        Dictionary<RuvioSocket, List<int>> groups,
+        Dictionary<RuvioSocket, ReadTarget> replicas,
+        IReadOnlyList<IReadOnlyList<string>> commands,
+        List<IReadOnlyList<string>>? extra,
+        RespValue[] replies,
+        CancellationToken cancellationToken)
+    {
+        foreach ((RuvioSocket connection, List<int> positions) in groups)
+        {
+            if (!replicas.TryGetValue(connection, out ReadTarget target))
+            {
+                continue;
+            }
+
+            foreach (int position in positions)
+            {
+                if (replies[position] is not { } reply || !IsLoading(reply))
+                {
+                    continue;
+                }
+
+                target.Skip();
+
+                if (_options.ReadPolicy == ReadPolicy.Replica)
+                {
+                    continue;
+                }
+
+                IReadOnlyList<string> command = position < commands.Count ? commands[position] : extra![position - commands.Count];
+                int slot = ClusterKeys.Slot(ClusterKeys.First(ClusterKeys.Name(command), command)!);
+
+                replies[position] = await SendRoutedAsync(await ForSlotAsync(slot, cancellationToken), command, cancellationToken);
+            }
+        }
     }
 
     private static void AddToGroup(Dictionary<RuvioSocket, List<int>> groups, RuvioSocket connection, int position)
@@ -921,10 +1198,20 @@ internal sealed class ClusterRouter : IDisposable
     {
         List<SplitPart> parts = SplitParts(name, arguments, keys);
         var byConnection = new Dictionary<RuvioSocket, List<int>>();
+        bool read = _options.ReadPolicy != ReadPolicy.Primary && ClusterKeys.Reads(name);
+        ReadTarget[]? targets = read ? new ReadTarget[parts.Count] : null;
 
         for (int part = 0; part < parts.Count; part++)
         {
-            AddToGroup(byConnection, await ForSlotAsync(parts[part].Slot, cancellationToken), part);
+            if (read)
+            {
+                targets![part] = await ReadSocketAsync(parts[part].Slot, cancellationToken);
+                AddToGroup(byConnection, targets[part].Socket, part);
+            }
+            else
+            {
+                AddToGroup(byConnection, await ForSlotAsync(parts[part].Slot, cancellationToken), part);
+            }
         }
 
         var replies = new RespValue[parts.Count];
@@ -948,6 +1235,17 @@ internal sealed class ClusterRouter : IDisposable
 
         for (int part = 0; part < parts.Count; part++)
         {
+            if (targets is not null && targets[part].Replica && IsLoading(replies[part]))
+            {
+                targets[part].Skip();
+
+                if (_options.ReadPolicy != ReadPolicy.Replica)
+                {
+                    replies[part] = await SendRoutedAsync(
+                        await ForSlotAsync(parts[part].Slot, cancellationToken), parts[part].Command, cancellationToken);
+                }
+            }
+
             if (MovedTarget(replies[part]) is { } moved)
             {
                 RuvioSocket owner = await FollowMovedAsync(moved, 0, cancellationToken);
@@ -1225,7 +1523,7 @@ internal sealed class ClusterRouter : IDisposable
             {
                 if (await AskSlotsAsync(connection, cancellationToken) is { } topology)
                 {
-                    _topology = topology;
+                    Install(topology);
 
                     return true;
                 }
@@ -1315,7 +1613,7 @@ internal sealed class ClusterRouter : IDisposable
                 stale.Dispose();
             }
 
-            _topology = topology;
+            Install(topology);
 
             return true;
         }
@@ -1478,7 +1776,8 @@ internal sealed class ClusterRouter : IDisposable
         string host,
         int port,
         CancellationToken cancellationToken,
-        bool force = false)
+        bool force = false,
+        bool replica = false)
     {
         string endpoint = Endpoint(host, port);
 
@@ -1519,6 +1818,23 @@ internal sealed class ClusterRouter : IDisposable
             RuvioSocket opened = _open is null
                 ? await RuvioSocket.OpenAsync(host, port, _options, cancellationToken)
                 : await _open(host, port, cancellationToken);
+
+            if (replica)
+            {
+                // Redis replicas serve reads only to connections that sent READONLY; Ruvio replicas
+                // serve them anyway and answer OK.
+                try
+                {
+                    await opened.SendAsync(["READONLY"], cancellationToken);
+                }
+
+                catch
+                {
+                    opened.Dispose();
+
+                    throw;
+                }
+            }
 
             if (stale is { IsBroken: true })
             {
@@ -1570,10 +1886,56 @@ internal sealed class ClusterTopology
 {
     private readonly short[] _owners;
 
-    private ClusterTopology(short[] owners, IReadOnlyList<(string Host, int Port)> nodes)
+    private (string Host, int Port)?[] _reads = [];
+
+    private ClusterTopology(
+        short[] owners, IReadOnlyList<(string Host, int Port)> nodes, IReadOnlyList<List<(string Host, int Port)>> replicas)
     {
         _owners = owners;
         Nodes = nodes;
+        Replicas = replicas;
+        ReplicaSockets = new RuvioSocket?[nodes.Count];
+    }
+
+    /// <summary>Per node of <see cref="Nodes"/>: the replicas <c>CLUSTER SLOTS</c> lists after it.</summary>
+    public IReadOnlyList<List<(string Host, int Port)>> Replicas { get; }
+
+    /// <summary>Open replica sockets by node index, for the replica each node's reads go to.</summary>
+    internal RuvioSocket?[] ReplicaSockets { get; }
+
+    /// <summary>The replica a node's reads go to; null when it has none, the policy is primary, or it was skipped.</summary>
+    internal (string Host, int Port)? ReadReplica(int node) => (uint)node < (uint)_reads.Length ? _reads[node] : null;
+
+    /// <summary>Picks one replica per node, <paramref name="pick"/> modulo the replica count, kept until the next load.</summary>
+    internal void PickReplicas(int pick)
+    {
+        var reads = new (string Host, int Port)?[Nodes.Count];
+
+        for (int node = 0; node < reads.Length; node++)
+        {
+            List<(string Host, int Port)> replicas = Replicas[node];
+
+            if (replicas.Count > 0)
+            {
+                reads[node] = replicas[pick % replicas.Count];
+            }
+        }
+
+        _reads = reads;
+    }
+
+    /// <summary>Stops sending reads to the replica <paramref name="node"/> uses, and to the same replica of any other node.</summary>
+    internal void SkipReplica(int node)
+    {
+        (string Host, int Port)? skipped = ReadReplica(node);
+
+        for (int other = 0; other < _reads.Length; other++)
+        {
+            if (_reads[other] == skipped)
+            {
+                _reads[other] = null;
+            }
+        }
     }
 
     public IReadOnlyList<(string Host, int Port)> Nodes { get; }
@@ -1627,6 +1989,7 @@ internal sealed class ClusterTopology
         Array.Fill(owners, (short)-1);
 
         var nodes = new List<(string Host, int Port)>();
+        var replicas = new List<List<(string Host, int Port)>>();
 
         foreach (RespValue range in ranges.OrderBy(range => range.Items?[0].Integer ?? 0))
         {
@@ -1644,6 +2007,19 @@ internal sealed class ClusterTopology
             {
                 node = nodes.Count;
                 nodes.Add((host, port));
+                replicas.Add([]);
+            }
+
+            // Replicas follow the primary; one that cannot be read is skipped, not fatal.
+            for (int index = 3; index < fields.Count; index++)
+            {
+                if (fields[index].Items is { Count: >= 2 } replica
+                    && replica[0].AsString() is { Length: > 0 } replicaHost
+                    && replica[1].Kind is RespKind.Integer && replica[1].Integer is > 0 and <= 65535
+                    && !replicas[node].Contains((replicaHost, (int)replica[1].Integer)))
+                {
+                    replicas[node].Add((replicaHost, (int)replica[1].Integer));
+                }
             }
 
             long first = Math.Max(0, fields[0].Integer);
@@ -1655,6 +2031,6 @@ internal sealed class ClusterTopology
             }
         }
 
-        return new ClusterTopology(owners, nodes) { Sockets = new RuvioSocket?[nodes.Count] };
+        return new ClusterTopology(owners, nodes, replicas) { Sockets = new RuvioSocket?[nodes.Count] };
     }
 }

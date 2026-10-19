@@ -973,11 +973,14 @@ fn replica_follows_a_new_link_that_resends_queued_frames_and_resyncs_on_a_gap() 
         epoch: 0,
     };
     let ok = |next| {
-        crate::replication::encode_reply_with_history(
+        let mut reply = crate::replication::encode_reply_with_history(
             crate::replication::HandshakeStatus::Ok,
             next,
             &history,
-        )
+        );
+
+        reply.extend_from_slice(&crate::replication::encode_address(None));
+        reply
     };
     let (replica_address, replica_stop, replica) = serve_with(|config| {
         config.persistence = PersistenceConfig {

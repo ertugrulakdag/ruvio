@@ -171,6 +171,7 @@ const C_AUTH = cmd('AUTH');
 const C_SELECT = cmd('SELECT');
 const C_SETNAME = cmd('CLIENT', 'SETNAME');
 const C_HELLO = cmd('HELLO');
+const C_READONLY = cmd('READONLY');
 
 /** @internal The multiplexed transport behind a client. */
 export class Connection extends EventEmitter {
@@ -205,6 +206,8 @@ export class Connection extends EventEmitter {
   forceBinary = false;
   /** Database to restore on reconnect (tracks SELECT through the typed client). */
   db: number;
+  /** A cluster replica chosen for reads: `READONLY` is sent each time the socket is opened, and a `-LOADING` reply to a kept frame goes to the router. */
+  replica = false;
   // Cluster routing keeps, per pending single command, where its frame sits in the write slab
   // (not overwritten while the command waits for its reply), so a `-MOVED` reply can re-send it;
   // the router copies the frame before any wait, since a reconnect rewinds the slab.
@@ -584,6 +587,12 @@ export class Connection extends EventEmitter {
     }
     if (this.db !== 0) send(C_SELECT, [this.db]);
     if (o.name !== undefined) send(C_SETNAME, [o.name]);
+    if (this.replica) {
+      // Redis replicas serve reads only after READONLY; Ruvio replicas serve them anyway and answer OK.
+      e.begin(C_READONLY, 0);
+      e.endFrame();
+      this.enqueue(noop, noop, null, 0);
+    }
     this.schedule();
   }
 
@@ -722,7 +731,7 @@ export class Connection extends EventEmitter {
     }
     if (typeof res === 'function') {
       if (v instanceof RuvioError) {
-        if (fb !== null && v.code === 'MOVED') {
+        if (fb !== null && (v.code === 'MOVED' || (this.replica && (v.code === 'LOADING' || v.code === 'MASTERDOWN')))) {
           this.onMoved!(v, fb, this.rFO![i]!, this.rFN![i]!, tf, this.rFl[i]!, res as (x: unknown) => void, rej as (e: unknown) => void);
           return;
         }

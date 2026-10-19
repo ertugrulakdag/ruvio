@@ -23,6 +23,12 @@ public class RoutedRequest<T> extends Request<T> {
     public int frameLen;
     /** How many MOVED redirects this command has followed so far. */
     public byte redirects;
+    /** Set under a replica read policy: the command is a read (flagged readonly, not blocking). */
+    public boolean read;
+    /** Set while a pipeline holds the command: a keyed read, which may go to a replica when the whole pipeline reads. */
+    public boolean replicaOk;
+    /** The replica this command was sent to, or null; a {@code LOADING} reply from it sends the command on to the primary. */
+    public ClusterNode replica;
 
     /**
      * Creates a request.
@@ -49,13 +55,19 @@ public class RoutedRequest<T> extends Request<T> {
     }
 
     /**
-     * Follows a {@code -MOVED} reply when the redirect budget allows, otherwise completes exceptionally.
+     * Sends the command to the primary after a replica answered {@code LOADING}, follows a {@code -MOVED} reply
+     * when the redirect budget allows, otherwise completes exceptionally.
      *
      * @param error the failure
      */
     @Override
     public void fail(Throwable error) {
         ClusterRouter r = router;
+        ClusterNode from = replica;
+        if (from != null && r != null && frame != null && ClusterRouter.isLoading(error)) {
+            r.readAgain(this, from, error);
+            return;
+        }
         if (r != null && frame != null && redirects < ClusterRouter.MAX_REDIRECTS && ClusterRouter.isMoved(error)) {
             redirects++;
             r.redirect(this, error);

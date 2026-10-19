@@ -1718,25 +1718,25 @@ async fn dispatch_inner<'s>(
     if !session.is_multi() {
         match &command {
             Command::ClusterSlots => {
-                write_cluster_slots(output, state.cluster_view())?;
+                write_cluster_slots(output, state.cluster_view(), &state.shard_peers())?;
 
                 return Ok(());
             }
 
             Command::ClusterNodes => {
-                write_cluster_nodes(output, state.cluster_view())?;
+                write_cluster_nodes(output, state.cluster_view(), &state.shard_peers())?;
 
                 return Ok(());
             }
 
             Command::ClusterShards => {
-                write_cluster_shards(output, state.cluster_view())?;
+                write_cluster_shards(output, state.cluster_view(), &state.shard_peers())?;
 
                 return Ok(());
             }
 
             Command::ClusterInfo => {
-                write_cluster_info(output, state.cluster_view())?;
+                write_cluster_info(output, state.cluster_view(), &state.shard_peers())?;
 
                 return Ok(());
             }

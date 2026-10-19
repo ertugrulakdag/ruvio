@@ -10,6 +10,7 @@ use std::{
 
 use crate::{
     persistence::{CheckpointManager, PersistenceError, ShardCheckpoint, ShardFile},
+    replication::{Endpoint, ReplicaPeer},
     routing::SlotTable,
     time::UnixMillis,
 };
@@ -28,9 +29,70 @@ pub(crate) struct ClusterRoute {
     pub slots: SlotTable,
 }
 
+/// The other nodes serving one shard's slots, as this node knows them: a primary's
+/// replicas that announced an address, or on a replica the primary it follows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ShardPeers {
+    /// Set on a replica that has been accepted by a primary that announced itself.
+    pub primary: Option<Endpoint>,
+    pub replicas: Vec<ReplicaPeer>,
+}
+
+/// One node of a shard in the cluster answers.
+struct Node {
+    host: String,
+    port: u16,
+    id: String,
+    primary: bool,
+    /// Sequence the node acknowledged; 0 for the primary, as before replicas were listed.
+    offset: u64,
+}
+
+/// The nodes that serve `shard_id`'s slots, primary first.
+fn shard_nodes(route: &ClusterRoute, peers: &[ShardPeers], shard_id: usize) -> Vec<Node> {
+    let host = route.advertised_host.clone();
+    let port = route.advertised_port.wrapping_add(shard_id as u16);
+    let own = |primary| Node {
+        id: node_id(&host, port),
+        host: host.clone(),
+        port,
+        primary,
+        offset: 0,
+    };
+    let peers = peers.get(shard_id);
+
+    if let Some(primary) = peers.and_then(|peers| peers.primary.as_ref()) {
+        return vec![
+            Node {
+                id: node_id(&primary.host, primary.port),
+                host: primary.host.clone(),
+                port: primary.port,
+                primary: true,
+                offset: 0,
+            },
+            own(false),
+        ];
+    }
+
+    let mut nodes = vec![own(true)];
+
+    for replica in peers.map_or(&[][..], |peers| &peers.replicas) {
+        nodes.push(Node {
+            id: node_id(&replica.endpoint.host, replica.endpoint.port),
+            host: replica.endpoint.host.clone(),
+            port: replica.endpoint.port,
+            primary: false,
+            offset: replica.sequence,
+        });
+    }
+
+    nodes
+}
+
 pub(crate) fn write_cluster_slots(
     output: &mut impl Write,
     route: Option<&ClusterRoute>,
+    peers: &[ShardPeers],
 ) -> io::Result<()> {
     let Some(route) = route else {
         output.write_all(b"-ERR cluster mode is disabled\r\n")?;
@@ -39,21 +101,23 @@ pub(crate) fn write_cluster_slots(
     };
 
     let ranges = route.slots.ranges();
+    let nodes: Vec<Vec<Node>> = (0..route.shard_count)
+        .map(|shard_id| shard_nodes(route, peers, shard_id))
+        .collect();
 
     write!(output, "*{}\r\n", ranges.len())?;
 
     for (start, end, shard_id) in ranges {
-        let port = route.advertised_port + shard_id as u16;
-        let node_id = node_id(shard_id);
+        let nodes = &nodes[shard_id];
 
-        write!(
-            output,
-            "*3\r\n:{start}\r\n:{end}\r\n*3\r\n${}\r\n{}\r\n:{port}\r\n${}\r\n{}\r\n",
-            route.advertised_host.len(),
-            route.advertised_host,
-            node_id.len(),
-            node_id
-        )?;
+        write!(output, "*{}\r\n:{start}\r\n:{end}\r\n", 2 + nodes.len())?;
+
+        for node in nodes {
+            write!(output, "*3\r\n")?;
+            write_bulk(output, node.host.as_bytes())?;
+            write!(output, ":{}\r\n", node.port)?;
+            write_bulk(output, node.id.as_bytes())?;
+        }
     }
 
     Ok(())
@@ -62,6 +126,7 @@ pub(crate) fn write_cluster_slots(
 pub(crate) fn write_cluster_nodes(
     output: &mut impl Write,
     route: Option<&ClusterRoute>,
+    peers: &[ShardPeers],
 ) -> io::Result<()> {
     let Some(route) = route else {
         output.write_all(b"-ERR cluster mode is disabled\r\n")?;
@@ -69,8 +134,9 @@ pub(crate) fn write_cluster_nodes(
         return Ok(());
     };
 
-    let mut nodes = Vec::new();
+    let mut lines = Vec::new();
     let ranges = route.slots.ranges();
+    let myself = my_id(route);
 
     for shard_id in 0..route.shard_count {
         let slots = shard_ranges(&ranges, shard_id)
@@ -82,29 +148,41 @@ pub(crate) fn write_cluster_nodes(
                 }
             })
             .collect::<String>();
-        let port = route.advertised_port + shard_id as u16;
-        let bus_port = u32::from(port) + 10_000;
-        let node_id = node_id(shard_id);
-        let flags = if shard_id == route.shard_id {
-            "myself,master"
-        } else {
-            "master"
-        };
+        let nodes = shard_nodes(route, peers, shard_id);
+        let primary_id = nodes[0].id.clone();
 
-        writeln!(
-            nodes,
-            "{node_id} {}:{port}@{bus_port} {flags} - 0 0 {} connected{slots}",
-            route.advertised_host,
-            shard_id + 1
-        )?;
+        for node in nodes {
+            let bus_port = u32::from(node.port) + 10_000;
+            let role = if node.primary { "master" } else { "slave" };
+            let flags = if node.id == myself {
+                format!("myself,{role}")
+            } else {
+                role.to_owned()
+            };
+            let (master, slots) = if node.primary {
+                ("-", slots.as_str())
+            } else {
+                (primary_id.as_str(), "")
+            };
+
+            writeln!(
+                lines,
+                "{} {}:{}@{bus_port} {flags} {master} 0 0 {} connected{slots}",
+                node.id,
+                node.host,
+                node.port,
+                shard_id + 1
+            )?;
+        }
     }
 
-    crate::engine::write_response(output, crate::engine::Response::Bulk(Some(nodes.into())))
+    crate::engine::write_response(output, crate::engine::Response::Bulk(Some(lines.into())))
 }
 
 pub(crate) fn write_cluster_shards(
     output: &mut impl Write,
     route: Option<&ClusterRoute>,
+    peers: &[ShardPeers],
 ) -> io::Result<()> {
     let Some(route) = route else {
         output.write_all(b"-ERR cluster mode is disabled\r\n")?;
@@ -117,29 +195,39 @@ pub(crate) fn write_cluster_shards(
     write!(output, "*{}\r\n", route.shard_count)?;
 
     for shard_id in 0..route.shard_count {
-        let port = route.advertised_port + shard_id as u16;
-        let host = &route.advertised_host;
         let owned: Vec<(u16, u16)> = shard_ranges(&ranges, shard_id).collect();
+        let nodes = shard_nodes(route, peers, shard_id);
 
         write!(output, "*4\r\n$5\r\nslots\r\n*{}\r\n", owned.len() * 2)?;
         for (start, end) in owned {
             write!(output, ":{start}\r\n:{end}\r\n")?;
         }
-        output.write_all(b"$5\r\nnodes\r\n*1\r\n*14\r\n")?;
-        write_bulk(output, b"id")?;
-        write_bulk(output, node_id(shard_id).as_bytes())?;
-        write_bulk(output, b"port")?;
-        write!(output, ":{port}\r\n")?;
-        write_bulk(output, b"ip")?;
-        write_bulk(output, host.as_bytes())?;
-        write_bulk(output, b"endpoint")?;
-        write_bulk(output, host.as_bytes())?;
-        write_bulk(output, b"role")?;
-        write_bulk(output, b"master")?;
-        write_bulk(output, b"replication-offset")?;
-        output.write_all(b":0\r\n")?;
-        write_bulk(output, b"health")?;
-        write_bulk(output, b"online")?;
+        write!(output, "$5\r\nnodes\r\n*{}\r\n", nodes.len())?;
+
+        for node in nodes {
+            output.write_all(b"*14\r\n")?;
+            write_bulk(output, b"id")?;
+            write_bulk(output, node.id.as_bytes())?;
+            write_bulk(output, b"port")?;
+            write!(output, ":{}\r\n", node.port)?;
+            write_bulk(output, b"ip")?;
+            write_bulk(output, node.host.as_bytes())?;
+            write_bulk(output, b"endpoint")?;
+            write_bulk(output, node.host.as_bytes())?;
+            write_bulk(output, b"role")?;
+            write_bulk(
+                output,
+                if node.primary {
+                    &b"master"[..]
+                } else {
+                    &b"replica"[..]
+                },
+            )?;
+            write_bulk(output, b"replication-offset")?;
+            write!(output, ":{}\r\n", node.offset)?;
+            write_bulk(output, b"health")?;
+            write_bulk(output, b"online")?;
+        }
     }
 
     Ok(())
@@ -148,6 +236,7 @@ pub(crate) fn write_cluster_shards(
 pub(crate) fn write_cluster_info(
     output: &mut impl Write,
     route: Option<&ClusterRoute>,
+    peers: &[ShardPeers],
 ) -> io::Result<()> {
     let Some(route) = route else {
         output.write_all(b"-ERR cluster mode is disabled\r\n")?;
@@ -155,9 +244,12 @@ pub(crate) fn write_cluster_info(
         return Ok(());
     };
 
-    let nodes = route.shard_count;
+    let size = route.shard_count;
+    let known: usize = (0..size)
+        .map(|shard_id| shard_nodes(route, peers, shard_id).len())
+        .sum();
     let info = format!(
-        "cluster_enabled:1\r\ncluster_state:ok\r\ncluster_slots_assigned:16384\r\ncluster_slots_ok:16384\r\ncluster_slots_pfail:0\r\ncluster_slots_fail:0\r\ncluster_known_nodes:{nodes}\r\ncluster_size:{nodes}\r\ncluster_current_epoch:{nodes}\r\ncluster_my_epoch:{}\r\n",
+        "cluster_enabled:1\r\ncluster_state:ok\r\ncluster_slots_assigned:16384\r\ncluster_slots_ok:16384\r\ncluster_slots_pfail:0\r\ncluster_slots_fail:0\r\ncluster_known_nodes:{known}\r\ncluster_size:{size}\r\ncluster_current_epoch:{size}\r\ncluster_my_epoch:{}\r\n",
         route.shard_id + 1
     );
 
@@ -174,7 +266,7 @@ pub(crate) fn write_cluster_myid(
         return Ok(());
     };
 
-    write_bulk(output, node_id(route.shard_id).as_bytes())
+    write_bulk(output, my_id(route).as_bytes())
 }
 
 /// `READONLY` and `READWRITE` have nothing to switch: every shard is a primary.
@@ -213,8 +305,22 @@ fn shard_ranges(
         .map(|(start, end, _)| (*start, *end))
 }
 
-fn node_id(shard_id: usize) -> String {
-    format!("{:040x}", shard_id + 1)
+/// A node's id: the SHA-1 of the address clients reach it on, so it differs between the
+/// shards of one process and between processes, and survives a restart on the same address.
+fn node_id(host: &str, port: u16) -> String {
+    use sha1::{Digest, Sha1};
+
+    let digest = Sha1::digest(format!("{host}:{port}").as_bytes());
+
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The id of the shard answering, at its announced address.
+fn my_id(route: &ClusterRoute) -> String {
+    node_id(
+        &route.advertised_host,
+        route.advertised_port.wrapping_add(route.shard_id as u16),
+    )
 }
 
 fn write_bulk(output: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
@@ -897,19 +1003,21 @@ mod tests {
     fn disabled_cluster_commands_are_errors() {
         let mut slots = Vec::new();
 
-        write_cluster_slots(&mut slots, None).unwrap();
+        write_cluster_slots(&mut slots, None, &[]).unwrap();
         assert_eq!(slots, b"-ERR cluster mode is disabled\r\n");
         let mut nodes = Vec::new();
 
-        write_cluster_nodes(&mut nodes, None).unwrap();
+        write_cluster_nodes(&mut nodes, None, &[]).unwrap();
         assert_eq!(nodes, b"-ERR cluster mode is disabled\r\n");
 
-        for write in [
-            write_cluster_shards,
-            write_cluster_info,
-            write_cluster_myid,
-            write_read_mode,
-        ] {
+        for write in [write_cluster_shards, write_cluster_info] {
+            let mut encoded = Vec::new();
+
+            write(&mut encoded, None, &[]).unwrap();
+            assert_eq!(encoded, b"-ERR cluster mode is disabled\r\n");
+        }
+
+        for write in [write_cluster_myid, write_read_mode] {
             let mut encoded = Vec::new();
 
             write(&mut encoded, None).unwrap();
@@ -927,7 +1035,7 @@ mod tests {
     fn shards_list_each_owner_with_its_slot_range() {
         let mut encoded = Vec::new();
 
-        write_cluster_shards(&mut encoded, Some(&two_shard_route(1))).unwrap();
+        write_cluster_shards(&mut encoded, Some(&two_shard_route(1)), &[]).unwrap();
         let text = String::from_utf8(encoded).unwrap();
 
         assert!(
@@ -948,7 +1056,7 @@ mod tests {
     fn slots_cover_the_full_hash_space_on_consecutive_ports() {
         let mut encoded = Vec::new();
 
-        write_cluster_slots(&mut encoded, Some(&two_shard_route(0))).unwrap();
+        write_cluster_slots(&mut encoded, Some(&two_shard_route(0)), &[]).unwrap();
         let text = String::from_utf8(encoded).unwrap();
 
         assert!(text.starts_with("*2\r\n"), "{text}");
@@ -962,7 +1070,7 @@ mod tests {
     fn nodes_marks_the_receiving_shard_as_myself() {
         let mut encoded = Vec::new();
 
-        write_cluster_nodes(&mut encoded, Some(&two_shard_route(0))).unwrap();
+        write_cluster_nodes(&mut encoded, Some(&two_shard_route(0)), &[]).unwrap();
         let text = String::from_utf8(encoded).unwrap();
 
         assert!(
@@ -1429,7 +1537,7 @@ mod tests {
         for shard_id in 0..route.shard_count {
             let (start, end) = slot_range_for_shard(shard_id, route.shard_count);
             let port = route.advertised_port + shard_id as u16;
-            let id = node_id(shard_id);
+            let id = node_id(host, port);
             let flags = if shard_id == route.shard_id {
                 "myself,master"
             } else {
@@ -1473,15 +1581,15 @@ mod tests {
             let (slots, nodes, shards) = formula_answers(&route);
             let mut written = Vec::new();
 
-            write_cluster_slots(&mut written, Some(&route)).unwrap();
+            write_cluster_slots(&mut written, Some(&route), &[]).unwrap();
             assert_eq!(String::from_utf8(written).unwrap(), slots, "{count} shards");
             let mut written = Vec::new();
 
-            write_cluster_nodes(&mut written, Some(&route)).unwrap();
+            write_cluster_nodes(&mut written, Some(&route), &[]).unwrap();
             assert_eq!(String::from_utf8(written).unwrap(), nodes, "{count} shards");
             let mut written = Vec::new();
 
-            write_cluster_shards(&mut written, Some(&route)).unwrap();
+            write_cluster_shards(&mut written, Some(&route), &[]).unwrap();
             assert_eq!(
                 String::from_utf8(written).unwrap(),
                 shards,
@@ -1504,7 +1612,7 @@ mod tests {
 
         let mut slots = Vec::new();
 
-        write_cluster_slots(&mut slots, Some(&route)).unwrap();
+        write_cluster_slots(&mut slots, Some(&route), &[]).unwrap();
         let slots = String::from_utf8(slots).unwrap();
 
         // Shard 0 now owns 0-99 and 101-8191, shard 1 owns 100 and 8192-16383.
@@ -1514,7 +1622,7 @@ mod tests {
 
         let mut nodes = Vec::new();
 
-        write_cluster_nodes(&mut nodes, Some(&route)).unwrap();
+        write_cluster_nodes(&mut nodes, Some(&route), &[]).unwrap();
         let nodes = String::from_utf8(nodes).unwrap();
 
         assert!(nodes.contains("connected 0-99 101-8191\n"), "{nodes}");
@@ -1522,7 +1630,7 @@ mod tests {
 
         let mut shards = Vec::new();
 
-        write_cluster_shards(&mut shards, Some(&route)).unwrap();
+        write_cluster_shards(&mut shards, Some(&route), &[]).unwrap();
         let shards = String::from_utf8(shards).unwrap();
 
         assert!(

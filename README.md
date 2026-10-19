@@ -267,7 +267,7 @@ Docker RSS is not the bare-metal result; the memory detail is in [the string mem
 | [Configuration](https://ruviodb.com/docs/configuration/) | TOML, environment, ACL users |
 | [Commands](https://ruviodb.com/docs/commands/) | The supported surface |
 | [Durability](https://ruviodb.com/docs/recovery/) | Acknowledgement boundaries |
-| [Replication](https://ruviodb.com/docs/recovery/) | WAL tail, no failover |
+| [Replication](https://ruviodb.com/docs/recovery/) | WAL tail, reads from replicas, no failover |
 | [Operations](https://ruviodb.com/docs/observability/) | Limits, metrics, shutdown |
 | [Testing and evidence](https://ruviodb.com/docs/testing/) | Test coverage, recorded results, open production evidence gates |
 | [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | What the process does and does not defend |

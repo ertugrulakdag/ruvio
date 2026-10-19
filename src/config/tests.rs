@@ -1013,6 +1013,7 @@ fn every_template_setting_answers_config_get() {
         ("protocol.max_key_bytes", "max-key-bytes"),
         ("protocol.max_pipeline_commands", "max-pipeline-commands"),
         ("protocol.max_value_bytes", "max-value-bytes"),
+        ("replication.announced", "replica-announced"),
         ("replication.min_replicas_max_lag", "min-replicas-max-lag"),
         ("replication.min_replicas_to_write", "min-replicas-to-write"),
         ("replication.role", "replication-role"),
