@@ -1232,6 +1232,7 @@ pub fn command_acl_name(command: &Command<'_>) -> &'static str {
             ..
         } => "zdiffstore",
         Command::HashSet { .. } => "hset",
+        Command::HashMSet { .. } => "hmset",
         Command::HashDelete { .. } => "hdel",
         Command::HashGet { .. } => "hget",
         Command::HashMGet { .. } => "hmget",

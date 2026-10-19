@@ -384,7 +384,7 @@ pub(super) fn validate_command_payloads(
             }
         }
 
-        Command::HashSet { key, pairs } => {
+        Command::HashSet { key, pairs } | Command::HashMSet { key, pairs } => {
             validate_key(key, limits)?;
 
             for (field, value) in pairs {
