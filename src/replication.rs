@@ -26,15 +26,20 @@ use crate::{
 pub const HANDSHAKE_MAGIC: &[u8; 8] = b"RUVREP01";
 /// Handshake versions this build speaks; the version also names the request: resume from the
 /// replica's log, resync from a snapshot at a sequence, or resync an incomplete image.
-pub const VERSION_RESUME: u16 = 6;
-pub const VERSION_RESYNC: u16 = 7;
-pub const VERSION_RESYNC_INCOMPLETE: u16 = 8;
+pub const VERSION_RESUME: u16 = 9;
+pub const VERSION_RESYNC: u16 = 10;
+pub const VERSION_RESYNC_INCOMPLETE: u16 = 11;
 const SUPPORTED_VERSIONS: std::ops::RangeInclusive<u16> =
     VERSION_RESUME..=VERSION_RESYNC_INCOMPLETE;
 /// Versions of builds whose handshake ended after the password and whose reply carried no
 /// history id. They are refused in their own reply format so they log the refusal.
 const LEGACY_VERSIONS: std::ops::RangeInclusive<u16> = 1..=5;
 const LEGACY_REPLY_LEN: usize = 8 + 2 + 8 + CHECKSUM_LEN;
+/// Versions of builds whose handshake and reply carried a history id but no epoch. Refused in
+/// their own formats, like the legacy ones.
+const HISTORY_ONLY_VERSIONS: std::ops::RangeInclusive<u16> = 6..=8;
+const HISTORY_ONLY_TAIL: usize = HISTORY_LEN + 4;
+const HISTORY_ONLY_REPLY_LEN: usize = 8 + 2 + 8 + HISTORY_LEN + CHECKSUM_LEN;
 const VERSION_MISMATCH: &str =
     "primary and replicas must run the same Ruvio version (replication handshake version mismatch)";
 pub const READONLY_LINE: &[u8] = b"READONLY You can't write against a read only replica.";
@@ -61,10 +66,11 @@ const PASSWORD_LEN_OFFSET: usize = 22;
 pub type HistoryId = [u8; HISTORY_LEN];
 
 pub const HISTORY_LEN: usize = 16;
-/// History id (16) and shard count (4) follow the password; the checksum closes the frame.
-const HANDSHAKE_TAIL: usize = HISTORY_LEN + 4;
+/// History id (16), shard count (4) and epoch (8) follow the password; the checksum closes
+/// the frame.
+const HANDSHAKE_TAIL: usize = HISTORY_LEN + 4 + 8;
 const HANDSHAKE_MIN: usize = HANDSHAKE_PREFIX + HANDSHAKE_TAIL + CHECKSUM_LEN;
-const REPLY_LEN: usize = 8 + 2 + 8 + HISTORY_LEN + CHECKSUM_LEN;
+const REPLY_LEN: usize = 8 + 2 + 8 + HISTORY_LEN + 8 + CHECKSUM_LEN;
 const CHECKSUM_LEN: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,6 +86,8 @@ pub enum HandshakeStatus {
     Snapshot = 8,
     /// The replica follows another write history than this primary's.
     History = 9,
+    /// The other side has seen a newer epoch: this primary was replaced.
+    Stale = 10,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,6 +99,8 @@ pub struct Handshake {
     /// History of the primary this replica last followed; all zero when it has none.
     pub history: HistoryId,
     pub shard_count: u32,
+    /// Highest epoch this replica has seen; a primary below it was replaced.
+    pub epoch: u64,
 }
 
 pub fn encode_handshake(handshake: &Handshake) -> Result<Vec<u8>, ()> {
@@ -108,6 +118,7 @@ pub fn encode_handshake(handshake: &Handshake) -> Result<Vec<u8>, ()> {
     bytes.extend_from_slice(&handshake.password);
     bytes.extend_from_slice(&handshake.history);
     put_u32(&mut bytes, handshake.shard_count);
+    put_u64(&mut bytes, handshake.epoch);
     append_checksum(&mut bytes);
     Ok(bytes)
 }
@@ -143,6 +154,7 @@ pub fn decode_handshake(bytes: &[u8]) -> Result<Handshake, FrameError> {
 
     history.copy_from_slice(&bytes[tail..tail + HISTORY_LEN]);
     let shard_count = read_u32(bytes, tail + HISTORY_LEN);
+    let epoch = read_u64(bytes, tail + HISTORY_LEN + 4);
 
     Ok(Handshake {
         version,
@@ -151,24 +163,38 @@ pub fn decode_handshake(bytes: &[u8]) -> Result<Handshake, FrameError> {
         password,
         history,
         shard_count,
+        epoch,
     })
 }
 
 pub fn encode_reply(status: HandshakeStatus, next_sequence: u64) -> Vec<u8> {
-    encode_reply_with_history(status, next_sequence, &[0; HISTORY_LEN])
+    encode_reply_with_history(status, next_sequence, &Origin::NONE)
 }
 
 pub fn encode_reply_with_history(
     status: HandshakeStatus,
     next_sequence: u64,
-    history: &HistoryId,
+    origin: &Origin,
 ) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(REPLY_LEN);
 
     bytes.extend_from_slice(HANDSHAKE_MAGIC);
     put_u16(&mut bytes, status as u16);
     put_u64(&mut bytes, next_sequence);
-    bytes.extend_from_slice(history);
+    bytes.extend_from_slice(&origin.history);
+    put_u64(&mut bytes, origin.epoch);
+    append_checksum(&mut bytes);
+    bytes
+}
+
+/// A refusal in the reply format of builds with a history id but no epoch.
+fn encode_history_only_reply(status: HandshakeStatus) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(HISTORY_ONLY_REPLY_LEN);
+
+    bytes.extend_from_slice(HANDSHAKE_MAGIC);
+    put_u16(&mut bytes, status as u16);
+    put_u64(&mut bytes, 0);
+    bytes.extend_from_slice(&[0; HISTORY_LEN]);
     append_checksum(&mut bytes);
     bytes
 }
@@ -192,7 +218,7 @@ pub fn decode_reply(bytes: &[u8]) -> Result<(HandshakeStatus, u64), FrameError> 
 
 pub fn decode_reply_with_history(
     bytes: &[u8],
-) -> Result<(HandshakeStatus, u64, HistoryId), FrameError> {
+) -> Result<(HandshakeStatus, u64, Origin), FrameError> {
     if bytes.len() != REPLY_LEN {
         return Err("handshake reply length");
     }
@@ -210,8 +236,9 @@ pub fn decode_reply_with_history(
     let mut history = [0; HISTORY_LEN];
 
     history.copy_from_slice(&bytes[18..18 + HISTORY_LEN]);
+    let epoch = read_u64(bytes, 18 + HISTORY_LEN);
 
-    Ok((status, next_sequence, history))
+    Ok((status, next_sequence, Origin { history, epoch }))
 }
 
 /// Write-history identity of `data_dir`: random, created with the directory, so a wiped or
@@ -260,6 +287,115 @@ pub fn upstream_file_name(shard_id: u32) -> String {
     format!("UPSTREAM_{shard_id:04}")
 }
 
+/// A primary's write history and epoch, as its replicas see them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Origin {
+    pub history: HistoryId,
+    pub epoch: u64,
+}
+
+impl Origin {
+    pub const NONE: Self = Self {
+        history: [0; HISTORY_LEN],
+        epoch: 0,
+    };
+}
+
+/// The history one primary shard writes, and the history it forked from when a replica was
+/// promoted: replicas of the old primary that did not pass the fork continue from their log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Lineage {
+    pub origin: Origin,
+    /// History this one continues up to `fork_sequence`; zeros when it has none.
+    pub parent: HistoryId,
+    pub fork_sequence: u64,
+}
+
+impl Lineage {
+    /// A history of its own with no parent: a new primary, or one written by an older build.
+    pub fn root(history: HistoryId) -> Self {
+        Self {
+            origin: Origin { history, epoch: 0 },
+            parent: [0; HISTORY_LEN],
+            fork_sequence: 0,
+        }
+    }
+
+    /// Whether a replica that followed `history` through `after` can continue from this log.
+    /// A replica past the fork holds records this primary never saw and must take a copy.
+    pub fn continues(&self, history: &HistoryId, after: u64) -> bool {
+        *history == self.origin.history
+            || (self.parent != [0; HISTORY_LEN]
+                && *history == self.parent
+                && after <= self.fork_sequence)
+    }
+}
+
+const LINEAGE_LEN: usize = HISTORY_LEN * 2 + 8 + 8;
+
+/// Name of the file holding primary shard `shard_id`'s lineage.
+pub fn lineage_file_name(shard_id: u32) -> String {
+    format!("LINEAGE_{shard_id:04}")
+}
+
+/// The lineage primary shard `shard_id` writes, deciding it on the shard's first start as a
+/// writer. A shard whose last role was replica (it has an upstream record and no lineage of
+/// its own) is being promoted: it forks a new history from the one it followed, at
+/// `last_sequence`, one epoch above it. A shard with neither continues the directory's
+/// `HISTORY`, as older builds did.
+pub fn resolve_lineage(data_dir: &Path, shard_id: u32, last_sequence: u64) -> io::Result<Lineage> {
+    let path = data_dir.join(lineage_file_name(shard_id));
+
+    if let Some(lineage) = read_lineage_file(&path) {
+        return Ok(lineage);
+    }
+
+    let lineage = match read_origin_file(&data_dir.join(upstream_file_name(shard_id))) {
+        Some(followed) => Lineage {
+            origin: Origin {
+                history: random_history_id(),
+                epoch: followed.epoch.saturating_add(1),
+            },
+            parent: followed.history,
+            fork_sequence: last_sequence,
+        },
+        None => Lineage::root(load_or_create_history(data_dir)?),
+    };
+
+    let mut bytes = Vec::with_capacity(LINEAGE_LEN);
+
+    bytes.extend_from_slice(&lineage.origin.history);
+    bytes.extend_from_slice(&lineage.parent);
+    put_u64(&mut bytes, lineage.fork_sequence);
+    put_u64(&mut bytes, lineage.origin.epoch);
+    write_durably(&path, &bytes)?;
+
+    Ok(lineage)
+}
+
+fn read_lineage_file(path: &Path) -> Option<Lineage> {
+    let bytes = std::fs::read(path).ok()?;
+
+    if bytes.len() != LINEAGE_LEN {
+        return None;
+    }
+
+    let mut history = [0; HISTORY_LEN];
+    let mut parent = [0; HISTORY_LEN];
+
+    history.copy_from_slice(&bytes[..HISTORY_LEN]);
+    parent.copy_from_slice(&bytes[HISTORY_LEN..2 * HISTORY_LEN]);
+
+    Some(Lineage {
+        origin: Origin {
+            history,
+            epoch: read_u64(&bytes, 2 * HISTORY_LEN + 8),
+        },
+        parent,
+        fork_sequence: read_u64(&bytes, 2 * HISTORY_LEN),
+    })
+}
+
 /// History of the primary shard `shard_id` of this replica last synchronised from; zeros when
 /// unknown, which makes the primary refuse a resume and send a full copy.
 ///
@@ -267,26 +403,66 @@ pub fn upstream_file_name(shard_id: u32) -> String {
 /// `HISTORY`, which is what it continues. A directory with the older shared `UPSTREAM` file
 /// cannot tell which shard that record was written for, so it claims nothing: each shard
 /// takes one full copy and records its own id.
+#[cfg(test)]
 pub fn upstream_history(data_dir: &Path, shard_id: u32) -> HistoryId {
-    read_history_file(&data_dir.join(upstream_file_name(shard_id)))
+    upstream_origin(data_dir, shard_id).history
+}
+
+/// History and epoch of the primary shard `shard_id` last synchronised from (see
+/// [`upstream_history`]); the epoch is zero when unknown.
+pub fn upstream_origin(data_dir: &Path, shard_id: u32) -> Origin {
+    read_origin_file(&data_dir.join(upstream_file_name(shard_id)))
         .or_else(|| {
             if data_dir.join("UPSTREAM").exists() {
                 None
             } else {
                 read_history_file(&data_dir.join("HISTORY"))
+                    .map(|history| Origin { history, epoch: 0 })
             }
         })
-        .unwrap_or([0; HISTORY_LEN])
+        .unwrap_or(Origin::NONE)
 }
 
-/// Records that shard `shard_id`'s log now continues history `id`. Called only once the log
-/// really does: on a resume the primary accepted, or after a snapshot from it is installed.
-pub fn record_upstream_history(data_dir: &Path, shard_id: u32, id: &HistoryId) -> io::Result<()> {
-    if upstream_history(data_dir, shard_id) == *id {
-        return Ok(());
+/// Records that shard `shard_id`'s log now continues `origin`'s history. Called only once the
+/// log really does: on a resume the primary accepted, or after a snapshot from it is
+/// installed. The shard no longer writes a history of its own, so its lineage goes: started as
+/// a writer again, it forks from `origin`.
+pub fn record_upstream_history(data_dir: &Path, shard_id: u32, origin: &Origin) -> io::Result<()> {
+    let path = data_dir.join(upstream_file_name(shard_id));
+
+    if read_origin_file(&path) != Some(*origin) {
+        let mut bytes = Vec::with_capacity(HISTORY_LEN + 8);
+
+        bytes.extend_from_slice(&origin.history);
+        put_u64(&mut bytes, origin.epoch);
+        write_durably(&path, &bytes)?;
     }
 
-    write_history_file(&data_dir.join(upstream_file_name(shard_id)), id)
+    match std::fs::remove_file(data_dir.join(lineage_file_name(shard_id))) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
+/// An upstream record: a history id, followed by the epoch in files this build writes.
+fn read_origin_file(path: &Path) -> Option<Origin> {
+    let bytes = std::fs::read(path).ok()?;
+    let mut history = [0; HISTORY_LEN];
+
+    match bytes.len() {
+        HISTORY_LEN => {
+            history.copy_from_slice(&bytes);
+            Some(Origin { history, epoch: 0 })
+        }
+        len if len == HISTORY_LEN + 8 => {
+            history.copy_from_slice(&bytes[..HISTORY_LEN]);
+            Some(Origin {
+                history,
+                epoch: read_u64(&bytes, HISTORY_LEN),
+            })
+        }
+        _ => None,
+    }
 }
 
 fn read_history_file(path: &Path) -> Option<HistoryId> {
@@ -295,10 +471,10 @@ fn read_history_file(path: &Path) -> Option<HistoryId> {
     <HistoryId>::try_from(bytes.as_slice()).ok()
 }
 
-fn write_history_file(path: &Path, id: &HistoryId) -> io::Result<()> {
+fn write_durably(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temporary = path.with_extension("tmp");
 
-    std::fs::write(&temporary, id)?;
+    std::fs::write(&temporary, bytes)?;
     // Write access: Windows refuses to flush a read-only handle.
     std::fs::OpenOptions::new()
         .write(true)
@@ -929,6 +1105,7 @@ fn status_from_u16(value: u16) -> Result<HandshakeStatus, FrameError> {
         7 => Ok(HandshakeStatus::Local),
         8 => Ok(HandshakeStatus::Snapshot),
         9 => Ok(HandshakeStatus::History),
+        10 => Ok(HandshakeStatus::Stale),
         _ => Err("unknown handshake reply status"),
     }
 }
@@ -984,7 +1161,7 @@ pub struct Shipment {
     pub fanout: Arc<PublishFanout>,
     pub snapshot_max_bytes: u64,
     pub shard_count: u32,
-    pub history: HistoryId,
+    pub lineage: Lineage,
     /// Request a coordinated checkpoint after a rejected delta; never used by ordinary streams.
     pub snapshot_requests: Arc<AtomicU64>,
 }
@@ -1146,7 +1323,7 @@ pub enum ReplicaDelivery {
         hot: Option<Vec<u8>>,
         catchup_through: u64,
         /// The primary's history: the replica records it once the snapshot is installed.
-        history: HistoryId,
+        history: Origin,
     },
     CaughtUp(u64),
 }
@@ -1389,6 +1566,8 @@ fn serve_replica(
             );
             let reply = if LEGACY_VERSIONS.contains(&version) {
                 encode_legacy_reply(HandshakeStatus::Version)
+            } else if HISTORY_ONLY_VERSIONS.contains(&version) {
+                encode_history_only_reply(HandshakeStatus::Version)
             } else {
                 encode_reply(HandshakeStatus::Version, 0)
             };
@@ -1432,9 +1611,28 @@ fn serve_replica(
     let forced_snapshot = handshake.version != VERSION_RESUME;
     let incomplete = handshake.version == VERSION_RESYNC_INCOMPLETE;
 
-    // A replica that resumes from its own log must have followed this very history; a
-    // wiped, restored or unrelated primary can reuse the same sequence numbers.
-    if !forced_snapshot && handshake.after_sequence > 0 && handshake.history != shipment.history {
+    // A replica that has seen a newer epoch follows a primary that replaced this one.
+    if handshake.epoch > shipment.lineage.origin.epoch {
+        warn!(
+            shard_id = shipment.shard_id,
+            epoch = shipment.lineage.origin.epoch,
+            replica_epoch = handshake.epoch,
+            "a replica has seen a newer primary; this one was replaced"
+        );
+        refuse_handshake(&mut stream, HandshakeStatus::Stale)?;
+
+        return Ok(());
+    }
+
+    // A replica that resumes from its own log must have followed this very history, or the
+    // one it forked from no further than the fork; a wiped, restored or unrelated primary
+    // can reuse the same sequence numbers.
+    if !forced_snapshot
+        && handshake.after_sequence > 0
+        && !shipment
+            .lineage
+            .continues(&handshake.history, handshake.after_sequence)
+    {
         refuse_handshake(&mut stream, HandshakeStatus::History)?;
 
         return Ok(());
@@ -1503,7 +1701,11 @@ fn serve_replica(
 
             if !write_live(
                 &mut stream,
-                &encode_reply_with_history(HandshakeStatus::Snapshot, through, &shipment.history),
+                &encode_reply_with_history(
+                    HandshakeStatus::Snapshot,
+                    through,
+                    &shipment.lineage.origin,
+                ),
                 stop,
             )? {
                 return Ok(());
@@ -1565,7 +1767,7 @@ fn serve_replica(
 
     if !write_live(
         &mut stream,
-        &encode_reply_with_history(HandshakeStatus::Ok, next_sequence, &shipment.history),
+        &encode_reply_with_history(HandshakeStatus::Ok, next_sequence, &shipment.lineage.origin),
         stop,
     )? {
         return Ok(());
@@ -1878,6 +2080,7 @@ fn read_primary(
         outstanding.clear();
     }
 
+    let followed = upstream_origin(&link.data_dir, link.shard_id);
     let handshake = Handshake {
         version: if requested == 0 {
             VERSION_RESUME
@@ -1889,8 +2092,9 @@ fn read_primary(
         shard_id: link.shard_id,
         after_sequence,
         password: link.password.clone(),
-        history: upstream_history(&link.data_dir, link.shard_id),
+        history: followed.history,
         shard_count: link.shard_count,
+        epoch: followed.epoch,
     };
 
     let Ok(encoded) = encode_handshake(&handshake) else {
@@ -1924,6 +2128,30 @@ fn read_primary(
             shard_id = link.shard_id,
             replica_version = handshake.version,
             "primary refused this replica: {VERSION_MISMATCH}"
+        );
+
+        return (true, false);
+    }
+
+    if status == HandshakeStatus::Stale {
+        warn!(
+            shard_id = link.shard_id,
+            epoch = followed.epoch,
+            "the primary was replaced by a newer one; not following it"
+        );
+
+        return (true, false);
+    }
+
+    // A primary below the epoch this replica already followed is an old, replaced one.
+    if matches!(status, HandshakeStatus::Ok | HandshakeStatus::Snapshot)
+        && primary_history.epoch < followed.epoch
+    {
+        warn!(
+            shard_id = link.shard_id,
+            epoch = followed.epoch,
+            primary_epoch = primary_history.epoch,
+            "the primary is older than the one this replica followed; not following it"
         );
 
         return (true, false);
@@ -2281,10 +2509,19 @@ fn read_handshake(stream: &mut TcpStream) -> io::Result<Incoming> {
     // Decided before the rest is read: other builds send a different tail, and waiting for
     // bytes that never come would stall both sides until the read timeout.
     if !SUPPORTED_VERSIONS.contains(&version) {
-        if LEGACY_VERSIONS.contains(&version) {
-            // Their handshake ends with the password and checksum; consume it so the peer
-            // reads the refusal instead of a reset.
-            let mut rest = vec![0; password_len + CHECKSUM_LEN];
+        // Consume what older builds send after the prefix so the peer reads the refusal
+        // instead of a reset: the legacy ones end with the password, the history-only ones
+        // add a history id and shard count.
+        let rest_len = if LEGACY_VERSIONS.contains(&version) {
+            Some(password_len + CHECKSUM_LEN)
+        } else if HISTORY_ONLY_VERSIONS.contains(&version) {
+            Some(password_len + HISTORY_ONLY_TAIL + CHECKSUM_LEN)
+        } else {
+            None
+        };
+
+        if let Some(rest_len) = rest_len {
+            let mut rest = vec![0; rest_len];
 
             let _ = stream.read_exact(&mut rest);
         }
@@ -2333,7 +2570,7 @@ pub fn read_snapshot_blob(stream: &mut TcpStream, maximum: u64) -> io::Result<Ve
     Ok(bytes)
 }
 
-fn read_reply(stream: &mut TcpStream) -> io::Result<(HandshakeStatus, u64, HistoryId)> {
+fn read_reply(stream: &mut TcpStream) -> io::Result<(HandshakeStatus, u64, Origin)> {
     let mut bytes = [0; REPLY_LEN];
 
     stream.read_exact(&mut bytes)?;

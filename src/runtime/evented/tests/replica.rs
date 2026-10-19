@@ -655,7 +655,10 @@ fn resync_expired_json(compacted: bool, busy: bool) {
     crate::replication::record_upstream_history(
         replica_dir.path(),
         0,
-        &crate::replication::load_or_create_history(primary_dir.path()).unwrap(),
+        &crate::replication::Origin {
+            history: crate::replication::load_or_create_history(primary_dir.path()).unwrap(),
+            epoch: 0,
+        },
     )
     .unwrap();
     let writes = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -952,7 +955,10 @@ fn replica_follows_a_new_link_that_resends_queued_frames_and_resyncs_on_a_gap() 
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let replication = listener.local_addr().unwrap();
-    let history = [5; crate::replication::HISTORY_LEN];
+    let history = crate::replication::Origin {
+        history: [5; crate::replication::HISTORY_LEN],
+        epoch: 0,
+    };
     let ok = |next| {
         crate::replication::encode_reply_with_history(
             crate::replication::HandshakeStatus::Ok,

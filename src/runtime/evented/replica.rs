@@ -5,8 +5,22 @@ pub(super) fn attach_replication(
     shard_id: u32,
 ) -> io::Result<Option<crate::replication::ReplicationThread>> {
     match state.published_config.replication.role {
-        crate::config::ReplicationRole::Off => Ok(None),
+        crate::config::ReplicationRole::Off => {
+            // A standalone shard that never followed a primary has nothing to fork.
+            if state
+                .published_config
+                .persistence
+                .data_dir
+                .join(crate::replication::upstream_file_name(shard_id))
+                .exists()
+            {
+                writer_lineage(state, shard_id)?;
+            }
+
+            Ok(None)
+        }
         crate::config::ReplicationRole::Primary => {
+            let lineage = writer_lineage(state, shard_id)?;
             let Some(listen) = state.published_config.replication.listen else {
                 return Ok(None);
             };
@@ -49,9 +63,7 @@ pub(super) fn attach_replication(
                         .unwrap_or_else(|| Arc::new(crate::replication::PublishFanout::new())),
                     snapshot_max_bytes: state.published_config.persistence.snapshot_max_bytes,
                     shard_count: state.published_config.shards as u32,
-                    history: crate::replication::load_or_create_history(
-                        &state.published_config.persistence.data_dir,
-                    )?,
+                    lineage,
                     snapshot_requests: Arc::clone(&state.snapshot_requests),
                 },
             )?))
@@ -101,6 +113,19 @@ pub(super) fn attach_replication(
 
 /// Shard `shard_id`'s replication address: `base`'s port plus the shard id. A port past
 /// 65535 is an error; wrapping around would bind or dial a port nobody configured.
+/// The lineage this shard writes as a writer, settled before it accepts its first write: a
+/// shard promoted from replica forks here, at its last logged sequence.
+fn writer_lineage(state: &ShardState, shard_id: u32) -> io::Result<crate::replication::Lineage> {
+    let data_dir = &state.published_config.persistence.data_dir;
+    let last_sequence = state
+        .persistence
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .last_sequence();
+
+    crate::replication::resolve_lineage(data_dir, shard_id, last_sequence)
+}
+
 pub(super) fn shard_port(base: SocketAddr, shard_id: u32) -> io::Result<SocketAddr> {
     u16::try_from(shard_id)
         .ok()
@@ -122,7 +147,7 @@ pub(super) fn install_replica_snapshot(
     shard: &[u8],
     hot: Option<&[u8]>,
     catchup_through: u64,
-    history: &crate::replication::HistoryId,
+    history: &crate::replication::Origin,
 ) -> bool {
     let limits = state.published_config.protocol;
     let maximum = state.published_config.persistence.snapshot_max_bytes;

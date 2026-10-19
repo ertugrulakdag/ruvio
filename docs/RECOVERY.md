@@ -239,8 +239,8 @@ ruvio --config ./ruvio.toml --force-promote-incomplete
 ```
 
    The flag is CLI-only, not a config or environment setting, and is not saved to the config file. It bypasses the completion gate, **not** WAL/checkpoint corruption checks. The marker remains on disk: a later writer restart needs another explicit force decision. Force does not restore missing writes; keys, JSON documents, or transactions not copied before the failure may be absent. An incomplete replica cannot use this flag while its role is still `replica`.
-7. Point clients at the new process's RESP address.
-8. Leave the old primary stopped. Starting it again next to the new writer forks the history. Take a backup of the old directory if you still need it, then retire it.
+7. Point clients at the new process's RESP address. Point the other replicas at the new primary's replication address: each continues from its own log when it stopped at or before the point where the new primary took over (see *Write history*), and takes a full copy otherwise.
+8. Leave the old primary stopped. Starting it again next to the new writer forks the history. A replica that already follows the new primary refuses the old one (its epoch is lower), and the old primary refuses such a replica. Take a backup of the old directory if you still need it, then retire it.
 
 ### Write history
 
@@ -258,18 +258,44 @@ count.
 The id changes when the primary's history does:
 
 - A wiped data directory (including `HISTORY`) starts a new id.
-- `ruvio-ctl restore` removes `HISTORY` and every `UPSTREAM*` file from the
+- `ruvio-ctl restore` removes `HISTORY` and every `UPSTREAM*` and `LINEAGE*` file from the
   destination (backups never contain them), so a restored directory starts a new
   id on its first start and its former replicas take a full copy. This matters
   because a restored primary reuses sequence numbers its replicas may already
   hold: with the old id, a replica that is ahead would be refused only until the
   primary wrote past it, then resume and mix the two logs.
-- If you restore by copying files yourself, delete `HISTORY` and `UPSTREAM*` in
-  the restored directory before starting it.
+- If you restore by copying files yourself, delete `HISTORY`, `UPSTREAM*` and
+  `LINEAGE*` in the restored directory before starting it.
 
 A directory written by an older build has one shared `UPSTREAM` file. Shards that
 have no file of their own then claim no history, so each takes one full copy and
 records its own id.
+
+#### Promotion keeps the replicas' logs
+
+A writer shard keeps its lineage in `LINEAGE_0000`, `LINEAGE_0001`, ... (one file
+per shard): its history id, the history it forked from, the sequence where it
+forked, and an epoch. A shard whose last role was replica (it has an `UPSTREAM_####`
+record and no lineage) is being promoted. On that first start as a writer it takes
+a new id, records the history it followed as its parent, its last logged sequence
+as the fork, and the followed primary's epoch plus one. The file is written before
+the shard accepts a write and is not changed later; following a primary again
+removes it.
+
+A promoted primary lets a replica resume from its own log when the replica followed
+the parent history and stopped at or before the fork. A replica past the fork holds
+writes from the old primary that the new one never saw, so it takes a full copy.
+Without this every other replica took a full copy after a promotion.
+
+The epoch only grows. Replicas send the highest epoch they have followed, and the
+primary sends its own:
+
+- A primary refuses a replica that has followed a higher epoch (`Stale`): the
+  replica already follows a primary that replaced this one.
+- A replica does not follow a primary with a lower epoch than the one it followed.
+
+`INFO` does not show the lineage yet. A shard of a server that never replicated
+(role `off`, no `UPSTREAM_####`) writes no lineage file.
 
 Primary and replicas must run the same Ruvio version. The replication handshake
 carries a version; a primary refuses any other version with a `Version` status and
