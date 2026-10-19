@@ -940,6 +940,7 @@ const ACL_SUBCOMMANDS: &[&str] = &[
     "config|set",
     "ruvio|bigkeys",
     "ruvio|hotkeys",
+    "ruvio|moveslots",
 ];
 
 fn known_subcommand(name: &str) -> Option<&'static str> {
@@ -972,6 +973,7 @@ const SUBCOMMAND_CATEGORIES: &[(&str, &[&str])] = &[
     ("client|list", &["admin", "slow", "dangerous"]),
     ("ruvio|hotkeys", &["admin", "slow"]),
     ("ruvio|bigkeys", &["admin", "slow"]),
+    ("ruvio|moveslots", &["admin", "slow", "dangerous"]),
 ];
 
 fn commands_in_category(category: &str) -> Vec<&'static str> {
@@ -1076,6 +1078,7 @@ pub fn command_acl_name(command: &Command<'_>) -> &'static str {
         Command::ConfigSet(_) => "config|set",
         Command::ConfigRewrite => "config|rewrite",
         Command::ReplicaOf { .. } => "replicaof",
+        Command::MoveSlots(_) => "ruvio|moveslots",
         Command::Role => "role",
         Command::Info(_) => "info",
         Command::Save => "save",

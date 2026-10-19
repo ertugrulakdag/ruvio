@@ -101,6 +101,9 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
         Command::ReplicaOf { .. } | Command::Role => Ok(Response::Error(
             b"ERR REPLICAOF and ROLE are handled by the server",
         )),
+        Command::MoveSlots(_) => Ok(Response::Error(
+            b"ERR RUVIO MOVESLOTS needs more than one shard",
+        )),
 
         Command::Multi
         | Command::Exec

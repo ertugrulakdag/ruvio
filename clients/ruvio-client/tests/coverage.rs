@@ -362,6 +362,8 @@ fn methods_exist() {
     let _ = Client::rpushcap;
     let _ = Client::rpushx;
     let _ = Client::ruvio;
+    let _ = Client::move_slots;
+    let _ = Client::move_slots_status;
     let _ = Client::sadd;
     let _ = Client::save;
     let _ = Client::scan;

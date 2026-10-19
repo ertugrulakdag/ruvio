@@ -97,6 +97,20 @@ fn round_trips_every_wal_mutation_type() {
             key: b"k".to_vec(),
             value: b"v".to_vec(),
         },
+        OwnedMutation::SlotCopy {
+            key: b"k".to_vec(),
+            entry: Some(b"frame".to_vec()),
+        },
+        OwnedMutation::SlotCopy {
+            key: b"k".to_vec(),
+            entry: None,
+        },
+        OwnedMutation::SlotsMoved {
+            first: 100,
+            last: 16_383,
+            to: 3,
+            position: u64::MAX,
+        },
         OwnedMutation::SetInteger {
             key: b"i".to_vec(),
             value: -42,
@@ -1090,6 +1104,8 @@ fn cover_owned_mutation(mutation: &OwnedMutation) {
         | OwnedMutation::FlushAll
         | OwnedMutation::SwapDatabases { .. }
         | OwnedMutation::MoveKey { .. }
+        | OwnedMutation::SlotCopy { .. }
+        | OwnedMutation::SlotsMoved { .. }
         | OwnedMutation::SetRange { .. }
         | OwnedMutation::ListSet { .. }
         | OwnedMutation::ListInsert { .. }
@@ -1197,4 +1213,71 @@ fn header_fields_sit_at_their_documented_offsets() {
     assert!(super::record_header_plausible(&record, 7, 0x1122_3344));
     assert!(!super::record_header_plausible(&record, 7, 0x1122_3345));
     assert!(!super::record_header_plausible(&record, 6, 0));
+}
+
+#[test]
+fn a_slot_copy_record_replays_the_value_and_its_deadline_or_removes_the_key() {
+    use crate::store::{SnapshotEntry, SnapshotValue};
+
+    let entry = SnapshotEntry {
+        database: 0,
+        key: b"moved".to_vec(),
+        expires_at: Some(crate::UnixMillis::new(u64::MAX / 2)),
+        value: SnapshotValue::List(vec![b"a".to_vec(), b"b".to_vec()]),
+    };
+    let mut frame = Vec::new();
+
+    crate::persistence::encode_entry(&mut frame, &entry).unwrap();
+    let copy = OwnedMutation::SlotCopy {
+        key: b"moved".to_vec(),
+        entry: Some(frame),
+    };
+    let record = encode_record(0, 1, 2, &copy).unwrap();
+    let decoded = decode_record(&record, 0, ProtocolLimits::default()).unwrap();
+
+    assert_eq!(decoded.mutation, copy);
+    assert_eq!(decoded.database, 2);
+
+    let mut shard = crate::KvShard::new();
+
+    shard.enter(2);
+    shard.set_bytes(b"moved", b"old");
+    shard.enter(0);
+    crate::persistence::apply_mutation(&mut shard, 2, &decoded.mutation).unwrap();
+    shard.enter(2);
+    assert_eq!(shard.list_len(b"moved").unwrap(), 2);
+    assert!(shard.deadline(2, b"moved").is_some());
+
+    crate::persistence::apply_mutation(
+        &mut shard,
+        2,
+        &OwnedMutation::SlotCopy {
+            key: b"moved".to_vec(),
+            entry: None,
+        },
+    )
+    .unwrap();
+    assert!(!shard.contains_key(b"moved"));
+
+    // A damaged frame is corruption, not a silent skip.
+    let damaged = OwnedMutation::SlotCopy {
+        key: b"moved".to_vec(),
+        entry: Some(b"not a frame".to_vec()),
+    };
+    assert!(crate::persistence::apply_mutation(&mut shard, 2, &damaged).is_err());
+}
+
+#[test]
+fn a_slot_copy_larger_than_any_command_still_decodes() {
+    let copy = OwnedMutation::SlotCopy {
+        key: b"big".to_vec(),
+        entry: Some(vec![7; 4096]),
+    };
+    let record = encode_record(0, 1, 0, &copy).unwrap();
+    let small = ProtocolLimits {
+        max_command_bytes: 1024,
+        ..ProtocolLimits::default()
+    };
+
+    assert_eq!(decode_record(&record, 0, small).unwrap().mutation, copy);
 }

@@ -68,6 +68,7 @@ pub(super) fn validate_command_payloads(
         | Command::Save
         | Command::ConfigRewrite
         | Command::ReplicaOf { .. }
+        | Command::MoveSlots(_)
         | Command::Role
         | Command::Bgsave
         | Command::DbSize

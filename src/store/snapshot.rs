@@ -176,7 +176,7 @@ pub(crate) enum SnapshotStep {
 impl<C: Clock, I: StorageIndex> KvShard<C, I> {
     /// An expired key is left out of a snapshot, except on a replica: it keeps the key
     /// until the primary deletes it, and a restart must too.
-    fn snapshot_skips(&self, db: u8, key: &[u8]) -> bool {
+    pub(super) fn snapshot_skips(&self, db: u8, key: &[u8]) -> bool {
         !self.removals.keeps_expired() && self.deadline_passed(db, key)
     }
 
@@ -204,7 +204,7 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
         entries
     }
 
-    fn map_of(&self, database: u8) -> Option<&I> {
+    pub(super) fn map_of(&self, database: u8) -> Option<&I> {
         if database == self.active {
             Some(&self.entries)
         } else {
@@ -842,6 +842,46 @@ pub(super) fn live_snapshot_entry(
         key: key.to_vec(),
         expires_at,
         value,
+    }
+}
+
+impl<C: Clock, I: StorageIndex> KvShard<C, I> {
+    /// Appends `key`'s snapshot frame from every database that holds it (and has not
+    /// expired), encoded straight from the live values as a checkpoint writes them. Returns
+    /// how many frames it wrote; on error `output` keeps only what came before.
+    pub(crate) fn encode_key_frames(
+        &self,
+        key: &[u8],
+        output: &mut Vec<u8>,
+    ) -> Result<u32, crate::PersistenceError> {
+        let start = output.len();
+        let mut frames = 0;
+
+        for (database, map) in self.database_maps() {
+            let Some(hit) = map.lookup(key) else {
+                continue;
+            };
+
+            if self.snapshot_skips(database, key) {
+                continue;
+            }
+
+            let walked = WalkedEntry {
+                database,
+                key,
+                expires_at: self.deadline(database, key),
+                hit,
+                log: &self.value_log,
+            };
+
+            if let Err(error) = walked.encode_into(output) {
+                output.truncate(start);
+                return Err(error);
+            }
+            frames += 1;
+        }
+
+        Ok(frames)
     }
 }
 

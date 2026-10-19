@@ -31,7 +31,8 @@ use crate::{KvShard, OwnedMutation, time::UnixMillis};
 #[cfg(all(test, not(miri)))]
 pub(crate) use crash::{CrashSite, arm_io_fault};
 pub(crate) use snapshot::{
-    CheckpointManager, ShardCheckpoint, ShardFile, SnapshotWriter, encode_entry, encode_entry_with,
+    CheckpointManager, ShardCheckpoint, ShardFile, SnapshotWriter, decode_entry_frame,
+    encode_entry, encode_entry_with,
 };
 
 // The shipper consumes these in a later snapshot-resync task.
@@ -956,6 +957,18 @@ fn apply_in_active(
 
         OwnedMutation::FlushDatabase => shard.flush_database(database),
         OwnedMutation::FlushAll => shard.flush_all(),
+        OwnedMutation::SlotCopy { key, entry } => {
+            shard.forget_key(database, key);
+            if let Some(entry) = entry {
+                let mut entry = snapshot::decode_entry_frame(entry)?;
+
+                entry.database = database;
+                shard
+                    .restore_snapshot_entry(entry)
+                    .map_err(|error| PersistenceError::Corruption(error.into()))?;
+            }
+        }
+        OwnedMutation::SlotsMoved { .. } => {}
         OwnedMutation::SwapDatabases { first, second } => shard.swap_databases(*first, *second),
         OwnedMutation::MoveKey { key, destination } => {
             if !shard.move_key(key, *destination) {

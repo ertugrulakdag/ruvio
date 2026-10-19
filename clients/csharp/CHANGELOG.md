@@ -4,6 +4,7 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 
 ## Unreleased
 
+- `MoveSlotsAsync(first, last, shard)` and `GetMoveSlotsStatusAsync()` for `RUVIO MOVESLOTS`, which moves a slot range to another shard of the same server.
 - `SetHashManyAsync(key, fields)` sends `HMSET` (multi-field `HSET` that replies `OK`; Redis marks it deprecated) (issue #26).
 - `RuvioClientOptions.CommandTimeout`: a command with no cancellation of its own throws `TimeoutException` when its reply takes longer; the connection stays in use. Default zero: no limit, as before (issue #48).
 - `RuvioClientOptions.ReadPolicy` (`ReadPolicy.Primary` by default, `PreferReplica`, `Replica`): a cluster client sends reads (commands the server flags `readonly` and not blocking) to one replica per shard, picked when the slot map loads. Pipelines go to replicas only when every command reads. A replica that cannot be opened or answers `LOADING` is skipped until the next load. `Ruvio.Client.AspNetCore` is unchanged.

@@ -5285,6 +5285,27 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Sends {@code RUVIO MOVESLOTS first-last shard}: moves the hash slots {@code first..last} to {@code shard} (counted from 0) of the same server, which keeps serving them meanwhile. Completes once the move has started; {@link #moveSlotsStatus()} follows it. One move runs at a time, and every slot of the range must be on one shard.
+     *
+     * @param first first hash slot of the range (0-16383)
+     * @param last last hash slot of the range, inclusive
+     * @param shard shard of the same server to move it to
+     * @throws RuvioServerException when the range is already on that shard, spans shards, another move runs, the server has one shard, or replication is on
+     */
+    public void moveSlots(int first, int last, int shard) {
+        await(async.moveSlots(first, last, shard));
+    }
+
+    /**
+     * Sends {@code RUVIO MOVESLOTS STATUS}: the running or last slot move. {@code state} is {@code none}, {@code copying}, {@code cleaning}, {@code cancelling}, {@code done} or {@code cancelled}; the other names are {@code first}, {@code last}, {@code from}, {@code to}, {@code keys}, {@code rounds}, {@code elapsed_ms}, {@code freeze_ms} and {@code error}.
+     *
+     * @return name to value, as text
+     */
+    public Map<String, String> moveSlotsStatus() {
+        return await(async.moveSlotsStatus());
+    }
+
+    /**
      * Sends {@code PING}: checks that the server answers.
      *
      * <pre>{@code

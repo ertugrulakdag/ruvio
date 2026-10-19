@@ -18,7 +18,8 @@ pub fn shard_for_slot(slot: u16, shard_count: usize) -> usize {
 ///
 /// Built from [`shard_for_slot`], so a data directory keeps the layout it was written with.
 /// Entries are atomics so a later change can move one slot in place without a lock; a
-/// `Relaxed` load is a plain load. Nothing changes an entry yet. Cloning shares the table.
+/// `Relaxed` load is a plain load. Moved ranges (`SLOTS`) are applied at start. Cloning
+/// shares the table.
 #[derive(Clone)]
 pub struct SlotTable(std::sync::Arc<[std::sync::atomic::AtomicU16]>);
 
@@ -47,8 +48,7 @@ impl SlotTable {
         usize::from(self.0[usize::from(slot)].load(std::sync::atomic::Ordering::Relaxed))
     }
 
-    /// Gives `slot` to `owner`. Only tests move slots until a migration protocol exists.
-    #[cfg(test)]
+    /// Gives `slot` to `owner`.
     pub fn assign(&self, slot: u16, owner: usize) {
         self.0[usize::from(slot)].store(owner as u16, std::sync::atomic::Ordering::Relaxed);
     }
@@ -135,6 +135,7 @@ pub fn command_slot(command: &Command<'_>) -> Result<Option<u16>, CrossSlot> {
         | Command::ConfigSet(_)
         | Command::ConfigRewrite
         | Command::ReplicaOf { .. }
+        | Command::MoveSlots(_)
         | Command::Role
         | Command::Bgsave
         | Command::Scan { .. }
@@ -448,6 +449,7 @@ pub fn command_keys<'a>(command: &'a Command<'_>) -> Vec<&'a [u8]> {
         | Command::ConfigSet(_)
         | Command::ConfigRewrite
         | Command::ReplicaOf { .. }
+        | Command::MoveSlots(_)
         | Command::Role
         | Command::Bgsave
         | Command::Scan { .. }

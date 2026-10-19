@@ -1122,6 +1122,31 @@ public partial interface IRuvioClient
     ValueTask<string> GetRuvioOwnerAsync(CancellationToken cancellationToken = default)
         => RespRead.RequiredText(ExecuteAsync(new RespCommand("RUVIO", "OWNER").AsList(), cancellationToken), "RUVIO");
 
+    /// <summary>Sends <c>RUVIO MOVESLOTS first-last shard</c>: moves the hash slots <paramref name="first"/> to <paramref name="last"/> to <paramref name="shard"/> (counted from 0) of the same server, which keeps serving them meanwhile. Completes once the move has started; <see cref="GetMoveSlotsStatusAsync"/> follows it. One move runs at a time, and every slot of the range must be on one shard.</summary>
+    /// <param name="first">First hash slot of the range (0-16383).</param>
+    /// <param name="last">Last hash slot of the range, inclusive.</param>
+    /// <param name="shard">Shard of the same server to move the range to.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <exception cref="RuvioException">The range is already on that shard, spans shards, another move runs, the server has one shard, or replication is on.</exception>
+    /// <example>
+    /// <code>
+    /// await db.MoveSlotsAsync(0, 1000, 2);
+    /// </code>
+    /// </example>
+    ValueTask MoveSlotsAsync(int first, int last, int shard, CancellationToken cancellationToken = default)
+        => RespRead.Ok(ExecuteAsync(new RespCommand("RUVIO", "MOVESLOTS", RespRead.Number(first) + "-" + RespRead.Number(last), RespRead.Number(shard)).AsList(), cancellationToken));
+
+    /// <summary>Sends <c>RUVIO MOVESLOTS STATUS</c>: the running or last slot move. <c>state</c> is <c>none</c>, <c>copying</c>, <c>cleaning</c>, <c>cancelling</c>, <c>done</c> or <c>cancelled</c>; the other names are <c>first</c>, <c>last</c>, <c>from</c>, <c>to</c>, <c>keys</c>, <c>rounds</c>, <c>elapsed_ms</c>, <c>freeze_ms</c> and <c>error</c>.</summary>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>Name to value, as text.</returns>
+    /// <example>
+    /// <code>
+    /// var status = await db.GetMoveSlotsStatusAsync();
+    /// </code>
+    /// </example>
+    ValueTask<IReadOnlyDictionary<string, string>> GetMoveSlotsStatusAsync(CancellationToken cancellationToken = default)
+        => RespRead.Map(ExecuteAsync(new RespCommand("RUVIO", "MOVESLOTS", "STATUS").AsList(), cancellationToken), "RUVIO");
+
     /// <summary>Sends <c>COMMAND</c>: lists the command table.</summary>
     /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
     /// <returns>The raw reply, one entry per command (name, arity, flags and positions of the first and last key).</returns>

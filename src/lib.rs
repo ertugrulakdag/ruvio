@@ -49,6 +49,7 @@ pub mod routing;
 pub mod runtime;
 mod security;
 pub mod shutdown;
+mod slot_moves;
 mod slots;
 mod slowlog;
 mod store;
