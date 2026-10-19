@@ -184,6 +184,7 @@ fn eligible_outside_multi(command: WalGroupCommand<'_, '_>) -> bool {
                 | Command::BloomInfo { .. }
                 | Command::BloomCard { .. }
                 | Command::SetIfEq { .. }
+                | Command::SetIfCmp { .. }
                 | Command::DelIfEq { .. }
                 | Command::ListPushCapped { .. }
                 | Command::JsonGet { .. }

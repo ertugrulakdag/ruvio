@@ -76,6 +76,11 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         Assert.InRange(await db.GetTimeToLiveMillisecondsAsync("cas"), 1, 30000);
         Assert.True(await db.SetIfEqualKeepingTimeToLiveAsync("cas", "3", "2"));
         Assert.InRange(await db.GetTimeToLiveMillisecondsAsync("cas"), 1, 30000);
+        Assert.True(await db.SetIfGreaterAsync("wm", 10));
+        Assert.False(await db.SetIfGreaterAsync("wm", 10));
+        Assert.True(await db.SetIfGreaterAsync("wm", 11, TimeSpan.FromSeconds(30)));
+        Assert.False(await db.SetIfLessAsync("wm", 12));
+        Assert.True(await db.SetIfLessAsync("wm", -1));
         Assert.False(await db.DeleteIfEqualAsync("cas", "2"));
         Assert.True(await db.DeleteIfEqualAsync("cas", "3"));
         Assert.False(await db.DeleteIfEqualAsync("cas", "3"));

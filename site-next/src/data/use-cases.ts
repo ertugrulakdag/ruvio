@@ -111,6 +111,21 @@ SETV profile:ada "{...}" 1
     refs: [{ label: "SETV", href: commands }],
   },
   {
+    id: "watermarks",
+    nav: "Watermarks",
+    title: "Watermarks and best values",
+    problem: "Keep the newest timestamp, the highest version or the lowest price, no matter in which order writers arrive.",
+    code: `SET watermark:orders 1700000200 IFGT
+# OK    -> written (key was missing or smaller)
+SET watermark:orders 1700000100 IFGT
+# (nil) -> stored number is greater, nothing written
+SET price:best 499 IFLT PX 3600000
+# OK    -> new lowest price, expires in an hour`,
+    body: "<code>SET key number IFGT</code> writes only when the number is greater than the stored integer (<code>IFLT</code> for smaller) and takes the usual expiry options. One command replaces a read-compare-write script.",
+    note: "Integers only. A stored value that is not an integer is an error and is left unchanged.",
+    refs: [{ label: "SET", href: commands }],
+  },
+  {
     id: "sessions",
     nav: "Sessions",
     title: "Sessions and sliding expiry",

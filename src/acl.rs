@@ -1045,7 +1045,7 @@ pub fn command_acl_name(command: &Command<'_>) -> &'static str {
         Command::Take { .. } => "take",
         Command::Transfer { .. } => "transfer",
         Command::HashTransfer { .. } => "htransfer",
-        Command::SetIfEq { .. } => "set",
+        Command::SetIfEq { .. } | Command::SetIfCmp { .. } => "set",
         Command::DelIfEq { .. } => "delex",
         Command::ListPushCapped { back: false, .. } => "lpushcap",
         Command::ListPushCapped { back: true, .. } => "rpushcap",
