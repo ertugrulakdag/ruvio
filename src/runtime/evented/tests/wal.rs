@@ -413,6 +413,19 @@ fn a_grouped_script_or_transaction_whose_write_fails_rolls_back() {
               *2\r\n$3\r\nold\r\n$-1\r\n"
                 .as_slice(),
         ),
+        // A script queued in MULTI is undone with the rest of the batch.
+        (
+            resp(&[
+                &[b"GET", b"{t}k"],
+                &[b"MULTI"],
+                &[b"EVAL", set.as_slice(), b"2", b"{t}k", b"{t}n", b"new"],
+                &[b"EXEC"],
+                &[b"MGET", b"{t}k", b"{t}n"],
+            ]),
+            b"$3\r\nold\r\n+OK\r\n+QUEUED\r\n-MISCONF persistence error\r\n\
+              *2\r\n$3\r\nold\r\n$-1\r\n"
+                .as_slice(),
+        ),
     ];
 
     for (batch, expected) in batches {

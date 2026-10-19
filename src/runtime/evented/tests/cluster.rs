@@ -770,7 +770,7 @@ fn a_publish_the_gate_refuses_reaches_no_other_shard() {
         "{missed}"
     );
 
-    // Inside MULTI a PUBLISH would reach the other shards before DISCARD: refused.
+    // Inside MULTI a PUBLISH is queued and sent only at EXEC: DISCARD sends nothing.
     let queued = String::from_utf8(request(
         left,
         &resp(&[
@@ -782,13 +782,33 @@ fn a_publish_the_gate_refuses_reaches_no_other_shard() {
     ))
     .unwrap();
 
-    assert!(queued.contains("cannot be queued in MULTI"), "{queued}");
+    assert_eq!(queued, "+OK\r\n+OK\r\n+QUEUED\r\n+OK\r\n");
     let missed = subscriber.read(&mut quiet).unwrap_err();
 
     assert!(matches!(
         missed.kind(),
         ErrorKind::TimedOut | ErrorKind::WouldBlock
     ));
+
+    // EXEC sends it, to the subscriber on the other shard too; the reply counts this shard's.
+    assert_eq!(
+        request(
+            left,
+            &resp(&[
+                &[b"AUTH", b"secret"],
+                &[b"MULTI"],
+                &[b"PUBLISH", b"news", b"committed"],
+                &[b"EXEC"],
+            ])
+        ),
+        b"+OK\r\n+OK\r\n+QUEUED\r\n*1\r\n:0\r\n"
+    );
+    subscriber.set_read_timeout(Some(PATIENCE)).unwrap();
+    let expected = crate::pubsub::encode_message(b"news", b"committed");
+    let mut message = vec![0u8; expected.len()];
+
+    subscriber.read_exact(&mut message).unwrap();
+    assert_eq!(message, expected);
 
     // Authenticated and outside MULTI: delivered.
     assert_eq!(
