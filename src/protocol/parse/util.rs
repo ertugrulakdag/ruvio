@@ -60,6 +60,7 @@ pub(in crate::protocol) fn parse_scan<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
     let mut pattern = None;
     let mut count = 10;
     let mut type_name = None;
+    let mut slot = None;
     let mut index = 1;
 
     while index < args.len() {
@@ -78,6 +79,14 @@ pub(in crate::protocol) fn parse_scan<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
                 .map_err(|_| ProtocolError::Invalid("value is not an integer"))?;
         } else if name.eq_ignore_ascii_case(b"TYPE") {
             type_name = Some(args.arg(index + 1));
+        } else if name.eq_ignore_ascii_case(b"SLOT") {
+            slot = Some(
+                std::str::from_utf8(args.bytes(index + 1))
+                    .ok()
+                    .and_then(|value| value.parse::<u16>().ok())
+                    .filter(|&value| usize::from(value) < crate::routing::HASH_SLOT_COUNT)
+                    .ok_or(ProtocolError::Invalid("slot is out of range (0-16383)"))?,
+            );
         } else {
             return Err(ProtocolError::Invalid("syntax error"));
         }
@@ -90,6 +99,7 @@ pub(in crate::protocol) fn parse_scan<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
         pattern,
         count,
         type_name,
+        slot,
     })
 }
 
