@@ -80,7 +80,9 @@ public sealed class RuvioClientOptions
 
     /// <summary>
     /// How long one command may wait for its reply. On expiry the call throws <see cref="TimeoutException"/>;
-    /// the connection stays in use and the late reply is discarded. Default 30 seconds; zero (or
+    /// the connection stays in use and the late reply is discarded (a socket write that takes no data for the
+    /// whole limit closes the connection instead). One timer per connection enforces it, so it costs
+    /// nothing per command. Default 30 seconds; zero (or
     /// <see cref="Timeout.InfiniteTimeSpan"/>) means no limit, so a half-open peer blocks a call until the socket
     /// drops or its token is cancelled. A blocking command gets its own wait on top (<c>BLPOP k 5</c> may take
     /// 5 s plus this), and one that waits forever (timeout <c>0</c>) has no limit. Commands on the multiplexed

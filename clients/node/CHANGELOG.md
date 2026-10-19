@@ -5,6 +5,7 @@ Notable changes to the Node.js client `ruvio-client` on npm. New entries go unde
 ## Unreleased
 
 - **Behavior change:** `commandTimeoutMs` is now 30000 by default (was 0, no limit); `0` turns it off. A blocking command gets its own wait on top (`BLPOP k 5` may take 5 s plus the timeout; a wait of 0, or one the client cannot parse, has no deadline; a pipeline takes its largest wait), and a Pub/Sub or `MONITOR` connection never times out while it waits for messages (issue #48 follow-up).
+- The command timeout adds no work per command: only frames whose command may block (`BLPOP`, `XREAD`, `WAIT` and the like) are scanned for their wait; one interval timer per connection does the rest, as before (issue #48 follow-up).
 - `hmset(key, fields)` sends `HMSET` (multi-field `HSET` that replies `OK`; Redis marks it deprecated) (issue #26).
 - `commandTimeoutMs` option: the connection fails (pending calls reject with a `ConnectionError`, a later command reconnects) when replies are outstanding and none arrives for that long. `connectTimeoutMs` now defaults to 5000 ms (was no limit; `0` still means none), as in the other clients (issue #48).
 - `readPolicy` option on `ClusterClient` (`'primary'` by default, `'prefer-replica'`, `'replica'`; new `ReadPolicy` type): reads go to one replica per shard, picked when the slot map loads. A pipeline goes to replicas only when every command in it is a read. A replica that cannot be opened or answers `LOADING` is skipped until the next load.
