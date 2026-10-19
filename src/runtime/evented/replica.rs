@@ -148,7 +148,7 @@ pub(super) fn install_replica_snapshot(
         state.store.borrow().now_unix_millis(),
     ));
 
-    fresh.apply_memory_limits(state.published_config.shard_memory_limits());
+    fresh.apply_memory_limits(state.live.with(AppConfig::shard_memory_limits));
     fresh.follow_primary(state.store.borrow().follows_primary());
     let replay_clock = fresh.pause_expiration_for_replay();
 

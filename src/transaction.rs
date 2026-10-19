@@ -267,6 +267,8 @@ fn queueable(command: &Command<'_>) -> bool {
             | Command::StreamRead { block: Some(_), .. }
             | Command::StreamGroupRead { block: Some(_), .. }
             | Command::Save
+            | Command::ConfigSet(_)
+            | Command::ConfigRewrite
             | Command::Bgsave
             | Command::Hello { .. }
             | Command::ClientGetName

@@ -1076,6 +1076,8 @@ pub fn command_acl_name(command: &Command<'_>) -> &'static str {
         Command::ReadOnly => "readonly",
         Command::ReadWrite => "readwrite",
         Command::ConfigGet(_) => "config",
+        Command::ConfigSet(_) => "config|set",
+        Command::ConfigRewrite => "config|rewrite",
         Command::Info(_) => "info",
         Command::Save => "save",
         Command::Bgsave => "bgsave",

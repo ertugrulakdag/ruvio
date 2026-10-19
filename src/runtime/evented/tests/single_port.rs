@@ -1755,3 +1755,47 @@ fn per_shard_wait_counts_the_shards_a_connection_forwarded_to() {
     stop.request();
     join_within(server, PATIENCE).unwrap().unwrap();
 }
+
+/// In single-port mode the acceptor admits connections for every shard: `CONFIG SET
+/// max-connections` reaches its limiter too, and every shard reports the new value.
+#[test]
+fn single_port_config_set_reaches_the_acceptor_and_every_shard() {
+    let (address, stop, server) = serve_single_port(2);
+    let mut first = connect_bounded(address);
+
+    first
+        .write_all(&resp(&[&[
+            b"CONFIG",
+            b"SET",
+            b"max-connections",
+            b"1",
+            b"slowlog-max-len",
+            b"9",
+        ]]))
+        .unwrap();
+    let mut reply = [0u8; 5];
+    first.read_exact(&mut reply).unwrap();
+    assert_eq!(&reply, b"+OK\r\n");
+
+    let mut refused = connect_bounded(address);
+    let mut answer = Vec::new();
+    refused.read_to_end(&mut answer).unwrap();
+    assert_eq!(answer, b"-ERR max number of clients reached\r\n");
+
+    first
+        .write_all(&resp(&[&[b"CONFIG", b"SET", b"max-connections", b"100"]]))
+        .unwrap();
+    first.read_exact(&mut reply).unwrap();
+    assert_eq!(&reply, b"+OK\r\n");
+    drop(first);
+
+    // Connections are spread over both shards; each answers with the new value.
+    for _ in 0..6 {
+        assert_eq!(
+            request(address, &resp(&[&[b"CONFIG", b"GET", b"slowlog-max-len"]])),
+            b"*2\r\n$15\r\nslowlog-max-len\r\n$1\r\n9\r\n"
+        );
+    }
+    stop.request();
+    join_within(server, PATIENCE).unwrap();
+}

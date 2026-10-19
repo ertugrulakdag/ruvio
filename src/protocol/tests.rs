@@ -985,11 +985,15 @@ fn rejects_mutating_admin_and_cluster_verbs() {
     let frames: &[(&[u8], &str)] = &[
         (
             b"*3\r\n$6\r\nCONFIG\r\n$3\r\nSET\r\n$11\r\nrequirepass\r\n",
-            "only CONFIG GET is supported",
+            "wrong number of arguments for 'config|set' command",
         ),
         (
-            b"*4\r\n$6\r\nCONFIG\r\n$3\r\nSET\r\n$11\r\nrequirepass\r\n$1\r\nx\r\n",
-            "only CONFIG GET is supported",
+            b"*3\r\n$6\r\nCONFIG\r\n$7\r\nREWRITE\r\n$1\r\nx\r\n",
+            "wrong number of arguments for 'config|rewrite' command",
+        ),
+        (
+            b"*2\r\n$6\r\nCONFIG\r\n$9\r\nRESETSTAT\r\n",
+            "only CONFIG GET, SET and REWRITE are supported",
         ),
         (
             b"*3\r\n$7\r\nCLUSTER\r\n$4\r\nMEET\r\n$9\r\n127.0.0.1\r\n",
@@ -1921,4 +1925,32 @@ fn integer_and_timeout_arguments_follow_redis_rules() {
             "BLPOP k {timeout}"
         );
     }
+}
+
+#[test]
+fn parses_config_set_pairs_and_config_rewrite() {
+    let set = b"*6\r\n$6\r\nconfig\r\n$3\r\nset\r\n$9\r\nmaxmemory\r\n$3\r\n100\r\n$15\r\nslowlog-max-len\r\n$1\r\n5\r\n";
+    let (command, used) = parse_command(set).unwrap().unwrap();
+
+    assert_eq!(used, set.len());
+    let Command::ConfigSet(pairs) = command else {
+        panic!("{command:?}");
+    };
+    let pairs: Vec<(&[u8], &[u8])> = pairs
+        .iter()
+        .map(|(name, value)| (name.as_ref(), value.as_ref()))
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            (&b"maxmemory"[..], &b"100"[..]),
+            (&b"slowlog-max-len"[..], &b"5"[..])
+        ]
+    );
+
+    let rewrite = b"*2\r\n$6\r\nCONFIG\r\n$7\r\nREWRITE\r\n";
+    assert_eq!(
+        parse_command(rewrite).unwrap(),
+        Some((Command::ConfigRewrite, rewrite.len()))
+    );
 }

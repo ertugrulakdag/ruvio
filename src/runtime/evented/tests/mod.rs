@@ -487,6 +487,7 @@ fn tag_on_shard(shard: usize) -> String {
 }
 
 mod cluster;
+mod config_set;
 mod connection;
 mod expire;
 mod hangups;

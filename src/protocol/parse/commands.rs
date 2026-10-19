@@ -68,11 +68,46 @@ pub(in crate::protocol) fn cmd_readonly<'a>(name: &[u8], args: &Args<'a, '_>) ->
 }
 
 pub(in crate::protocol) fn cmd_config<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
-    if args.len() == 2 && args.bytes(0).eq_ignore_ascii_case(b"GET") {
+    if args.len() == 0 {
+        return Err(ProtocolError::Invalid(
+            "wrong number of arguments for 'config' command",
+        ));
+    }
+
+    let subcommand = args.bytes(0);
+
+    if args.len() == 2 && subcommand.eq_ignore_ascii_case(b"GET") {
         return Ok(Command::ConfigGet(args.arg(1)));
     }
 
-    Err(ProtocolError::Invalid("only CONFIG GET is supported"))
+    if subcommand.eq_ignore_ascii_case(b"SET") {
+        if args.len() < 3 || args.len().is_multiple_of(2) {
+            return Err(ProtocolError::Invalid(
+                "wrong number of arguments for 'config|set' command",
+            ));
+        }
+
+        let pairs = (1..args.len())
+            .step_by(2)
+            .map(|index| (args.arg(index), args.arg(index + 1)))
+            .collect();
+
+        return Ok(Command::ConfigSet(pairs));
+    }
+
+    if subcommand.eq_ignore_ascii_case(b"REWRITE") {
+        if args.len() != 1 {
+            return Err(ProtocolError::Invalid(
+                "wrong number of arguments for 'config|rewrite' command",
+            ));
+        }
+
+        return Ok(Command::ConfigRewrite);
+    }
+
+    Err(ProtocolError::Invalid(
+        "only CONFIG GET, SET and REWRITE are supported",
+    ))
 }
 
 pub(in crate::protocol) fn cmd_info<'a>(args: &Args<'a, '_>) -> Parsed<'a> {

@@ -66,6 +66,7 @@ pub(super) fn validate_command_payloads(
         | Command::ReadWrite
         | Command::Wait { .. }
         | Command::Save
+        | Command::ConfigRewrite
         | Command::Bgsave
         | Command::DbSize
         | Command::RandomKey
@@ -113,6 +114,12 @@ pub(super) fn validate_command_payloads(
         }
         Command::Move { key, .. } => validate_key(key, limits)?,
         Command::ConfigGet(pattern) => validate_value(pattern, limits)?,
+        Command::ConfigSet(pairs) => {
+            for (name, value) in pairs {
+                validate_value(name, limits)?;
+                validate_value(value, limits)?;
+            }
+        }
         Command::JsonGet { key, path } | Command::JsonDel { key, path } => {
             validate_key(key, limits)?;
             validate_value(path, limits)?;

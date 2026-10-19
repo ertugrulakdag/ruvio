@@ -581,7 +581,7 @@ fn evented_rejected_admin_verbs_reply_and_keep_the_connection() {
                   *3\r\n$7\r\nCLUSTER\r\n$4\r\nMEET\r\n$9\r\n127.0.0.1\r\n\
                   *1\r\n$4\r\nPING\r\n",
         ),
-        b"-ERR only CONFIG GET is supported\r\n\
+        b"-ERR wrong number of arguments for 'config|set' command\r\n\
               -ERR unknown command\r\n\
               -ERR unknown command\r\n\
               -ERR only CLUSTER SLOTS, NODES, SHARDS, INFO, MYID, and KEYSLOT are supported\r\n\

@@ -99,6 +99,13 @@ impl<'a> Command<'a> {
             Self::ReadOnly => Command::ReadOnly,
             Self::ReadWrite => Command::ReadWrite,
             Self::ConfigGet(pattern) => Command::ConfigGet(owned(pattern)),
+            Self::ConfigSet(pairs) => Command::ConfigSet(
+                pairs
+                    .into_iter()
+                    .map(|(name, value)| (owned(name), owned(value)))
+                    .collect(),
+            ),
+            Self::ConfigRewrite => Command::ConfigRewrite,
             Self::Info(message) => Command::Info(message.map(owned)),
             Self::Save => Command::Save,
             Self::Bgsave => Command::Bgsave,
@@ -1235,6 +1242,8 @@ pub(crate) fn command_mutates_store(command: &Command<'_>) -> bool {
             | Command::ConfigGet(_)
             | Command::Info(_)
             | Command::Save
+            | Command::ConfigSet(_)
+            | Command::ConfigRewrite
             | Command::Bgsave
             | Command::Get(_)
             | Command::JsonGet { .. }

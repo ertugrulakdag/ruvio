@@ -1070,3 +1070,96 @@ fn every_template_setting_answers_config_get() {
         );
     }
 }
+
+/// Every `CONFIG GET` name is decided: live (`CONFIG SET` changes it) or restart-only. A
+/// setting added to `introspect` fails here until it is in exactly one list.
+#[test]
+fn every_config_get_name_is_live_or_restart_only() {
+    let names: Vec<String> = AppConfig::default()
+        .introspect()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+
+    for name in &names {
+        let live = super::LIVE_SETTINGS.contains(&name.as_str());
+        let restart = super::RESTART_ONLY_SETTINGS.contains(&name.as_str());
+
+        assert!(
+            live != restart,
+            "{name}: live {live}, restart-only {restart}"
+        );
+    }
+
+    for name in super::LIVE_SETTINGS
+        .iter()
+        .chain(super::RESTART_ONLY_SETTINGS)
+    {
+        assert!(
+            names.iter().any(|known| known == name),
+            "{name} is not a CONFIG GET name"
+        );
+    }
+}
+
+/// Each live setting takes the text `CONFIG GET` shows for it: setting every one to its own
+/// value changes nothing.
+#[test]
+fn every_live_setting_accepts_its_config_get_value() {
+    let config = AppConfig::default();
+
+    for (name, value) in config.introspect() {
+        if !super::LIVE_SETTINGS.contains(&name.as_str())
+            || matches!(name.as_str(), "requirepass" | "metrics-token")
+        {
+            continue;
+        }
+
+        let changed = config
+            .with_live_changes(&[(name.as_bytes(), value.as_bytes())])
+            .unwrap_or_else(|error| panic!("{name} = {value:?}: {error}"));
+
+        assert_eq!(changed, config, "{name} = {value:?}");
+    }
+}
+
+#[test]
+fn live_changes_apply_together_or_not_at_all() {
+    let config = AppConfig::default();
+    let changed = config
+        .with_live_changes(&[
+            (b"MAXMEMORY", b"200000000"),
+            (b"maxmemory-policy", b"allkeys-lfu"),
+            (b"notify-keyspace-events", b"Ex"),
+            (b"idle-timeout-ms", b"1500"),
+            (b"requirepass", b"pw"),
+        ])
+        .unwrap();
+
+    assert_eq!(changed.memory.max_process_bytes, 200_000_000);
+    assert_eq!(changed.memory.eviction_policy, EvictionPolicy::AllKeysLfu);
+    assert_ne!(changed.memory.notify_mask, 0);
+    assert_eq!(changed.timeouts.idle, Duration::from_millis(1500));
+    assert_eq!(changed.security.requirepass, "pw");
+
+    for (pairs, error) in [
+        (
+            &[(&b"maxmemory"[..], &b"1"[..]), (b"port-mode", b"single")][..],
+            "restart-only setting",
+        ),
+        (&[(b"maxmemory", b"lots")], "must be an unsigned integer"),
+        (
+            &[(b"maxmemory-policy", b"random")],
+            "unknown maxmemory-policy",
+        ),
+        (
+            &[(b"notify-keyspace-events", b"?")],
+            "notify-keyspace-events",
+        ),
+        (&[(b"nope", b"1")], "Unknown option"),
+    ] {
+        let message = config.with_live_changes(pairs).unwrap_err();
+
+        assert!(message.contains(error), "{message}");
+    }
+}

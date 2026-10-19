@@ -1157,6 +1157,39 @@
     {
       "args": [
         "config",
+        "SET",
+        "$",
+        "KEYSLOT",
+        "v4",
+        "INCRBY"
+      ],
+      "keys": []
+    },
+    {
+      "args": [
+        "config",
+        "SET",
+        "2",
+        "a3"
+      ],
+      "keys": []
+    },
+    {
+      "args": [
+        "config",
+        "SET",
+        "b2",
+        "LATEST",
+        "LOAD",
+        "2",
+        "f6",
+        "1"
+      ],
+      "keys": []
+    },
+    {
+      "args": [
+        "config",
         "GET",
         "-1"
       ],

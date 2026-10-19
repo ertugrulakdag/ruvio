@@ -325,8 +325,11 @@ pub(super) async fn handle_client(
         return Ok(());
     }
 
-    let mut rate =
-        CommandRateLimiter::new(state.published_config.connections.max_commands_per_second);
+    let mut rate = CommandRateLimiter::new(
+        state
+            .live
+            .with(|live| live.connections.max_commands_per_second),
+    );
     let mut session = TxSession::new(conn);
     let fwd_entry = state
         .forwarding
@@ -1439,6 +1442,8 @@ fn plain_command(command: &Command<'_>) -> bool {
                 | Command::ConfigGet(_)
                 | Command::Info(_)
                 | Command::Save
+                | Command::ConfigSet(_)
+                | Command::ConfigRewrite
                 | Command::Bgsave
                 | Command::ChangesSubscribe(_)
                 | Command::Multi
@@ -1498,7 +1503,7 @@ fn dispatch_plain(
     command: Command<'_>,
     frame: &[u8],
 ) -> io::Result<()> {
-    let threshold = state.published_config.slowlog_threshold_micros;
+    let threshold = state.live.slowlog_threshold_micros.get();
     let started = (threshold >= 0).then(crate::time::Stamp::now);
 
     if !rate.allow() {
@@ -1576,7 +1581,7 @@ pub(super) async fn dispatch_command<'s>(
     peer: Option<Peer<'_>>,
     deferred: Option<&mut Option<Parking<'s>>>,
 ) -> io::Result<()> {
-    let threshold = state.published_config.slowlog_threshold_micros;
+    let threshold = state.live.slowlog_threshold_micros.get();
     let sample = (threshold >= 0).then(|| clients::SlowSample::of(&command, frame));
     let identity = clients::is_identity_change(&command);
     let started = sample.as_ref().map(|_| crate::time::Stamp::now());
@@ -1762,8 +1767,25 @@ async fn dispatch_inner<'s>(
             Command::ConfigGet(pattern) => {
                 write_response(
                     output,
-                    crate::engine::config_get_response(&state.published_config, pattern),
+                    crate::engine::config_get_response(&state.live.current(), pattern),
                 )?;
+
+                return Ok(());
+            }
+
+            Command::ConfigSet(pairs) => {
+                let pairs: Vec<(&[u8], &[u8])> = pairs
+                    .iter()
+                    .map(|(name, value)| (name.as_ref(), value.as_ref()))
+                    .collect();
+
+                write_response(output, super::live::config_set(state, &pairs).await)?;
+
+                return Ok(());
+            }
+
+            Command::ConfigRewrite => {
+                write_response(output, super::live::config_rewrite(state))?;
 
                 return Ok(());
             }
@@ -2008,7 +2030,7 @@ async fn dispatch_inner<'s>(
                     &mut *persistence,
                     &mut *waiters,
                     &mut scripts,
-                    state.published_config.scripts,
+                    state.live.with(|live| live.scripts),
                     command,
                     session.database,
                 ) {
@@ -2352,7 +2374,7 @@ async fn dispatch_inner<'s>(
                     for (index, query) in server_queries {
                         let answer = match &query {
                             Command::ConfigGet(pattern) => {
-                                crate::engine::config_get_response(&state.published_config, pattern)
+                                crate::engine::config_get_response(&state.live.current(), pattern)
                             }
                             Command::Info(section) => Response::Bulk(Some(
                                 super::info::evented_info(state, section.as_deref())?.into(),

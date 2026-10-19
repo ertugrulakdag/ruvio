@@ -53,6 +53,8 @@ pub fn command_slot(command: &Command<'_>) -> Result<Option<u16>, CrossSlot> {
         | Command::ConfigGet(_)
         | Command::Info(_)
         | Command::Save
+        | Command::ConfigSet(_)
+        | Command::ConfigRewrite
         | Command::Bgsave
         | Command::Scan { .. }
         | Command::Keys(_)
@@ -361,6 +363,8 @@ pub fn command_keys<'a>(command: &'a Command<'_>) -> Vec<&'a [u8]> {
         | Command::ConfigGet(_)
         | Command::Info(_)
         | Command::Save
+        | Command::ConfigSet(_)
+        | Command::ConfigRewrite
         | Command::Bgsave
         | Command::Scan { .. }
         | Command::Keys(_)

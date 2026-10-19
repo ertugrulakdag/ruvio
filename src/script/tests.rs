@@ -37,6 +37,8 @@ const KEYLESS_REFUSED_IN_SCRIPTS: &[&str] = &[
     "ClusterShards",
     "ClusterSlots",
     "ConfigGet",
+    "ConfigRewrite",
+    "ConfigSet",
     "Discard",
     "Eval",
     "EvalSha",

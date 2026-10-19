@@ -115,6 +115,60 @@ pub(super) enum Message {
     /// Redis Cluster node answers for the node that took the command. One copy is shared by
     /// every destination; the receiver returns its reservation (see `Fabric::reserve_publish`).
     Publish(Arc<PublishDelivery>),
+    /// A change another shard made that every shard applies on its own thread (see
+    /// [`Forwarding::apply_everywhere`]).
+    Broadcast(Arc<Broadcast>),
+}
+
+/// Something every shard applies on its own thread, such as a `CONFIG SET`.
+pub(super) trait ShardChange: Send + Sync {
+    fn apply(&self, state: &ShardState);
+}
+
+/// One [`ShardChange`] handed to the other shards, shared by all of them.
+pub(super) struct Broadcast {
+    change: Box<dyn ShardChange>,
+    /// Shards that have not applied it yet.
+    pending: AtomicUsize,
+    done: tokio::sync::Notify,
+}
+
+impl Broadcast {
+    fn apply_on(&self, state: &ShardState) {
+        self.change.apply(state);
+
+        if self.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.done.notify_one();
+        }
+    }
+}
+
+impl Forwarding {
+    /// Sends `change` to every other shard and waits until each has applied it. The caller
+    /// applies it on its own shard. Nothing is sent with one shard.
+    pub(super) async fn apply_everywhere(&self, change: Box<dyn ShardChange>) {
+        let others = self.fabric.count - 1;
+
+        if others == 0 {
+            return;
+        }
+
+        let broadcast = Arc::new(Broadcast {
+            change,
+            pending: AtomicUsize::new(others),
+            done: tokio::sync::Notify::new(),
+        });
+
+        for dst in (0..self.fabric.count).filter(|&dst| dst != self.me) {
+            self.fabric
+                .send(self.me, dst, Message::Broadcast(Arc::clone(&broadcast)));
+        }
+
+        // `notify_one` keeps a permit when it runs before this waits.
+        while broadcast.pending.load(Ordering::Acquire) > 0 {
+            broadcast.done.notified().await;
+        }
+    }
 }
 
 /// One classic `PUBLISH` handed to the other shards.
@@ -149,6 +203,8 @@ pub(crate) struct Fabric {
     boxes: Vec<Mutex<Vec<Message>>>,
     /// Each shard's log and replica acknowledgements, so `WAIT` covers every shard.
     durability: Mutex<Vec<Option<ShardDurability>>>,
+    /// The newest `CONFIG SET` configuration and its version (see `live`).
+    pub(super) config: Mutex<super::live::ConfigAuthority>,
 }
 
 #[derive(Clone)]
@@ -173,6 +229,7 @@ impl Fabric {
                 .collect(),
             boxes: (0..count * count).map(|_| Mutex::new(Vec::new())).collect(),
             durability: Mutex::new(vec![None; count]),
+            config: Mutex::new(super::live::ConfigAuthority::default()),
         })
     }
 
@@ -815,6 +872,8 @@ pub(super) async fn remote_loop(state: Rc<ShardState>, shutdown: ShutdownToken) 
                     forwarding.fabric.release_publish(forwarding.me, &delivery);
                 }
 
+                Message::Broadcast(broadcast) => broadcast.apply_on(&state),
+
                 Message::Cancel { src, conn } => {
                     if let Some(cancel) = forwarding.blocked.borrow().get(&(src, conn)) {
                         cancel.cancel();
@@ -1031,8 +1090,12 @@ async fn execute_request_in(
         rules: Arc::clone(&request.rules),
     };
     let mut rate = CommandRateLimiter::new(0);
-    let mut output =
-        BoundedOutput::with_capacity(0, state.published_config.requests.max_output_buffer_bytes);
+    let mut output = BoundedOutput::with_capacity(
+        0,
+        state
+            .live
+            .with(|live| live.requests.max_output_buffer_bytes),
+    );
     let mut lens = Vec::with_capacity(request.count as usize);
     let mut unlogged = Vec::new();
     let suspended = std::cell::Cell::new(false);
@@ -2016,6 +2079,8 @@ mod tests {
         "ClusterSlots",
         "CommandMeta",
         "ConfigGet",
+        "ConfigRewrite",
+        "ConfigSet",
         "Discard",
         "Echo",
         "Eval",

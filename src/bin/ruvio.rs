@@ -166,7 +166,10 @@ fn run() -> io::Result<()> {
 
     ruvio::config::ensure_config_file(&config_path).map_err(invalid_config)?;
 
-    let mut config = ruvio::AppConfig::default();
+    let mut config = ruvio::AppConfig {
+        config_file: Some(config_path.clone()),
+        ..ruvio::AppConfig::default()
+    };
     let file_text = std::fs::read_to_string(&config_path).map_err(|error| {
         invalid_config(format!(
             "failed to read config {}: {error}",

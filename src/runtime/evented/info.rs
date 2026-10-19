@@ -90,7 +90,7 @@ pub(super) fn evented_info(state: &ShardState, section: Option<&[u8]>) -> io::Re
         u8::from(super::checkpoint::background_save_in_progress(state)),
     )?;
 
-    if state.published_config.latency_histograms {
+    if state.live.latency_histograms.get() {
         info.extend_from_slice(b"# Latencystats\r\n");
 
         for latency in command_latency(state) {

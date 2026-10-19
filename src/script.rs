@@ -1358,6 +1358,8 @@ fn scriptable(command: &Command<'_>) -> bool {
             command,
             Command::Wait { .. }
                 | Command::Save
+                | Command::ConfigSet(_)
+                | Command::ConfigRewrite
                 | Command::Bgsave
                 | Command::Hello { .. }
                 | Command::ClientGetName

@@ -545,6 +545,7 @@ fn redact_secrets(arguments: &mut [&[u8]]) {
 
             if parameter.windows(4).any(|part| part == b"pass")
                 || parameter.windows(6).any(|part| part == b"secret")
+                || parameter.windows(5).any(|part| part == b"token")
             {
                 arguments[index + 1] = REDACTED;
             }

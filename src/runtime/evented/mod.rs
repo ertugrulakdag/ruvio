@@ -68,6 +68,7 @@ mod forward;
 mod hot;
 mod info;
 mod input;
+mod live;
 mod maintenance;
 mod net;
 mod pubsub;
@@ -143,7 +144,12 @@ struct ShardState {
     subscribers: RefCell<HashMap<u64, Outbound>>,
     clients: RefCell<HashMap<u64, ClientEntry>>,
     slowlog: RefCell<crate::slowlog::SlowLog>,
+    /// Settings fixed at start: the restart-only ones are read here. The ones `CONFIG SET`
+    /// changes are read from `live`.
     published_config: AppConfig,
+    live: live::LiveConfig,
+    /// Admits this shard's own listener connections (per-shard mode).
+    limiter: ConnectionLimiter,
     next_conn_id: Cell<u64>,
     scripts: RefCell<crate::script::ScriptCache>,
     active_connections: Cell<u64>,
@@ -242,9 +248,9 @@ impl CommandTiming {
             )
         };
         let (sampled, hot_tick) = sampled;
-        let hot_sample = hot_tick && state.published_config.key_stats;
+        let hot_sample = hot_tick && state.live.key_stats.get();
 
-        let histogram = (sampled && state.published_config.latency_histograms)
+        let histogram = (sampled && state.live.latency_histograms.get())
             .then(|| {
                 crate::protocol::command_spec(name().as_bytes()).map(crate::protocol::command_index)
             })
@@ -278,7 +284,7 @@ impl CommandTiming {
     /// Feed the sampled-key tables: one access in `HOT_KEY_SAMPLE` is counted as hot, and
     /// every string write of at least `BIG_KEY_BYTES` is remembered as big.
     fn observe_key(&self, key: impl Fn() -> Option<Vec<u8>>, write_bytes: Option<usize>) {
-        if !self.state.published_config.key_stats {
+        if !self.state.live.key_stats.get() {
             return;
         }
 
@@ -551,6 +557,11 @@ fn run_cluster(config: &AppConfig, shutdown: ShutdownToken, force: bool) -> io::
         let acceptor = bind_listener(base)?;
         let fabric = fabric.clone();
         let limiter = ConnectionLimiter::new(config.connections);
+        fabric
+            .config
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .register_acceptor(limiter.clone());
         let stop = shutdown.clone();
         let exit_guard = ShutdownOnExit(shutdown.clone());
 
@@ -975,6 +986,8 @@ async fn serve_async(
         clients: RefCell::new(HashMap::new()),
         slowlog: RefCell::new(crate::slowlog::SlowLog::default()),
         published_config: config.clone(),
+        live: live::LiveConfig::new(&config),
+        limiter: ConnectionLimiter::new(config.connections),
         next_conn_id: Cell::new(1),
         scripts: RefCell::new(crate::script::ScriptCache::with_payload_limits(
             config.protocol,
@@ -1038,10 +1051,7 @@ async fn serve_async(
         recovered_records = state.recovery.records_replayed,
         "server listening"
     );
-    let limiter = ConnectionLimiter::new(config.connections);
-    let timeouts = config.timeouts;
     let limits = config.protocol;
-    let request_limits = config.requests;
     let shutdown_grace = config.shutdown_grace;
 
     let replication = attach_replication(&state, shard_id)?;
@@ -1090,10 +1100,14 @@ async fn serve_async(
                         continue;
                     }
                 };
+                // Connection settings are read per accept: `CONFIG SET` changes them for new
+                // connections only.
+                let (timeouts, request_limits) =
+                    state.live.with(|live| (live.timeouts, live.requests));
                 let permit = match handed {
                     Some(permit) => permit,
                     None => {
-                        let Some(permit) = limiter.try_acquire(peer.ip()) else {
+                        let Some(permit) = state.limiter.try_acquire(peer.ip()) else {
                             let mut stream = stream;
                             let _ = timeout(
                                 timeouts.write,
@@ -1134,16 +1148,18 @@ async fn serve_async(
                 if state.replica_incomplete.get() {
                     continue;
                 }
+                let maintenance_keys =
+                    state.live.with(|live| live.memory.active_expire_maintenance_keys);
                 let mut store = state.store.borrow_mut();
                 let reaped = expire_maintenance(
                     &mut store,
-                    config.memory.active_expire_maintenance_keys,
+                    maintenance_keys,
                     EXPIRE_MAINTENANCE_TIME,
                     EXPIRE_MAINTENANCE_MAX_KEYS,
                 );
                 // A slice that ended on its time limit with work left comes back as soon as
                 // requests have had their turn, so a mass expiry clears in seconds.
-                let backlog = reaped >= config.memory.active_expire_maintenance_keys
+                let backlog = reaped >= maintenance_keys
                     && store.soonest_deadline_due();
                 // A write admitted before eviction made room for it left a debt: evict the
                 // rest in slices, so no single request stalls the shard.

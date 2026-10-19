@@ -508,6 +508,10 @@ pub enum Command<'a> {
     ReadOnly,
     ReadWrite,
     ConfigGet(Bytes<'a>),
+    /// `CONFIG SET name value [name value ...]`: names and values as sent, checked by the
+    /// connection that receives it.
+    ConfigSet(Vec<(Bytes<'a>, Bytes<'a>)>),
+    ConfigRewrite,
     Info(Option<Bytes<'a>>),
     Save,
     Bgsave,

@@ -117,6 +117,9 @@ pub struct AppConfig {
     /// Original `notify-keyspace-events` letters. Empty disables the feature.
     pub notify_keyspace_events: String,
     pub replication: ReplicationConfig,
+    /// The file this configuration was read from, where `CONFIG REWRITE` writes. Not a
+    /// setting: `None` (tests, embedded servers) refuses `CONFIG REWRITE`.
+    pub config_file: Option<PathBuf>,
 }
 
 impl AppConfig {
@@ -1059,6 +1062,7 @@ impl Default for AppConfig {
             hot_keys: Vec::new(),
             notify_keyspace_events: String::new(),
             replication: ReplicationConfig::default(),
+            config_file: None,
         }
     }
 }
@@ -2615,6 +2619,10 @@ fn parse_bool(value: &str, name: &str) -> Result<bool, String> {
         _ => Err(format!("{name} must be a boolean")),
     }
 }
+
+mod live;
+
+pub use live::{LIVE_SETTINGS, RESTART_ONLY_SETTINGS};
 
 #[cfg(test)]
 mod tests;
