@@ -29,10 +29,10 @@ Import path `github.com/salihcantekin/ruvio/clients/go` (package `ruvio`).
 - One `Client` multiplexes all concurrent callers over **one TCP connection**: frames that
   queue up while a write is in flight are coalesced into a single write, and replies are
   matched to callers through a FIFO.
-- A typed method for **every command in `docs/compatibility-matrix.json` (288/288)** plus the
+- A typed method for **every command in `docs/compatibility-matrix.json` (290/290)** plus the
   options that change what Ruvio does (`SET ... IFEQ`, `INCRBY ... MAX`, `FILLGET ... WAIT`,
   `FILLSET ... SWR`, `GETEX` ms, `DELEX key IFEQ`, `LPUSHCAP/RPUSHCAP`, `BF.*`, `JSON.*` incl.
-  `JSON.INDEX`/`JSON.FIND`, `IDEM BEGIN/COMPLETE`, `LEASE/RELEASE`, `SEMAPHORE`, `ONCE`, `TAKE`,
+  `JSON.INDEX`/`JSON.FIND`, `IDEM BEGIN/COMPLETE`, `LEASE/RELEASE`, `SEMAPHORE`, `ONCE`, `TAKE`, `TRANSFER/HTRANSFER`,
   `SETV`, `CHANGES`, `LIMIT`, `XADD ... DELAY`).
 - `context.Context` on every call; pipelines; `MULTI/EXEC` transactions with `WATCH`;
   Pub/Sub; RESP3 (`Options.Protocol = 3`) with push frames for `CLIENT TRACKING`.
@@ -70,6 +70,7 @@ v, ok, err := c.Get(ctx, "greeting")           // ok=false when the key is missi
 
 ok, err = c.SetArgs(ctx, "k", "v", ruvio.SetOptions{NX: true, TTL: 30 * time.Second})
 ok, err = c.SetIfEq(ctx, "k", "v2", "v", ruvio.SetOptions{})   // Ruvio IFEQ
+ok, err = c.SetIfGreater(ctx, "watermark", 1700000000, ruvio.SetOptions{}) // Ruvio IFGT: keep the highest number
 n, ok, err := c.IncrByMax(ctx, "quota", 1, 100)                 // nil (ok=false) past 100
 
 // anything else: the escape hatch (string, []byte, ints, floats, bool)

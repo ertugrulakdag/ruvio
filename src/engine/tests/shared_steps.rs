@@ -261,6 +261,19 @@ const CASES: &[(&str, &[&[&str]])] = &[
     ("idem", &[&["IDEM", "k", "BEGIN", "fp", "owner", "5000"]]),
     ("once", &[&["ONCE", "k", "5000"]]),
     ("take", &[&["TAKE", "s", "3"]]),
+    ("transfer", &[&["TRANSFER", "s", "d", "4"]]),
+    (
+        "transfer",
+        &[&["SET", "d", "7"], &["TRANSFER", "s", "d", "4"]],
+    ),
+    ("htransfer", &[&["HTRANSFER", "h", "f", "g", "1"]]),
+    (
+        "htransfer",
+        &[
+            &["HEXPIRE", "h", "100", "FIELDS", "1", "f"],
+            &["HTRANSFER", "h", "f", "g", "1"],
+        ],
+    ),
     ("getex", &[&["GETEX", "s", "100000"]]),
     (
         "release",

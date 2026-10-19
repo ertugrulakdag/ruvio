@@ -378,6 +378,8 @@ fn methods_exist() {
     let _ = Client::set_expires_at;
     let _ = Client::set_if_eq;
     let _ = Client::set_if_eq_keep_ttl;
+    let _ = Client::set_if_greater;
+    let _ = Client::set_if_less;
     let _ = Client::set_keep_ttl;
     let _ = Client::set_with;
     let _ = Client::setbit;
@@ -413,6 +415,8 @@ fn methods_exist() {
     let _ = Client::sunsubscribe;
     let _ = Client::swapdb;
     let _ = Client::take;
+    let _ = Client::transfer;
+    let _ = Client::htransfer;
     let _ = Client::touch;
     let _ = Client::ttl;
     let _ = Client::unlink;

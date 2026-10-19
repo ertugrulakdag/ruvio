@@ -223,6 +223,82 @@ impl Client {
             .ok_or_else(|| unexpected("TAKE", &value))
     }
 
+    /// Sends `TRANSFER source destination amount [MAX cap]`: moves `amount` from the integer at
+    /// `source` to the integer at `destination` in one step, only when `source` holds at least
+    /// that much. A missing `destination` starts at 0. Both keys are written as one WAL record.
+    ///
+    /// # Arguments
+    /// * `amount` - a positive integer to move.
+    /// * `max` - optional ceiling for `destination` after the move.
+    ///
+    /// # Returns
+    /// `Some((source_after, destination_after))`, or `None` when `source` is missing or short,
+    /// or `destination` would overflow or pass `max`; nothing is written then.
+    ///
+    /// # Errors
+    /// [`Error::Server`] if a value is not an integer, a key has another type, `amount` is not
+    /// positive, or (on a sharded server) the two keys are in different slots (`CROSSSLOT`);
+    /// hash tags such as `{user:42}` put them in one slot.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// match client.transfer("{u:42}:wallet", "{u:42}:escrow", 30, None)? {
+    ///     Some((wallet, escrow)) => println!("moved: {wallet} left, {escrow} held"),
+    ///     None => println!("not enough balance"),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn transfer(
+        &mut self,
+        source: &str,
+        destination: &str,
+        amount: i64,
+        max: Option<i64>,
+    ) -> Result<Option<(i64, i64)>, Error> {
+        let mut command = args!["TRANSFER", source, destination, amount];
+
+        if let Some(max) = max {
+            command.extend(args!["MAX", max]);
+        }
+
+        let value = self.run(command)?;
+
+        balance_pair("TRANSFER", value)
+    }
+
+    /// Sends `HTRANSFER key from to amount [MAX cap]`: [`Client::transfer`] between two integer
+    /// fields of one hash. A missing `to` field starts at 0 and field TTLs stay.
+    ///
+    /// # Returns
+    /// `Some((from_after, to_after))`, or `None` when the key or the `from` field is missing or
+    /// short, or `to` would overflow or pass `max`; nothing is written then.
+    ///
+    /// # Errors
+    /// [`Error::Server`] if a field is not an integer, the key is not a hash, or `amount` is
+    /// not positive.
+    pub fn htransfer(
+        &mut self,
+        key: &str,
+        from: &str,
+        to: &str,
+        amount: i64,
+        max: Option<i64>,
+    ) -> Result<Option<(i64, i64)>, Error> {
+        let mut command = args!["HTRANSFER", key, from, to, amount];
+
+        if let Some(max) = max {
+            command.extend(args!["MAX", max]);
+        }
+
+        let value = self.run(command)?;
+
+        balance_pair("HTRANSFER", value)
+    }
+
     /// Sends `GETEX key PX ttl_ms`: returns the string and sets a new TTL in one step (sliding
     /// expiry). Plain `GET` does not move the deadline.
     ///
@@ -3835,5 +3911,20 @@ mod tests {
             .unwrap()
             .is_none()
         );
+    }
+}
+
+/// `[a, b]` from `TRANSFER` and `HTRANSFER`; null (nothing moved) is `None`.
+fn balance_pair(command: &str, value: RespValue) -> Result<Option<(i64, i64)>, Error> {
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    match value.as_array() {
+        Some([first, second]) => match (first.as_integer(), second.as_integer()) {
+            (Some(first), Some(second)) => Ok(Some((first, second))),
+            _ => Err(unexpected(command, &value)),
+        },
+        _ => Err(unexpected(command, &value)),
     }
 }

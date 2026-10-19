@@ -465,6 +465,10 @@ pub(super) fn validate_command_payloads(
             validate_value(value, limits)?;
             validate_value(expected, limits)?;
         }
+        Command::SetIfCmp { key, value, .. } => {
+            validate_key(key, limits)?;
+            validate_value(value, limits)?;
+        }
         Command::BloomInsert { key, items, .. } => {
             validate_key(key, limits)?;
             validate_values(items, limits)?;
@@ -517,6 +521,21 @@ pub(super) fn validate_command_payloads(
         Command::HashIncrement { key, field, .. } | Command::HashStrLen { key, field } => {
             validate_key(key, limits)?;
             validate_value(field, limits)?;
+        }
+
+        Command::HashTransfer { key, from, to, .. } => {
+            validate_key(key, limits)?;
+            validate_value(from, limits)?;
+            validate_value(to, limits)?;
+        }
+
+        Command::Transfer {
+            source,
+            destination,
+            ..
+        } => {
+            validate_key(source, limits)?;
+            validate_key(destination, limits)?;
         }
 
         Command::SortedSetAdd { key, pairs, .. } => {

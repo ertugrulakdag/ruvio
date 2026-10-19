@@ -161,7 +161,12 @@ pub fn command_slot(command: &Command<'_>) -> Result<Option<u16>, CrossSlot> {
         Command::MSet(pairs) | Command::MSetNx(pairs) => {
             common_slot(pairs.iter().map(|(key, _)| key.as_ref())).map(Some)
         }
-        Command::Rename {
+        Command::Transfer {
+            source,
+            destination,
+            ..
+        }
+        | Command::Rename {
             source,
             destination,
         }
@@ -185,6 +190,7 @@ pub fn command_slot(command: &Command<'_>) -> Result<Option<u16>, CrossSlot> {
         | Command::IdempotencyComplete { key, .. }
         | Command::Take { key, .. }
         | Command::SetIfEq { key, .. }
+        | Command::SetIfCmp { key, .. }
         | Command::DelIfEq { key, .. }
         | Command::ListPushCapped { key, .. }
         | Command::GetEx { key, .. }
@@ -233,6 +239,7 @@ pub fn command_slot(command: &Command<'_>) -> Result<Option<u16>, CrossSlot> {
         | Command::HashSet { key, .. }
         | Command::HashSetNx { key, .. }
         | Command::HashIncrement { key, .. }
+        | Command::HashTransfer { key, .. }
         | Command::HashStrLen { key, .. }
         | Command::HashDelete { key, .. }
         | Command::HashGet { key, .. }
@@ -436,6 +443,11 @@ pub fn command_keys<'a>(command: &'a Command<'_>) -> Vec<&'a [u8]> {
             destination,
             ..
         } => vec![source.as_ref(), destination.as_ref()],
+        Command::Transfer {
+            source,
+            destination,
+            ..
+        } => vec![source.as_ref(), destination.as_ref()],
         Command::GeoSearch {
             key,
             store: Some(store),
@@ -455,6 +467,7 @@ pub fn command_keys<'a>(command: &'a Command<'_>) -> Vec<&'a [u8]> {
         | Command::IdempotencyComplete { key, .. }
         | Command::Take { key, .. }
         | Command::SetIfEq { key, .. }
+        | Command::SetIfCmp { key, .. }
         | Command::DelIfEq { key, .. }
         | Command::ListPushCapped { key, .. }
         | Command::GetEx { key, .. }
@@ -503,6 +516,7 @@ pub fn command_keys<'a>(command: &'a Command<'_>) -> Vec<&'a [u8]> {
         | Command::HashSet { key, .. }
         | Command::HashSetNx { key, .. }
         | Command::HashIncrement { key, .. }
+        | Command::HashTransfer { key, .. }
         | Command::HashStrLen { key, .. }
         | Command::HashDelete { key, .. }
         | Command::HashGet { key, .. }

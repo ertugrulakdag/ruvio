@@ -76,6 +76,11 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         Assert.InRange(await db.GetTimeToLiveMillisecondsAsync("cas"), 1, 30000);
         Assert.True(await db.SetIfEqualKeepingTimeToLiveAsync("cas", "3", "2"));
         Assert.InRange(await db.GetTimeToLiveMillisecondsAsync("cas"), 1, 30000);
+        Assert.True(await db.SetIfGreaterAsync("wm", 10));
+        Assert.False(await db.SetIfGreaterAsync("wm", 10));
+        Assert.True(await db.SetIfGreaterAsync("wm", 11, TimeSpan.FromSeconds(30)));
+        Assert.False(await db.SetIfLessAsync("wm", 12));
+        Assert.True(await db.SetIfLessAsync("wm", -1));
         Assert.False(await db.DeleteIfEqualAsync("cas", "2"));
         Assert.True(await db.DeleteIfEqualAsync("cas", "3"));
         Assert.False(await db.DeleteIfEqualAsync("cas", "3"));
@@ -108,6 +113,16 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         Assert.True(await db.SetAsync("stock", "5"));
         Assert.Equal(2, await db.TakeAsync("stock", 3));
         Assert.Null(await db.TakeAsync("stock", 3));
+
+        Assert.True(await db.SetAsync("{w}a", "10"));
+        Assert.Equal((6L, 4L), await db.TransferAsync("{w}a", "{w}b", 4));
+        Assert.Null(await db.TransferAsync("{w}a", "{w}b", 7));
+        Assert.Null(await db.TransferAsync("{w}a", "{w}b", 3, 6));
+        Assert.Equal((4L, 6L), await db.TransferAsync("{w}a", "{w}b", 2, 6));
+        Assert.Equal(1, await db.SetHashFieldsAsync("th", ("f", "10")));
+        Assert.Equal((6L, 4L), await db.TransferHashFieldAsync("th", "f", "g", 4));
+        Assert.Null(await db.TransferHashFieldAsync("th", "f", "g", 3, 5));
+
         Assert.Equal(1, await db.OnceAsync("once", 10000));
         Assert.Equal(0, await db.OnceAsync("once", 10000));
         Assert.Equal(1, await db.LimitAsync("lim", 2, 10000));

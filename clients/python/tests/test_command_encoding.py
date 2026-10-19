@@ -88,6 +88,11 @@ def test_set_options_in_wire_order():
     r = Rec(reply="OK")
     r.set("k", "v", ex=1, px=2, exat=3, pxat=4, keepttl=True, nx=True, xx=True, ifeq="old")
     assert r.args == ["SET", "k", "v", "IFEQ", "old", "EX", "1", "PX", "2", "EXAT", "3", "PXAT", "4", "KEEPTTL", "NX", "XX"]
+    r.reply = "OK"
+    r.set("k", 5, px=9, ifgt=True)
+    assert r.args == ["SET", "k", "5", "IFGT", "PX", "9"]
+    r.set("k", -5, iflt=True)
+    assert r.args == ["SET", "k", "-5", "IFLT"]
     r.reply = "prev"
     assert r.set("k", "v", get=True) == "prev"
     assert r.args == ["SET", "k", "v", "GET"]
@@ -247,3 +252,16 @@ def test_flush_variants_and_geo_without_hash():
     assert r.georadius("g", 1, 2, 3, withcoord=True, withdist=True) == [GeoResult("m", 2.5, None, (1.0, 2.0))]
     r.reply = [["m", ["1", "2"]]]
     assert r.georadius("g", 1, 2, 3, withcoord=True) == [GeoResult("m", None, None, (1.0, 2.0))]
+
+
+def test_transfer_commands_encode_the_optional_cap_and_return_a_pair():
+    r = Rec(reply=[6, 4])
+    assert r.transfer("a", "b", 4) == (6, 4)
+    assert r.args == ["TRANSFER", "a", "b", "4"]
+    assert r.transfer("a", "b", 4, max=9) == (6, 4)
+    assert r.args == ["TRANSFER", "a", "b", "4", "MAX", "9"]
+    assert r.htransfer("h", "f", "g", 1, max=5) == (6, 4)
+    assert r.args == ["HTRANSFER", "h", "f", "g", "1", "MAX", "5"]
+    r.reply = None
+    assert r.transfer("a", "b", 4) is None
+    assert r.htransfer("h", "f", "g", 1) is None

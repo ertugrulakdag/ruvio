@@ -524,6 +524,19 @@ func (c *cmds) HIncrBy(ctx context.Context, key, field string, delta int64) (int
 	return c.intR(ctx, newCmd(4, cHINCRBY).s(key).s(field).i(delta))
 }
 
+// HTransfer is Transfer between two integer fields of one hash (HTRANSFER key from to
+// amount). A missing to field starts at 0 and field TTLs stay. ok is false, and nothing
+// is written, when the key or the from field is missing or short or to would overflow.
+func (c *cmds) HTransfer(ctx context.Context, key, from, to string, amount int64) (fromAfter, toAfter int64, ok bool, err error) {
+	return c.pairNil(ctx, newCmd(5, cHTRANSFER).s(key).s(from).s(to).i(amount))
+}
+
+// HTransferMax is HTransfer that also refuses when to would end above max (HTRANSFER
+// ... MAX max).
+func (c *cmds) HTransferMax(ctx context.Context, key, from, to string, amount, max int64) (fromAfter, toAfter int64, ok bool, err error) {
+	return c.pairNil(ctx, newCmd(7, cHTRANSFER).s(key).s(from).s(to).i(amount).t(tMAX).i(max))
+}
+
 // HIncrByFloat adds a float to field and returns the new value (HINCRBYFLOAT). A missing
 // field counts as 0; a non-numeric value is a server error.
 func (c *cmds) HIncrByFloat(ctx context.Context, key, field string, delta float64) (float64, error) {

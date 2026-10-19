@@ -64,6 +64,11 @@ class StringsLiveTest {
         assertFalse(c.setIfEq("s:o", "8", "nope"));
         assertTrue(c.setIfEq("s:o", "8", "7"));
         assertTrue(c.setIfEq("s:o", "9", "8", SetOptions.px(50_000)));
+        assertTrue(c.setIfGreater("s:wm", 10));
+        assertFalse(c.setIfGreater("s:wm", 10));
+        assertTrue(c.setIfGreater("s:wm", 11, SetOptions.px(50_000)));
+        assertFalse(c.setIfLess("s:wm", 12));
+        assertTrue(c.setIfLess("s:wm", -1));
         assertEquals("9", c.get("s:o"));
         assertTrue(c.pttl("s:o") <= 50_000);
         c.setex("s:ex", 100, "v");
@@ -105,6 +110,15 @@ class StringsLiveTest {
         assertEquals(2L, c.take("s:t", 3));
         assertNull(c.take("s:t", 3));
         assertEquals("2", c.get("s:t"));
+        // TRANSFER / HTRANSFER
+        c.set("{w}a", "10");
+        assertEquals(java.util.Arrays.asList(6L, 4L), c.transfer("{w}a", "{w}b", 4));
+        assertNull(c.transfer("{w}a", "{w}b", 7));
+        assertNull(c.transfer("{w}a", "{w}b", 3, 6));
+        assertEquals(java.util.Arrays.asList(4L, 6L), c.transfer("{w}a", "{w}b", 2, 6));
+        c.hset("s:th", "f", "10");
+        assertEquals(java.util.Arrays.asList(6L, 4L), c.htransfer("s:th", "f", "g", 4));
+        assertNull(c.htransfer("s:th", "f", "g", 3, 5));
     }
 
     @Test

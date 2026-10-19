@@ -239,6 +239,64 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Sends the Ruvio command {@code SET key value IFGT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is greater than the stored integer (a watermark, a version, the highest bid).
+     * Any TTL is cleared; use the overload with {@code SetOptions} to set one.
+     *
+     * <pre>{@code
+     * boolean advanced = client.setIfGreater("watermark", 1_700_000_000L);
+     * }</pre>
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @return {@code true} when the value was written, {@code false} when the stored number is greater or equal
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-string; an error when the stored string is not an integer
+     */
+    public Boolean setIfGreater(K key, long value) {
+        return await(async.setIfGreater(key, value));
+    }
+
+    /**
+     * Sends the Ruvio command {@code SET key value IFGT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is greater than the stored integer (a watermark, a version, the highest bid).
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @param expiry the expiry to apply
+     * @return {@code true} when written, {@code false} when refused
+     */
+    public Boolean setIfGreater(K key, long value, SetOptions expiry) {
+        return await(async.setIfGreater(key, value, expiry));
+    }
+
+    /**
+     * Sends the Ruvio command {@code SET key value IFLT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is smaller than the stored integer (the lowest price, the earliest deadline).
+     * Any TTL is cleared; use the overload with {@code SetOptions} to set one.
+     *
+     * <pre>{@code
+     * boolean lowered = client.setIfLess("best:price", 4_99L);
+     * }</pre>
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @return {@code true} when the value was written, {@code false} when the stored number is smaller or equal
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-string; an error when the stored string is not an integer
+     */
+    public Boolean setIfLess(K key, long value) {
+        return await(async.setIfLess(key, value));
+    }
+
+    /**
+     * Sends the Ruvio command {@code SET key value IFLT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is smaller than the stored integer (the lowest price, the earliest deadline).
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @param expiry the expiry to apply
+     * @return {@code true} when written, {@code false} when refused
+     */
+    public Boolean setIfLess(K key, long value, SetOptions expiry) {
+        return await(async.setIfLess(key, value, expiry));
+    }
+
+    /**
      * Sends the Ruvio command {@code SETV key value}: starts a versioned string and returns its version.
      * It works on a missing key or a plain string (the key becomes versioned, version 1). Once a key is
      * versioned, later writes must use {@link #setv(Object, Object, long)} with the current version.
@@ -294,6 +352,46 @@ public abstract class RuvioSyncCommands<K, V> {
      */
     public Long take(K key, long count) {
         return await(async.take(key, count));
+    }
+
+    /**
+     * Sends the Ruvio command {@code TRANSFER source destination amount}: moves {@code amount} from the
+     * integer at {@code source} to the integer at {@code destination} in one step, only when {@code source}
+     * holds at least that much. A missing {@code destination} starts at 0. Both writes are one WAL record.
+     *
+     * <pre>{@code
+     * client.set("{u}:wallet", "50");
+     * List<Long> after = client.transfer("{u}:wallet", "{u}:escrow", 30); // [20, 30]
+     * List<Long> none = client.transfer("{u}:wallet", "{u}:escrow", 30);  // null, nothing changed
+     * }</pre>
+     *
+     * @param source the key to subtract from (a decimal integer string)
+     * @param destination the key to add to; in a cluster it must share a slot with {@code source}
+     * (use a hash tag such as {@code {user:42}})
+     * @param amount the amount to move; must be greater than zero
+     * @return {@code [sourceAfter, destinationAfter]}, or {@code null} when {@code source} is missing or
+     * short, or {@code destination} would overflow (nothing is written)
+     * @throws RuvioServerException {@code ERR} when {@code amount} is not positive, the keys are the same or a
+     * value is not an integer; {@code WRONGTYPE} for a non-string; {@code CROSSSLOT} when the keys are in different slots
+     */
+    public List<Long> transfer(K source, K destination, long amount) {
+        return await(async.transfer(source, destination, amount));
+    }
+
+    /**
+     * Sends the Ruvio command {@code TRANSFER source destination amount MAX max}: {@link #transfer(Object, Object, long)}
+     * that also refuses when {@code destination} would end above {@code max}.
+     *
+     * @param source the key to subtract from (a decimal integer string)
+     * @param destination the key to add to; in a cluster it must share a slot with {@code source}
+     * @param amount the amount to move; must be greater than zero
+     * @param max the highest value {@code destination} may reach
+     * @return {@code [sourceAfter, destinationAfter]}, or {@code null} when nothing was moved
+     * @throws RuvioServerException {@code ERR} when {@code amount} is not positive, the keys are the same or a
+     * value is not an integer; {@code WRONGTYPE} for a non-string; {@code CROSSSLOT} when the keys are in different slots
+     */
+    public List<Long> transfer(K source, K destination, long amount, long max) {
+        return await(async.transfer(source, destination, amount, max));
     }
 
     /**
@@ -1437,6 +1535,41 @@ public abstract class RuvioSyncCommands<K, V> {
      */
     public Long hincrby(K key, K field, long delta) {
         return await(async.hincrby(key, field, delta));
+    }
+
+    /**
+     * Sends {@code HTRANSFER key from to amount}: moves {@code amount} between two integer fields of one hash
+     * in one step, only when {@code from} holds at least that much. A missing {@code to} field starts at 0 and
+     * field TTLs stay.
+     *
+     * @param key the hash key
+     * @param from the field to subtract from
+     * @param to the field to add to
+     * @param amount the amount to move; must be greater than zero
+     * @return {@code [fromAfter, toAfter]}, or {@code null} when the key or {@code from} is missing or short, or
+     * {@code to} would overflow (nothing is written)
+     * @throws RuvioServerException {@code ERR} when {@code amount} is not positive, the fields are the same or a
+     * field is not an integer; {@code WRONGTYPE} when the key holds a non-hash
+     */
+    public List<Long> htransfer(K key, K from, K to, long amount) {
+        return await(async.htransfer(key, from, to, amount));
+    }
+
+    /**
+     * Sends {@code HTRANSFER key from to amount MAX max}: {@link #htransfer(Object, Object, Object, long)} that
+     * also refuses when {@code to} would end above {@code max}.
+     *
+     * @param key the hash key
+     * @param from the field to subtract from
+     * @param to the field to add to
+     * @param amount the amount to move; must be greater than zero
+     * @param max the highest value {@code to} may reach
+     * @return {@code [fromAfter, toAfter]}, or {@code null} when nothing was moved
+     * @throws RuvioServerException {@code ERR} when {@code amount} is not positive, the fields are the same or a
+     * field is not an integer; {@code WRONGTYPE} when the key holds a non-hash
+     */
+    public List<Long> htransfer(K key, K from, K to, long amount, long max) {
+        return await(async.htransfer(key, from, to, amount, max));
     }
 
     /**

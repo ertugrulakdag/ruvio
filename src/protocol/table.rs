@@ -1040,6 +1040,22 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         commands::cmd_take,
     ),
     CommandSpec::migrated(
+        "transfer",
+        -4,
+        WRITE | DENYOOM | FAST,
+        (1, 2, 1),
+        &["string", "write", "fast"],
+        commands::cmd_transfer,
+    ),
+    CommandSpec::migrated(
+        "htransfer",
+        -5,
+        WRITE | DENYOOM | FAST,
+        (1, 1, 1),
+        &["hash", "write", "fast"],
+        commands::cmd_htransfer,
+    ),
+    CommandSpec::migrated(
         "getex",
         -2,
         WRITE | DENYOOM | FAST,

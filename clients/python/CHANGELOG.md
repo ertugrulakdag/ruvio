@@ -4,6 +4,8 @@ Notable changes to the Python client `ruvio-client` on PyPI. New entries go unde
 
 ## Unreleased
 
+- New `transfer(source, destination, amount, max=None)` and `htransfer(key, from_field, to_field, amount, max=None)` for the server's `TRANSFER` and `HTRANSFER`: they return a `(a, b)` tuple after the move, or `None` when nothing moved.
+
 ## 0.1.2 - 2026-10-17
 
 - Added `StreamTrim` (`MAXLEN` or `MINID`, `=` or `~`, threshold) for `xadd(trim=...)` and `xtrim(trim=...)`, the `InfoSection`, `ClientType` and `ChangeType` enums (with `change_types()`), `StreamId`, `ScoreBound` and `LexBound` constants, and `score_exclusive()`, `lex_inclusive()` and `lex_exclusive()` bound builders. Existing string arguments keep working.

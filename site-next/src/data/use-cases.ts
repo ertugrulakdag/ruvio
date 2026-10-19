@@ -65,6 +65,24 @@ INCRBY seats:room-9 1 MAX 120
     refs: [{ label: "TAKE", href: commands }, { label: "INCRBY MAX", href: commands }],
   },
   {
+    id: "balances",
+    nav: "Credits and wallets",
+    title: "Credits, points and wallet moves",
+    problem: "Move an amount from one balance to another only when the first one has enough, with no script and no retry loop.",
+    code: `SET {user:42}:wallet 50
+TRANSFER {user:42}:wallet {user:42}:escrow 30
+# 1) 20  -> wallet after
+# 2) 30  -> escrow after
+# (nil)  -> not enough, nothing changed
+
+HTRANSFER account:7 available held 30 MAX 1000
+# 1) 20  -> available after
+# 2) 30  -> held after`,
+    body: "<code>TRANSFER</code> moves an amount between two integer keys, <code>HTRANSFER</code> between two fields of one hash. Both balances change in one WAL record, and a refusal (short source, or a destination past <code>MAX</code>) answers with a null bulk and writes nothing.",
+    note: "TRANSFER keys must share a slot; a hash tag such as {user:42} keeps them together.",
+    refs: [{ label: "TRANSFER", href: commands }, { label: "HTRANSFER", href: commands }],
+  },
+  {
     id: "idempotency",
     nav: "Idempotent APIs",
     title: "Idempotent APIs and payments",
@@ -93,6 +111,21 @@ SETV profile:ada "{...}" 1
     body: "Optimistic concurrency without <code>WATCH</code> or a script. Only keys written with <code>SETV</code> carry a version.",
     note: "A plain <code>SET</code> replaces a versioned string.",
     refs: [{ label: "SETV", href: commands }],
+  },
+  {
+    id: "watermarks",
+    nav: "Watermarks",
+    title: "Watermarks and best values",
+    problem: "Keep the newest timestamp, the highest version or the lowest price, no matter in which order writers arrive.",
+    code: `SET watermark:orders 1700000200 IFGT
+# OK    -> written (key was missing or smaller)
+SET watermark:orders 1700000100 IFGT
+# (nil) -> stored number is greater, nothing written
+SET price:best 499 IFLT PX 3600000
+# OK    -> new lowest price, expires in an hour`,
+    body: "<code>SET key number IFGT</code> writes only when the number is greater than the stored integer (<code>IFLT</code> for smaller) and takes the usual expiry options. One command replaces a read-compare-write script.",
+    note: "Integers only. A stored value that is not an integer is an error and is left unchanged.",
+    refs: [{ label: "SET", href: commands }],
   },
   {
     id: "sessions",

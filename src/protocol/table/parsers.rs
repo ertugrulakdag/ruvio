@@ -19,6 +19,14 @@ pub(super) fn parse_set<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, Protocol
             return parse_set_ifeq(args);
         }
 
+        if args.bytes(2).eq_ignore_ascii_case(b"IFGT") {
+            return parse_set_ifcmp(args, true);
+        }
+
+        if args.bytes(2).eq_ignore_ascii_case(b"IFLT") {
+            return parse_set_ifcmp(args, false);
+        }
+
         let options = parse_set_options(&args.rest(2))?;
 
         return Ok(Command::Set(args.arg(0), args.arg(1), options));
@@ -50,6 +58,28 @@ pub(super) fn parse_set_ifeq<'a>(args: &Args<'a, '_>) -> Result<Command<'a>, Pro
         key: args.arg(0),
         value: args.arg(1),
         expected: args.arg(3),
+        options,
+    })
+}
+
+/// `SET key value IFGT|IFLT [EX|PX|EXAT|PXAT|KEEPTTL]`: `value` must be a signed 64-bit integer.
+/// `NX`, `XX` and `GET` do not combine with it.
+pub(super) fn parse_set_ifcmp<'a>(
+    args: &Args<'a, '_>,
+    greater: bool,
+) -> Result<Command<'a>, ProtocolError> {
+    let number = parse_integer_argument(args.bytes(1))?;
+    let options = parse_set_options(&args.rest(3))?;
+
+    if options.get || options.condition != SetCondition::Always {
+        return Err(ProtocolError::Invalid("syntax error"));
+    }
+
+    Ok(Command::SetIfCmp {
+        key: args.arg(0),
+        value: args.arg(1),
+        number,
+        greater,
         options,
     })
 }

@@ -57,7 +57,7 @@ import { KW_AGGREGATE, KW_BITOP, KW_BITUNIT, KW_CLIENT_TYPE, KW_GEO_UNIT, KW_INF
 const w = (s: string): Buffer => Buffer.from(s, 'latin1');
 const W = {
   EX: w('EX'), PX: w('PX'), EXAT: w('EXAT'), PXAT: w('PXAT'), KEEPTTL: w('KEEPTTL'), NX: w('NX'), XX: w('XX'),
-  GET: w('GET'), IFEQ: w('IFEQ'), MAX: w('MAX'), WAIT: w('WAIT'), SWR: w('SWR'), BEGIN: w('BEGIN'),
+  GET: w('GET'), IFEQ: w('IFEQ'), IFGT: w('IFGT'), IFLT: w('IFLT'), MAX: w('MAX'), WAIT: w('WAIT'), SWR: w('SWR'), BEGIN: w('BEGIN'),
   COMPLETE: w('COMPLETE'), START: w('START'), MATCH: w('MATCH'), COUNT: w('COUNT'), TYPE: w('TYPE'),
   ASYNC: w('ASYNC'), REPLACE: w('REPLACE'), ABSTTL: w('ABSTTL'), IDLETIME: w('IDLETIME'), FREQ: w('FREQ'),
   SAMPLES: w('SAMPLES'), DB: w('DB'), RANK: w('RANK'), MAXLEN: w('MAXLEN'), LIMIT: w('LIMIT'),
@@ -845,12 +845,12 @@ export abstract class Commands {
   }
   /**
    * Stores a string (`SET key value [EX|PX|EXAT|PXAT|KEEPTTL] [NX|XX] [GET]`), or Ruvio's compare-and-set form `SET key value IFEQ expected [...]`.
-   * Only one expiry option is sent, in the order `ex`, `px`, `exat`, `pxat`, `keepTtl`; `nx` wins over `xx`. A plain `set` removes any existing TTL. `ifEq` cannot be combined with `nx`, `xx` or `get`.
+   * Only one expiry option is sent, in the order `ex`, `px`, `exat`, `pxat`, `keepTtl`; `nx` wins over `xx`. A plain `set` removes any existing TTL. `ifEq`, `ifGt` and `ifLt` cannot be combined with `nx`, `xx` or `get`.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param value Value to store: string, Buffer or number (numbers are sent as ASCII text).
    * @param opts See {@link SetOptions}: `ex`/`px`/`exat`/`pxat`/`keepTtl` for expiry, `nx`/`xx` for conditions, `get` to return the old value, `ifEq` for compare-and-set.
-   * @returns `'OK'` when written. `null` when `nx`/`xx`/`ifEq` blocked the write. With `get`, the previous value instead (`null` if there was none).
+   * @returns `'OK'` when written. `null` when `nx`/`xx`/`ifEq`/`ifGt`/`ifLt` blocked the write. With `get`, the previous value instead (`null` if there was none).
    * @throws {@link RuvioError} `WRONGTYPE` when `get` is used and the key holds a non-string; `ERR` for an invalid expiry or an invalid option mix.
    *
    * @example
@@ -859,12 +859,15 @@ export abstract class Commands {
    * await client.set('session:9', 'tok', { ex: 3600 });          // expires in an hour
    * await client.set('lock:a', 'me', { nx: true, px: 5000 });    // null if already held
    * await client.set('cfg', 'v2', { ifEq: 'v1' });               // null if cfg is not 'v1'
+   * await client.set('watermark', 1700000000, { ifGt: true });   // null unless greater than the stored number
    * ```
    */
   set(key: Key, value: Value, opts?: SetOptions): R<string | null> {
     if (opts === undefined) return this._2(null, C.SET, key, value);
     const a: Arg[] = [key, value];
     if (opts.ifEq !== undefined) a.push(W.IFEQ, opts.ifEq);
+    else if (opts.ifGt) a.push(W.IFGT);
+    else if (opts.ifLt) a.push(W.IFLT);
     if (opts.ex !== undefined) a.push(W.EX, opts.ex);
     else if (opts.px !== undefined) a.push(W.PX, opts.px);
     else if (opts.exat !== undefined) a.push(W.EXAT, opts.exat);
@@ -911,6 +914,50 @@ export abstract class Commands {
    */
   take(key: Key, count: number): R<number | null> {
     return this._2(null, C.TAKE, key, count);
+  }
+  /**
+   * Moves an amount between two integer keys in one step (`TRANSFER source destination amount [MAX max]`, Ruvio extension). Both writes are one WAL record; a missing `destination` starts at 0.
+   *
+   * @param source Key holding a decimal integer; it must hold at least `amount`.
+   * @param destination Integer key that receives the amount. On a cluster it must share a slot with `source` (use a hash tag such as `{user:42}`).
+   * @param amount Positive amount to move.
+   * @param max Optional ceiling for `destination` after the move.
+   * @returns `[sourceAfter, destinationAfter]`, or `null` when `source` is missing or short, or `destination` would overflow or pass `max`. Nothing is written in the `null` case.
+   * @throws {@link RuvioError} `WRONGTYPE` for another type, an error when a value is not an integer, `amount` is not positive, or the keys are the same.
+   *
+   * @example
+   * ```ts
+   * await client.set('{u}:wallet', 50);
+   * await client.transfer('{u}:wallet', '{u}:escrow', 30); // [20, 30]
+   * await client.transfer('{u}:wallet', '{u}:escrow', 30); // null, nothing changed
+   * ```
+   */
+  transfer(source: Key, destination: Key, amount: number, max?: number): R<[number, number] | null> {
+    return max === undefined
+      ? this._3(T.balances, C.TRANSFER, source, destination, amount)
+      : this._v(T.balances, C.TRANSFER, [source, destination, amount, W.MAX, max]);
+  }
+  /**
+   * Moves an amount between two integer fields of one hash (`HTRANSFER key from to amount [MAX max]`, Ruvio extension). A missing `to` field starts at 0 and field TTLs stay.
+   *
+   * @param key Hash key.
+   * @param from Field to subtract from.
+   * @param to Field to add to.
+   * @param amount Positive amount to move.
+   * @param max Optional ceiling for the `to` field after the move.
+   * @returns `[fromAfter, toAfter]`, or `null` when the key or `from` is missing or short, or `to` would overflow or pass `max`. Nothing is written in the `null` case.
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` is not a hash, an error when a field is not an integer.
+   *
+   * @example
+   * ```ts
+   * await client.hset('acct', { available: 50 });
+   * await client.htransfer('acct', 'available', 'held', 30); // [20, 30]
+   * ```
+   */
+  htransfer(key: Key, from: Key, to: Key, amount: number, max?: number): R<[number, number] | null> {
+    return max === undefined
+      ? this._4(T.balances, C.HTRANSFER, key, from, to, amount)
+      : this._v(T.balances, C.HTRANSFER, [key, from, to, amount, W.MAX, max]);
   }
   /**
    * Deletes a string only if it equals the given value (`DELEX key IFEQ value`, Ruvio extension). The safe way to release a lock you own.

@@ -440,6 +440,69 @@ pub(in crate::protocol) fn cmd_take<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
     })
 }
 
+/// Trailing `[MAX cap]` of `TRANSFER` and `HTRANSFER`, from argument `at`.
+fn transfer_max(args: &Args<'_, '_>, at: usize) -> Result<Option<i64>, ProtocolError> {
+    if args.len() == at {
+        return Ok(None);
+    }
+
+    if args.len() != at + 2 || !args.bytes(at).eq_ignore_ascii_case(b"MAX") {
+        return Err(ProtocolError::Invalid("syntax error"));
+    }
+
+    parse_i64(args.bytes(at + 1)).map(Some)
+}
+
+fn transfer_amount(args: &Args<'_, '_>, at: usize) -> Result<i64, ProtocolError> {
+    match parse_i64(args.bytes(at)) {
+        Ok(amount) if amount > 0 => Ok(amount),
+        _ => Err(ProtocolError::Invalid(
+            "transfer amount must be a positive integer",
+        )),
+    }
+}
+
+pub(in crate::protocol) fn cmd_transfer<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() < 3 {
+        return Err(ProtocolError::Invalid(
+            "TRANSFER expects a source, a destination and an amount",
+        ));
+    }
+
+    if args.bytes(0) == args.bytes(1) {
+        return Err(ProtocolError::Invalid(
+            "TRANSFER source and destination must differ",
+        ));
+    }
+
+    Ok(Command::Transfer {
+        source: args.arg(0),
+        destination: args.arg(1),
+        amount: transfer_amount(args, 2)?,
+        max: transfer_max(args, 3)?,
+    })
+}
+
+pub(in crate::protocol) fn cmd_htransfer<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() < 4 {
+        return Err(ProtocolError::Invalid(
+            "HTRANSFER expects a key, two fields and an amount",
+        ));
+    }
+
+    if args.bytes(1) == args.bytes(2) {
+        return Err(ProtocolError::Invalid("HTRANSFER fields must differ"));
+    }
+
+    Ok(Command::HashTransfer {
+        key: args.arg(0),
+        from: args.arg(1),
+        to: args.arg(2),
+        amount: transfer_amount(args, 3)?,
+        max: transfer_max(args, 4)?,
+    })
+}
+
 pub(in crate::protocol) fn cmd_getex<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
     if args.len() != 2 {
         return Err(ProtocolError::Invalid(

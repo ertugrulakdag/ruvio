@@ -62,7 +62,7 @@ keys must share one slot, or the call fails with `CROSSSLOT` before anything is 
 Cluster transactions are deliberately not supported by this API; unsupported commands fail
 explicitly. Existing string APIs are unchanged.
 
-RESP2 client for [Ruvio](https://ruviodb.com/). Connecting does not send `CLIENT SETINFO` or `HELLO`. The typed methods cover every command in `docs/compatibility-matrix.json` (288/288) and the options that change what Ruvio does; `MatrixCoverageTests` fails when a matrix command has no typed method, and `LiveCommandTests` sends every one of them to a real server. `FLUSHDB ASYNC` (it runs synchronously) and `HELLO AUTH`/`SETNAME` have no typed form. Anything else can go through `ExecuteAsync` with the same argument lists as `redis-cli`.
+RESP2 client for [Ruvio](https://ruviodb.com/). Connecting does not send `CLIENT SETINFO` or `HELLO`. The typed methods cover every command in `docs/compatibility-matrix.json` (290/290) and the options that change what Ruvio does; `MatrixCoverageTests` fails when a matrix command has no typed method, and `LiveCommandTests` sends every one of them to a real server. `FLUSHDB ASYNC` (it runs synchronously) and `HELLO AUTH`/`SETNAME` have no typed form. Anything else can go through `ExecuteAsync` with the same argument lists as `redis-cli`.
 
 ## Command coverage
 
@@ -82,6 +82,7 @@ Ruvio-specific commands and options added in this pass:
 | Command / option | Method |
 |---|---|
 | `SET key value IFEQ expected [PX ms \| KEEPTTL]` | `SetIfEqualAsync(key, value, expected, expiry?)`, `SetIfEqualKeepingTimeToLiveAsync` |
+| `SET key value IFGT \| IFLT [PX ms]` | `SetIfGreaterAsync(key, long, expiry?)`, `SetIfLessAsync(key, long, expiry?)`; false when the stored number was not greater / smaller |
 | `DELEX key IFEQ value` | `DeleteIfEqualAsync` |
 | `LPUSHCAP` / `RPUSHCAP` | `PushListLeftCappedAsync` / `PushListRightCappedAsync(key, cap, values)` |
 | `BF.RESERVE ... EXPANSION n \| NONSCALING` | `ReserveBloomFilterAsync(key, error, capacity, expansion, nonScaling)` |
