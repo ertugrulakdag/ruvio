@@ -41,6 +41,7 @@ export const families = [
     commands: [
       { name: "LEASE", blurb: "Acquire a lock", help: "Returns a fencing token, or nil while held. Keep the token to release the lock. Expiry preserves its sequence; deleting the key resets it.", fields: [key("Lock key"), millis()], build: (f) => ["LEASE", f.key, f.ms] },
       { name: "SEMAPHORE", blurb: "Hold one of N slots", help: "Returns a token while fewer than the maximum holders are live, or nil when full. Each holder has its own lifetime, so a crashed worker frees its slot. Release the token with RELEASE. The key goes away with its last holder.", fields: [key("Semaphore key"), { name: "max", label: "Maximum holders", inputmode: "numeric" }, millis()], build: (f) => ["SEMAPHORE", f.key, f.max, f.ms] },
+      { name: "RENEW", blurb: "Extend a lease or slot", help: "Moves the deadline of a lease or semaphore slot you hold to now + ttl. 1 means extended; 0 means the token expired, was released or is not the holder. The token stays the same.", fields: [key("Lock key"), { name: "token", label: "Fencing token", inputmode: "numeric" }, millis()], build: (f) => ["RENEW", f.key, f.token, f.ms] },
       { name: "RELEASE", blurb: "Release a lock", help: "Only the current holder's token can release the lease. 1 means released; 0 means the token did not match.", fields: [key("Lock key"), { name: "token", label: "Fencing token", inputmode: "numeric" }], build: (f) => ["RELEASE", f.key, f.token] },
     ],
   },

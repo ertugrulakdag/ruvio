@@ -173,7 +173,10 @@ test('LIMIT, ONCE, LEASE, SEMAPHORE, RELEASE, IDEM, CHANGES and their helpers', 
     assert.equal(typeof t1, 'number');
     assert.equal(await c.lease('le', 5000), null);
     assert.equal(await c.release('le', t1! + 100), false);
+    assert.equal(await c.renew('le', t1! + 100, 5000), false);
+    assert.equal(await c.renew('le', t1!, 9000), true);
     assert.equal(await c.release('le', t1!), true);
+    assert.equal(await c.renew('le', t1!, 9000), false);
     const lease = await c.acquireLease('le', 5000);
     assert.ok(lease && lease.token > t1!);
     assert.equal(await c.acquireLease('le', 5000), null);
@@ -187,6 +190,8 @@ test('LIMIT, ONCE, LEASE, SEMAPHORE, RELEASE, IDEM, CHANGES and their helpers', 
     const s1 = await c.semaphore('sem', 2, 5000);
     const s2 = await c.semaphore('sem', 2, 5000);
     assert.ok(s1 && s2 && s1 !== s2);
+    assert.equal(await c.semaphore('sem', 2, 5000), null);
+    assert.equal(await c.renew('sem', s1!, 9000), true);
     assert.equal(await c.semaphore('sem', 2, 5000), null);
     assert.equal(await c.release('sem', s1!), true);
     const permit = await c.acquireSemaphore('sem', 2, 5000);

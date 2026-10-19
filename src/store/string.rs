@@ -610,6 +610,37 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
         }
     }
 
+    /// `Some((kind, new_deadline))` when `token` is the live lease holder or a live semaphore
+    /// holder of `key`; `None` when it is not held.
+    pub(crate) fn renew_plan(
+        &mut self,
+        key: &[u8],
+        token: u64,
+        ttl_ms: u64,
+    ) -> Result<Option<(ValueKind, u64)>, WrongType> {
+        self.remove_expired(key);
+
+        let now = self.now_unix_millis().get();
+        let expires_at = now.saturating_add(ttl_ms);
+
+        match self.object_value(key)? {
+            Some(Value::Lease(lease)) if lease.token == token && now < lease.expires_at => {
+                Ok(Some((ValueKind::Lease, expires_at)))
+            }
+
+            Some(Value::Semaphore(semaphore))
+                if semaphore
+                    .holders()
+                    .any(|(held, at)| held == token && at > now) =>
+            {
+                Ok(Some((ValueKind::Semaphore, expires_at)))
+            }
+
+            Some(Value::Lease(_) | Value::Semaphore(_)) | None => Ok(None),
+            Some(_) => Err(WrongType),
+        }
+    }
+
     pub(crate) fn lease_put(
         &mut self,
         key: &[u8],
@@ -675,8 +706,9 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
         }
     }
 
-    /// Adds one holder. Expired holders are dropped first. Replay calls this with the recorded
-    /// token, so `next_token` only moves forward.
+    /// Adds one holder. Expired holders are dropped first, and a holder that already has `token`
+    /// is replaced (a renewal). Replay calls this with the recorded token, so `next_token` only
+    /// moves forward.
     pub(crate) fn semaphore_put(
         &mut self,
         key: &[u8],
@@ -707,7 +739,7 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
 
                 let latest = semaphore.latest();
 
-                semaphore.rewrite(now, None, Some((token, expires_at)));
+                semaphore.rewrite(now, Some(token), Some((token, expires_at)));
 
                 if latest.is_none_or(|latest| expires_at > latest) {
                     self.set_deadline(self.active, key, UnixMillis::new(expires_at));

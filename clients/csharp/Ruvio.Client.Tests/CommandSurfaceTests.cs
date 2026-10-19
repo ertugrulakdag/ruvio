@@ -1598,6 +1598,17 @@ public partial class CommandSurfaceTests
     }
 
     [Fact(Timeout = 15000)]
+    public async Task RenewSendsRenewWithTheTokenAndTtl()
+    {
+        await using ScriptedSession session = await ScriptedSession.Open();
+        ValueTask<long> pending = session.Client.RenewAsync("lock", 7, 30000);
+
+        await session.Expect("RENEW", "lock", "7", "30000");
+        await session.Reply(":1\r\n");
+        Assert.Equal(1, await pending);
+    }
+
+    [Fact(Timeout = 15000)]
     public async Task SemaphoreAndLimitedIncrementSendTheirCommands()
     {
         await using ScriptedSession session = await ScriptedSession.Open();

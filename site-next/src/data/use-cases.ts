@@ -26,11 +26,13 @@ export const cases: UseCase[] = [
     code: `LEASE job:nightly-report 30000
 # 17    -> you hold it, token 17
 # (nil) -> someone else holds it
+RENEW job:nightly-report 17 30000
+# 1     -> deadline moved to now + 30 s (0 if the token no longer holds it)
 RELEASE job:nightly-report 17
 # 1     -> released (0 if the token no longer matches)`,
-    body: "Each grant returns a token that grows. Send it with writes to the thing you protect and have that side reject older tokens. Expiry and <code>RELEASE</code> keep the sequence while the key exists.",
+    body: "Each grant returns a token that grows. Send it with writes to the thing you protect and have that side reject older tokens. A long job calls <code>RENEW</code> with its token to keep the lock without releasing it. Expiry and <code>RELEASE</code> keep the sequence while the key exists.",
     note: "Deleting the key restarts the token at 1, and data loss can do the same. A token alone does not fence an external system after that.",
-    refs: [{ label: "LEASE and RELEASE", href: commands }],
+    refs: [{ label: "LEASE, RENEW and RELEASE", href: commands }],
   },
   {
     id: "workers",

@@ -166,6 +166,7 @@ var (
 	cREADONLY          = preEnc("READONLY")
 	cREADWRITE         = preEnc("READWRITE")
 	cRELEASE           = preEnc("RELEASE")
+	cRENEW             = preEnc("RENEW")
 	cRENAME            = preEnc("RENAME")
 	cRENAMENX          = preEnc("RENAMENX")
 	cRESTORE           = preEnc("RESTORE")

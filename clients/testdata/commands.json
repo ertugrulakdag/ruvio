@@ -2158,6 +2158,20 @@
       }
     },
     {
+      "name": "RENEW",
+      "arity": 4,
+      "flags": [
+        "write",
+        "fast"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
       "name": "RESTORE",
       "arity": -4,
       "flags": [

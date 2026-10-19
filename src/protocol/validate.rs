@@ -145,6 +145,7 @@ pub(super) fn validate_command_payloads(
         | Command::Semaphore { key, .. }
         | Command::IncrementCapped { key, .. }
         | Command::Release { key, .. }
+        | Command::Renew { key, .. }
         | Command::Limit { key, .. }
         | Command::Once { key, .. }
         | Command::Take { key, .. }

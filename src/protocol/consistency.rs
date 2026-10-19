@@ -97,6 +97,8 @@ pub(super) const SAMPLES: &[&[&str]] = &[
     &["BLMPOP", "0", "1", "a", "LEFT"],
     &["BITOP", "AND", "d", "a", "b"],
     &["DELEX", "k", "IFEQ", "v"],
+    &["RENEW", "k", "1", "1000"],
+    &["XREAD", "STREAMS", "k", "0"],
     &["SET", "k", "5", "IFGT"],
     &["SET", "k", "5", "IFLT", "EX", "10"],
     &["HEXPIRE", "h", "10", "FIELDS", "1", "f"],

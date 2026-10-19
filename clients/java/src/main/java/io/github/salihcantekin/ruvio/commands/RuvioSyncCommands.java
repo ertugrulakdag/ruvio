@@ -1014,6 +1014,21 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Sends the Ruvio command {@code RENEW key token ttl}: moves the deadline of a lease or semaphore slot you hold to
+     * now + {@code ttlMillis}. The fencing token does not change and no holder is created.
+     *
+     * @param key the lease or semaphore key
+     * @param token the token returned by {@link #lease(Object, long)} or {@link #semaphore(Object, long, long)}
+     * @param ttlMillis the new lifetime in milliseconds (positive); it replaces the remaining time
+     * @return {@code true} when the token was live and its deadline moved, {@code false} when the key is missing or the
+     * token is stale or does not match
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds something other than a lease or semaphore
+     */
+    public Boolean renew(K key, long token, long ttlMillis) {
+        return await(async.renew(key, token, ttlMillis));
+    }
+
+    /**
      * Sends the Ruvio command {@code RELEASE key token}: gives up a lease or one semaphore slot.
      *
      * @param key the lease or semaphore key

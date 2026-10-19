@@ -561,6 +561,12 @@ pub enum Command<'a> {
         key: Bytes<'a>,
         token: u64,
     },
+    /// `RENEW key token ttl_ms`: moves a live lease or semaphore holder's deadline to now + TTL.
+    Renew {
+        key: Bytes<'a>,
+        token: u64,
+        ttl_ms: u64,
+    },
     /// `SEMAPHORE key max ttl_ms`: one of at most `max` holders, each with its own TTL.
     Semaphore {
         key: Bytes<'a>,

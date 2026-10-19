@@ -189,6 +189,7 @@ pub(crate) static COMMAND_KEY_RULES: &[(&str, KeyRule, u8)] = &[
     ("RELEASE", KeyRule::Range { first: 1, last: 1, step: 1 }, 5),
     ("RENAME", KeyRule::Range { first: 1, last: 2, step: 1 }, 5),
     ("RENAMENX", KeyRule::Range { first: 1, last: 2, step: 1 }, 5),
+    ("RENEW", KeyRule::Range { first: 1, last: 1, step: 1 }, 5),
     ("RESTORE", KeyRule::Range { first: 1, last: 1, step: 1 }, 9),
     ("RPOP", KeyRule::Range { first: 1, last: 1, step: 1 }, 5),
     ("RPOPLPUSH", KeyRule::Range { first: 1, last: 2, step: 1 }, 9),

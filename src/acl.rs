@@ -1052,6 +1052,7 @@ pub fn command_acl_name(command: &Command<'_>) -> &'static str {
         Command::ListPushCapped { back: true, .. } => "rpushcap",
         Command::GetEx { .. } => "getex",
         Command::Release { .. } => "release",
+        Command::Renew { .. } => "renew",
         Command::SetVersioned { .. } => "setv",
         Command::Changes(_) | Command::ChangesSubscribe(_) => "changes",
         Command::Ruvio(Some(word)) if word.eq_ignore_ascii_case(b"hotkeys") => "ruvio|hotkeys",
