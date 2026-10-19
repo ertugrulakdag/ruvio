@@ -100,8 +100,8 @@ port. The 16,384 slots are split into consecutive ranges, one per shard. With
 2 shards, slots 0-8191 belong to the first and 8192-16383 to the second; the
 shard of a slot is `slot * shards / 16384`. So a key's place is decided by its
 name: key to slot to shard. The server keeps that answer in a table of 16,384
-entries, filled from the rule when it starts, and routes by the table; nothing
-moves a slot or a key between shards while the server runs yet.
+entries, filled from the rule when it starts, and routes by the table.
+`RUVIO MOVESLOTS` can move a range of slots to another shard later (see below).
 
 ### Who decides this, and where?
 
@@ -111,6 +111,19 @@ and the `SlotTable` filled from it). Every client library has its own copy of
 `CLUSTER SLOTS` when it connects and sends each key to its owner. If a key
 reaches the wrong shard anyway, the server forwards it to the owner and answers
 on the same connection.
+
+### Can I move slots to another shard?
+
+Yes, between the shards of one server: `RUVIO MOVESLOTS 0-1000 2` moves slots 0 to 1000 to
+shard 2 (shards count from 0) while both keep serving them, and `RUVIO MOVESLOTS STATUS`
+follows the move (`state` is `copying`, then `cleaning`, then `done`). Use it when one shard
+gets more traffic than the others. Clients keep working: a command sent to the old shard is
+forwarded, `CLUSTER SLOTS` shows the new owner at once, and the clients pick it up on their
+next slot map load. During the hand-over the old shard pauses for a moment (well under a
+millisecond without a log, around 15 ms with one on a Mac, mostly the log sync). One move runs at a time, every slot of the range must be on one
+shard, and it is refused while replication is on. With `everysec` or `always` the move
+survives a crash at any step; the moved ranges are kept in the `SLOTS` file of the data
+directory. Moving slots to another machine is not supported.
 
 ### How do I list the keys of one slot?
 

@@ -211,6 +211,21 @@ ROLE
     refs: [{ label: "Client behavior", href: "/docs/client-behavior/#reads-from-replicas" }, { label: "Replication settings", href: "/docs/configuration/" }],
   },
   {
+    id: "rebalance",
+    nav: "Rebalance a busy shard",
+    title: "Move slots off a busy shard",
+    problem: "One shard takes most of the traffic while the other cores idle.",
+    code: `RUVIO MOVESLOTS 0-2047 3
+# OK: slots 0-2047 start moving to shard 3 (shards count from 0)
+RUVIO MOVESLOTS STATUS
+# state copying, keys 120544, ...  then cleaning, then done
+CLUSTER SLOTS
+# 0-2047 now on shard 3`,
+    body: "Both shards keep serving the range while it moves. The source copies it in bounded steps, sends the keys written meanwhile again, and hands over in one short step; clients that still route to the old shard are forwarded, and pick up the new owner on their next slot map load. With a log the move survives a crash at any step, and the old shard's <code>CHANGES</code> feed says where the range continues.",
+    note: "Slots move between the shards of one server, one move at a time, and not while replication is on. The hand-over pauses the source shard briefly (well under a millisecond without a log, around 15 ms with one on a Mac, mostly the log sync). A server that moved slots writes WAL records an older release cannot read.",
+    refs: [{ label: "RUVIO MOVESLOTS", href: commands }, { label: "Moved slot ranges", href: "/docs/recovery/#moved-slot-ranges" }],
+  },
+  {
     id: "data",
     nav: "Leaderboards, geo, JSON",
     title: "Leaderboards, geo and documents",
