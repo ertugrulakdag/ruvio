@@ -955,6 +955,19 @@ public sealed partial class RuvioClient
 
     /// <inheritdoc />
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    public async ValueTask<IReadOnlyList<SortedSetEntry>> PopSortedSetByScoreAsync(string key, string min, string max, long count = 1, CancellationToken cancellationToken = default)
+    {
+        return ParseSortedSet(await ExecuteCommandAsync(new RespCommand("ZPOPBYSCORE", key, max, "MIN", min, "COUNT").With(count).With("WITHSCORES"), cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public ValueTask<long> MoveDueSortedSetAsync(string source, string destination, string max, long count = 1, CancellationToken cancellationToken = default)
+    {
+        return Integer(new RespCommand("ZMOVEDUE", source, destination, max, "COUNT", count), cancellationToken);
+    }
+
+    /// <inheritdoc />
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public async ValueTask<IReadOnlyList<SortedSetEntry>> PopSortedSetMaxAsync(string key, long count = 1, CancellationToken cancellationToken = default)
     {
         return ParseSortedSet(await ExecuteCommandAsync(new RespCommand("ZPOPMAX", key, count), cancellationToken));

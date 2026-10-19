@@ -62,13 +62,13 @@ keys must share one slot, or the call fails with `CROSSSLOT` before anything is 
 Cluster transactions are deliberately not supported by this API; unsupported commands fail
 explicitly. Existing string APIs are unchanged.
 
-RESP2 client for [Ruvio](https://ruviodb.com/). Connecting does not send `CLIENT SETINFO` or `HELLO`. The typed methods cover every command in `docs/compatibility-matrix.json` (290/290) and the options that change what Ruvio does; `MatrixCoverageTests` fails when a matrix command has no typed method, and `LiveCommandTests` sends every one of them to a real server. `FLUSHDB ASYNC` (it runs synchronously) and `HELLO AUTH`/`SETNAME` have no typed form. Anything else can go through `ExecuteAsync` with the same argument lists as `redis-cli`.
+RESP2 client for [Ruvio](https://ruviodb.com/). Connecting does not send `CLIENT SETINFO` or `HELLO`. The typed methods cover every command in `docs/compatibility-matrix.json` (292/292) and the options that change what Ruvio does; `MatrixCoverageTests` fails when a matrix command has no typed method, and `LiveCommandTests` sends every one of them to a real server. `FLUSHDB ASYNC` (it runs synchronously) and `HELLO AUTH`/`SETNAME` have no typed form. Anything else can go through `ExecuteAsync` with the same argument lists as `redis-cli`.
 
 ## Command coverage
 
 `Ruvio.Client.Tests/MatrixCoverageTests.cs` reads `docs/compatibility-matrix.json` and maps each command
 to the method that sends it (`SELECT` maps to `RuvioConnection.GetDatabaseAsync`). `LiveCommandTests`
-runs every command family against a live server through a recording TCP proxy and fails unless all 287
+runs every command family against a live server through a recording TCP proxy and fails unless all 291
 matrix commands were sent by their typed methods and answered. Set `RUVIO_TEST_ADDR=host:port` to run the
 live tests; without it they are skipped. They use databases 12, 13 and 14 (`FLUSHDB`), create and delete
 uniquely-prefixed keys in database 0 for `JSON.INDEX`, and end with `FLUSHALL`: use a disposable server.

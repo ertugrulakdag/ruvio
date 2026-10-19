@@ -130,6 +130,7 @@ pub(super) const SAMPLES: &[&[&str]] = &[
     &["XTRIM", "x", "MAXLEN", "10"],
     &["XTRIM", "x", "MINID", "5-0"],
     &["XSETID", "x", "5-0"],
+    &["XREAD", "STREAMS", "x", "0"],
     &["XREADGROUP", "GROUP", "g", "c", "STREAMS", "x", ">"],
     &["XACK", "x", "g", "1-1"],
     &["XCLAIM", "x", "g", "c", "0", "1-1"],

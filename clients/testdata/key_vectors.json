@@ -10340,6 +10340,17 @@
       "args": [
         "XREAD",
         "STREAMS",
+        "x",
+        "0"
+      ],
+      "keys": [
+        "x"
+      ]
+    },
+    {
+      "args": [
+        "XREAD",
+        "STREAMS",
         "a2",
         "0"
       ],
@@ -10978,154 +10989,154 @@
     },
     {
       "args": [
-        "zmscore",
-        "GETKEYS",
+        "ZMOVEDUE",
+        "a1",
+        "b2",
+        "10"
+      ],
+      "keys": [
+        "a1",
+        "b2"
+      ]
+    },
+    {
+      "args": [
+        "zmovedue",
+        "2",
+        "+",
+        "10"
+      ],
+      "keys": [
+        "+",
+        "2"
+      ]
+    },
+    {
+      "args": [
+        "zmovedue",
+        "INCRBY",
+        "a2",
+        "0"
+      ],
+      "keys": [
+        "INCRBY",
+        "a2"
+      ]
+    },
+    {
+      "args": [
+        "zmovedue",
+        "GETNAME",
+        "10",
+        "10"
+      ],
+      "keys": [
+        "10",
+        "GETNAME"
+      ]
+    },
+    {
+      "args": [
+        "zmovedue",
+        "SETUSER",
+        "CREATE",
         "1.5"
       ],
       "keys": [
-        "GETKEYS"
-      ]
-    },
-    {
-      "args": [
-        "zmscore",
-        "LOAD",
-        "CONSUMERS",
-        "MAX"
-      ],
-      "keys": [
-        "LOAD"
-      ]
-    },
-    {
-      "args": [
-        "zmscore",
         "CREATE",
+        "SETUSER"
+      ]
+    },
+    {
+      "args": [
+        "zmovedue",
+        "LEN",
         ">",
-        "IDLETIME",
-        "+"
+        "-1"
       ],
       "keys": [
-        "CREATE"
-      ]
-    },
-    {
-      "args": [
-        "zmscore",
         ">",
-        "-1",
-        "1",
-        "$",
-        "FROMLONLAT"
-      ],
-      "keys": [
-        ">"
+        "LEN"
       ]
     },
     {
       "args": [
         "zmscore",
-        "ID",
-        "v2",
-        "-1",
-        "1",
-        "IDLETIME",
-        "*"
+        "SAVE",
+        "b2"
       ],
       "keys": [
-        "ID"
+        "SAVE"
       ]
     },
     {
       "args": [
         "zmscore",
-        "LEFT",
-        "RELEASE",
-        "b3",
-        "$",
-        "1",
-        "b6",
-        "a7"
-      ],
-      "keys": [
-        "LEFT"
-      ]
-    },
-    {
-      "args": [
-        "zpopmax",
-        ">"
-      ],
-      "keys": [
-        ">"
-      ]
-    },
-    {
-      "args": [
-        "zpopmax",
+        "TRACKING",
+        "1.5",
         "DELCONSUMER"
       ],
       "keys": [
-        "DELCONSUMER"
+        "TRACKING"
       ]
     },
     {
       "args": [
-        "zpopmax",
-        "GETKEYS"
+        "zmscore",
+        "BEGIN",
+        "INFO",
+        "CONSUMERS",
+        "-1"
       ],
       "keys": [
-        "GETKEYS"
+        "BEGIN"
       ]
     },
     {
       "args": [
-        "zpopmax",
-        "1"
+        "zmscore",
+        "km",
+        "$.a",
+        "-",
+        "*",
+        "MIN"
       ],
       "keys": [
-        "1"
+        "km"
       ]
     },
     {
       "args": [
-        "zpopmax",
-        "KILL"
+        "zmscore",
+        "RIGHT",
+        "+",
+        ">",
+        "f4",
+        "OVERFLOW",
+        "TRACKING"
       ],
       "keys": [
-        "KILL"
+        "RIGHT"
       ]
     },
     {
       "args": [
-        "zpopmax",
-        "SHARDS"
+        "zmscore",
+        "MIN",
+        "-",
+        "-1",
+        "1.5",
+        "0",
+        "f6",
+        "SET"
       ],
       "keys": [
-        "SHARDS"
+        "MIN"
       ]
     },
     {
       "args": [
-        "zpopmin",
-        "SETNAME"
-      ],
-      "keys": [
-        "SETNAME"
-      ]
-    },
-    {
-      "args": [
-        "zpopmin",
-        "CONSUMERS"
-      ],
-      "keys": [
-        "CONSUMERS"
-      ]
-    },
-    {
-      "args": [
-        "zpopmin",
+        "zpopbyscore",
         "u8",
         "0"
       ],
@@ -11135,34 +11146,57 @@
     },
     {
       "args": [
-        "zpopmin",
-        "SHARDS"
+        "zpopbyscore",
+        "0",
+        "1"
       ],
       "keys": [
-        "SHARDS"
+        "0"
       ]
     },
     {
       "args": [
-        "zpopmin",
-        "NODES"
+        "zpopbyscore",
+        "FREQ",
+        "0"
       ],
       "keys": [
-        "NODES"
+        "FREQ"
       ]
     },
     {
       "args": [
-        "zpopmin",
-        ">"
+        "zpopbyscore",
+        "FROMLONLAT",
+        "1"
       ],
       "keys": [
-        ">"
+        "FROMLONLAT"
       ]
     },
     {
       "args": [
-        "zrandmember",
+        "zpopbyscore",
+        "INFO",
+        "1.5"
+      ],
+      "keys": [
+        "INFO"
+      ]
+    },
+    {
+      "args": [
+        "zpopbyscore",
+        "RELEASE",
+        "2"
+      ],
+      "keys": [
+        "RELEASE"
+      ]
+    },
+    {
+      "args": [
+        "zpopmax",
         "f1"
       ],
       "keys": [
@@ -11171,7 +11205,7 @@
     },
     {
       "args": [
-        "zrandmember",
+        "zpopmax",
         "+"
       ],
       "keys": [
@@ -11180,7 +11214,7 @@
     },
     {
       "args": [
-        "zrandmember",
+        "zpopmax",
         "LEN"
       ],
       "keys": [
@@ -11189,7 +11223,7 @@
     },
     {
       "args": [
-        "zrandmember",
+        "zpopmax",
         "TRACKING"
       ],
       "keys": [
@@ -11198,7 +11232,7 @@
     },
     {
       "args": [
-        "zrandmember",
+        "zpopmax",
         "WHOAMI"
       ],
       "keys": [
@@ -11207,7 +11241,7 @@
     },
     {
       "args": [
-        "zrandmember",
+        "zpopmax",
         "1.5"
       ],
       "keys": [
@@ -11216,21 +11250,35 @@
     },
     {
       "args": [
-        "zrange",
-        "DELCONSUMER",
-        "0",
-        "10"
+        "zpopmin",
+        "GET"
       ],
       "keys": [
-        "DELCONSUMER"
+        "GET"
       ]
     },
     {
       "args": [
-        "zrange",
-        "+",
-        "2",
-        "1"
+        "zpopmin",
+        "*"
+      ],
+      "keys": [
+        "*"
+      ]
+    },
+    {
+      "args": [
+        "zpopmin",
+        "FLUSH"
+      ],
+      "keys": [
+        "FLUSH"
+      ]
+    },
+    {
+      "args": [
+        "zpopmin",
+        "+"
       ],
       "keys": [
         "+"
@@ -11238,54 +11286,18 @@
     },
     {
       "args": [
-        "zrange",
-        "REFCOUNT",
-        "-1",
-        "1"
+        "zpopmin",
+        "SLOTS"
       ],
       "keys": [
-        "REFCOUNT"
+        "SLOTS"
       ]
     },
     {
       "args": [
-        "zrange",
-        "OFF",
-        "10",
-        "1"
-      ],
-      "keys": [
-        "OFF"
-      ]
-    },
-    {
-      "args": [
-        "zrange",
-        "0",
-        "-1",
-        "-1"
-      ],
-      "keys": [
-        "0"
-      ]
-    },
-    {
-      "args": [
-        "zrange",
-        "-",
-        "0",
-        "0"
-      ],
-      "keys": [
-        "-"
-      ]
-    },
-    {
-      "args": [
-        "zrangebylex",
+        "zpopmin",
         "BEGIN",
-        "+",
-        "-"
+        "10"
       ],
       "keys": [
         "BEGIN"
@@ -11293,54 +11305,18 @@
     },
     {
       "args": [
-        "zrangebylex",
-        "RESET",
-        "-",
-        "+"
+        "zrandmember",
+        "2"
       ],
       "keys": [
-        "RESET"
+        "2"
       ]
     },
     {
       "args": [
-        "zrangebylex",
-        "f1",
-        "+",
-        "+"
-      ],
-      "keys": [
-        "f1"
-      ]
-    },
-    {
-      "args": [
-        "zrangebylex",
-        "$",
-        "+",
-        "+"
-      ],
-      "keys": [
-        "$"
-      ]
-    },
-    {
-      "args": [
-        "zrangebylex",
-        "LEFT",
-        "+",
-        "+"
-      ],
-      "keys": [
-        "LEFT"
-      ]
-    },
-    {
-      "args": [
-        "zrangebylex",
+        "zrandmember",
         "1",
-        "+",
-        "-"
+        "2"
       ],
       "keys": [
         "1"
@@ -11348,7 +11324,45 @@
     },
     {
       "args": [
-        "zrangebyscore",
+        "zrandmember",
+        "SETNAME"
+      ],
+      "keys": [
+        "SETNAME"
+      ]
+    },
+    {
+      "args": [
+        "zrandmember",
+        "SLOTS",
+        "1"
+      ],
+      "keys": [
+        "SLOTS"
+      ]
+    },
+    {
+      "args": [
+        "zrandmember",
+        "CREATE"
+      ],
+      "keys": [
+        "CREATE"
+      ]
+    },
+    {
+      "args": [
+        "zrandmember",
+        "km",
+        "1"
+      ],
+      "keys": [
+        "km"
+      ]
+    },
+    {
+      "args": [
+        "zrange",
         "LIST",
         "1",
         "2"
@@ -11359,7 +11373,7 @@
     },
     {
       "args": [
-        "zrangebyscore",
+        "zrange",
         "1",
         "-1",
         "-1"
@@ -11370,7 +11384,7 @@
     },
     {
       "args": [
-        "zrangebyscore",
+        "zrange",
         "LEN",
         "10",
         "2"
@@ -11381,18 +11395,18 @@
     },
     {
       "args": [
-        "zrangebyscore",
-        "OFF",
+        "zrange",
         "1",
-        "1.5"
+        "10",
+        "2"
       ],
       "keys": [
-        "OFF"
+        "1"
       ]
     },
     {
       "args": [
-        "zrangebyscore",
+        "zrange",
         "SHARDS",
         "-1",
         "1"
@@ -11403,20 +11417,43 @@
     },
     {
       "args": [
-        "zrangebyscore",
-        "GETUSER",
-        "0",
-        "1.5"
+        "zrange",
+        "1.5",
+        "1",
+        "10"
       ],
       "keys": [
-        "GETUSER"
+        "1.5"
       ]
     },
     {
       "args": [
-        "zrank",
-        "a1",
+        "zrangebylex",
+        "v1",
+        "-",
+        "+"
+      ],
+      "keys": [
+        "v1"
+      ]
+    },
+    {
+      "args": [
+        "zrangebylex",
+        "INFO",
+        "-",
         "-"
+      ],
+      "keys": [
+        "INFO"
+      ]
+    },
+    {
+      "args": [
+        "zrangebylex",
+        "a1",
+        "-",
+        "+"
       ],
       "keys": [
         "a1"
@@ -11424,28 +11461,42 @@
     },
     {
       "args": [
-        "zrank",
-        ">",
-        "v2"
+        "zrangebyscore",
+        "0",
+        "1",
+        "-1"
       ],
       "keys": [
-        ">"
+        "0"
       ]
     },
     {
       "args": [
-        "zrank",
-        "CREATE",
-        "GETUSER"
+        "zrangebyscore",
+        "a1",
+        "10",
+        "-1"
       ],
       "keys": [
-        "CREATE"
+        "a1"
       ]
     },
     {
       "args": [
-        "zrank",
+        "zrangebyscore",
+        "i8",
+        "2",
+        "0"
+      ],
+      "keys": [
+        "i8"
+      ]
+    },
+    {
+      "args": [
+        "zrangebyscore",
         "b1",
+        "1",
         "2"
       ],
       "keys": [
@@ -11454,52 +11505,21 @@
     },
     {
       "args": [
-        "zrank",
-        "$.a",
-        "INFO"
-      ],
-      "keys": [
-        "$.a"
-      ]
-    },
-    {
-      "args": [
-        "zrank",
-        "f1",
-        "*"
-      ],
-      "keys": [
-        "f1"
-      ]
-    },
-    {
-      "args": [
-        "zrem",
-        "MYID",
+        "zrangebyscore",
+        "DROP",
+        "2",
         "2"
       ],
       "keys": [
-        "MYID"
+        "DROP"
       ]
     },
     {
       "args": [
-        "zrem",
-        "+",
-        "f2",
-        "*"
-      ],
-      "keys": [
-        "+"
-      ]
-    },
-    {
-      "args": [
-        "zrem",
+        "zrangebyscore",
         "f1",
-        "1",
-        "v3",
-        "+"
+        "10",
+        "2"
       ],
       "keys": [
         "f1"
@@ -11507,41 +11527,9 @@
     },
     {
       "args": [
-        "zrem",
-        "km",
-        "STATUS",
-        "a3",
-        "$",
-        "f5"
-      ],
-      "keys": [
-        "km"
-      ]
-    },
-    {
-      "args": [
-        "zrem",
-        "GETUSER",
-        "*",
-        "RELEASE",
-        "+",
-        "GROUPS",
-        ">"
-      ],
-      "keys": [
-        "GETUSER"
-      ]
-    },
-    {
-      "args": [
-        "zrem",
+        "zrank",
         "1.5",
-        "0",
-        "STATUS",
-        "+",
-        "2",
-        "1",
-        "STATUS"
+        "*"
       ],
       "keys": [
         "1.5"
@@ -11549,98 +11537,29 @@
     },
     {
       "args": [
-        "zremrangebylex",
-        "DELCONSUMER",
-        "+",
-        "-"
+        "zrank",
+        "ACQUIRE",
+        "1"
       ],
       "keys": [
-        "DELCONSUMER"
+        "ACQUIRE"
       ]
     },
     {
       "args": [
-        "zremrangebyrank",
-        "MYID",
-        "10",
+        "zrank",
+        "ON",
         "0"
       ],
       "keys": [
-        "MYID"
+        "ON"
       ]
     },
     {
       "args": [
-        "zremrangebyrank",
-        "GETKEYS",
-        "0",
-        "10"
-      ],
-      "keys": [
-        "GETKEYS"
-      ]
-    },
-    {
-      "args": [
-        "zremrangebyrank",
-        "WHOAMI",
-        "10",
-        "-1"
-      ],
-      "keys": [
-        "WHOAMI"
-      ]
-    },
-    {
-      "args": [
-        "zremrangebyrank",
-        "1",
-        "1",
-        "10"
-      ],
-      "keys": [
-        "1"
-      ]
-    },
-    {
-      "args": [
-        "zremrangebyrank",
-        "TRACKING",
-        "-1",
-        "1"
-      ],
-      "keys": [
-        "TRACKING"
-      ]
-    },
-    {
-      "args": [
-        "zremrangebyrank",
-        "RESET",
-        "0",
-        "2"
-      ],
-      "keys": [
-        "RESET"
-      ]
-    },
-    {
-      "args": [
-        "zremrangebyscore",
-        "WRAP",
-        "0",
-        "2"
-      ],
-      "keys": [
-        "WRAP"
-      ]
-    },
-    {
-      "args": [
-        "zremrangebyscore",
+        "zrank",
         ">",
-        "2",
-        "0"
+        "DOCS"
       ],
       "keys": [
         ">"
@@ -11648,51 +11567,135 @@
     },
     {
       "args": [
-        "zremrangebyscore",
-        "f1",
-        "1",
-        "2"
+        "zrank",
+        "$",
+        "FROMLONLAT"
       ],
       "keys": [
-        "f1"
+        "$"
       ]
     },
     {
       "args": [
-        "zremrangebyscore",
-        "WHOAMI",
-        "1",
-        "2"
+        "zrank",
+        "CAT",
+        "GETNAME"
       ],
       "keys": [
-        "WHOAMI"
+        "CAT"
       ]
     },
     {
       "args": [
-        "zremrangebyscore",
-        "LIST",
+        "zrem",
+        "GETNAME",
+        "+"
+      ],
+      "keys": [
+        "GETNAME"
+      ]
+    },
+    {
+      "args": [
+        "zrem",
+        "CONSUMERS",
+        "1.5",
+        "f3"
+      ],
+      "keys": [
+        "CONSUMERS"
+      ]
+    },
+    {
+      "args": [
+        "zrem",
+        "ENCODING",
+        "k2",
+        "1",
+        "b4"
+      ],
+      "keys": [
+        "ENCODING"
+      ]
+    },
+    {
+      "args": [
+        "zrem",
+        "MYID",
+        "-",
         "0",
+        "0",
+        "a5"
+      ],
+      "keys": [
+        "MYID"
+      ]
+    },
+    {
+      "args": [
+        "zrem",
+        "0",
+        "MAXLEN",
+        "b3",
+        "1",
+        "ON",
+        "a6"
+      ],
+      "keys": [
+        "0"
+      ]
+    },
+    {
+      "args": [
+        "zrem",
+        "CREATECONSUMER",
+        "v2",
+        "-1",
+        "GETUSER",
+        "*",
+        "f6",
         "10"
       ],
       "keys": [
-        "LIST"
+        "CREATECONSUMER"
       ]
     },
     {
       "args": [
-        "zremrangebyscore",
-        "2",
-        "0",
-        "1"
+        "zremrangebylex",
+        "TRACKING",
+        "-",
+        "+"
       ],
       "keys": [
-        "2"
+        "TRACKING"
       ]
     },
     {
       "args": [
-        "zrevrange",
+        "zremrangebylex",
+        "10",
+        "-",
+        "-"
+      ],
+      "keys": [
+        "10"
+      ]
+    },
+    {
+      "args": [
+        "zremrangebylex",
+        "a1",
+        "+",
+        "+"
+      ],
+      "keys": [
+        "a1"
+      ]
+    },
+    {
+      "args": [
+        "zremrangebyrank",
         "COUNT",
         "1",
         "1"
@@ -11703,7 +11706,7 @@
     },
     {
       "args": [
-        "zrevrange",
+        "zremrangebyrank",
         "GETKEYS",
         "2",
         "0"
@@ -11714,7 +11717,7 @@
     },
     {
       "args": [
-        "zrevrange",
+        "zremrangebyrank",
         "MINID",
         "0",
         "-1"
@@ -11725,7 +11728,7 @@
     },
     {
       "args": [
-        "zrevrange",
+        "zremrangebyrank",
         "FLUSH",
         "2",
         "10"
@@ -11736,7 +11739,7 @@
     },
     {
       "args": [
-        "zrevrange",
+        "zremrangebyrank",
         "GROUPS",
         "2",
         "1"
@@ -11747,7 +11750,7 @@
     },
     {
       "args": [
-        "zrevrange",
+        "zremrangebyrank",
         "BYRADIUS",
         "0",
         "-1"
@@ -11758,121 +11761,98 @@
     },
     {
       "args": [
-        "zrevrangebylex",
-        "SET",
-        "-",
-        "+"
-      ],
-      "keys": [
-        "SET"
-      ]
-    },
-    {
-      "args": [
-        "zrevrangebylex",
-        "BYRADIUS",
-        "+",
-        "+"
-      ],
-      "keys": [
-        "BYRADIUS"
-      ]
-    },
-    {
-      "args": [
-        "zrevrank",
-        "LIST",
-        "a2"
-      ],
-      "keys": [
-        "LIST"
-      ]
-    },
-    {
-      "args": [
-        "zrevrank",
-        "SAVE",
-        "$"
-      ],
-      "keys": [
-        "SAVE"
-      ]
-    },
-    {
-      "args": [
-        "zrevrank",
-        "OVERFLOW",
-        "10"
-      ],
-      "keys": [
-        "OVERFLOW"
-      ]
-    },
-    {
-      "args": [
-        "zrevrank",
-        "DESTROY",
-        "10"
-      ],
-      "keys": [
-        "DESTROY"
-      ]
-    },
-    {
-      "args": [
-        "zrevrank",
+        "zremrangebyscore",
+        "MAXLEN",
         "0",
-        "STORE"
-      ],
-      "keys": [
-        "0"
-      ]
-    },
-    {
-      "args": [
-        "zrevrank",
-        "LEN",
-        "$"
-      ],
-      "keys": [
-        "LEN"
-      ]
-    },
-    {
-      "args": [
-        "zscan",
-        "RESET",
         "10"
       ],
       "keys": [
-        "RESET"
+        "MAXLEN"
       ]
     },
     {
       "args": [
-        "zscan",
-        "SETUSER",
+        "zremrangebyscore",
+        "2",
+        "1.5",
+        "2"
+      ],
+      "keys": [
+        "2"
+      ]
+    },
+    {
+      "args": [
+        "zremrangebyscore",
+        "LEFT",
+        "0",
+        "10"
+      ],
+      "keys": [
+        "LEFT"
+      ]
+    },
+    {
+      "args": [
+        "zremrangebyscore",
+        "ON",
+        "0",
+        "0"
+      ],
+      "keys": [
+        "ON"
+      ]
+    },
+    {
+      "args": [
+        "zremrangebyscore",
+        "*",
+        "1",
+        "1.5"
+      ],
+      "keys": [
+        "*"
+      ]
+    },
+    {
+      "args": [
+        "zremrangebyscore",
+        "FIND",
+        "-1",
+        "-1"
+      ],
+      "keys": [
+        "FIND"
+      ]
+    },
+    {
+      "args": [
+        "zrevrange",
+        "GROUPS",
+        "1",
+        "0"
+      ],
+      "keys": [
+        "GROUPS"
+      ]
+    },
+    {
+      "args": [
+        "zrevrange",
+        "v1",
+        "1",
         "1"
       ],
       "keys": [
-        "SETUSER"
+        "v1"
       ]
     },
     {
       "args": [
-        "zscan",
-        "*",
-        "2"
-      ],
-      "keys": [
-        "*"
-      ]
-    },
-    {
-      "args": [
-        "zscan",
+        "zrevrange",
         "-1",
-        "10"
+        "1",
+        "2"
       ],
       "keys": [
         "-1"
@@ -11880,19 +11860,32 @@
     },
     {
       "args": [
-        "zscan",
-        "*",
-        "10"
+        "zrevrange",
+        "GETNAME",
+        "0",
+        "1"
       ],
       "keys": [
-        "*"
+        "GETNAME"
       ]
     },
     {
       "args": [
-        "zscan",
+        "zrevrange",
+        "1.5",
+        "0",
+        "0"
+      ],
+      "keys": [
+        "1.5"
+      ]
+    },
+    {
+      "args": [
+        "zrevrange",
         "$",
-        "2"
+        "1",
+        "-1"
       ],
       "keys": [
         "$"
@@ -11900,7 +11893,29 @@
     },
     {
       "args": [
-        "zscore",
+        "zrevrangebylex",
+        "SETNAME",
+        "-",
+        "-"
+      ],
+      "keys": [
+        "SETNAME"
+      ]
+    },
+    {
+      "args": [
+        "zrevrangebylex",
+        "10",
+        "+",
+        "-"
+      ],
+      "keys": [
+        "10"
+      ]
+    },
+    {
+      "args": [
+        "zrevrank",
         "f1",
         "-1"
       ],
@@ -11910,7 +11925,7 @@
     },
     {
       "args": [
-        "zscore",
+        "zrevrank",
         "LEN",
         "1.5"
       ],
@@ -11920,7 +11935,7 @@
     },
     {
       "args": [
-        "zscore",
+        "zrevrank",
         "CREATE",
         "$"
       ],
@@ -11930,7 +11945,7 @@
     },
     {
       "args": [
-        "zscore",
+        "zrevrank",
         "v1",
         "a2"
       ],
@@ -11940,7 +11955,7 @@
     },
     {
       "args": [
-        "zscore",
+        "zrevrank",
         "-1",
         "a2"
       ],
@@ -11950,12 +11965,132 @@
     },
     {
       "args": [
-        "zscore",
+        "zrevrank",
         "ON",
         "$"
       ],
       "keys": [
         "ON"
+      ]
+    },
+    {
+      "args": [
+        "zscan",
+        "GROUPS",
+        "1"
+      ],
+      "keys": [
+        "GROUPS"
+      ]
+    },
+    {
+      "args": [
+        "zscan",
+        "FROMLONLAT",
+        "1"
+      ],
+      "keys": [
+        "FROMLONLAT"
+      ]
+    },
+    {
+      "args": [
+        "zscan",
+        "-",
+        "1"
+      ],
+      "keys": [
+        "-"
+      ]
+    },
+    {
+      "args": [
+        "zscan",
+        "WRAP",
+        "10"
+      ],
+      "keys": [
+        "WRAP"
+      ]
+    },
+    {
+      "args": [
+        "zscan",
+        "+",
+        "10"
+      ],
+      "keys": [
+        "+"
+      ]
+    },
+    {
+      "args": [
+        "zscan",
+        "-",
+        "2"
+      ],
+      "keys": [
+        "-"
+      ]
+    },
+    {
+      "args": [
+        "zscore",
+        "SLOTS",
+        "GETUSER"
+      ],
+      "keys": [
+        "SLOTS"
+      ]
+    },
+    {
+      "args": [
+        "zscore",
+        "*",
+        "$"
+      ],
+      "keys": [
+        "*"
+      ]
+    },
+    {
+      "args": [
+        "zscore",
+        "1.5",
+        "v2"
+      ],
+      "keys": [
+        "1.5"
+      ]
+    },
+    {
+      "args": [
+        "zscore",
+        "COUNT",
+        "LEFT"
+      ],
+      "keys": [
+        "COUNT"
+      ]
+    },
+    {
+      "args": [
+        "zscore",
+        "1.5",
+        "a2"
+      ],
+      "keys": [
+        "1.5"
+      ]
+    },
+    {
+      "args": [
+        "zscore",
+        "ACQUIRE",
+        ">"
+      ],
+      "keys": [
+        "ACQUIRE"
       ]
     },
     {
@@ -11991,47 +12126,45 @@
     {
       "args": [
         "zunion",
-        "2",
-        "ACQUIRE",
-        "1.5"
+        "1",
+        "f2"
       ],
       "keys": [
-        "1.5",
-        "ACQUIRE"
+        "f2"
       ]
     },
     {
       "args": [
         "zunion",
         "1",
-        "+"
+        "USERS"
       ],
       "keys": [
-        "+"
+        "USERS"
       ]
     },
     {
       "args": [
         "zunion",
         "2",
-        "$",
-        "*"
+        "RESET",
+        "MYID"
       ],
       "keys": [
-        "$",
-        "*"
+        "MYID",
+        "RESET"
       ]
     },
     {
       "args": [
         "zunion",
         "2",
-        "2",
-        "WHOAMI"
+        "-1",
+        "MAX"
       ],
       "keys": [
-        "2",
-        "WHOAMI"
+        "-1",
+        "MAX"
       ]
     },
     {
@@ -12054,63 +12187,65 @@
     {
       "args": [
         "zunionstore",
-        "DROP",
-        "1",
-        "1.5"
-      ],
-      "keys": [
-        "1.5",
-        "DROP"
-      ]
-    },
-    {
-      "args": [
-        "zunionstore",
-        "STORE",
-        "1",
-        "10"
-      ],
-      "keys": [
-        "10",
-        "STORE"
-      ]
-    },
-    {
-      "args": [
-        "zunionstore",
-        "$",
-        "1",
-        "*"
-      ],
-      "keys": [
-        "$",
-        "*"
-      ]
-    },
-    {
-      "args": [
-        "zunionstore",
-        "GROUP",
-        "2",
-        "+",
-        "STATUS"
-      ],
-      "keys": [
-        "+",
-        "GROUP",
-        "STATUS"
-      ]
-    },
-    {
-      "args": [
-        "zunionstore",
-        "FIND",
+        "COMPLETE",
         "1",
         "1"
       ],
       "keys": [
         "1",
-        "FIND"
+        "COMPLETE"
+      ]
+    },
+    {
+      "args": [
+        "zunionstore",
+        "OVERFLOW",
+        "1",
+        "LOAD"
+      ],
+      "keys": [
+        "LOAD",
+        "OVERFLOW"
+      ]
+    },
+    {
+      "args": [
+        "zunionstore",
+        "INFO",
+        "2",
+        "DROP",
+        "KEYSLOT"
+      ],
+      "keys": [
+        "DROP",
+        "INFO",
+        "KEYSLOT"
+      ]
+    },
+    {
+      "args": [
+        "zunionstore",
+        "MINID",
+        "2",
+        "a3",
+        "+"
+      ],
+      "keys": [
+        "+",
+        "MINID",
+        "a3"
+      ]
+    },
+    {
+      "args": [
+        "zunionstore",
+        "1.5",
+        "1",
+        "*"
+      ],
+      "keys": [
+        "*",
+        "1.5"
       ]
     }
   ]

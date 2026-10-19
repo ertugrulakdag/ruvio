@@ -3355,6 +3355,41 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
         """
         return self._c(_scored, "ZPOPMIN", key) if count is None else self._c(_scored, "ZPOPMIN", key, count)
 
+    def zpopbyscore(self, key: KeyT, max: Arg, min: Arg = "-inf", count: int = 1) -> Any:  # noqa: A002
+        """``ZPOPBYSCORE key max MIN min COUNT count WITHSCORES`` - pops the members that are due.
+
+        Removes and returns up to ``count`` members whose score is between ``min`` and ``max``,
+        lowest score first. With scores set to due times this takes the jobs that are ready.
+
+        Args:
+            key: The sorted-set key.
+            max: Upper bound: number, ``"+inf"`` or ``"(9"`` (exclusive).
+            min: Lower bound: number, ``"-inf"`` (default) or ``"(5"`` (exclusive).
+            count: How many to pop, 1 to 10000 (default one).
+
+        Returns:
+            A list of ``(member, score)`` tuples, lowest first; empty when nothing is due.
+        """
+        return self._c(_scored, "ZPOPBYSCORE", key, max, "MIN", min, "COUNT", count, "WITHSCORES")
+
+    def zmovedue(self, source: KeyT, destination: KeyT, max: Arg, count: int = 1) -> Any:  # noqa: A002
+        """``ZMOVEDUE source destination max COUNT count`` - moves due members to a list.
+
+        Moves up to ``count`` members whose score is at most ``max`` from the sorted set
+        ``source`` to the tail of the list ``destination``, lowest score first. Clients blocked
+        on ``destination`` are served first. Both keys must share a slot on a sharded server.
+
+        Args:
+            source: The sorted-set key.
+            destination: The list key.
+            max: Upper bound: number, ``"+inf"`` or ``"(9"`` (exclusive).
+            count: How many to move, 1 to 10000 (default one).
+
+        Returns:
+            The number of members moved.
+        """
+        return self._c(None, "ZMOVEDUE", source, destination, max, "COUNT", count)
+
     def zpopmax(self, key: KeyT, count: Optional[int] = None) -> Any:
         """``ZPOPMAX key [count]`` - removes and returns the highest-scored members.
 

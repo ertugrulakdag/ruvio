@@ -5,6 +5,7 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 ## Unreleased
 
 - New `RENEW key token ttl_ms`: extends a `LEASE` or `SEMAPHORE` holder by its token (1 when the token is a live holder, 0 otherwise) without releasing it, so a long job keeps its slot and its fencing token. All six clients have `renew`; lease and permit handles gain `renew` where they exist.
+- New `ZPOPBYSCORE key max [MIN min] [COUNT n] [WITHSCORES]` and `ZMOVEDUE source destination max [COUNT n]`: take the due members of a sorted set (score up to `max`) and return them, or move them to the tail of a list, in one command. At most 10000 members per call.
 - New: `SET key value IFGT|IFLT [EX|PX|EXAT|PXAT|KEEPTTL]` writes an integer only when the key is missing or the number is greater (`IFGT`) or smaller (`IFLT`) than the stored one, so a watermark, version or best price needs no script. It answers `OK` or a null bulk; a non-integer argument or stored string is an error and writes nothing. Typed options in all six clients.
 - New `TRANSFER source destination amount [MAX cap]` and `HTRANSFER key from to amount [MAX cap]`: move an integer amount between two keys (same slot) or two fields of a hash only when the source holds enough, in one WAL record. Reply `[source, destination]` after, or a null bulk and no write.
 

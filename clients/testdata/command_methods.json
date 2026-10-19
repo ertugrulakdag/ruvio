@@ -273,6 +273,8 @@
     "ZLEXCOUNT": {"rust": "zlexcount", "csharp": "CountSortedSetByLexAsync", "go": "ZLexCount", "java": "zlexcount", "node": "zlexcount", "python": "zlexcount"},
     "ZMSCORE": {"rust": "zmscore", "csharp": "GetSortedSetScoresAsync", "go": "ZMScore", "java": "zmscore", "node": "zmscore", "python": "zmscore"},
     "ZPOPMAX": {"rust": "zpopmax", "csharp": "PopSortedSetMaxAsync", "go": "ZPopMax", "java": "zpopmax", "node": "zpopmax", "python": "zpopmax"},
+    "ZPOPBYSCORE": {"rust": "zpopbyscore", "csharp": "PopSortedSetByScoreAsync", "go": "ZPopByScore", "java": "zpopbyscore", "node": "zpopbyscore", "python": "zpopbyscore"},
+    "ZMOVEDUE": {"rust": "zmovedue", "csharp": "MoveDueSortedSetAsync", "go": "ZMoveDue", "java": "zmovedue", "node": "zmovedue", "python": "zmovedue"},
     "ZPOPMIN": {"rust": "zpopmin", "csharp": "PopSortedSetMinAsync", "go": "ZPopMin", "java": "zpopmin", "node": "zpopmin", "python": "zpopmin"},
     "ZRANDMEMBER": {"rust": ["zrandmember", "zrandmember_count", "zrandmember_with_scores"], "csharp": "GetSortedSetRandomMemberAsync", "go": "ZRandMember", "java": "zrandmember", "node": "zrandmember", "python": "zrandmember"},
     "ZRANGE": {"rust": ["zrange", "zrange_with_scores", "zrange_by_lex", "zrange_query", "zrange_query_with_scores"], "csharp": "GetSortedSetRangeByRankAsync", "go": "ZRange", "java": "zrange", "node": "zrange", "python": "zrange"},

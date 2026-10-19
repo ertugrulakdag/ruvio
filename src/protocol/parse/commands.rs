@@ -790,6 +790,14 @@ pub(in crate::protocol) fn cmd_zpopmin<'a>(name: &[u8], args: &Args<'a, '_>) -> 
     parse_sorted_set_pop(args, name.eq_ignore_ascii_case(b"ZPOPMAX"))
 }
 
+pub(in crate::protocol) fn cmd_zpopbyscore<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    parse_sorted_set_pop_by_score(args)
+}
+
+pub(in crate::protocol) fn cmd_zmovedue<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    parse_sorted_set_move_due(args)
+}
+
 pub(in crate::protocol) fn cmd_bzpopmin<'a>(name: &[u8], args: &Args<'a, '_>) -> Parsed<'a> {
     let max = name.eq_ignore_ascii_case(b"BZPOPMAX");
 

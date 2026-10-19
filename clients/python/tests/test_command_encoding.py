@@ -254,6 +254,16 @@ def test_flush_variants_and_geo_without_hash():
     assert r.georadius("g", 1, 2, 3, withcoord=True) == [GeoResult("m", None, None, (1.0, 2.0))]
 
 
+def test_due_commands_encode_their_options():
+    r = Rec(reply=[b"m", b"2"])
+
+    assert r.zpopbyscore("z", "(5", min=1, count=3) == [(b"m", 2.0)]
+    assert r.args == ["ZPOPBYSCORE", "z", "(5", "MIN", "1", "COUNT", "3", "WITHSCORES"]
+
+    r = Rec(reply=2)
+
+    assert r.zmovedue("{t}z", "{t}l", "+inf", count=4) == 2
+    assert r.args == ["ZMOVEDUE", "{t}z", "{t}l", "+inf", "COUNT", "4"]
 def test_transfer_commands_encode_the_optional_cap_and_return_a_pair():
     r = Rec(reply=[6, 4])
     assert r.transfer("a", "b", 4) == (6, 4)

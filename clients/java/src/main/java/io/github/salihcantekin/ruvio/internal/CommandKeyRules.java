@@ -34,7 +34,7 @@ public final class CommandKeyRules {
     public static final Map<String, Rule> RULES;
 
     static {
-        Map<String, Rule> rules = new HashMap<>(522);
+        Map<String, Rule> rules = new HashMap<>(526);
         rules.put("ACL", new Rule(0, 0, 0, 0, new String[0], 0));
         rules.put("APPEND", new Rule(1, 1, 1, 1, new String[0], 13));
         rules.put("AUTH", new Rule(0, 0, 0, 0, new String[0], 4));
@@ -277,7 +277,9 @@ public final class CommandKeyRules {
         rules.put("ZINTER", new Rule(2, 1, 0, 0, new String[0], 2));
         rules.put("ZINTERSTORE", new Rule(2, 2, 1, 0, new String[0], 9));
         rules.put("ZLEXCOUNT", new Rule(1, 1, 1, 1, new String[0], 6));
+        rules.put("ZMOVEDUE", new Rule(1, 1, 2, 1, new String[0], 9));
         rules.put("ZMSCORE", new Rule(1, 1, 1, 1, new String[0], 6));
+        rules.put("ZPOPBYSCORE", new Rule(1, 1, 1, 1, new String[0], 5));
         rules.put("ZPOPMAX", new Rule(1, 1, 1, 1, new String[0], 5));
         rules.put("ZPOPMIN", new Rule(1, 1, 1, 1, new String[0], 5));
         rules.put("ZRANDMEMBER", new Rule(1, 1, 1, 1, new String[0], 2));
