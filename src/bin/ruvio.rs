@@ -410,6 +410,12 @@ fn operational_checks(config: &ruvio::AppConfig) -> Result<(), String> {
         if !config.security.authentication_enabled() && !ruvio::bind_is_loopback(&config.address) {
             tracing::warn!("tls is enabled without requirepass on a non-loopback bind");
         }
+
+        if config.replication.leaves_the_host() {
+            tracing::warn!(
+                "tls covers client connections only: replication traffic, including the replication password, is not encrypted; keep it on a private network or a tunnel"
+            );
+        }
     }
 
     if config.persistence.profile != ruvio::DurabilityProfile::Memory {
