@@ -30,6 +30,8 @@
 | Python | [`ruvio-client`](python/README.md) | `pip install ruvio-client` | `python -m pytest` |
 | Node.js | [`ruvio-client`](node/README.md) | `npm install ruvio-client` | `npm test` |
 
+The matrix counts a subcommand such as `CLIENT ID` as its own command; the client spec in `testdata/commands.json` has one entry per command name (`CLIENT`), so it lists fewer entries. The client count is the six language directories; `ruvio-ui` is not a client.
+
 Also here: [`ruvio-ui`](ruvio-ui/README.md), the browser operator UI (AGPL-3.0). The clients are MIT licensed ([license](LICENSE)).
 
 Live tests skip unless `RUVIO_TEST_ADDR` is set; cluster tests need `RUVIO_CLUSTER_ADDR` (a server started with `shards = 3` and `port_mode = "per-shard"`). Details are in each client's README.
