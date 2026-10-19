@@ -95,7 +95,12 @@ ruvio coordinator --config coordinator.toml
   the loss of one; five survive two. A single coordinator works for tests but cannot fail over when it is
   the one that fails.
 - [deploy/compose.failover.yml](../deploy/compose.failover.yml) runs three data nodes and three coordinators
-  with Docker Compose.
+  with Docker Compose; it needs `RUVIO_COORDINATOR_SECRET` and `RUVIO_REPLICATION_PASSWORD` (a replication
+  listener on a public address requires a password), and `RUVIO_IMAGE` to use an image built from this
+  repository. Checked on Docker 29 (arm64): killing the primary container made another member primary
+  in 3.8 s (`down_after_ms` 3000), the restarted old primary came back as a replica, and with the
+  coordinator leader killed too the remaining two failed over again in 3.6 s. The coordinators answer
+  with the containers' names (`ruvio-2 6379`), so Sentinel clients must run on the same Docker network.
 
 ## Finding the primary from a client
 
