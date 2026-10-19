@@ -665,6 +665,7 @@ fn keyspace_commands_cover_exists_type_scan_rename_and_dbsize() {
             pattern: Some(owned(b"*")),
             count: 1,
             type_name: None,
+            slot: None,
         },
     );
     let (cursor, first_count) = match first {
@@ -685,6 +686,7 @@ fn keyspace_commands_cover_exists_type_scan_rename_and_dbsize() {
                 pattern: Some(owned(b"*")),
                 count: 1,
                 type_name: None,
+                slot: None,
             },
         );
         let Response::Scan { cursor: next, keys } = page else {
@@ -1159,4 +1161,52 @@ fn mset_matches_one_set_per_pair_across_windows_repeats_ttls_and_types() {
             "{pairs} pairs"
         );
     }
+}
+
+#[test]
+fn scan_with_a_slot_walks_the_keyspace_and_returns_only_that_slots_keys() {
+    let mut shard = KvShard::new();
+    let slot = crate::routing::hash_slot(b"{tag}a");
+
+    for key in [
+        &b"{tag}a"[..],
+        b"{tag}b",
+        b"{tag}c",
+        b"other:1",
+        b"other:2",
+        b"other:3",
+    ] {
+        shard.set_bytes(key, b"v");
+    }
+
+    let mut cursor = 0;
+    let mut found = Vec::new();
+
+    loop {
+        let page = execute(
+            &mut shard,
+            command_of(&[
+                b"SCAN",
+                cursor.to_string().as_bytes(),
+                b"COUNT",
+                b"1",
+                b"SLOT",
+                slot.to_string().as_bytes(),
+            ]),
+        );
+        let Response::Scan { cursor: next, keys } = page else {
+            panic!("expected scan {page:?}");
+        };
+
+        found.extend(keys.into_iter().map(|key| key.into_owned()));
+        cursor = next;
+        if cursor == 0 {
+            break;
+        }
+    }
+    found.sort();
+    assert_eq!(
+        found,
+        [b"{tag}a".to_vec(), b"{tag}b".to_vec(), b"{tag}c".to_vec()]
+    );
 }

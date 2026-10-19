@@ -2458,3 +2458,83 @@ fn hot_key_set_keeps_absolute_and_kept_deadlines_through_the_log() {
     join_within(left, PATIENCE).unwrap();
     join_within(right, PATIENCE).unwrap();
 }
+
+/// One `SCAN` reply on a connection that stays open: a forwarded command answers only a
+/// client that is still connected.
+fn scan_page(address: SocketAddr, args: &[&[u8]]) -> (String, Vec<String>) {
+    use std::io::{BufRead, BufReader, Read};
+
+    let mut stream = StdTcpStream::connect(address).unwrap();
+
+    stream.set_read_timeout(Some(PATIENCE)).unwrap();
+    stream.write_all(&resp(&[args])).unwrap();
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    let bulk = |reader: &mut BufReader<StdTcpStream>| {
+        let mut header = String::new();
+
+        reader.read_line(&mut header).unwrap();
+        let length: usize = header.trim_end()[1..].parse().unwrap();
+        let mut body = vec![0; length + 2];
+
+        reader.read_exact(&mut body).unwrap();
+        String::from_utf8(body[..length].to_vec()).unwrap()
+    };
+
+    reader.read_line(&mut line).unwrap();
+    assert_eq!(line, "*2\r\n");
+    let cursor = bulk(&mut reader);
+
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    let count: usize = line.trim_end()[1..].parse().unwrap();
+    let keys = (0..count).map(|_| bulk(&mut reader)).collect();
+
+    (cursor, keys)
+}
+
+#[test]
+fn evented_scan_with_a_slot_runs_on_the_owner_from_either_shard() {
+    use crate::routing::hash_slot;
+
+    let (left_addr, right_addr, stop, left_server, right_server) = serve_two_shards();
+    let slot = hash_slot(b"tag").to_string();
+
+    for key in ["{tag}a", "{tag}b", "other"] {
+        let set = resp(&[&[b"SET", key.as_bytes(), b"v"]]);
+
+        assert_eq!(request(left_addr, &set), b"+OK\r\n");
+    }
+
+    // One of the two shards owns the slot; the other forwards the command to it.
+    for address in [left_addr, right_addr] {
+        let mut cursor = String::from("0");
+        let mut keys = Vec::new();
+
+        loop {
+            let (next, page) = scan_page(
+                address,
+                &[
+                    b"SCAN",
+                    cursor.as_bytes(),
+                    b"COUNT",
+                    b"1000",
+                    b"SLOT",
+                    slot.as_bytes(),
+                ],
+            );
+
+            keys.extend(page);
+            cursor = next;
+            if cursor == "0" {
+                break;
+            }
+        }
+        keys.sort();
+        assert_eq!(keys, ["{tag}a", "{tag}b"], "from {address}");
+    }
+
+    stop.request();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
+}

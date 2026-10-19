@@ -220,6 +220,7 @@ pub(super) fn scan_keys<'a, C: Clock, I: StorageIndex>(
     pattern: Option<&[u8]>,
     count: usize,
     type_name: Option<&[u8]>,
+    slot: Option<u16>,
 ) -> Response<'a> {
     let kind = match type_name {
         None => None,
@@ -231,9 +232,15 @@ pub(super) fn scan_keys<'a, C: Clock, I: StorageIndex>(
 
     let (cursor, keys) = shard.scan(cursor, count, pattern, kind);
 
+    // `SLOT` filters the same walk: `COUNT` still bounds the work, a page may come back
+    // shorter or empty, and the cursor ends the walk at 0 as usual.
     Response::Scan {
         cursor,
-        keys: keys.into_iter().map(Cow::Borrowed).collect(),
+        keys: keys
+            .into_iter()
+            .filter(|key| slot.is_none_or(|slot| crate::routing::hash_slot(key) == slot))
+            .map(Cow::Borrowed)
+            .collect(),
     }
 }
 

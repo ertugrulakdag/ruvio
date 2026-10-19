@@ -497,7 +497,7 @@
       "family": "keys",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Shard-local. Cursors walk sorted live keys, not Redis dict cursors.",
+      "limitations": "Shard-local. Cursors walk sorted live keys, not Redis dict cursors. Ruvio adds SLOT n (0-16383): only keys of that hash slot, run on the shard that owns it from any port; COUNT still bounds the work, so pages may be short or empty until the cursor returns 0. No CLUSTER COUNTKEYSINSLOT or GETKEYSINSLOT.",
       "coverage": [
         "scripts/resp_conformance.py"
       ]
