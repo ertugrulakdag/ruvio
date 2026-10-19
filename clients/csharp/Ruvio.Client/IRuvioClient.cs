@@ -571,6 +571,17 @@ public partial interface IRuvioClient
     ValueTask<long?> IncrementWithLimitAsync(string key, long delta, long limit, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Sends <c>RENEW key token ttl</c>: moves the deadline of a lease from <see cref="LeaseAsync"/> or a semaphore slot from <see cref="AcquireSemaphoreAsync"/> to now + <paramref name="ttlMilliseconds"/>. The token does not change and no holder is created.
+    /// </summary>
+    /// <param name="key">The key.</param>
+    /// <param name="token">The token that acquire returned.</param>
+    /// <param name="ttlMilliseconds">The new lifetime in milliseconds (positive). It replaces the remaining time.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>
+    /// <returns>1 when the token held the lease or slot and its deadline moved; 0 when it no longer held it (expired, released or taken by someone else), in which case nothing changes.</returns>
+    /// <exception cref="RuvioException">The server refuses the command, for example the key holds another type.</exception>
+    ValueTask<long> RenewAsync(string key, long token, long ttlMilliseconds, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Sends <c>RELEASE key token</c>: gives back a lease from <see cref="LeaseAsync"/> or a semaphore slot from <see cref="AcquireSemaphoreAsync"/>.
     /// </summary>
     /// <param name="key">The key.</param>

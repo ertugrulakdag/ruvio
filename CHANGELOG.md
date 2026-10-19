@@ -4,6 +4,7 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+- New `RENEW key token ttl_ms`: extends a `LEASE` or `SEMAPHORE` holder by its token (1 when the token is a live holder, 0 otherwise) without releasing it, so a long job keeps its slot and its fencing token. All six clients have `renew`; lease and permit handles gain `renew` where they exist.
 - TTL on create: `INCR`, `DECR`, `INCRBY`, `DECRBY`, `INCRBYFLOAT`, `HINCRBY`, `ZADD`, `ZINCRBY`, `GEOADD`, `XADD`, `SETBIT`, `JSON.SET` and `BF.INSERT` take `EX seconds` or `PX milliseconds`. The deadline is set only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record, so a crash never leaves the key without its TTL.
 - `EXPIRE`, `PEXPIRE`, `EXPIREAT` and `PEXPIREAT` accept `NX`, `XX`, `GT` or `LT`. `SADD`, `LPUSH` and the other variadic writes use `EXPIRE key ttl NX` in the same pipeline or `MULTI`.
 - New `ZPOPBYSCORE key max [MIN min] [COUNT n] [WITHSCORES]` and `ZMOVEDUE source destination max [COUNT n]`: take the due members of a sorted set (score up to `max`) and return them, or move them to the tail of a list, in one command. At most 10000 members per call.

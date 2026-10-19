@@ -1588,6 +1588,22 @@ export abstract class Commands {
     return this._2(T.bool, C.RELEASE, key, token);
   }
   /**
+   * Moves the deadline of a lease or semaphore slot you hold to now + `ttlMs` (`RENEW key token ttlMs`, Ruvio extension).
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param token The token returned by {@link lease} or {@link semaphore}.
+   * @param ttlMs New lifetime in milliseconds (positive). It replaces the remaining time.
+   * @returns `true` when the deadline moved; `false` when the token expired, was released or belongs to someone else (nothing changes).
+   *
+   * @example
+   * ```ts
+   * await client.renew('job:nightly', token, 30_000);
+   * ```
+   */
+  renew(key: Key, token: Value | bigint, ttlMs: number): R<boolean> {
+    return this._3(T.bool, C.RENEW, key, token, ttlMs);
+  }
+  /**
    * Arms the in-memory change feed on this shard (`CHANGES START`, Ruvio extension) and returns the cursor to read from.
    * Nothing is recorded before this call. The feed is not a copy of the WAL and is empty after a restart.
    *

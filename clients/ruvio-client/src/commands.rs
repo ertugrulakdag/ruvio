@@ -611,6 +611,26 @@ impl Client {
         self.integer(["RELEASE", key, Num::uint(token).as_str()])
     }
 
+    /// Sends `RENEW key token ttl_ms`: moves the deadline of a lease or semaphore slot you hold
+    /// to now + `ttl_ms`, without releasing it.
+    ///
+    /// # Arguments
+    /// * `token` - the value returned by [`Client::lease`] or [`Client::semaphore`].
+    /// * `ttl_ms` - the new lifetime in milliseconds (positive); it replaces the remaining time,
+    ///   so it can also be shorter.
+    ///
+    /// # Returns
+    /// `1` when the token is a live holder and its deadline moved; `0` when it expired, was
+    /// released or belongs to someone else (nothing is created or changed).
+    pub fn renew(&mut self, key: &str, token: u64, ttl_ms: u64) -> Result<i64, Error> {
+        self.integer([
+            "RENEW",
+            key,
+            Num::uint(token).as_str(),
+            Num::uint(ttl_ms).as_str(),
+        ])
+    }
+
     /// Sends `SETV key value [version]` (Ruvio): optimistic-locking write of a versioned string.
     ///
     /// # Arguments

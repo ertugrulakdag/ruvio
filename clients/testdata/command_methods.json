@@ -183,6 +183,7 @@
     "RELEASE": {"rust": "release", "csharp": "ReleaseAsync", "go": "Release", "java": "release", "node": "release", "python": "release"},
     "RENAME": {"rust": "rename", "csharp": "RenameAsync", "go": "Rename", "java": "rename", "node": "rename", "python": "rename"},
     "RENAMENX": {"rust": "rename_nx", "csharp": "RenameIfNotExistsAsync", "go": "RenameNX", "java": "renamenx", "node": "renamenx", "python": "renamenx"},
+    "RENEW": {"rust": "renew", "csharp": "RenewAsync", "go": "Renew", "java": "renew", "node": "renew", "python": "renew"},
     "RESTORE": {"rust": "restore", "csharp": "RestoreAsync", "go": "Restore", "java": "restore", "node": "restore", "python": "restore"},
     "RPOP": {"rust": ["rpop", "rpop_count"], "csharp": "PopListRightAsync", "go": "RPop", "java": "rpop", "node": "rpop", "python": "rpop"},
     "RPOPLPUSH": {"rust": "rpoplpush", "csharp": "PopListRightPushLeftAsync", "go": "RPopLPush", "java": "rpoplpush", "node": "rpoplpush", "python": "rpoplpush"},

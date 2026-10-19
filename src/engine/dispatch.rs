@@ -344,6 +344,43 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
             Ok(Response::Integer(1))
         }
 
+        Command::Renew { key, token, ttl_ms } => {
+            let (kind, expires_at) = match shard.renew_plan(&key, token, ttl_ms) {
+                Ok(Some(planned)) => planned,
+                Ok(None) => return Ok(Response::Integer(0)),
+                Err(_) => return Ok(wrong_type()),
+            };
+
+            // A renewal rewrites the holder in place: a running snapshot keeps the held one.
+            before_mutation_allow_oom(shard, sink, [key.as_ref()], 0)?;
+
+            let applied = if kind == crate::store::ValueKind::Semaphore {
+                sink.record(Mutation::SemaphoreAcquire {
+                    key: &key,
+                    token,
+                    expires_at,
+                })?;
+
+                shard.semaphore_put(&key, token, expires_at)
+            } else {
+                sink.record(Mutation::LeasePut {
+                    key: &key,
+                    token,
+                    expires_at,
+                })?;
+
+                shard.lease_put(&key, token, expires_at, "RENEW")
+            };
+
+            if applied.is_err() {
+                debug_assert!(false, "renew failed after validation");
+
+                return Ok(wrong_type());
+            }
+
+            Ok(Response::Integer(1))
+        }
+
         Command::SetVersioned {
             key,
             value,

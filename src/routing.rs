@@ -189,6 +189,7 @@ pub fn command_slot(command: &Command<'_>) -> Result<Option<u16>, CrossSlot> {
         | Command::Semaphore { key, .. }
         | Command::IncrementCapped { key, .. }
         | Command::Release { key, .. }
+        | Command::Renew { key, .. }
         | Command::Limit { key, .. }
         | Command::Once { key, .. }
         | Command::IdempotencyBegin { key, .. }
@@ -472,6 +473,7 @@ pub fn command_keys<'a>(command: &'a Command<'_>) -> Vec<&'a [u8]> {
         | Command::Semaphore { key, .. }
         | Command::IncrementCapped { key, .. }
         | Command::Release { key, .. }
+        | Command::Renew { key, .. }
         | Command::Limit { key, .. }
         | Command::Once { key, .. }
         | Command::IdempotencyBegin { key, .. }

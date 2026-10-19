@@ -186,6 +186,7 @@ var commandKeyRules = map[string]commandKeyRule{
 	"RELEASE":           {1, 1, 1, 1, nil, 5},
 	"RENAME":            {1, 1, 2, 1, nil, 5},
 	"RENAMENX":          {1, 1, 2, 1, nil, 5},
+	"RENEW":             {1, 1, 1, 1, nil, 5},
 	"RESTORE":           {1, 1, 1, 1, nil, 9},
 	"RPOP":              {1, 1, 1, 1, nil, 5},
 	"RPOPLPUSH":         {1, 1, 2, 1, nil, 9},

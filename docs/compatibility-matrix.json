@@ -305,6 +305,17 @@
       ]
     },
     {
+      "name": "RENEW",
+      "family": "keys",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "RENEW key token ttl_ms moves the deadline of a live LEASE holder or SEMAPHORE slot to now + ttl_ms (the new TTL replaces the remaining time). Returns 1, or 0 when the token is expired, released or not the holder. It never creates a holder and never changes the token sequence. A lease renew is a LeasePut record and a semaphore renew a SemaphoreAcquire record with the same token, so no new WAL record type exists. Any other key type is WRONGTYPE.",
+      "coverage": [
+        "src/protocol/",
+        "src/engine/"
+      ]
+    },
+    {
       "name": "CHANGES",
       "family": "keys",
       "status": "supported",

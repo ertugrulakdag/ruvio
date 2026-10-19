@@ -118,6 +118,15 @@ public sealed class RuvioLease : IAsyncDisposable
     /// <summary>True after <see cref="ReleaseAsync"/> or <see cref="DisposeAsync"/> ran.</summary>
     public bool IsReleased => Volatile.Read(ref released) != 0;
 
+    /// <summary>Sends <c>RENEW key token ttl</c>: moves the deadline to now + <paramref name="ttl"/>. The token stays the same.</summary>
+    /// <param name="ttl">The new lifetime. It replaces the remaining time.</param>
+    /// <param name="cancellationToken">Abandons the wait for the reply; a command already sent still runs.</param>
+    /// <returns><see langword="true"/> when this token still held the lease or slot; <see langword="false"/> when it had expired or moved on, or this object was already released.</returns>
+    /// <exception cref="RuvioException">The server refuses the command.</exception>
+    public async ValueTask<bool> RenewAsync(TimeSpan ttl, CancellationToken cancellationToken = default) =>
+        !IsReleased
+        && await client.RenewAsync(Key, Token, (long)ttl.TotalMilliseconds, cancellationToken).ConfigureAwait(false) > 0;
+
     /// <summary>Sends <c>RELEASE key token</c> once. False when the token no longer held it.</summary>
     /// <param name="cancellationToken">Abandons the wait for the reply; a command already sent still runs.</param>
     /// <returns><see langword="true"/> when the server freed this token; <see langword="false"/> when it had expired or moved on, or this object was already released.</returns>

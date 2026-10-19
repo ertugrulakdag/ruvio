@@ -293,6 +293,15 @@ const CASES: &[(&str, &[&[&str]])] = &[
         "release",
         &[&["LEASE", "k", "5000"], &["RELEASE", "k", "$LAST"]],
     ),
+    (
+        "renew",
+        &[
+            &["SEMAPHORE", "sem", "2", "5000"],
+            &["RENEW", "sem", "$LAST", "9000"],
+            &["LEASE", "k", "5000"],
+            &["RENEW", "k", "$LAST", "9000"],
+        ],
+    ),
     ("setv", &[&["SETV", "k", "x"]]),
     ("mset", &[&["MSET", "s", "x", "d", "y"]]),
     ("unlink", &[&["UNLINK", "s", "l"]]),

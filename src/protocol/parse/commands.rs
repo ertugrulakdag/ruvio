@@ -636,6 +636,31 @@ pub(in crate::protocol) fn cmd_release<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
     })
 }
 
+pub(in crate::protocol) fn cmd_renew<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
+    if args.len() != 3 {
+        return Err(ProtocolError::Invalid(
+            "RENEW expects a key, a token, and a TTL in milliseconds",
+        ));
+    }
+
+    let token = parse_u64(args.bytes(1))
+        .map_err(|_| ProtocolError::Invalid("RENEW token must be an integer"))?;
+    let ttl_ms = parse_u64(args.bytes(2))
+        .map_err(|_| ProtocolError::Invalid("RENEW TTL must be a positive integer"))?;
+
+    if ttl_ms == 0 {
+        return Err(ProtocolError::Invalid(
+            "RENEW TTL must be a positive integer",
+        ));
+    }
+
+    Ok(Command::Renew {
+        key: args.arg(0),
+        token,
+        ttl_ms,
+    })
+}
+
 pub(in crate::protocol) fn cmd_setv<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
     if args.len() != 2 && args.len() != 3 {
         return Err(ProtocolError::Invalid(

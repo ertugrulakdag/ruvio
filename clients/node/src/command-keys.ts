@@ -172,6 +172,7 @@ export const COMMAND_KEY_RULES: ReadonlyMap<string, CommandKeyRule> = new Map<st
   ["RELEASE", [1, 1, 1, 1, [], 5]],
   ["RENAME", [1, 1, 2, 1, [], 5]],
   ["RENAMENX", [1, 1, 2, 1, [], 5]],
+  ["RENEW", [1, 1, 1, 1, [], 5]],
   ["RESTORE", [1, 1, 1, 1, [], 9]],
   ["RPOP", [1, 1, 1, 1, [], 5]],
   ["RPOPLPUSH", [1, 1, 2, 1, [], 9]],

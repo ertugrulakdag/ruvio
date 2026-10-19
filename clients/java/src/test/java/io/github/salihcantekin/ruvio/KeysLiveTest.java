@@ -159,7 +159,10 @@ class KeysLiveTest {
         assertNotNull(t1);
         assertNull(c.lease("k:lease", 10_000));
         assertFalse(c.release("k:lease", t1 + 100));
+        assertFalse(c.renew("k:lease", t1 + 100, 20_000));
+        assertTrue(c.renew("k:lease", t1, 20_000));
         assertTrue(c.release("k:lease", t1));
+        assertFalse(c.renew("k:lease", t1, 20_000));
         Long t2 = c.lease("k:lease", 10_000);
         assertTrue(t2 > t1, "fencing tokens increase");
         // SEMAPHORE
@@ -167,6 +170,8 @@ class KeysLiveTest {
         Long s2 = c.semaphore("k:sem", 2, 10_000);
         assertNotNull(s1);
         assertNotNull(s2);
+        assertNull(c.semaphore("k:sem", 2, 10_000));
+        assertTrue(c.renew("k:sem", s1, 20_000));
         assertNull(c.semaphore("k:sem", 2, 10_000));
         assertTrue(c.release("k:sem", s1));
         assertNotNull(c.semaphore("k:sem", 2, 10_000));

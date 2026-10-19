@@ -346,8 +346,16 @@ fn semaphores_and_capped_increments() {
     assert_eq!(second, first + 1);
     assert_eq!(db.semaphore("jobs", 2, 60_000).unwrap(), None);
     assert_eq!(db.key_type("jobs").unwrap(), "semaphore");
+    assert_eq!(db.renew("jobs", first as u64, 120_000).unwrap(), 1);
+    assert_eq!(db.renew("jobs", first as u64 + 100, 120_000).unwrap(), 0);
+    assert_eq!(
+        db.semaphore("jobs", 2, 60_000).unwrap(),
+        None,
+        "renew takes no slot"
+    );
     assert_eq!(db.release("jobs", first as u64).unwrap(), 1);
     assert_eq!(db.release("jobs", first as u64).unwrap(), 0);
+    assert_eq!(db.renew("jobs", first as u64, 120_000).unwrap(), 0);
     assert!(db.semaphore("jobs", 2, 60_000).unwrap().is_some());
     assert!(db.semaphore("short", 1, 30).unwrap().is_some());
     std::thread::sleep(Duration::from_millis(80));

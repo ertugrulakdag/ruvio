@@ -195,6 +195,12 @@ public sealed partial class RuvioClient
     }
 
     /// <inheritdoc />
+    public ValueTask<long> RenewAsync(string key, long token, long ttlMilliseconds, CancellationToken cancellationToken = default)
+    {
+        return Integer(new RespCommand("RENEW", key, token, ttlMilliseconds), cancellationToken);
+    }
+
+    /// <inheritdoc />
     public ValueTask<long> ReleaseAsync(string key, long token, CancellationToken cancellationToken = default)
     {
         return Integer(new RespCommand("RELEASE", key, token), cancellationToken);

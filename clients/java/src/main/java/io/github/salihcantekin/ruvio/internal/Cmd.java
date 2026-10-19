@@ -354,6 +354,8 @@ public final class Cmd {
     public static final byte[] RENAME = RespOut.fragment("RENAME");
     /** The word {@code RENAMENX}, pre-encoded as a RESP bulk string. */
     public static final byte[] RENAMENX = RespOut.fragment("RENAMENX");
+    /** The word {@code RENEW}, pre-encoded as a RESP bulk string. */
+    public static final byte[] RENEW = RespOut.fragment("RENEW");
     /** The word {@code RESTORE}, pre-encoded as a RESP bulk string. */
     public static final byte[] RESTORE = RespOut.fragment("RESTORE");
     /** The word {@code RPOP}, pre-encoded as a RESP bulk string. */
