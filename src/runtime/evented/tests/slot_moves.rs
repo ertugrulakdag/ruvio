@@ -543,3 +543,132 @@ fn a_range_that_does_not_fit_on_the_target_is_cancelled_and_stays() {
 
     stop_pair(shutdown, server);
 }
+
+/// What a writer expects each key of the range to hold, from the writes the server acked.
+#[derive(Default)]
+struct Model {
+    strings: HashMap<String, Option<String>>,
+    lists: HashMap<String, VecDeque<String>>,
+    hashes: HashMap<String, HashMap<String, String>>,
+}
+
+#[test]
+fn every_kind_of_write_during_a_move_lands_on_the_new_owner() {
+    let (left, right, shutdown, server) = serve_memory_pair();
+
+    wait_until_listening(left, &server);
+    wait_until_listening(right, &server);
+    let mut client = Client::connect(left);
+
+    for n in 0..3000 {
+        let key = key_in_slots(&format!("bulk{n}"), 0, 4095);
+
+        client.call(&[b"SET", key.as_bytes(), b"x"]);
+    }
+
+    let strings: Vec<String> = (0..16).map(|n| key_in_slots(&format!("str{n}"), 0, 4095)).collect();
+    let lists: Vec<String> = (0..8).map(|n| key_in_slots(&format!("list{n}"), 0, 4095)).collect();
+    let hashes: Vec<String> = (0..8).map(|n| key_in_slots(&format!("hash{n}"), 0, 4095)).collect();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer = {
+        let (strings, lists, hashes) = (strings.clone(), lists.clone(), hashes.clone());
+        let stop = Arc::clone(&stop);
+
+        thread::spawn(move || {
+            let mut clients = [Client::connect(left), Client::connect(right)];
+            let mut model = Model::default();
+            let mut step = 0usize;
+
+            while !stop.load(Ordering::Acquire) || step < 2000 {
+                let client = &mut clients[step % 2];
+                let value = step.to_string();
+                let string = &strings[step % strings.len()];
+                let list = &lists[step % lists.len()];
+                let hash = &hashes[step % hashes.len()];
+                let field = format!("f{}", step % 5);
+                let reply = match step % 7 {
+                    0 => client.call(&[b"SET", string.as_bytes(), value.as_bytes()]),
+                    1 => client.call(&[b"APPEND", string.as_bytes(), b"+"]),
+                    2 => client.call(&[b"DEL", string.as_bytes()]),
+                    3 => client.call(&[b"RPUSH", list.as_bytes(), value.as_bytes()]),
+                    4 => client.call(&[b"LPOP", list.as_bytes()]),
+                    5 => client.call(&[b"HSET", hash.as_bytes(), field.as_bytes(), value.as_bytes()]),
+                    _ => client.call(&[b"HDEL", hash.as_bytes(), field.as_bytes()]),
+                };
+
+                step += 1;
+                if matches!(&reply, Value::Error(error) if error.starts_with("TRYAGAIN")) {
+                    continue;
+                }
+                assert!(!matches!(reply, Value::Error(_)), "{reply:?}");
+                match (step - 1) % 7 {
+                    0 => {
+                        model.strings.insert(string.clone(), Some(value));
+                    }
+                    1 => {
+                        let entry = model.strings.entry(string.clone()).or_insert(None);
+
+                        *entry = Some(format!("{}+", entry.clone().unwrap_or_default()));
+                    }
+                    2 => {
+                        model.strings.insert(string.clone(), None);
+                    }
+                    3 => model.lists.entry(list.clone()).or_default().push_back(value),
+                    4 => {
+                        model.lists.entry(list.clone()).or_default().pop_front();
+                    }
+                    5 => {
+                        model.hashes.entry(hash.clone()).or_default().insert(field, value);
+                    }
+                    _ => {
+                        model.hashes.entry(hash.clone()).or_default().remove(&field);
+                    }
+                }
+            }
+            model
+        })
+    };
+
+    thread::sleep(Duration::from_millis(30));
+    client.call(&[b"RUVIO", b"MOVESLOTS", b"0-4095", b"1"]);
+    let status = wait_for_move(&mut client);
+
+    stop.store(true, Ordering::Release);
+    let model = writer.join().unwrap();
+
+    assert_eq!(status["state"], "done", "{status:?}");
+
+    let mut check = Client::connect(right);
+
+    for (key, value) in &model.strings {
+        assert_eq!(
+            check.call(&[b"GET", key.as_bytes()]),
+            Value::Bulk(value.as_ref().map(|value| value.as_bytes().to_vec())),
+            "{key}"
+        );
+    }
+    for (key, values) in &model.lists {
+        let expected: Vec<Value> = values
+            .iter()
+            .map(|value| Value::Bulk(Some(value.as_bytes().to_vec())))
+            .collect();
+
+        assert_eq!(check.call(&[b"LRANGE", key.as_bytes(), b"0", b"-1"]), Value::Array(expected), "{key}");
+    }
+    for (key, fields) in &model.hashes {
+        assert_eq!(
+            check.call(&[b"HLEN", key.as_bytes()]),
+            Value::Integer(fields.len() as i64),
+            "{key}"
+        );
+        for (field, value) in fields {
+            assert_eq!(
+                check.call(&[b"HGET", key.as_bytes(), field.as_bytes()]),
+                Value::Bulk(Some(value.as_bytes().to_vec())),
+                "{key} {field}"
+            );
+        }
+    }
+
+    stop_pair(shutdown, server);
+}
