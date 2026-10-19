@@ -14,7 +14,7 @@ the README and the license; `SHA256SUMS` lists the checksum of every archive. No
 Download, verify and unpack (use `linux-arm64` on an arm64 host):
 
 ```bash
-v=0.3.2
+v=0.3.4
 curl -LO https://github.com/salihcantekin/ruvio/releases/download/ruvio-$v/ruvio-$v-linux-x64.tar.gz
 curl -LO https://github.com/salihcantekin/ruvio/releases/download/ruvio-$v/SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS
