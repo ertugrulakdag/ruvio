@@ -2172,6 +2172,14 @@
       }
     },
     {
+      "name": "REPLICAOF",
+      "arity": -3,
+      "flags": [],
+      "keys": {
+        "kind": "none"
+      }
+    },
+    {
       "name": "RESTORE",
       "arity": -4,
       "flags": [
@@ -2183,6 +2191,16 @@
         "first": 1,
         "last": 1,
         "step": 1
+      }
+    },
+    {
+      "name": "ROLE",
+      "arity": 1,
+      "flags": [
+        "fast"
+      ],
+      "keys": {
+        "kind": "none"
       }
     },
     {

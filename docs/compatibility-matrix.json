@@ -1845,6 +1845,26 @@
       ]
     },
     {
+      "name": "REPLICAOF",
+      "family": "replication",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "REPLICAOF host port makes every shard follow host:port (shard i dials port + i) without a restart; writes answer READONLY at once. A shard resumes from its own log when the new primary continues its history up to where it forked, otherwise it takes a full copy. REPLICAOF NO ONE promotes in place: queued frames are applied, a new history forks one epoch up, and the shard ships to replicas when replication.listen is set. It is refused while any shard has a catch-up marker unless FORCE is given; a shard still copying answers LOADING to every command, so an incomplete single-shard replica is promoted with a restart and --force-promote-incomplete. Durability memory and snapshot refuse it. Lasts until restart (the file's role applies again); not logged or replicated; refused inside MULTI and scripts. No SLAVEOF alias.",
+      "coverage": [
+        "src/runtime/evented/tests/role_change.rs"
+      ]
+    },
+    {
+      "name": "ROLE",
+      "family": "replication",
+      "status": "supported",
+      "same_slot": false,
+      "limitations": "Per shard (each shard is a node): a primary, or a server that does not replicate, answers master, its WAL sequence and an empty replica list (INFO replication_replicas has the count); a replica answers slave, the address it dials, connect or connected, and its synced sequence.",
+      "coverage": [
+        "src/runtime/evented/tests/role_change.rs"
+      ]
+    },
+    {
       "name": "CONFIG GET",
       "family": "introspection",
       "status": "supported",

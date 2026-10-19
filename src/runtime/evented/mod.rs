@@ -103,6 +103,12 @@ struct ShardState {
     /// Signalled by that thread for every delivery, and by a drain that ran out of budget.
     replica_wake: Arc<tokio::sync::Notify>,
     replica_resync_sequence: Arc<AtomicU64>,
+    /// The shard's replication role now: the configured one until `REPLICAOF` changes it.
+    role: Cell<crate::config::ReplicationRole>,
+    /// The primary this replica shard dials (its own port), for `ROLE`.
+    followed: RefCell<Option<(String, u16)>>,
+    /// The thread that ships this shard's log to replicas, or follows a primary.
+    replication: RefCell<Option<crate::replication::ReplicationThread>>,
     /// Whether this shard takes writes; read for every write.
     write_gate: Cell<crate::replication::WriteGate>,
     /// Epoch of the history this shard writes as a primary (0 otherwise).
@@ -178,7 +184,8 @@ struct ShardState {
     /// `(generation, covered sequence)` of this shard's files whose round is not yet published.
     submitted_coverage: RefCell<std::collections::VecDeque<(u64, u64)>>,
     hot_store: Option<crate::hot_store::SharedMemoryStore>,
-    publish_fanout: Option<Arc<crate::replication::PublishFanout>>,
+    /// Copies of `PUBLISH` for replicas; fed only while the shard is a primary.
+    publish_fanout: Arc<crate::replication::PublishFanout>,
     durable_acks: Arc<crate::replication::DurableAcks>,
 }
 
@@ -960,6 +967,9 @@ async fn serve_async(
         replica_wake: Arc::new(tokio::sync::Notify::new()),
         replica_link: Arc::new(crate::replication::LinkStatus::default()),
         replica_persist_warned: Cell::new(None),
+        role: Cell::new(config.replication.role),
+        followed: RefCell::new(None),
+        replication: RefCell::new(None),
         write_gate: Cell::new(
             if config.replication.role == crate::config::ReplicationRole::Replica {
                 crate::replication::WriteGate::Replica
@@ -1023,8 +1033,7 @@ async fn serve_async(
         compacted_generation: Cell::new(0),
         submitted_coverage: RefCell::new(std::collections::VecDeque::new()),
         hot_store,
-        publish_fanout: (config.replication.role == crate::config::ReplicationRole::Primary)
-            .then(|| Arc::new(crate::replication::PublishFanout::new())),
+        publish_fanout: Arc::new(crate::replication::PublishFanout::new()),
         durable_acks: Arc::new(crate::replication::DurableAcks::new()),
     });
 
@@ -1070,10 +1079,7 @@ async fn serve_async(
     let limits = config.protocol;
     let shutdown_grace = config.shutdown_grace;
 
-    let replication = attach_replication(&state, shard_id)?;
-    *state.replica_reader.borrow_mut() = replication
-        .as_ref()
-        .and_then(crate::replication::ReplicationThread::reader);
+    *state.replication.borrow_mut() = attach_replication(&state, shard_id)?;
     let mut maintenance = tokio::time::interval(Duration::from_millis(100));
     maintenance.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     maintenance.tick().await;
@@ -1350,6 +1356,6 @@ async fn serve_async(
         warn!(%error, "final checkpoint failed; the WAL keeps every acknowledged write");
     }
 
-    drop(replication);
+    drop(state.replication.borrow_mut().take());
     Ok(())
 }

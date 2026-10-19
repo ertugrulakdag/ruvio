@@ -1386,7 +1386,7 @@ impl LinkStatus {
         self.touch();
     }
 
-    fn mark_down(&self) {
+    pub(crate) fn mark_down(&self) {
         self.up.store(false, Ordering::Release);
     }
 

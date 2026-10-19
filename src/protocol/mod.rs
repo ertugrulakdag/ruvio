@@ -512,6 +512,12 @@ pub enum Command<'a> {
     /// connection that receives it.
     ConfigSet(Vec<(Bytes<'a>, Bytes<'a>)>),
     ConfigRewrite,
+    /// `REPLICAOF host port`, or `REPLICAOF NO ONE [FORCE]` (`primary` is `None`).
+    ReplicaOf {
+        primary: Option<(Bytes<'a>, Bytes<'a>)>,
+        force: bool,
+    },
+    Role,
     Info(Option<Bytes<'a>>),
     Save,
     Bgsave,

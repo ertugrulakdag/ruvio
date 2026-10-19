@@ -14,7 +14,7 @@ use crate::{
 
 pub use crate::security::SecurityConfig;
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ReplicationRole {
     #[default]
@@ -1412,12 +1412,12 @@ fn listener_ranges_overlap(left: SocketAddr, right: SocketAddr, shards: usize) -
     u32::from(left.port()) <= right_end && u32::from(right.port()) <= left_end
 }
 
-struct ParsedPrimary {
-    socket: Option<SocketAddr>,
-    name: Option<(String, u16)>,
+pub(crate) struct ParsedPrimary {
+    pub(crate) socket: Option<SocketAddr>,
+    pub(crate) name: Option<(String, u16)>,
 }
 
-fn parse_replication_primary(value: &str) -> Result<ParsedPrimary, String> {
+pub(crate) fn parse_replication_primary(value: &str) -> Result<ParsedPrimary, String> {
     if let Ok(address) = value.parse::<SocketAddr>() {
         return Ok(ParsedPrimary {
             socket: Some(address),

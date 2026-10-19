@@ -1078,6 +1078,8 @@ pub fn command_acl_name(command: &Command<'_>) -> &'static str {
         Command::ConfigGet(_) => "config|get",
         Command::ConfigSet(_) => "config|set",
         Command::ConfigRewrite => "config|rewrite",
+        Command::ReplicaOf { .. } => "replicaof",
+        Command::Role => "role",
         Command::Info(_) => "info",
         Command::Save => "save",
         Command::Bgsave => "bgsave",

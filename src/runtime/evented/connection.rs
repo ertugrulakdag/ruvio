@@ -1440,6 +1440,8 @@ fn plain_command(command: &Command<'_>) -> bool {
                 | Command::Save
                 | Command::ConfigSet(_)
                 | Command::ConfigRewrite
+                | Command::ReplicaOf { .. }
+                | Command::Role
                 | Command::Bgsave
                 | Command::ChangesSubscribe(_)
                 | Command::Multi
@@ -1482,7 +1484,7 @@ fn lean_session(
         && auth.authenticated
         && auth.rules.all_commands
         && auth.rules.all_keys
-        && state.published_config.replication.role == crate::config::ReplicationRole::Off
+        && state.role.get() == crate::config::ReplicationRole::Off
         && (state.hot_store.is_none() || state.published_config.hot_keys.is_empty())
         && state.tracker.borrow().is_empty()
 }
@@ -1628,8 +1630,7 @@ async fn dispatch_inner<'s>(
             security: &state.security,
             cluster: state.cluster_view().is_some(),
             write_refusal: state.write_gate.get().refusal(),
-            replication: state.published_config.replication.role
-                != crate::config::ReplicationRole::Off,
+            replication: state.role.get() != crate::config::ReplicationRole::Off,
             databases: state.published_config.protocol.databases,
         },
         &command,
@@ -1660,8 +1661,7 @@ async fn dispatch_inner<'s>(
             } = &command
             {
                 if let Some(slot) = deferred.as_deref_mut()
-                    && state.published_config.replication.role
-                        == crate::config::ReplicationRole::Primary
+                    && state.role.get() == crate::config::ReplicationRole::Primary
                 {
                     *slot = Some(Parking::Wait(Wait::Replicas {
                         replicas: *replicas,
@@ -1781,6 +1781,25 @@ async fn dispatch_inner<'s>(
 
             Command::ConfigRewrite => {
                 write_response(output, super::live::config_rewrite(state))?;
+
+                return Ok(());
+            }
+
+            Command::ReplicaOf { primary, force } => {
+                let primary = primary
+                    .as_ref()
+                    .map(|(host, port)| (host.as_ref(), port.as_ref()));
+
+                write_response(
+                    output,
+                    super::replica::replicaof(state, primary, *force).await,
+                )?;
+
+                return Ok(());
+            }
+
+            Command::Role => {
+                write_response(output, super::replica::role_response(state))?;
 
                 return Ok(());
             }

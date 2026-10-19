@@ -2076,6 +2076,8 @@ mod tests {
         "ConfigGet",
         "ConfigRewrite",
         "ConfigSet",
+        "ReplicaOf",
+        "Role",
         "Discard",
         "Echo",
         "Eval",

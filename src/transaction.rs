@@ -269,6 +269,8 @@ fn queueable(command: &Command<'_>) -> bool {
             | Command::Save
             | Command::ConfigSet(_)
             | Command::ConfigRewrite
+            | Command::ReplicaOf { .. }
+            | Command::Role
             | Command::Bgsave
             | Command::Hello { .. }
             | Command::ClientGetName
