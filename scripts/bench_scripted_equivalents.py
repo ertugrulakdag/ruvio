@@ -48,6 +48,20 @@ LUA = {
             "return #r",
     "incr_ex": "local v=redis.call('INCR',KEYS[1]) if v==1 then redis.call('EXPIRE',KEYS[1],ARGV[1]) end return v",
     "lease_renew": "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('PEXPIRE',KEYS[1],ARGV[2]) end return 0",
+    "limit_fixed": "local c=redis.call('INCR',KEYS[1]) if c==1 then redis.call('PEXPIRE',KEYS[1],ARGV[2]) end "
+                   "if c>tonumber(ARGV[1]) then return false end return tonumber(ARGV[1])-c",
+    "limit_sliding": "local t=redis.call('TIME') local ms=t[1]*1000+math.floor(t[2]/1000) local w=tonumber(ARGV[2]) "
+                     "local cur=math.floor(ms/w) local ck=KEYS[1]..':'..cur local pk=KEYS[1]..':'..(cur-1) "
+                     "local c=tonumber(redis.call('GET',ck) or '0') local p=tonumber(redis.call('GET',pk) or '0') "
+                     "local est=p*(1-(ms%w)/w)+c if est+1>tonumber(ARGV[1]) then return false end "
+                     "redis.call('INCR',ck) redis.call('PEXPIRE',ck,w*2) return math.floor(tonumber(ARGV[1])-est-1)",
+    "limit_tokens": "local t=redis.call('TIME') local ms=t[1]*1000+math.floor(t[2]/1000) local cap=tonumber(ARGV[1]) "
+                    "local refill=tonumber(ARGV[2]) local h=redis.call('HMGET',KEYS[1],'t','ts') "
+                    "local tok=tonumber(h[1]) local ts=tonumber(h[2]) "
+                    "if not tok then tok=cap ts=ms else local add=math.floor((ms-ts)/refill) "
+                    "if add>0 then tok=math.min(cap,tok+add) ts=ts+add*refill end end "
+                    "if tok<1 then return false end tok=tok-1 "
+                    "redis.call('HSET',KEYS[1],'t',tok,'ts',ts) redis.call('PEXPIRE',KEYS[1],cap*refill) return tok",
     "sem_renew": "if redis.call('ZSCORE',KEYS[1],ARGV[1]) then redis.call('ZADD',KEYS[1],'XX',ARGV[2],ARGV[1]) return 1 end return 0",
 }
 SHA = {name: hashlib.sha1(body.encode()).hexdigest() for name, body in LUA.items()}
@@ -127,6 +141,13 @@ def rows(args: argparse.Namespace):
         rf.send_all(port, [rf.frame("ZADD", "sk", "9999999999999", "tok")])
         return ["EVALSHA", SHA["sem_renew"], "1", "sk", "tok", "9999999999999"]
 
+    def limit(mode, redis_script, ruvio_args, redis_args):
+        def setup(name, port):
+            if name == "ruvio":
+                return ["LIMIT", "lim:__rand_int__", *ruvio_args]
+            return ["EVALSHA", SHA[redis_script], "1", "lim:__rand_int__", *redis_args]
+        return setup
+
     return [
         ("TRANSFER (enough)", 1000, 300_000, transfer),
         ("TRANSFER (source too low)", 1000, 300_000, transfer_low),
@@ -140,6 +161,11 @@ def rows(args: argparse.Namespace):
         ("INCR (plain, for scale)", 1000, 300_000, incr_plain),
         ("INCR EX 60 (1000 keys, mostly existing)", 1000, 300_000, incr_ex),
         ("INCR EX 60 (new keys)", 10_000_000, 300_000, incr_ex),
+        ("LIMIT plain (fixed window, allowed)", 1000, 300_000, limit("plain", "limit_fixed", ["1000000000", "60000"], ["1000000000", "60000"])),
+        ("LIMIT SLIDING (allowed)", 1000, 300_000, limit("sliding", "limit_sliding", ["1000000000", "60000", "SLIDING"], ["1000000000", "60000"])),
+        ("LIMIT SLIDING (mostly refused, max 5)", 1000, 300_000, limit("sliding", "limit_sliding", ["5", "60000", "SLIDING"], ["5", "60000"])),
+        ("LIMIT TOKENS (allowed)", 1000, 300_000, limit("tokens", "limit_tokens", ["1000000", "60000", "TOKENS"], ["1000000", "60000"])),
+        ("LIMIT TOKENS (mostly refused, capacity 5)", 1000, 300_000, limit("tokens", "limit_tokens", ["5", "60000", "TOKENS"], ["5", "60000"])),
         ("RENEW lease", 1000, 300_000, lease_renew),
         ("RENEW semaphore slot", 1000, 300_000, sem_renew),
     ]
@@ -178,6 +204,8 @@ def command_works(port: int, argv: list[str]) -> str | None:
 MEMORY_CASES = [
     ("100,000 counters INCR ... EX (vs INCR + EXPIRE)", "incr_ex"),
     ("100,000 leases (vs SET ... PX)", "lease"),
+    ("100,000 sliding-window limiters (vs two-counter Lua)", "sliding"),
+    ("100,000 token buckets (vs hash + PEXPIRE Lua)", "tokens"),
     ("50,000 one-holder semaphores (vs one-member ZSET)", "sem"),
 ]
 
@@ -192,6 +220,14 @@ def memory_frames(kind: str, name: str) -> list[bytes]:
         if name == "ruvio":
             return [rf.frame("LEASE", f"l:{i:08d}", "600000") for i in range(100_000)]
         return [rf.frame("SET", f"l:{i:08d}", "1234567890123456", "PX", "600000") for i in range(100_000)]
+
+    if kind in ("sliding", "tokens"):
+        if name == "ruvio":
+            mode = "SLIDING" if kind == "sliding" else "TOKENS"
+            return [rf.frame("LIMIT", f"q:{i:08d}", "100", "60000", mode) for i in range(100_000)]
+
+        body = LUA["limit_sliding" if kind == "sliding" else "limit_tokens"]
+        return [rf.frame("EVAL", body, "1", f"q:{i:08d}", "100", "60000") for i in range(100_000)]
 
     if name == "ruvio":
         return [rf.frame("SEMAPHORE", f"s:{i:08d}", "10", "600000") for i in range(50_000)]
