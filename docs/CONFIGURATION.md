@@ -450,7 +450,8 @@ already has those files or markers unless `--force` is set. Integrity checks
 do not certify replica catch-up completeness. See [RECOVERY.md](RECOVERY.md).
 
 `INFO prometheus` returns Prometheus text for the receiving shard. There is no
-HTTP metrics endpoint yet.
+HTTP metrics endpoint yet: `metrics_address` / `--metrics-address` is accepted but nothing listens on it
+(the server warns at startup if it is set).
 
 `hot_keys` / `RUVIO_HOT_KEYS` is a list of Redis-style `*` / `?` globs
 (`hot_keys = ["lock:*", "session:*"]` or `RUVIO_HOT_KEYS=lock:*,session:*`).
