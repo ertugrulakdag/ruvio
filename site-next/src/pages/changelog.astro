@@ -1,0 +1,196 @@
+---
+import Page from "../layouts/Page.astro";
+import PageIntro from "../components/PageIntro.astro";
+import { site } from "../config/site";
+// Written by scripts/changelog.mjs from the git history on every dev and build run (not committed).
+import data from "../data/changelog.json";
+
+type Entry = {
+  kind: "commit" | "pr" | "promote" | "release";
+  sha?: string; short?: string; onMain?: boolean;
+  area?: string | null; text?: string;
+  pr?: number; from?: string; count?: number; collapsed?: number;
+  tag?: string; label?: string;
+};
+type Day = { date: string; entries: Entry[] };
+const days: Day[] = data.available ? (data as { days: Day[] }).days : [];
+
+const notes = [
+  { label: "Server", path: "CHANGELOG.md" },
+  { label: "Rust client", path: "clients/ruvio-client/CHANGELOG.md" },
+  { label: "C# client", path: "clients/csharp/CHANGELOG.md" },
+  { label: "Go client", path: "clients/go/CHANGELOG.md" },
+  { label: "Java client", path: "clients/java/CHANGELOG.md" },
+  { label: "Python client", path: "clients/python/CHANGELOG.md" },
+  { label: "Node.js client", path: "clients/node/CHANGELOG.md" },
+  { label: "Operator UI", path: "clients/ruvio-ui/CHANGELOG.md" },
+];
+
+const longDate = (d: string) =>
+  new Date(`${d}T00:00:00Z`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+const branchOf = (e: Entry) => (e.onMain ? "main" : "dev");
+const commits = (n: number) => `${n} ${n === 1 ? "commit" : "commits"}`;
+---
+
+<Page title="Changelog" description="Every change merged into Ruvio's main and dev branches, by day, read from the git history when the site is built.">
+  <PageIntro title="Changelog" kicker="What changed, day by day">
+    Every change merged into <code>main</code> and <code>dev</code>, read from the repository's history each time
+    the site is built. <code>main</code> is what the releases are cut from; <code>dev</code> is ahead of it. The
+    per-package release notes say what each published version changed.
+  </PageIntro>
+
+  <div class="reading">
+    <div class="wrap">
+      <section class="panel notes" aria-labelledby="notes-h">
+        <h2 id="notes-h">Release notes</h2>
+        <div class="note-links">
+          {notes.map((n) => <a class="chip" href={`${site.github}/blob/main/${n.path}`}>{n.label}</a>)}
+          <a class="chip" href={`${site.github}/releases`}>All releases</a>
+        </div>
+      </section>
+
+      {data.available ? (
+        <>
+          <div class="toolbar">
+            <div class="seg" role="group" aria-label="Show branch" data-branch-filter>
+              <button type="button" aria-pressed="true" data-show="all">All</button>
+              <button type="button" aria-pressed="false" data-show="main">main</button>
+              <button type="button" aria-pressed="false" data-show="dev">dev only</button>
+            </div>
+            <p class="tips">
+              Built from <code>main</code> at <a href={`${site.github}/commit/${data.tips.main}`}>{data.tips.main}</a>
+              {data.tips.dev && <> and <code>dev</code> at <a href={`${site.github}/commit/${data.tips.dev}`}>{data.tips.dev}</a></>}
+            </p>
+          </div>
+
+          <ol class="days">
+            {days.map((d) => (
+              <li class="day" data-day>
+                <h2 class="day-h"><time datetime={d.date}>{longDate(d.date)}</time></h2>
+                <ul class="entries">
+                  {d.entries.map((e) =>
+                    e.kind === "release" ? (
+                      <li class="entry release" data-branch="main">
+                        <span class="badge rel">release</span>
+                        <a class="text" href={`${site.github}/releases/tag/${e.tag}`}>{e.label}</a>
+                        <code class="sha">{e.tag}</code>
+                      </li>
+                    ) : (
+                      <li class={`entry ${e.kind}`} data-branch={branchOf(e)}>
+                        <span class={`badge ${e.kind === "promote" ? "promote" : branchOf(e)}`}>
+                          {e.kind === "promote" ? "dev → main" : branchOf(e)}
+                        </span>
+                        <span class="text">
+                          {e.area && <span class="area">{e.area}</span>}
+                          {e.text}
+                          {e.kind === "pr" && (
+                            <span class="meta">
+                              <a href={`${site.github}/pull/${e.pr}`}>#{e.pr}</a> from <code>{e.from}</code>, {commits(e.count ?? 0)}
+                            </span>
+                          )}
+                          {e.kind === "promote" && e.count ? <span class="meta">{e.count} changes from dev</span> : null}
+                          {e.collapsed && <span class="meta">{e.collapsed} version updates</span>}
+                        </span>
+                        <a class="sha" href={`${site.github}/commit/${e.sha}`} aria-label={`Commit ${e.short}`}>{e.short}</a>
+                      </li>
+                    ),
+                  )}
+                </ul>
+              </li>
+            ))}
+          </ol>
+          <p class="more-history">
+            Older history is on GitHub: <a href={`${site.github}/commits/main`}>main</a> and
+            <a href={`${site.github}/commits/dev`}>dev</a>.
+          </p>
+        </>
+      ) : (
+        <section class="panel empty">
+          <p>
+            The history was not available when this copy of the site was built. The commits are on GitHub:
+            <a href={`${site.github}/commits/main`}>main</a> and <a href={`${site.github}/commits/dev`}>dev</a>.
+          </p>
+        </section>
+      )}
+    </div>
+  </div>
+</Page>
+
+<script>
+  // Branch filter: hides entries of the other branch and any day left empty. Without script everything shows.
+  const group = document.querySelector<HTMLElement>("[data-branch-filter]");
+  group?.addEventListener("click", (ev) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("button[data-show]");
+    if (!btn) return;
+    const show = btn.dataset.show;
+    group.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+    document.querySelectorAll<HTMLElement>("[data-day]").forEach((day) => {
+      let visible = 0;
+      day.querySelectorAll<HTMLElement>("[data-branch]").forEach((e) => {
+        const on = show === "all" || e.dataset.branch === show;
+        e.hidden = !on;
+        if (on) visible++;
+      });
+      day.hidden = visible === 0;
+    });
+  });
+</script>
+
+<style>
+  .notes { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+  .notes h2 { margin: 0; font-size: 18px; }
+  .note-links { display: flex; flex-wrap: wrap; gap: 8px; }
+  .note-links .chip { font-family: var(--f-sans); font-size: 14.5px; text-decoration: none; }
+  .note-links .chip:hover { border-color: color-mix(in srgb, var(--ink) 35%, var(--line)); }
+
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; margin: 32px 0 8px; }
+  .tips { margin: 0; font-size: 14.5px; color: var(--faint); }
+  .tips a { color: var(--mute); font-family: var(--f-mono); }
+
+  .days { list-style: none; margin: 0; padding: 0; }
+  .day { margin-top: 28px; }
+  .day-h {
+    position: sticky; top: 65px; z-index: 1; margin: 0 0 10px; padding: 8px 0;
+    font-size: 17px; font-weight: 600; color: var(--ink);
+    background: var(--bg); box-shadow: 0 6px 8px -6px var(--bg);
+  }
+  .entries {
+    list-style: none; margin: 0; padding: 0;
+    background: var(--paper); border: 1px solid var(--paper-line); border-radius: var(--radius); overflow: hidden;
+  }
+  .entry {
+    display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; align-items: baseline; gap: 4px 14px;
+    padding: 11px 16px; border-top: 1px solid var(--paper-line); font-size: 16px; color: var(--ink-body);
+  }
+  .entry:first-child { border-top: 0; }
+  .entry[hidden], .day[hidden] { display: none; }
+  .entry.pr .text, .entry.promote .text { color: var(--ink); font-weight: 500; }
+  .entry.release { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .entry.release .text { color: var(--ink); font-weight: 600; text-decoration: none; }
+  .entry.release .text:hover { text-decoration: underline; }
+
+  .badge {
+    justify-self: start; font-family: var(--f-mono); font-size: 12.5px; line-height: 1; padding: 5px 8px;
+    border-radius: 4px; border: 1px solid var(--line); color: var(--mute); white-space: nowrap;
+  }
+  .badge.main { color: var(--ink); border-color: color-mix(in srgb, var(--c2) 60%, var(--line)); }
+  .badge.promote { color: var(--ink); border-color: var(--c1); }
+  .badge.rel { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+
+  .area {
+    display: inline-block; margin-right: 8px; padding: 1px 7px; border-radius: 4px; font-size: 13px; font-weight: 500;
+    color: var(--mute); background: var(--surface-2); vertical-align: 1px;
+  }
+  .meta { display: block; margin-top: 3px; font-size: 14px; font-weight: 400; color: var(--faint); }
+  .meta a { color: var(--mute); }
+  .sha { font-family: var(--f-mono); font-size: 13px; color: var(--faint); text-decoration: none; }
+  a.sha:hover { color: var(--ink); text-decoration: underline; }
+
+  .more-history, .empty p { margin: 28px 0 0; color: var(--mute); font-size: 15.5px; }
+  .empty p { margin: 0; }
+
+  @media (max-width: 640px) {
+    .entry { grid-template-columns: minmax(0, 1fr) auto; }
+    .badge { grid-column: 1 / -1; }
+  }
+</style>

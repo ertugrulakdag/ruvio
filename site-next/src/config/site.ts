@@ -33,6 +33,7 @@ export const footerNav: { title: string; items: NavItem[] }[] = [
       { label: "Interactive examples", href: "/examples/" },
       { label: "Benchmarks", href: "/benchmarks/" },
       { label: "Get started", href: "/get-started/" },
+      { label: "Changelog", href: "/changelog/" },
     ],
   },
   {
