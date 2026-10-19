@@ -219,6 +219,9 @@ const STRUCTURED: &[&[&str]] = &[
     &["SINTERCARD", "1", "a"],
     &["TRANSFER", "a", "b", "4", "MAX", "9"],
     &["HTRANSFER", "h", "f", "g", "1", "MAX", "5"],
+    &["RUVIO", "MOVESLOTS", "0-100", "1"],
+    &["RUVIO", "MOVESLOTS", "7", "0"],
+    &["RUVIO", "MOVESLOTS", "STATUS"],
 ];
 
 #[test]
@@ -248,8 +251,11 @@ impl Rng {
 fn every_matrix_command_is_recognised_and_no_argument_mix_breaks_the_parser() {
     let commands = matrix_commands();
     let mut unrecognised = Vec::new();
-    let structured: std::collections::HashSet<String> =
-        STRUCTURED.iter().map(|words| words[0].to_owned()).collect();
+    // A form names its command, or its subcommand when the matrix lists one (`RUVIO MOVESLOTS`).
+    let structured: std::collections::HashSet<String> = STRUCTURED
+        .iter()
+        .flat_map(|words| [words[0].to_owned(), words[..words.len().min(2)].join(" ")])
+        .collect();
     assert!(
         commands.len() > 250,
         "matrix looks truncated: {}",

@@ -790,6 +790,8 @@ pub(super) async fn handle_client(
                             // Every key in one slot (true without a fabric): the lean path
                             // may skip the `CROSSSLOT` check of the generic one.
                             let mut one_slot = true;
+                            // Routed, then awaited before it runs here (see the re-check below).
+                            let mut waited = false;
 
                             // A subscribed client may only run (local) pub/sub commands;
                             // `gate` refuses the rest, so nothing is forwarded.
@@ -875,6 +877,7 @@ pub(super) async fn handle_client(
                                         }
                                     }
                                 } else {
+                                    waited = true;
                                     // Neither a plain command nor this shard's alone: it
                                     // may wait on another shard (see `MAX_PENDING_FORWARDS`).
                                     if !wal_group.always {
@@ -997,8 +1000,19 @@ pub(super) async fn handle_client(
                                 {
                                     wal_group.begin();
                                 } else {
+                                    waited = true;
                                     wal_group.commit().await?;
                                 }
+                            }
+                            // A command that waited above may find its slot taken over by
+                            // another shard meanwhile: it goes through routing again.
+                            if waited
+                                && let Some(forwarding) = state.forwarding.as_ref()
+                                && forwarding.fabric.mover.moved()
+                                && !session.in_pubsub
+                                && super::moveslots::runs_elsewhere(&state, &session, &command)
+                            {
+                                continue;
                             }
                             let command_timing =
                                 CommandTiming::new(state.clone(), command_group(&command), || {
@@ -1438,6 +1452,7 @@ fn plain_command(command: &Command<'_>) -> bool {
                 | Command::ConfigSet(_)
                 | Command::ConfigRewrite
                 | Command::ReplicaOf { .. }
+                | Command::MoveSlots(_)
                 | Command::Role
                 | Command::Bgsave
                 | Command::ChangesSubscribe(_)
@@ -1778,6 +1793,12 @@ async fn dispatch_inner<'s>(
 
             Command::ConfigRewrite => {
                 write_response(output, super::live::config_rewrite(state))?;
+
+                return Ok(());
+            }
+
+            Command::MoveSlots(target) => {
+                write_response(output, super::moveslots::command(state, *target))?;
 
                 return Ok(());
             }
@@ -2289,7 +2310,14 @@ async fn dispatch_inner<'s>(
                         .store
                         .borrow_mut()
                         .watch(conn, session.database, &keys);
-                    session.accept_watch(slot, keys.len());
+                    session.accept_watch(
+                        slot,
+                        keys.len(),
+                        state
+                            .forwarding
+                            .as_ref()
+                            .map_or(0, |forwarding| forwarding.me),
+                    );
                     write_response(output, Response::Simple(b"OK"))?;
                 }
 
@@ -2835,6 +2863,16 @@ async fn finish_retry(
         }
 
         let timed_out = deadline.is_some_and(|deadline| Instant::now() >= deadline);
+
+        // The key's slot moved to another shard while the command waited here.
+        if state
+            .forwarding
+            .as_ref()
+            .is_some_and(|forwarding| forwarding.fabric.mover.moved())
+            && super::moveslots::runs_elsewhere(state, session, &command)
+        {
+            break Some(Response::Error(super::moveslots::UNBLOCKED_ERROR));
+        }
 
         // The batch that parked this command sampled the clock once; a retry must see time pass.
         state.store.borrow().sample_time();

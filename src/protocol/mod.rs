@@ -435,6 +435,14 @@ pub enum ObjectKind {
     Freq,
 }
 
+/// A slot range and the shard of this process it should move to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotRangeMove {
+    pub first: u16,
+    pub last: u16,
+    pub shard: u16,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command<'a> {
     Ping(Option<Bytes<'a>>),
@@ -518,6 +526,9 @@ pub enum Command<'a> {
         force: bool,
     },
     Role,
+    /// `RUVIO MOVESLOTS first-last shard` moves a slot range to another shard of this
+    /// process; `RUVIO MOVESLOTS STATUS` (`None`) reports the current or last move.
+    MoveSlots(Option<SlotRangeMove>),
     Info(Option<Bytes<'a>>),
     Save,
     Bgsave,

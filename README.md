@@ -53,7 +53,7 @@ The shard that owns a key parses, records, applies, and replies. The hot path do
 | **Owner-per-shard engine** | One owner per shard, no lock on apply. A feature allocates only when a key uses it: twenty thousand leases added about 3.6 MB, twenty thousand versioned 64-byte strings about 7.2 MB, body included. |
 | **Durability you name** | `memory`, `snapshot`, `everysec` or `always`, chosen at startup. A write is checked, appended, then applied. If the log cannot take the record, the key stays as it was and later writes return `MISCONF` (one exception for [`hot_keys`](docs/CONFIGURATION.md)). |
 | **Wire compatible** | RESP2 subset; `redis-cli` and existing RESP clients connect. The command list that CI checks is [docs/compatibility-matrix.json](docs/compatibility-matrix.json). |
-| **Six first-party clients** | Rust, C#, Go, Java, Python and Node.js, each with a typed method for every one of the 297 listed commands and cluster routing from one seed address. |
+| **Six first-party clients** | Rust, C#, Go, Java, Python and Node.js, each with a typed method for every one of the 298 listed commands and cluster routing from one seed address. |
 | **Operator UI** | A browser view of one running server: data, command forms, Pub/Sub and ACL users. |
 
 ## Quick start
@@ -237,7 +237,7 @@ The differences are about ownership, the durability contract, and how much of th
 | Durability | RDB, AOF, combinations | Snapshots | Tsavorite on disk | `memory`, `snapshot`, `everysec`, `always` |
 | Keep the other when | You need modules, the full Sentinel feature set, or a command Ruvio does not list | You want that single-node scale claim | You want a .NET stack and Tsavorite as the store | The written subset and the shard contract are enough |
 
-Not claimed: a cluster bus, online slot migration, failover across a multi-node cluster (failover covers one primary and its replicas, through `ruvio coordinator`), or a hardware latency number. Replication copies a WAL tail to a bounded set of replicas. Classic `PUBLISH` reaches subscribers on every shard of one process, not other processes.
+Not claimed: a cluster bus, slot migration between machines (slots move only between the shards of one process, with `RUVIO MOVESLOTS`), failover across a multi-node cluster (failover covers one primary and its replicas, through `ruvio coordinator`), or a hardware latency number. Replication copies a WAL tail to a bounded set of replicas. Classic `PUBLISH` reaches subscribers on every shard of one process, not other processes.
 
 ### Docker Desktop and memory density
 

@@ -22,6 +22,7 @@ mod lists;
 mod memory;
 mod sets;
 mod shrink;
+mod slot_watch;
 mod snapshot;
 mod sorted_sets;
 mod strings;

@@ -4,6 +4,7 @@ Notable changes to the Rust client crate `ruvio-client`. New entries go under "U
 
 ## Unreleased
 
+- `move_slots(first, last, shard)` and `move_slots_status()` for `RUVIO MOVESLOTS`, which moves a slot range to another shard of the same server.
 - `hmset(key, fields)` sends `HMSET` (multi-field `HSET` that replies `OK`; Redis marks it deprecated) (issue #26).
 - `ClientOptions::command_timeout` applies `Client::set_read_timeout` to every socket right after connecting. Default `None`: no limit, as before (issue #48).
 - `ClientOptions::read_policy` with `ReadPolicy::{Primary, PreferReplica, Replica}`: a cluster client sends read-only commands to a replica of the slot's shard (listed by the server in `CLUSTER SLOTS`), with a fallback to the primary under `PreferReplica`. The default keeps every command on the primaries. `ClientOptions` built with a struct literal needs `..Default::default()`.

@@ -499,4 +499,5 @@ mod replica;
 mod replica_reads;
 mod role_change;
 mod single_port;
+mod slot_moves;
 mod wal;

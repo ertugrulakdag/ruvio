@@ -4,6 +4,7 @@ Notable changes to the Go client `github.com/salihcantekin/ruvio/clients/go`. A 
 
 ## Unreleased
 
+- `MoveSlots(ctx, first, last, shard)` and `MoveSlotsStatus(ctx)` for `RUVIO MOVESLOTS`, which moves a slot range to another shard of the same server.
 - `HMSet(ctx, key, fieldValues...)` sends `HMSET` (multi-field `HSET` that replies `OK`; Redis marks it deprecated) (issue #26).
 - `Options.CommandTimeout` bounds a call whose context has no deadline (it fails with `context.DeadlineExceeded`, the connection stays usable). Default 0: no limit, as before (issue #48).
 - Docs: the README states that `-ASK` is not followed, as the Python and Node clients already did (issue #49).

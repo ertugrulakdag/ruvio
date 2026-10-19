@@ -39,6 +39,7 @@ COMPOSITE = {
         "CLUSTER KEYSLOT",
     ),
     "CONFIG": ("CONFIG GET", "CONFIG SET", "CONFIG REWRITE"),
+    "RUVIO": ("RUVIO", "RUVIO MOVESLOTS"),
     "SCRIPT": (
         "SCRIPT LOAD",
         "SCRIPT EXISTS",

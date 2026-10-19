@@ -93,6 +93,24 @@ deadlines. Upgrade replicas and recovery tools before writing this opcode; older
 readers reject it. Retention, eviction and the RPO above still apply and do not
 provide exactly-once external side effects. See [IDEM.md](IDEM.md).
 
+## Moved slot ranges
+
+`RUVIO MOVESLOTS` records the slot ranges it moved between shards in the `SLOTS` file of
+the data directory (written to a temporary file, synced and renamed, so a restart reads
+either the old or the new file). Each entry names the range, the source and target shards,
+the target's first log sequence of the copy and the source's first sequence after the
+hand-over; an entry without the latter is a move that did not finish. Without the file every
+shard owns the slots the formula gives it.
+
+At start the slot table takes the finished moves, and each shard's recovery keeps, per slot,
+only what the shard held while it owned the slot: copies of an unfinished move are skipped,
+and keys of a range that left the shard are dropped after replay. The copy is logged on the
+target as `SlotCopy` records (WAL format minor 4), and the target syncs its log before the
+move is recorded, so a crash at any step leaves each key on exactly one shard. A damaged
+`SLOTS` file, or one written for another shard count, stops startup instead of falling back
+to the formula. Back the file up with the rest of the directory. A server with a `SLOTS` file
+refuses to start with replication on.
+
 ## Recovery-Time Objective
 
 Startup time is the time to acquire `LOCK`, validate `CURRENT` and every
@@ -173,7 +191,9 @@ path.
 ## Upgrade
 
 An upgrade keeps the data directory and replaces the `ruvio` binary. Shard
-count, durability profile, and format major must stay the same. Changing
+count, durability profile, and format major must stay the same. A data directory whose
+shards moved slots (`RUVIO MOVESLOTS`) has WAL format minor 4 records and a `SLOTS` file, so
+it cannot go back to a release before slot moves. Changing
 `shards` is a new directory, not an in-place upgrade.
 
 1. Stop `ruvio`. `backup` takes an exclusive `LOCK` and fails immediately if the

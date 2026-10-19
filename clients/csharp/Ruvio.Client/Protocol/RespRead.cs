@@ -103,6 +103,18 @@ internal static class RespRead
         Entries(await pending.ConfigureAwait(false), name);
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    internal static async ValueTask<IReadOnlyDictionary<string, string>> Map(ValueTask<RespValue> pending, string name)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var (field, value) in Pairs(await pending.ConfigureAwait(false), name))
+        {
+            map[field] = value;
+        }
+
+        return map;
+    }
+
     internal static async ValueTask<IReadOnlyList<KeyValuePair<string, string>>> Pairs(ValueTask<RespValue> pending, string name) =>
         Pairs(await pending.ConfigureAwait(false), name);
 
