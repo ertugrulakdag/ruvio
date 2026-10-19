@@ -57,10 +57,14 @@ TAKE stock:ticket-42 2
 
 INCRBY seats:room-9 1 MAX 120
 # 57    -> joined
-# (nil) -> room is full, nothing was written`,
-    body: "<code>TAKE</code> subtracts only when the key holds enough. <code>INCRBY … MAX</code> adds only while the result stays at or below the cap. Both answer with a null bulk and write nothing when they refuse.",
+# (nil) -> room is full, nothing was written
+
+INCR hits:user-7:2026-10-19 EX 86400
+# 1     -> first hit, the day's deadline is set
+# 2, 3… -> later hits leave the deadline alone`,
+    body: "<code>TAKE</code> subtracts only when the key holds enough. <code>INCRBY … MAX</code> adds only while the result stays at or below the cap. Both answer with a null bulk and write nothing when they refuse. <code>EX</code> or <code>PX</code> on <code>INCR</code> and <code>INCRBY</code> sets a deadline only when the call creates the counter, so a daily counter needs one command.",
     note: "A refused call writes nothing, neither to the key nor to the WAL.",
-    refs: [{ label: "TAKE", href: commands }, { label: "INCRBY MAX", href: commands }],
+    refs: [{ label: "TAKE", href: commands }, { label: "INCRBY MAX", href: commands }, { label: "TTL on create", href: "/docs/data-types/" }],
   },
   {
     id: "balances",

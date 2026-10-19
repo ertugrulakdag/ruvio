@@ -1034,6 +1034,7 @@ fn pattern_may_match_notifications(pattern: &[u8]) -> bool {
 
 pub fn command_acl_name(command: &Command<'_>) -> &'static str {
     match command {
+        Command::CreateTtl { inner, .. } => command_acl_name(inner),
         Command::Ping(_) => "ping",
         Command::CommandMeta { .. } => "command",
         Command::Wait { .. } => "wait",

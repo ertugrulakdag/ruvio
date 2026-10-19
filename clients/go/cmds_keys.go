@@ -224,8 +224,8 @@ func (c *cmds) Move(ctx context.Context, key string, db int) (bool, error) {
 
 // Expire sets a TTL on key (EXPIRE). The duration is truncated to whole seconds. It
 // returns true when the TTL was set and false when the key does not exist. A TTL of zero
-// or less deletes the key and returns true. Use PExpire for sub-second precision. There
-// are no NX/XX/GT/LT options.
+// or less deletes the key and returns true. Use PExpire for sub-second precision. For the
+// NX/XX/GT/LT conditions use ExpireIf.
 func (c *cmds) Expire(ctx context.Context, key string, ttl time.Duration) (bool, error) {
 	return c.boolR(ctx, newCmd(3, cEXPIRE).s(key).i(int64(ttl/time.Second)))
 }
@@ -248,6 +248,32 @@ func (c *cmds) ExpireAt(ctx context.Context, key string, at time.Time) (bool, er
 // when set and false when the key does not exist. A time in the past deletes the key.
 func (c *cmds) PExpireAt(ctx context.Context, key string, at time.Time) (bool, error) {
 	return c.boolR(ctx, newCmd(3, cPEXPIREAT).s(key).i(at.UnixMilli()))
+}
+
+// ExpireIf is Expire with a condition (EXPIRE key seconds NX|XX|GT|LT). A key without a
+// deadline counts as having an infinite one, so GT never applies to it and LT always
+// does. It returns false when the key does not exist or the condition is not met, and
+// nothing changes. An empty cond sends a plain EXPIRE.
+func (c *cmds) ExpireIf(ctx context.Context, key string, ttl time.Duration, cond ExpireCondition) (bool, error) {
+	return c.boolR(ctx, cond.append(newCmd(3+cond.n(), cEXPIRE).s(key).i(int64(ttl/time.Second))))
+}
+
+// PExpireIf is PExpire with a condition (PEXPIRE key ms NX|XX|GT|LT); the condition rules
+// are those of ExpireIf.
+func (c *cmds) PExpireIf(ctx context.Context, key string, ttl time.Duration, cond ExpireCondition) (bool, error) {
+	return c.boolR(ctx, cond.append(newCmd(3+cond.n(), cPEXPIRE).s(key).i(ms(ttl))))
+}
+
+// ExpireAtIf is ExpireAt with a condition (EXPIREAT key unix-seconds NX|XX|GT|LT); the
+// condition rules are those of ExpireIf.
+func (c *cmds) ExpireAtIf(ctx context.Context, key string, at time.Time, cond ExpireCondition) (bool, error) {
+	return c.boolR(ctx, cond.append(newCmd(3+cond.n(), cEXPIREAT).s(key).i(at.Unix())))
+}
+
+// PExpireAtIf is PExpireAt with a condition (PEXPIREAT key unix-ms NX|XX|GT|LT); the
+// condition rules are those of ExpireIf.
+func (c *cmds) PExpireAtIf(ctx context.Context, key string, at time.Time, cond ExpireCondition) (bool, error) {
+	return c.boolR(ctx, cond.append(newCmd(3+cond.n(), cPEXPIREAT).s(key).i(at.UnixMilli())))
 }
 
 // TTL returns the remaining life of key in seconds (TTL): -1 when the key exists without

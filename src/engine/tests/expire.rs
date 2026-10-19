@@ -17,6 +17,7 @@ fn expire_ttl_and_persist_follow_redis_integer_replies() {
         execute(
             &mut shard,
             Command::Expire {
+                condition: crate::protocol::ExpireCondition::Always,
                 key: owned(b"key"),
                 milliseconds: 60_000,
             }
@@ -446,6 +447,7 @@ fn command_path_expire_cycle_counts_active_and_lookup_counts_passive() {
         execute(
             &mut shard,
             Command::PExpireAt {
+                condition: crate::protocol::ExpireCondition::Always,
                 key: owned(b"a"),
                 unix_millis: 1_500,
             }
@@ -456,6 +458,7 @@ fn command_path_expire_cycle_counts_active_and_lookup_counts_passive() {
         execute(
             &mut shard,
             Command::PExpireAt {
+                condition: crate::protocol::ExpireCondition::Always,
                 key: owned(b"b"),
                 unix_millis: 1_500,
             }
@@ -480,6 +483,7 @@ fn command_path_expire_cycle_counts_active_and_lookup_counts_passive() {
         execute(
             &mut shard,
             Command::PExpireAt {
+                condition: crate::protocol::ExpireCondition::Always,
                 key: owned(b"c"),
                 unix_millis: 2_000,
             }

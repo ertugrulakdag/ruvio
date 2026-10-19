@@ -206,3 +206,27 @@ test('streams and consumer groups', { skip: SKIP }, async () => {
     await c.quit();
   }
 });
+
+test('ttl on create: stream, json, bloom filter', { skip: SKIP }, async () => {
+  const c = await live(3);
+  try {
+    const within = async (key: string) => {
+      const t = await c.pttl(key);
+      assert.ok(t > 90_000 && t <= 100_000, `${key} pttl ${t}`);
+    };
+    assert.ok(await c.xadd('t:s', '*', { a: 1 }, { ttl: 100 }));
+    await within('t:s');
+    await c.xadd('t:s', '*', { a: 2 }, { ttl: 5000 });
+    await within('t:s');
+    assert.equal(await c.jsonSet('t:j', '$', '{"a":1}', undefined, { ttl: 100 }), true);
+    await within('t:j');
+    await c.jsonSetAs('t:j', '$', { a: 2 }, undefined, { ttl: 5000 });
+    await within('t:j');
+    assert.deepEqual(await c.bfInsert('t:b', ['x'], { ttl: 100 }), [true]);
+    await within('t:b');
+    await c.bfInsert('t:b', ['y'], { ttl: 5000 });
+    await within('t:b');
+  } finally {
+    await c.quit();
+  }
+});

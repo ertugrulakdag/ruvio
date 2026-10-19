@@ -96,7 +96,7 @@ raw reply.
 
 ### Typed keyword constants
 
-Keyword arguments have `str` enums: `GeoUnit` (`m`, `km`, `ft`, `mi`), `GeoOrder`, `InsertPosition`, `ListSide`, `BitOperation`, `BitUnit`, `Aggregate`, `KeyType` (for `SCAN TYPE`), and for `BITFIELD` `BitFieldOp`, `Overflow`, `signed(bits)` / `unsigned(bits)`. A member is a `str`, so plain strings keep working and send the same bytes; the encoder uses each member's pre-encoded bytes, with no per-call cost.
+Keyword arguments have `str` enums: `GeoUnit` (`m`, `km`, `ft`, `mi`), `GeoOrder`, `InsertPosition`, `ListSide`, `ExpireCondition`, `BitOperation`, `BitUnit`, `Aggregate`, `KeyType` (for `SCAN TYPE`), and for `BITFIELD` `BitFieldOp`, `Overflow`, `signed(bits)` / `unsigned(bits)`. A member is a `str`, so plain strings keep working and send the same bytes; the encoder uses each member's pre-encoded bytes, with no per-call cost.
 
 ```python
 from ruvio import GeoUnit, GeoOrder, KeyType, ListSide
@@ -113,6 +113,22 @@ from ruvio import StreamTrim, TrimMode
 
 r.xadd("events", {"type": "signup"}, trim=StreamTrim.maxlen(10_000, TrimMode.APPROXIMATE))  # MAXLEN ~ 10000
 r.xtrim("events", trim=StreamTrim.minid("1700000000000-0"))                                 # MINID = ...
+```
+
+### TTL on create
+
+Commands that can create a key take an optional keyword-only `ttl` (seconds as `int` or `float`, or a `timedelta`): `incr`, `decr`, `incrby`, `decrby`, `incrbyfloat`, `hincrby`, `zincrby`, `setbit`, `zadd`, `geoadd`, `xadd`, `json_set`, `json_set_obj` and `bf_insert`. The deadline is set only when the call creates the key; an existing key keeps the deadline it has. Whole seconds are sent as `EX`, a sub-second part as `PX`. Zero, negative or non-numeric values raise before anything is sent.
+
+```python
+r.incr("rate:user:7", ttl=60)                      # the 60 s window starts on the first call
+r.incrby("quota:day", 1, max=100, ttl=86400)       # counter with a ceiling and a daily window
+r.zadd("recent", {"a": 1}, ttl=timedelta(hours=1))
+```
+
+`expire`, `pexpire`, `expireat` and `pexpireat` take `condition=` (`ExpireCondition.NX`, `XX`, `GT` or `LT`, or the string). A key without a deadline counts as infinite; a failed condition returns `False`.
+
+```python
+r.expire("session", 3600, condition=ExpireCondition.NX)   # only when the key has no deadline yet
 ```
 
 ### Pipelines and transactions

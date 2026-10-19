@@ -14,6 +14,7 @@ import io.github.salihcantekin.ruvio.model.KeyValue;
 import io.github.salihcantekin.ruvio.model.ScanResult;
 import io.github.salihcantekin.ruvio.model.ScoredValue;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -368,6 +369,22 @@ public abstract class SortedSetCommands<K, V> extends SetCommands<K, V> {
      */
     public CompletableFuture<Double> zincrby(K key, double increment, V member) {
         return send(args().w(Cmd.ZINCRBY).k(key).d(increment).v(member), Reply.DOUBLE);
+    }
+
+    /**
+     * Sends {@code ZINCRBY key increment member EX|PX ttl}: like {@link #zincrby(Object, double, Object)}, and a sorted set this
+     * call creates gets a time to live. An existing key keeps its deadline.
+     *
+     * @param key the sorted set key
+     * @param increment the amount to add
+     * @param member the member
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the new score
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
+    public CompletableFuture<Double> zincrby(K key, double increment, V member, Duration ttl) {
+        return send(args().w(Cmd.ZINCRBY).k(key).d(increment).v(member).ttl(ttl), Reply.DOUBLE);
     }
 
     /**

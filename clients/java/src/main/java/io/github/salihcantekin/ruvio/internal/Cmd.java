@@ -92,6 +92,8 @@ public final class Cmd {
     public static final byte[] EVAL = RespOut.fragment("EVAL");
     /** The word {@code EVALSHA}, pre-encoded as a RESP bulk string. */
     public static final byte[] EVALSHA = RespOut.fragment("EVALSHA");
+    /** The word {@code EX}, pre-encoded as a RESP bulk string. */
+    public static final byte[] EX = RespOut.fragment("EX");
     /** The word {@code EXISTS}, pre-encoded as a RESP bulk string. */
     public static final byte[] EXISTS = RespOut.fragment("EXISTS");
     /** The word {@code EXPIRE}, pre-encoded as a RESP bulk string. */
@@ -336,6 +338,8 @@ public final class Cmd {
     public static final byte[] PTTL = RespOut.fragment("PTTL");
     /** The word {@code PUBLISH}, pre-encoded as a RESP bulk string. */
     public static final byte[] PUBLISH = RespOut.fragment("PUBLISH");
+    /** The word {@code PX}, pre-encoded as a RESP bulk string. */
+    public static final byte[] PX = RespOut.fragment("PX");
     /** The word {@code RANDOMKEY}, pre-encoded as a RESP bulk string. */
     public static final byte[] RANDOMKEY = RespOut.fragment("RANDOMKEY");
     /** The word {@code READONLY}, pre-encoded as a RESP bulk string. */

@@ -321,10 +321,18 @@ internal static class CoverageCommands
     internal static RespCommand InsertBloom(string key, IReadOnlyList<string> items, BloomInsertOptions? options)
     {
         ArgumentNullException.ThrowIfNull(items);
-        var parts = new List<string>(12 + items.Count) { "BF.INSERT", key };
+        var parts = new List<string>(14 + items.Count) { "BF.INSERT", key };
 
         if (options is not null)
         {
+            if (options.Ttl is { } lifetime)
+            {
+                (string word, long value) = RespRead.CreateTtl(lifetime, nameof(options.Ttl));
+
+                parts.Add(word);
+                parts.Add(RespRead.Number(value));
+            }
+
             if (options.Capacity is { } capacity)
             {
                 parts.Add("CAPACITY");

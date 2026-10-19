@@ -660,6 +660,66 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         _ = await connection.GetDatabaseAsync(Db);
     }
 
+    [LiveFact(Timeout = 60000)]
+    public async Task The_deadline_is_set_only_when_the_call_creates_the_key()
+    {
+        await using RuvioConnection connection = await LiveServer.ConnectAsync(Db);
+        RuvioClient db = await connection.GetDefaultDatabaseAsync();
+        TimeSpan ttl = TimeSpan.FromSeconds(100);
+
+        Assert.Equal(1, await db.IncrementAsync("ttl:incr", ttl));
+        Assert.InRange(await db.GetTimeToLiveAsync("ttl:incr"), 90, 100);
+        Assert.Equal(2, await db.IncrementAsync("ttl:incr", TimeSpan.FromSeconds(5000)));
+        Assert.InRange(await db.GetTimeToLiveAsync("ttl:incr"), 90, 100);
+
+        Assert.Equal(-1, await db.DecrementAsync("ttl:decr", ttl));
+        Assert.Equal(5, await db.IncrementByAsync("ttl:incrby", 5, ttl));
+        Assert.Equal(-5, await db.DecrementByAsync("ttl:decrby", 5, ttl));
+        Assert.Equal(1, await db.IncrementWithLimitAsync("ttl:max", 1, 2, ttl));
+        Assert.Equal(2, await db.IncrementWithLimitAsync("ttl:max", 1, 2, ttl));
+        Assert.Null(await db.IncrementWithLimitAsync("ttl:max", 1, 2, ttl));
+        Assert.Equal(1.5, await db.IncrementByFloatAsync("ttl:float", 1.5, ttl));
+        Assert.Equal(3, await db.IncrementHashFieldAsync("ttl:hash", "n", 3, ttl));
+        Assert.Equal(2.5, await db.IncrementSortedSetAsync("ttl:zset", "m", 2.5, ttl));
+        Assert.False(await db.SetBitAsync("ttl:bit", 7, true, ttl));
+        Assert.Equal(1, await db.AddSortedSetAsync("ttl:zadd", ttl, SortedSetAddFlags.None, ("a", 1)));
+        Assert.Equal(1, await db.AddGeoAsync("ttl:geo", ttl, (13.361389, 38.115556, "palermo")));
+        Assert.NotEmpty(await db.AddStreamEntryAsync("ttl:stream", ttl, "*", ("f", "v")));
+        Assert.True(await db.JsonSetAsync("ttl:json", "$", "{}", SetMode.IfNotExists, ttl));
+        Assert.Equal([true], await db.InsertBloomFilterAsync("ttl:bloom", ["x"], new BloomInsertOptions { Ttl = ttl }));
+
+        foreach (string key in new[] { "ttl:decr", "ttl:incrby", "ttl:decrby", "ttl:max", "ttl:float", "ttl:hash", "ttl:zset", "ttl:bit", "ttl:zadd", "ttl:geo", "ttl:stream", "ttl:json", "ttl:bloom" })
+        {
+            Assert.InRange(await db.GetTimeToLiveAsync(key), 90, 100);
+        }
+
+        Assert.Equal(1, await db.IncrementAsync("ttl:ms", TimeSpan.FromMilliseconds(90_500)));
+        Assert.InRange(await db.GetTimeToLiveMillisecondsAsync("ttl:ms"), 80_000, 90_500);
+    }
+
+    [LiveFact(Timeout = 60000)]
+    public async Task Expire_conditions_decide_whether_the_deadline_changes()
+    {
+        await using RuvioConnection connection = await LiveServer.ConnectAsync(Db);
+        RuvioClient db = await connection.GetDefaultDatabaseAsync();
+
+        Assert.True(await db.SetAsync("exp:key", "v"));
+        Assert.False(await db.ExpireAsync("exp:key", TimeSpan.FromSeconds(100), ExpireCondition.Xx));
+        Assert.True(await db.ExpireAsync("exp:key", TimeSpan.FromSeconds(100), ExpireCondition.Nx));
+        Assert.False(await db.ExpireAsync("exp:key", TimeSpan.FromSeconds(200), ExpireCondition.Nx));
+        Assert.False(await db.ExpireAsync("exp:key", TimeSpan.FromSeconds(50), ExpireCondition.Gt));
+        Assert.True(await db.ExpireAsync("exp:key", TimeSpan.FromSeconds(200), ExpireCondition.Gt));
+        Assert.False(await db.ExpireAsync("exp:key", TimeSpan.FromSeconds(300), ExpireCondition.Lt));
+        Assert.True(await db.ExpireAsync("exp:key", TimeSpan.FromSeconds(150), ExpireCondition.Lt));
+        Assert.InRange(await db.GetTimeToLiveAsync("exp:key"), 140, 150);
+
+        Assert.True(await db.SetAsync("exp:at", "v"));
+        DateTimeOffset soon = DateTimeOffset.UtcNow.AddSeconds(100);
+        Assert.True(await db.ExpireAtAsync("exp:at", soon, ExpireCondition.Nx));
+        Assert.False(await db.ExpireAtAsync("exp:at", soon.AddSeconds(100), ExpireCondition.Lt));
+        Assert.True(await db.ExpireAtAsync("exp:at", soon.AddSeconds(100), ExpireCondition.Gt));
+    }
+
     private static async Task ServerAnswers(Func<Task> call)
     {
         try

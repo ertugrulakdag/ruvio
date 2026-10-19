@@ -25,6 +25,7 @@ pub fn slot_range_for_shard(shard_id: usize, shard_count: usize) -> (u16, u16) {
 
 pub fn command_slot(command: &Command<'_>) -> Result<Option<u16>, CrossSlot> {
     match command {
+        Command::CreateTtl { inner, .. } => command_slot(inner),
         Command::ShardUnsubscribe(channels) if channels.is_empty() => Ok(None),
         Command::ShardPublish { channel, .. } => Ok(Some(hash_slot(channel))),
         Command::ShardSubscribe(channels) | Command::ShardUnsubscribe(channels) => {
@@ -329,6 +330,7 @@ pub fn command_slot(command: &Command<'_>) -> Result<Option<u16>, CrossSlot> {
 
 pub fn command_keys<'a>(command: &'a Command<'_>) -> Vec<&'a [u8]> {
     match command {
+        Command::CreateTtl { inner, .. } => command_keys(inner),
         Command::Ping(_)
         | Command::CommandMeta { .. }
         | Command::Wait { .. }

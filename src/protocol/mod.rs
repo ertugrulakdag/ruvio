@@ -1235,10 +1235,18 @@ pub enum Command<'a> {
     Expire {
         key: Bytes<'a>,
         milliseconds: i64,
+        condition: ExpireCondition,
     },
     PExpireAt {
         key: Bytes<'a>,
         unix_millis: i64,
+        condition: ExpireCondition,
+    },
+    /// A write that sets a key deadline only when it creates the key (`EX`/`PX` on `INCRBY`,
+    /// `ZADD`, ...). The inner write and the deadline are logged as one record.
+    CreateTtl {
+        ttl_ms: u64,
+        inner: Box<Command<'a>>,
     },
     Ttl(Bytes<'a>),
     PTtl(Bytes<'a>),
@@ -1388,6 +1396,17 @@ pub enum SortedRemoveRange<'a> {
 pub enum CollectionScanKind {
     Set,
     SortedSet,
+}
+
+/// `NX`, `XX`, `GT`, or `LT` on `EXPIRE`, `PEXPIRE`, `EXPIREAT` or `PEXPIREAT`. A key without a
+/// deadline counts as infinite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpireCondition {
+    Always,
+    Nx,
+    Xx,
+    Gt,
+    Lt,
 }
 
 /// `NX`, `XX`, `GT`, or `LT` on a hash field expire. A field without a TTL counts as infinite.
@@ -1572,5 +1591,48 @@ impl std::error::Error for ProtocolError {}
 impl From<io::Error> for ProtocolError {
     fn from(error: io::Error) -> Self {
         Self::Io(error)
+    }
+}
+
+/// `EX seconds` or `PX milliseconds` at `at`, as milliseconds, for a write that sets a
+/// deadline when it creates the key. `None` when the argument at `at` is neither keyword.
+pub(crate) fn create_ttl_option(
+    args: &table::Args<'_, '_>,
+    at: usize,
+) -> Result<Option<u64>, ProtocolError> {
+    let option = args.bytes(at);
+    let seconds = option.eq_ignore_ascii_case(b"EX");
+
+    if !seconds && !option.eq_ignore_ascii_case(b"PX") {
+        return Ok(None);
+    }
+
+    if at + 1 >= args.len() {
+        return Err(ProtocolError::Invalid("syntax error"));
+    }
+
+    const INVALID: ProtocolError = ProtocolError::Invalid("invalid expire time");
+
+    let value = u64::try_from(parse_i64(args.bytes(at + 1))?).map_err(|_| INVALID)?;
+
+    if value == 0 {
+        return Err(INVALID);
+    }
+
+    if seconds {
+        value.checked_mul(1_000).map(Some).ok_or(INVALID)
+    } else {
+        Ok(Some(value))
+    }
+}
+
+/// `command`, wrapped so the deadline is set only when it creates the key.
+pub(crate) fn with_create_ttl(ttl_ms: Option<u64>, command: Command<'_>) -> Command<'_> {
+    match ttl_ms {
+        Some(ttl_ms) => Command::CreateTtl {
+            ttl_ms,
+            inner: Box::new(command),
+        },
+        None => command,
     }
 }

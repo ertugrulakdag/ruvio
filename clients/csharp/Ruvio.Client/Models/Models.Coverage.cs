@@ -69,6 +69,12 @@ public readonly record struct BloomFilterInfo(long Capacity, long Size, long Fil
 /// <summary><c>BF.INSERT</c> options. The creation options apply only when the key is new.</summary>
 public sealed class BloomInsertOptions
 {
+    /// <summary>
+    /// <c>EX</c> or <c>PX</c>: a time to live for a new filter, set only when the call creates the key. A filter that already exists keeps its deadline.
+    /// Whole seconds are sent as <c>EX</c>, otherwise <c>PX</c> in milliseconds. Must be positive.
+    /// </summary>
+    public TimeSpan? Ttl { get; init; }
+
     /// <summary><c>CAPACITY</c> of a new filter.</summary>
     public long? Capacity { get; init; }
 
