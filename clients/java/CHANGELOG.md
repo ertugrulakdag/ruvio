@@ -5,6 +5,7 @@ Notable changes to the Java client `io.github.salihcantekin:ruvio-client`. New e
 ## Unreleased
 
 - `moveSlots(first, last, shard)` and `moveSlotsStatus()` for `RUVIO MOVESLOTS`, which moves a slot range to another shard of the same server, async and blocking.
+- `hmset(key, fields)` sends `HMSET` (multi-field `HSET` that replies `OK`; Redis marks it deprecated) (issue #26).
 - Docs: `commandTimeoutMillis` is the command timeout, default 0 (no limit); the README timeout table lists the matching option of every client (issue #48).
 - `RuvioOptions.Builder.readPolicy(ReadPolicy)` with `ReadPolicy.PRIMARY` (default), `PREFER_REPLICA` and `REPLICA`: a cluster client sends reads (commands the server flags readonly, not blocking) to one replica per shard, listed after the primary in `CLUSTER SLOTS` and picked when the slot map loads. A pipeline goes to replicas only when every command reads. A replica that cannot be opened or answers `LOADING` is skipped until the next load. Replication is asynchronous, so reads may miss recent writes.
 - `replicaOf(host, port)`, `replicaOfNoOne(force)` and `role()` for `REPLICAOF` and `ROLE`, async and blocking.

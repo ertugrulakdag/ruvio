@@ -905,6 +905,11 @@ pub enum Command<'a> {
         key: Bytes<'a>,
         pairs: Vec<(Bytes<'a>, Bytes<'a>)>,
     },
+    /// `HMSET`: `HSET` that replies `OK`.
+    HashMSet {
+        key: Bytes<'a>,
+        pairs: Vec<(Bytes<'a>, Bytes<'a>)>,
+    },
     HashDelete {
         key: Bytes<'a>,
         fields: Vec<Bytes<'a>>,

@@ -145,6 +145,7 @@ fn eligible_outside_multi(command: WalGroupCommand<'_, '_>) -> bool {
                 | Command::SetAlgebra { .. }
                 | Command::SetMove { .. }
                 | Command::HashSet { .. }
+                | Command::HashMSet { .. }
                 | Command::HashDelete { .. }
                 | Command::HashGet { .. }
                 | Command::HashMGet { .. }

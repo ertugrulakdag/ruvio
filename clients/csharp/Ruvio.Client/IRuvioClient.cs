@@ -1605,6 +1605,18 @@ public partial interface IRuvioClient
     /// </example>
     ValueTask<long> SetHashFieldsAsync(string key, params (string Field, string Value)[] fields);
 
+    /// <summary>Sends <c>HMSET</c>: writes fields like <see cref="SetHashFieldsAsync"/> but the server replies <c>OK</c> instead of the count of new fields.</summary>
+    /// <param name="key">The key.</param>
+    /// <param name="fields">The field/value pairs to write.</param>
+    /// <exception cref="RuvioException">The key holds a value of another type (<c>WRONGTYPE</c>), or the server refuses the command.</exception>
+    /// <remarks>Redis marks <c>HMSET</c> deprecated; prefer <see cref="SetHashFieldsAsync"/> in new code.</remarks>
+    /// <example>
+    /// <code>
+    /// await db.SetHashManyAsync("user:1", ("name", "Ada"), ("city", "London"));
+    /// </code>
+    /// </example>
+    ValueTask SetHashManyAsync(string key, params (string Field, string Value)[] fields);
+
     /// <summary>Sends <c>HGET</c>.</summary>
     /// <param name="key">The key.</param>
     /// <param name="field">The hash field name.</param>

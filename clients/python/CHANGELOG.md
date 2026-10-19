@@ -5,6 +5,7 @@ Notable changes to the Python client `ruvio-client` on PyPI. New entries go unde
 ## Unreleased
 
 - `move_slots(first, last, shard)` and `move_slots_status()` for `RUVIO MOVESLOTS`, which moves a slot range to another shard of the same server, sync and asyncio.
+- `hmset(key, mapping)` sends `HMSET` (multi-field `HSET` that replies `OK`; Redis marks it deprecated) (issue #26).
 - Docs: `socket_timeout` is the command timeout, default `None` (no limit); the README timeout table lists the matching option of every client (issue #48).
 - Added `read_policy=` (`ReadPolicy.PRIMARY`, `PREFER_REPLICA`, `REPLICA`, or the strings `"primary"`, `"prefer-replica"`, `"replica"`) to the sync and asyncio cluster clients: commands the server flags read-only and not blocking go to one replica of the key's shard, picked when the slot table loads; a pipeline goes to replicas only when every command in it reads. A replica that cannot be connected or answers `LOADING` is skipped until the next load. Reads may miss recent writes (replication is asynchronous). The default keeps today's routing.
 - `replicaof(host, port)`, `replicaof_no_one(force=False)` and `role()` for `REPLICAOF` and `ROLE`, sync and asyncio.

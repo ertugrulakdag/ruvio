@@ -2834,6 +2834,26 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
             pairs = [field, value, *pairs]
         return self._c(None, "HSET", key, *pairs)
 
+    def hmset(self, key: KeyT, mapping: Union[Mapping[Any, Any], Iterable[Tuple[Any, Any]]]) -> Any:
+        """``HMSET key field value [field value ...]`` - sets hash fields like ``hset``, replying ``OK``.
+
+        Redis marks ``HMSET`` deprecated; prefer ``hset(key, mapping=...)`` in new code.
+
+        Args:
+            key: The hash key.
+            mapping: A ``dict`` or iterable of ``(field, value)`` pairs, at least one.
+
+        Returns:
+            ``True``.
+
+        Raises:
+            WrongTypeError: The key holds a non-hash type.
+
+        Example:
+            client.hmset("user:1", {"name": "Ada", "city": "London"})
+        """
+        return self._c(_ok, "HMSET", key, *_flat_pairs(mapping))
+
     def hget(self, key: KeyT, field: Arg) -> Any:
         """``HGET key field`` - value of one field.
 

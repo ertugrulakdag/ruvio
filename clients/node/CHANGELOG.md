@@ -5,6 +5,7 @@ Notable changes to the Node.js client `ruvio-client` on npm. New entries go unde
 ## Unreleased
 
 - `moveSlots(first, last, shard)` and `moveSlotsStatus()` for `RUVIO MOVESLOTS`, which moves a slot range to another shard of the same server.
+- `hmset(key, fields)` sends `HMSET` (multi-field `HSET` that replies `OK`; Redis marks it deprecated) (issue #26).
 - `commandTimeoutMs` option: the connection fails (pending calls reject with a `ConnectionError`, a later command reconnects) when replies are outstanding and none arrives for that long. Default 0: no limit. `connectTimeoutMs` now defaults to 5000 ms (was no limit; `0` still means none), as in the other clients (issue #48).
 - `readPolicy` option on `ClusterClient` (`'primary'` by default, `'prefer-replica'`, `'replica'`; new `ReadPolicy` type): reads go to one replica per shard, picked when the slot map loads. A pipeline goes to replicas only when every command in it is a read. A replica that cannot be opened or answers `LOADING` is skipped until the next load.
 - `replicaOf(host, port)`, `replicaOfNoOne(force)` and `role()` for `REPLICAOF` and `ROLE`.

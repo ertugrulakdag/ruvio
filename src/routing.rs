@@ -327,6 +327,7 @@ pub fn command_slot(command: &Command<'_>) -> Result<Option<u16>, CrossSlot> {
         | Command::SetPop { key, .. }
         | Command::SetRandom { key, .. }
         | Command::HashSet { key, .. }
+        | Command::HashMSet { key, .. }
         | Command::HashSetNx { key, .. }
         | Command::HashIncrement { key, .. }
         | Command::HashTransfer { key, .. }
@@ -616,6 +617,7 @@ pub fn command_keys<'a>(command: &'a Command<'_>) -> Vec<&'a [u8]> {
         | Command::SetPop { key, .. }
         | Command::SetRandom { key, .. }
         | Command::HashSet { key, .. }
+        | Command::HashMSet { key, .. }
         | Command::HashSetNx { key, .. }
         | Command::HashIncrement { key, .. }
         | Command::HashTransfer { key, .. }

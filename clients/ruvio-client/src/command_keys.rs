@@ -102,6 +102,7 @@ pub(crate) static COMMAND_KEY_RULES: &[(&str, KeyRule, u8)] = &[
     ("HKEYS", KeyRule::Range { first: 1, last: 1, step: 1 }, 2),
     ("HLEN", KeyRule::Range { first: 1, last: 1, step: 1 }, 6),
     ("HMGET", KeyRule::Range { first: 1, last: 1, step: 1 }, 6),
+    ("HMSET", KeyRule::Range { first: 1, last: 1, step: 1 }, 13),
     ("HPERSIST", KeyRule::Range { first: 1, last: 1, step: 1 }, 5),
     ("HPEXPIRE", KeyRule::Range { first: 1, last: 1, step: 1 }, 13),
     ("HPEXPIREAT", KeyRule::Range { first: 1, last: 1, step: 1 }, 13),

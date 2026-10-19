@@ -1009,6 +1009,21 @@
       }
     },
     {
+      "name": "HMSET",
+      "arity": -4,
+      "flags": [
+        "write",
+        "fast",
+        "denyoom"
+      ],
+      "keys": {
+        "kind": "range",
+        "first": 1,
+        "last": 1,
+        "step": 1
+      }
+    },
+    {
       "name": "HPERSIST",
       "arity": -5,
       "flags": [

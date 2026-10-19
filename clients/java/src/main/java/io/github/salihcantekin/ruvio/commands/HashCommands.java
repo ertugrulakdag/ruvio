@@ -98,6 +98,28 @@ public abstract class HashCommands<K, V> extends KeyCommands<K, V> {
     }
 
     /**
+     * Sends {@code HMSET key field value [field value ...]}: sets several fields like {@link #hset(Object, Map)} but
+     * the server replies {@code OK} instead of the count of new fields. Redis marks {@code HMSET} deprecated; prefer
+     * {@code hset} in new code.
+     *
+     * <pre>{@code
+     * client.hmset("user:1", Map.of("name", "Ada", "city", "London"));
+     * }</pre>
+     *
+     * @param key the hash key
+     * @param fields the field names and values to set; must not be empty
+     * @return a future that completes with no value once the server has acknowledged the command
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-hash
+     */
+    public CompletableFuture<Void> hmset(K key, Map<K, V> fields) {
+        Args a = args().w(Cmd.HMSET).k(key);
+        for (Map.Entry<K, V> e : fields.entrySet()) {
+            a.k(e.getKey()).v(e.getValue());
+        }
+        return send(a, Reply.OK);
+    }
+
+    /**
      * Sends {@code HGET key field}.
      *
      * @param key the hash key

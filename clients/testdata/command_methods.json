@@ -99,6 +99,7 @@
     "HKEYS": {"rust": "hkeys", "csharp": "GetHashFieldNamesAsync", "go": "HKeys", "java": "hkeys", "node": "hkeys", "python": "hkeys"},
     "HLEN": {"rust": "hlen", "csharp": "GetHashLengthAsync", "go": "HLen", "java": "hlen", "node": "hlen", "python": "hlen"},
     "HMGET": {"rust": "hmget", "csharp": "GetHashFieldsAsync", "go": "HMGet", "java": "hmget", "node": "hmget", "python": "hmget"},
+    "HMSET": {"rust": "hmset", "csharp": "SetHashManyAsync", "go": "HMSet", "java": "hmset", "node": "hmset", "python": "hmset"},
     "HPERSIST": {"rust": "hpersist", "csharp": "PersistHashFieldsAsync", "go": "HPersist", "java": "hpersist", "node": "hpersist", "python": "hpersist"},
     "HPEXPIRE": {"rust": ["hexpire_with", "hpexpire"], "csharp": "ExpireHashFieldsAsync", "go": "HPExpire", "java": "hpexpire", "node": "hpexpire", "python": "hpexpire"},
     "HPEXPIREAT": {"rust": "hexpire_at", "csharp": "ExpireHashFieldsAtAsync", "go": "HPExpireAt", "java": "hpexpireat", "node": "hpexpireat", "python": "hpexpireat"},

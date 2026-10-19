@@ -3058,6 +3058,22 @@ export abstract class Commands {
     return this._v(null, C.HSET, flatPairs([key], f));
   }
   /**
+   * Sets hash fields like {@link hset} but sends `HMSET`, which replies `OK` instead of the count of new fields.
+   * Redis marks `HMSET` deprecated; prefer `hset` in new code.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param fields An object `{ field: value }` or an array of `[field, value]` pairs.
+   * @returns `'OK'`.
+   *
+   * @example
+   * ```ts
+   * await client.hmset('user:1', { name: 'Ada', city: 'London' });
+   * ```
+   */
+  hmset(key: Key, fields: Record<string, Value> | ReadonlyArray<readonly [Key, Value]>): R<'OK'> {
+    return this._v(null, C.HMSET, flatPairs([key], fields));
+  }
+  /**
    * Reads one hash field (`HGET`).
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
