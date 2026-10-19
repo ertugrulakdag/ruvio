@@ -86,6 +86,7 @@ fn expired_keys_remain_invisible_across_command_paths_without_active_sweeps() {
                 pattern: None,
                 count: 10,
                 type_name: None,
+                slot: None,
             },
         ),
         Response::Scan {

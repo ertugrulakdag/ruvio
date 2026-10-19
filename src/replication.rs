@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
-    io::{self, Read, Write},
+    io::{self},
     net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     sync::{
@@ -13,6 +13,7 @@ use std::{
 };
 
 use tracing::warn;
+use wire::Wire;
 
 use crate::{
     KvShard, OwnedMutation,
@@ -1412,6 +1413,8 @@ pub struct Shipment {
     pub snapshot_requests: Arc<AtomicU64>,
     /// Where clients reach this primary shard, sent to every replica with the reply.
     pub announce: Option<Endpoint>,
+    /// Wraps each accepted replica connection in TLS; none leaves the link in cleartext.
+    pub tls: Option<Arc<crate::tls::TlsAcceptor>>,
 }
 
 struct ReplicaProgress {
@@ -1656,6 +1659,8 @@ pub struct ReplicaLink {
     pub announce: Option<Endpoint>,
     /// Records the primary's client address from each accepted handshake.
     pub peers: Arc<DurableAcks>,
+    /// Wraps the dialed connection in TLS; none leaves the link in cleartext.
+    pub tls: Option<Arc<crate::tls::ReplicaTlsClient>>,
 }
 
 pub fn spawn_replica_reader(link: ReplicaLink) -> ReplicationThread {
@@ -1773,7 +1778,33 @@ fn accept_replicas_from(
                         .name("ruvio-ship-conn".into())
                         .spawn(move || {
                             let _ = stream.set_nonblocking(false);
-                            let _ = serve_replica(stream, &shipment, &progress, &connection_stop);
+
+                            let Some(acceptor) = shipment.tls.as_ref() else {
+                                let _ =
+                                    serve_replica(stream, &shipment, &progress, &connection_stop);
+
+                                return;
+                            };
+
+                            // A peer that never finishes the handshake must not hold this
+                            // thread: bound it, then hand the stream to the protocol, which
+                            // sets its own timeouts.
+                            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                            let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+
+                            match acceptor.handshake(stream) {
+                                Ok(secure) => {
+                                    let _ = serve_replica(
+                                        secure,
+                                        &shipment,
+                                        &progress,
+                                        &connection_stop,
+                                    );
+                                }
+                                Err(error) => {
+                                    warn!(%error, "replication tls handshake failed");
+                                }
+                            }
                         });
 
                 if let Ok(handle) = handle {
@@ -1811,7 +1842,7 @@ fn accept_replicas_from(
 }
 
 fn serve_replica(
-    mut stream: TcpStream,
+    mut stream: impl Wire,
     shipment: &Shipment,
     progress: &Arc<ReplicaProgress>,
     stop: &AtomicBool,
@@ -2122,7 +2153,7 @@ fn caught_up_cursor_is_retained(shipment: &Shipment, after_sequence: u64, throug
 /// Reads the replica's acknowledgements. False once the replica has hung up or the
 /// connection failed: an idle primary writes nothing that would find out, so without this
 /// the connection would hold one of the replica slots for good.
-fn poll_acks(stream: &mut TcpStream, hold: &CursorHold, pending: &mut Vec<u8>) -> bool {
+fn poll_acks(stream: &mut dyn Wire, hold: &CursorHold, pending: &mut Vec<u8>) -> bool {
     let _ = stream.set_read_timeout(Some(Duration::from_millis(1)));
     let mut scratch = [0u8; 64];
 
@@ -2167,7 +2198,7 @@ struct AckSend {
 }
 
 impl AckSend {
-    fn poll(&mut self, stream: &mut TcpStream, wal: &Mutex<WalSink>) {
+    fn poll(&mut self, stream: &mut dyn Wire, wal: &Mutex<WalSink>) {
         // The log of a replica still copying belongs to the history it is replacing.
         if !self.queued && self.status.is_copying() {
             return;
@@ -2206,7 +2237,7 @@ impl AckSend {
 }
 
 fn stream_frames_through(
-    stream: &mut TcpStream,
+    stream: &mut dyn Wire,
     shipment: &Shipment,
     hold: &CursorHold,
     stop: &AtomicBool,
@@ -2239,7 +2270,7 @@ fn stream_frames_through(
 }
 
 fn stream_new_frames(
-    stream: &mut TcpStream,
+    stream: &mut dyn Wire,
     shipment: &Shipment,
     hold: &CursorHold,
     copied_publishes: &Receiver<Vec<u8>>,
@@ -2292,8 +2323,8 @@ pub(crate) fn follow_primary(
         return (false, false);
     }
 
-    let address = match dial_address(link) {
-        Ok(address) => address,
+    let addresses = match dial_addresses(link) {
+        Ok(addresses) => addresses,
         Err(error) => {
             warn!(%error, "replication dial failed");
 
@@ -2301,10 +2332,20 @@ pub(crate) fn follow_primary(
         }
     };
 
-    let mut stream = match TcpStream::connect_timeout(&address, Duration::from_millis(200)) {
+    // A name can resolve to several addresses (`localhost` to ::1 and 127.0.0.1); the primary
+    // may listen on only one of them, so each is tried in the resolver's order.
+    let mut dialed = Err(io::Error::from(io::ErrorKind::NotFound));
+
+    for address in &addresses {
+        dialed = TcpStream::connect_timeout(address, Duration::from_millis(200));
+        if dialed.is_ok() {
+            break;
+        }
+    }
+    let mut stream = match dialed {
         Ok(stream) => stream,
         Err(error) => {
-            warn!(%error, primary = %address, "replication dial failed");
+            warn!(%error, primary = ?addresses, "replication dial failed");
 
             return (!stop.load(Ordering::Acquire), false);
         }
@@ -2318,7 +2359,24 @@ pub(crate) fn follow_primary(
         *wake.lock().unwrap_or_else(|error| error.into_inner()) = Some(cloned);
     }
 
-    let (retry, steady) = read_primary(&mut stream, link, outstanding, stop);
+    let (retry, steady) = match &link.tls {
+        None => read_primary(&mut stream, link, outstanding, stop),
+        Some(client) => {
+            let name = match &link.primary_name {
+                Some((host, _)) => host.clone(),
+                None => link.primary.ip().to_string(),
+            };
+
+            match client.connect(&name, stream) {
+                Ok(mut secure) => read_primary(&mut secure, link, outstanding, stop),
+                Err(error) => {
+                    warn!(%error, primary = ?addresses, "replication tls handshake failed");
+
+                    (!stop.load(Ordering::Acquire), false)
+                }
+            }
+        }
+    };
 
     link.status.mark_down();
     *wake.lock().unwrap_or_else(|error| error.into_inner()) = None;
@@ -2330,9 +2388,9 @@ pub(crate) fn follow_primary(
     (retry, steady)
 }
 
-fn dial_address(link: &ReplicaLink) -> io::Result<SocketAddr> {
+fn dial_addresses(link: &ReplicaLink) -> io::Result<Vec<SocketAddr>> {
     let Some((host, port)) = &link.primary_name else {
-        return Ok(link.primary);
+        return Ok(vec![link.primary]);
     };
 
     let port = u16::try_from(link.shard_id)
@@ -2344,14 +2402,16 @@ fn dial_address(link: &ReplicaLink) -> io::Result<SocketAddr> {
                 "replication port plus shard id is above 65535",
             )
         })?;
-    let mut addresses = (host.as_str(), port).to_socket_addrs()?;
+    let addresses: Vec<SocketAddr> = (host.as_str(), port).to_socket_addrs()?.collect();
 
-    addresses.next().ok_or_else(|| {
-        io::Error::new(
+    if addresses.is_empty() {
+        return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "replication primary did not resolve",
-        )
-    })
+        ));
+    }
+
+    Ok(addresses)
 }
 
 struct CatchupReconnect<'a> {
@@ -2375,7 +2435,7 @@ impl Drop for CatchupReconnect<'_> {
 }
 
 fn read_primary(
-    stream: &mut TcpStream,
+    stream: &mut dyn Wire,
     link: &ReplicaLink,
     outstanding: &mut VecDeque<(u64, usize)>,
     stop: &AtomicBool,
@@ -2661,7 +2721,7 @@ struct FrameReader {
 impl FrameReader {
     fn next_frame(
         &mut self,
-        stream: &mut TcpStream,
+        stream: &mut dyn Wire,
         stop: &AtomicBool,
         resync_sequence: &AtomicU64,
         acks: &mut AckSend,
@@ -2815,7 +2875,7 @@ enum Incoming {
     Unsupported(u16),
 }
 
-fn read_handshake(stream: &mut TcpStream) -> io::Result<Incoming> {
+fn read_handshake(stream: &mut dyn Wire) -> io::Result<Incoming> {
     let mut prefix = [0; HANDSHAKE_PREFIX];
 
     stream.read_exact(&mut prefix)?;
@@ -2871,14 +2931,14 @@ fn read_handshake(stream: &mut TcpStream) -> io::Result<Incoming> {
 
 /// A fake primary's side of the handshake, for tests outside this module.
 #[cfg(test)]
-pub(crate) fn read_current_handshake(stream: &mut TcpStream) -> Handshake {
+pub(crate) fn read_current_handshake(stream: &mut dyn Wire) -> Handshake {
     match read_handshake(stream) {
         Ok(Incoming::Handshake(handshake)) => handshake,
         _ => panic!("replica sent no current handshake"),
     }
 }
 
-pub fn read_snapshot_blob(stream: &mut TcpStream, maximum: u64) -> io::Result<Vec<u8>> {
+pub fn read_snapshot_blob(stream: &mut dyn Wire, maximum: u64) -> io::Result<Vec<u8>> {
     let mut length_bytes = [0; 8];
 
     stream.read_exact(&mut length_bytes)?;
@@ -2903,7 +2963,7 @@ pub fn read_snapshot_blob(stream: &mut TcpStream, maximum: u64) -> io::Result<Ve
 /// The primary's reply and the client address that follows it. A version refusal comes
 /// from a build that may not send the address, so nothing more is read after one.
 fn read_reply(
-    stream: &mut TcpStream,
+    stream: &mut dyn Wire,
 ) -> io::Result<(HandshakeStatus, u64, Origin, Option<Endpoint>)> {
     let invalid = |reason| io::Error::new(io::ErrorKind::InvalidData, reason);
     let mut bytes = [0; REPLY_LEN];
@@ -2927,7 +2987,7 @@ fn read_reply(
     Ok((status, next, origin, endpoint))
 }
 
-fn refuse_handshake(stream: &mut TcpStream, status: HandshakeStatus) -> io::Result<()> {
+fn refuse_handshake(stream: &mut dyn Wire, status: HandshakeStatus) -> io::Result<()> {
     warn!(?status, "replication handshake rejected");
     let mut reply = encode_reply(status, 0);
 
@@ -2945,18 +3005,14 @@ fn accepted_reply(status: HandshakeStatus, next_sequence: u64, shipment: &Shipme
     reply
 }
 
-fn write_snapshot_blob(
-    stream: &mut TcpStream,
-    bytes: &[u8],
-    stop: &AtomicBool,
-) -> io::Result<bool> {
+fn write_snapshot_blob(stream: &mut dyn Wire, bytes: &[u8], stop: &AtomicBool) -> io::Result<bool> {
     let mut payload = (bytes.len() as u64).to_le_bytes().to_vec();
 
     payload.extend_from_slice(bytes);
     write_live(stream, &payload, stop)
 }
 
-fn write_live(stream: &mut TcpStream, bytes: &[u8], stop: &AtomicBool) -> io::Result<bool> {
+fn write_live(stream: &mut dyn Wire, bytes: &[u8], stop: &AtomicBool) -> io::Result<bool> {
     let mut offset = 0;
     let mut last_progress = std::time::Instant::now();
 
@@ -2998,3 +3054,4 @@ fn write_live(stream: &mut TcpStream, bytes: &[u8], stop: &AtomicBool) -> io::Re
 
 #[cfg(test)]
 mod tests;
+mod wire;
