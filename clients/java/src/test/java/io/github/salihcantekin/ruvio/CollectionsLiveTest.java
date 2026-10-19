@@ -54,6 +54,11 @@ class CollectionsLiveTest {
         assertEquals(7.5, c.hincrbyfloat("h", "n", 0.5));
         assertFalse(c.hsetnx("h", "f1", "x"));
         assertTrue(c.hsetnx("h", "f3", "x"));
+        Map<String, String> legacy = new LinkedHashMap<>();
+        legacy.put("a", "1");
+        legacy.put("b", "2");
+        c.hmset("hm", legacy);
+        assertEquals(Arrays.asList("1", "2"), c.hmget("hm", "a", "b"));
         assertEquals(2L, c.hstrlen("h", "f1"));
         assertEquals(1L, c.hdel("h", "f3", "zz"));
         assertNotNull(c.hrandfield("h"));

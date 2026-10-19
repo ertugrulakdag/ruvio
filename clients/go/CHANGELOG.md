@@ -4,6 +4,7 @@ Notable changes to the Go client `github.com/salihcantekin/ruvio/clients/go`. A 
 
 ## Unreleased
 
+- `HMSet(ctx, key, fieldValues...)` sends `HMSET` (multi-field `HSET` that replies `OK`; Redis marks it deprecated) (issue #26).
 - `Options.CommandTimeout` bounds a call whose context has no deadline (it fails with `context.DeadlineExceeded`, the connection stays usable). Default 0: no limit, as before (issue #48).
 - Docs: the README states that `-ASK` is not followed, as the Python and Node clients already did (issue #49).
 - `Options.ReadPolicy` (`ReadPrimary` by default, `ReadPreferReplica`, `ReadReplica`): a cluster client sends reads (commands the server flags readonly and not blocking) to one replica per shard, found in `CLUSTER SLOTS` and picked when the slot map loads. Pipelines go to replicas only when every command is a read; a replica that cannot be connected or answers `LOADING` is skipped until the next load. Replication is asynchronous, so reads can miss recent writes. With the default policy nothing changes.

@@ -85,6 +85,7 @@ export const COMMAND_KEY_RULES: ReadonlyMap<string, CommandKeyRule> = new Map<st
   ["HKEYS", [1, 1, 1, 1, [], 2]],
   ["HLEN", [1, 1, 1, 1, [], 6]],
   ["HMGET", [1, 1, 1, 1, [], 6]],
+  ["HMSET", [1, 1, 1, 1, [], 13]],
   ["HPERSIST", [1, 1, 1, 1, [], 5]],
   ["HPEXPIRE", [1, 1, 1, 1, [], 13]],
   ["HPEXPIREAT", [1, 1, 1, 1, [], 13]],

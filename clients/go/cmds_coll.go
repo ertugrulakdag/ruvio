@@ -461,6 +461,14 @@ func (c *cmds) HSetBytes(ctx context.Context, key, field string, value []byte) (
 	return c.intR(ctx, newCmd(4, cHSET).s(key).s(field).b(value))
 }
 
+// HMSet sets fields of the hash at key like HSet but sends HMSET, which replies OK
+// instead of the count of new fields. Redis marks HMSET deprecated; prefer HSet.
+//
+//	err := c.HMSet(ctx, "user:1", "name", "Ada", "city", "London")
+func (c *cmds) HMSet(ctx context.Context, key string, fieldValues ...string) error {
+	return c.ok(ctx, newCmd(2+len(fieldValues), cHMSET).s(key).ss(fieldValues))
+}
+
 // HSetNX sets the field only when it does not exist (HSETNX) and returns true when it
 // wrote.
 func (c *cmds) HSetNX(ctx context.Context, key, field, value string) (bool, error) {

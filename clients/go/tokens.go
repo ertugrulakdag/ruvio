@@ -84,6 +84,7 @@ var (
 	cHKEYS             = preEnc("HKEYS")
 	cHLEN              = preEnc("HLEN")
 	cHMGET             = preEnc("HMGET")
+	cHMSET             = preEnc("HMSET")
 	cHPERSIST          = preEnc("HPERSIST")
 	cHPEXPIRE          = preEnc("HPEXPIRE")
 	cHPEXPIREAT        = preEnc("HPEXPIREAT")

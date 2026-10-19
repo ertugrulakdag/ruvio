@@ -89,6 +89,7 @@ COMMAND_KEY_RULES = {
     b"HKEYS": (1, 1, 1, 1, (), 2),
     b"HLEN": (1, 1, 1, 1, (), 6),
     b"HMGET": (1, 1, 1, 1, (), 6),
+    b"HMSET": (1, 1, 1, 1, (), 13),
     b"HPERSIST": (1, 1, 1, 1, (), 5),
     b"HPEXPIRE": (1, 1, 1, 1, (), 13),
     b"HPEXPIREAT": (1, 1, 1, 1, (), 13),

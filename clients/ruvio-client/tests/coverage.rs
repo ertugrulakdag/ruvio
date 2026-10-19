@@ -245,6 +245,7 @@ fn methods_exist() {
     let _ = Client::hpexpire;
     let _ = Client::hpexpiretime;
     let _ = Client::hpttl;
+    let _ = Client::hmset;
     let _ = Client::hrandfield;
     let _ = Client::hrandfield_count;
     let _ = Client::hrandfield_with_values;

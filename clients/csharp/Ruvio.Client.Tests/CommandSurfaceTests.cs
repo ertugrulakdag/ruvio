@@ -604,6 +604,12 @@ public partial class CommandSurfaceTests
         await session.Reply(":2\r\n");
         Assert.Equal(2, await hset);
 
+        ValueTask hmset = session.Client.SetHashManyAsync("h", ("f", "1"));
+
+        await session.Expect("HMSET", "h", "f", "1");
+        await session.Reply("+OK\r\n");
+        await hmset;
+
         ValueTask<string?> hget = session.Client.GetHashFieldAsync("h", "f");
 
         await session.Expect("HGET", "h", "f");

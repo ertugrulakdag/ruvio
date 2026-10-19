@@ -94,6 +94,7 @@ internal static class CommandKeyRules
         ["HKEYS"] = new(1, 1, 1, 1, [], 2),
         ["HLEN"] = new(1, 1, 1, 1, [], 6),
         ["HMGET"] = new(1, 1, 1, 1, [], 6),
+        ["HMSET"] = new(1, 1, 1, 1, [], 13),
         ["HPERSIST"] = new(1, 1, 1, 1, [], 5),
         ["HPEXPIRE"] = new(1, 1, 1, 1, [], 13),
         ["HPEXPIREAT"] = new(1, 1, 1, 1, [], 13),
