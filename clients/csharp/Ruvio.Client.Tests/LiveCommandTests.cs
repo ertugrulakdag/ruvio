@@ -678,6 +678,7 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         await ServerAnswers(() => db.ReadOnlyAsync().AsTask());
         await ServerAnswers(() => db.ReadWriteAsync().AsTask());
         Assert.Equal(12182, await db.GetClusterKeySlotAsync("foo"));
+        Assert.True((await db.GetMoveSlotsStatusAsync()).ContainsKey("state"));
 
         Assert.True(await db.SetAsync("flush-me", "1"));
         await db.FlushAllDatabasesAsync();
