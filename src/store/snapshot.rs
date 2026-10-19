@@ -845,6 +845,46 @@ pub(super) fn live_snapshot_entry(
     }
 }
 
+impl<C: Clock, I: StorageIndex> KvShard<C, I> {
+    /// Appends `key`'s snapshot frame from every database that holds it (and has not
+    /// expired), encoded straight from the live values as a checkpoint writes them. Returns
+    /// how many frames it wrote; on error `output` keeps only what came before.
+    pub(crate) fn encode_key_frames(
+        &self,
+        key: &[u8],
+        output: &mut Vec<u8>,
+    ) -> Result<u32, crate::PersistenceError> {
+        let start = output.len();
+        let mut frames = 0;
+
+        for (database, map) in self.database_maps() {
+            let Some(hit) = map.lookup(key) else {
+                continue;
+            };
+
+            if self.snapshot_skips(database, key) {
+                continue;
+            }
+
+            let walked = WalkedEntry {
+                database,
+                key,
+                expires_at: self.deadline(database, key),
+                hit,
+                log: &self.value_log,
+            };
+
+            if let Err(error) = walked.encode_into(output) {
+                output.truncate(start);
+                return Err(error);
+            }
+            frames += 1;
+        }
+
+        Ok(frames)
+    }
+}
+
 /// A key the snapshot walk reached, still borrowed from the shard: the checkpoint encodes
 /// it straight from the live value instead of copying it into a [`SnapshotEntry`] first.
 pub(crate) struct WalkedEntry<'a> {

@@ -31,7 +31,8 @@ use crate::{KvShard, OwnedMutation, time::UnixMillis};
 #[cfg(all(test, not(miri)))]
 pub(crate) use crash::{CrashSite, arm_io_fault};
 pub(crate) use snapshot::{
-    CheckpointManager, ShardCheckpoint, ShardFile, SnapshotWriter, encode_entry, encode_entry_with,
+    CheckpointManager, ShardCheckpoint, ShardFile, SnapshotWriter, decode_entry_frame,
+    encode_entry, encode_entry_with,
 };
 
 // The shipper consumes these in a later snapshot-resync task.

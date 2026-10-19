@@ -13,12 +13,13 @@ use super::*;
 use crate::protocol::SlotRangeMove;
 use crate::routing::hash_slot;
 use crate::slot_moves::SlotMoves;
-use crate::store::SnapshotEntry;
 use std::sync::Condvar;
 use std::sync::atomic::AtomicBool;
 
-/// Keys per copy message.
-const COPY_BATCH_KEYS: usize = 256;
+/// Keys per copy message, and the bytes after which a message is sent sooner: with
+/// `IN_FLIGHT` that bounds what a move holds in transit at about a megabyte.
+const COPY_BATCH_KEYS: u32 = 1024;
+const COPY_BATCH_BYTES: usize = 256 * 1024;
 /// Index positions one walk step visits.
 const WALK_STEP: usize = 1024;
 /// Copy messages the target may have queued before the source waits.
@@ -172,16 +173,79 @@ impl MoveSession {
     }
 }
 
-/// One key's values in every database that holds it; an empty list removes the key.
-pub(super) struct MovedKey {
-    key: Box<[u8]>,
-    entries: Vec<SnapshotEntry>,
+/// Keys as the source holds them, in one buffer: per key its length and bytes, the number
+/// of frames, then one checkpoint entry frame per database that holds it (written straight
+/// from the live value). No frames removes the key. The target logs the frames as they are.
+#[derive(Default)]
+pub(super) struct CopyBatch {
+    bytes: Vec<u8>,
+    keys: u32,
+}
+
+impl CopyBatch {
+    fn push(&mut self, store: &KvShard, key: &[u8]) -> Result<(), crate::PersistenceError> {
+        let start = self.bytes.len();
+
+        self.bytes
+            .extend_from_slice(&(key.len() as u32).to_le_bytes());
+        self.bytes.extend_from_slice(key);
+        let count_at = self.bytes.len();
+
+        self.bytes.extend_from_slice(&0u32.to_le_bytes());
+        match store.encode_key_frames(key, &mut self.bytes) {
+            Ok(frames) => {
+                self.bytes[count_at..count_at + 4].copy_from_slice(&frames.to_le_bytes());
+                self.keys += 1;
+                Ok(())
+            }
+            Err(error) => {
+                self.bytes.truncate(start);
+                Err(error)
+            }
+        }
+    }
+
+    fn full(&self) -> bool {
+        self.keys >= COPY_BATCH_KEYS || self.bytes.len() >= COPY_BATCH_BYTES
+    }
+
+    /// Each key with its frames, in order; `None` for a buffer that does not parse.
+    fn entries(&self) -> Option<Vec<(&[u8], Vec<&[u8]>)>> {
+        let mut at = 0;
+        let mut out = Vec::with_capacity(self.keys as usize);
+        let u32_at = |bytes: &[u8], at: usize| {
+            bytes
+                .get(at..at + 4)
+                .map(|word| u32::from_le_bytes(word.try_into().unwrap()) as usize)
+        };
+
+        while at < self.bytes.len() {
+            let length = u32_at(&self.bytes, at)?;
+            let key = self.bytes.get(at + 4..at + 4 + length)?;
+
+            at += 4 + length;
+            let count = u32_at(&self.bytes, at)?;
+
+            at += 4;
+            let mut frames = Vec::with_capacity(count);
+
+            for _ in 0..count {
+                let frame_length = u32_at(&self.bytes, at)?;
+
+                frames.push(self.bytes.get(at..at + frame_length)?);
+                at += frame_length;
+            }
+            out.push((key, frames));
+        }
+
+        Some(out)
+    }
 }
 
 pub(super) enum MoveMessage {
     /// The target records that a copy begins.
     Open(Arc<MoveSession>),
-    Copy(Arc<MoveSession>, Vec<MovedKey>),
+    Copy(Arc<MoveSession>, CopyBatch),
     /// The last copy is in; the target takes the range.
     Flip(Arc<MoveSession>),
     /// The move failed: the target drops what it copied.
@@ -392,20 +456,37 @@ fn record_begin(state: &ShardState, session: &MoveSession) -> Result<(), String>
 
 /// Target: logs and applies each key as the source holds it. A key absent from a database
 /// there is removed here too.
-fn apply_copies(state: &ShardState, session: &MoveSession, keys: Vec<MovedKey>) {
+fn apply_copies(state: &ShardState, session: &MoveSession, batch: CopyBatch) {
+    let Some(keys) = batch.entries() else {
+        session.fail("target received a damaged copy");
+        return;
+    };
     let mut store = state.store.borrow_mut();
     let databases = store.database_ids();
-    let count = keys.len() as u64;
 
-    if let Err(error) = log_copies(state, &store, &databases, &keys) {
-        drop(store);
-        session.fail(format!("target could not log the copy: {error}"));
-        return;
-    }
+    for (key, frames) in keys {
+        let mut entries = Vec::with_capacity(frames.len());
 
-    for MovedKey { key, entries } in keys {
+        for frame in &frames {
+            match crate::persistence::decode_entry_frame(frame) {
+                Ok(entry) => entries.push(entry),
+                Err(error) => {
+                    drop(store);
+                    session.fail(format!("target received a damaged copy: {error}"));
+                    return;
+                }
+            }
+        }
+
+        let logged = log_copy(state, &store, &databases, key, &frames, &entries);
+
+        if let Err(error) = logged {
+            drop(store);
+            session.fail(format!("target could not log the copy: {error}"));
+            return;
+        }
         for database in &databases {
-            store.forget_key(*database, &key);
+            store.forget_key(*database, key);
         }
         for entry in entries {
             if let Err(error) = store.restore_snapshot_entry(entry) {
@@ -422,15 +503,20 @@ fn apply_copies(state: &ShardState, session: &MoveSession, keys: Vec<MovedKey>) 
         return;
     }
 
-    session.keys.fetch_add(count, Ordering::AcqRel);
+    session
+        .keys
+        .fetch_add(u64::from(batch.keys), Ordering::AcqRel);
 }
 
-/// One `SlotCopy` record per database that holds the key on either side, in one group.
-fn log_copies(
+/// One `SlotCopy` record per database that holds `key` on either side, carrying the
+/// source's frame as it came.
+fn log_copy(
     state: &ShardState,
     store: &KvShard,
     databases: &[u8],
-    keys: &[MovedKey],
+    key: &[u8],
+    frames: &[&[u8]],
+    entries: &[crate::store::SnapshotEntry],
 ) -> Result<(), crate::PersistenceError> {
     use crate::mutation::{Mutation, MutationSink};
 
@@ -444,28 +530,23 @@ fn log_copies(
     }
 
     let active = store.active_database();
-    let mut frame = Vec::new();
 
     persistence.begin_group();
     let logged = (|| {
-        for MovedKey { key, entries } in keys {
-            for entry in entries {
-                frame.clear();
-                crate::persistence::encode_entry(&mut frame, entry)?;
-                persistence.select_database(entry.database);
-                persistence.record(Mutation::SlotCopy {
-                    key,
-                    entry: Some(&frame),
-                })?;
-            }
-            // Held here, gone there: replay removes it as the apply does.
-            for database in databases {
-                if entries.iter().all(|entry| entry.database != *database)
-                    && store.holds_key_in(*database, key)
-                {
-                    persistence.select_database(*database);
-                    persistence.record(Mutation::SlotCopy { key, entry: None })?;
-                }
+        for (frame, entry) in frames.iter().zip(entries) {
+            persistence.select_database(entry.database);
+            persistence.record(Mutation::SlotCopy {
+                key,
+                entry: Some(frame),
+            })?;
+        }
+        // Held here, gone there: replay removes it as the apply does.
+        for database in databases {
+            if entries.iter().all(|entry| entry.database != *database)
+                && store.holds_key_in(*database, key)
+            {
+                persistence.select_database(*database);
+                persistence.record(Mutation::SlotCopy { key, entry: None })?;
             }
         }
         Ok(())
@@ -588,35 +669,39 @@ async fn copy_and_hand_over(
     send(fabric, session, MoveMessage::Open(Arc::clone(session)));
     settle(session, 0).await?;
 
-    // Every key of the range, database by database, in bounded steps.
+    // Every key of the range, database by database, in bounded steps, encoded straight
+    // from the live values into the batch.
     let databases = state.store.borrow().database_ids();
-    let mut batch: Vec<MovedKey> = Vec::new();
+    let mut batch = CopyBatch::default();
 
     for database in databases {
         let mut cursor = 0;
 
         loop {
-            let mut keys: Vec<Box<[u8]>> = Vec::new();
-
-            cursor = state.store.borrow().walk_slots(
-                database,
-                session.first,
-                session.last,
-                cursor,
-                WALK_STEP,
-                &mut |key| keys.push(key.into()),
-            );
-
             {
                 let store = state.store.borrow();
+                let mut failed = None;
 
-                batch.extend(keys.into_iter().map(|key| MovedKey {
-                    entries: store.key_entries(&key),
-                    key,
-                }));
+                cursor = store.walk_slots(
+                    database,
+                    session.first,
+                    session.last,
+                    cursor,
+                    WALK_STEP,
+                    &mut |key| {
+                        if failed.is_none()
+                            && let Err(error) = batch.push(&store, key)
+                        {
+                            failed = Some(error);
+                        }
+                    },
+                );
+                if let Some(error) = failed {
+                    return Err(format!("source could not copy a key: {error}"));
+                }
             }
 
-            if batch.len() >= COPY_BATCH_KEYS {
+            if batch.full() {
                 send_copies(fabric, session, std::mem::take(&mut batch)).await?;
             }
             if cursor == 0 {
@@ -641,11 +726,17 @@ async fn copy_and_hand_over(
         }
 
         session.rounds.fetch_add(1, Ordering::AcqRel);
-        for chunk in changes.keys.chunks(COPY_BATCH_KEYS) {
-            let copies = moved_keys(state, chunk);
+        let mut batch = CopyBatch::default();
 
-            send_copies(fabric, session, copies).await?;
+        for key in &changes.keys {
+            batch
+                .push(&state.store.borrow(), key)
+                .map_err(|error| format!("source could not copy a key: {error}"))?;
+            if batch.full() {
+                send_copies(fabric, session, std::mem::take(&mut batch)).await?;
+            }
         }
+        send_copies(fabric, session, batch).await?;
     }
 
     settle(session, 0).await?;
@@ -655,17 +746,6 @@ async fn copy_and_hand_over(
         return Err("a flush or SWAPDB ran during the move".into());
     }
     hand_over(state, fabric, session, changes.keys)
-}
-
-fn moved_keys(state: &ShardState, keys: &[Box<[u8]>]) -> Vec<MovedKey> {
-    let store = state.store.borrow();
-
-    keys.iter()
-        .map(|key| MovedKey {
-            entries: store.key_entries(key),
-            key: key.clone(),
-        })
-        .collect()
 }
 
 /// One synchronous turn: the last changes, the flip, and a bounded wait for the target.
@@ -679,12 +759,19 @@ fn hand_over(
     let started = Instant::now();
 
     if !keys.is_empty() {
-        let copies = moved_keys(state, &keys);
+        let mut batch = CopyBatch::default();
+        let store = state.store.borrow();
 
+        for key in &keys {
+            batch
+                .push(&store, key)
+                .map_err(|error| format!("source could not copy a key: {error}"))?;
+        }
+        drop(store);
         send(
             fabric,
             session,
-            MoveMessage::Copy(Arc::clone(session), copies),
+            MoveMessage::Copy(Arc::clone(session), batch),
         );
     }
     // Nothing runs on this shard until the wait below ends, so its next record is the
@@ -736,9 +823,9 @@ fn send(fabric: &Fabric, session: &Arc<MoveSession>, message: MoveMessage) {
 async fn send_copies(
     fabric: &Fabric,
     session: &Arc<MoveSession>,
-    keys: Vec<MovedKey>,
+    batch: CopyBatch,
 ) -> Result<(), String> {
-    if keys.is_empty() {
+    if batch.keys == 0 {
         return Ok(());
     }
 
@@ -746,7 +833,7 @@ async fn send_copies(
     send(
         fabric,
         session,
-        MoveMessage::Copy(Arc::clone(session), keys),
+        MoveMessage::Copy(Arc::clone(session), batch),
     );
     Ok(())
 }

@@ -85,25 +85,6 @@ impl<C: Clock, I: StorageIndex> KvShard<C, I> {
         }
     }
 
-    /// `key` in every database that holds it (and has not expired), as checkpoint entries.
-    pub(crate) fn key_entries(&self, key: &[u8]) -> Vec<SnapshotEntry> {
-        self.database_maps()
-            .filter_map(|(database, map)| {
-                let entry = map.lookup(key)?;
-
-                (!self.snapshot_skips(database, key)).then(|| {
-                    snapshot::live_snapshot_entry(
-                        database,
-                        key,
-                        entry,
-                        self.deadline(database, key),
-                        &self.value_log,
-                    )
-                })
-            })
-            .collect()
-    }
-
     /// Up to `budget` positions of `database`'s index from `cursor`, handing every key of a
     /// slot in `first..=last` to `visit`. Returns the next cursor, 0 at the end. Keys present
     /// for the whole walk are visited at least once, whatever is written meanwhile.

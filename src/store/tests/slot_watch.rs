@@ -62,7 +62,7 @@ fn a_watch_and_a_slot_watch_share_the_gate() {
 }
 
 #[test]
-fn key_entries_cover_every_database_and_forget_key_is_quiet() {
+fn key_frames_cover_every_database_and_forget_key_is_quiet() {
     let mut shard = KvShard::new();
     let inside = key("in", true);
 
@@ -71,21 +71,24 @@ fn key_entries_cover_every_database_and_forget_key_is_quiet() {
     shard.set_bytes(&inside, b"three");
     shard.enter(0);
 
-    let entries = shard.key_entries(&inside);
+    let mut frames = Vec::new();
 
-    assert_eq!(
-        entries
-            .iter()
-            .map(|entry| entry.database)
-            .collect::<Vec<_>>(),
-        vec![0, 3]
-    );
+    assert_eq!(shard.encode_key_frames(&inside, &mut frames).unwrap(), 2);
+    let length = u32::from_le_bytes(frames[..4].try_into().unwrap()) as usize;
+    let first = crate::persistence::decode_entry_frame(&frames[..length]).unwrap();
+    let second = crate::persistence::decode_entry_frame(&frames[length..]).unwrap();
+
+    assert_eq!((first.database, second.database), (0, 3));
+    assert_eq!(first.key, inside);
 
     shard.watch_slots(0, 99);
     assert!(shard.forget_key(3, &inside));
     assert!(!shard.forget_key(3, &inside));
     assert_eq!(shard.active_database(), 0);
-    assert_eq!(shard.key_entries(&inside).len(), 1);
+    assert_eq!(
+        shard.encode_key_frames(&inside, &mut Vec::new()).unwrap(),
+        1
+    );
 }
 
 #[test]
