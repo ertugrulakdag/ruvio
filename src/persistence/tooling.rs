@@ -145,6 +145,16 @@ pub fn backup_data_dir_with(
 
     copy_persistence_tree(source, destination)?;
     write_backup_signature(destination, seal)?;
+    // The report below must not be printed for files that only sit in the page cache.
+    sync_tree(destination)?;
+
+    if let Some(parent) = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        sync_directory(parent)?;
+    }
+
     verify_backup_signature(destination, &seal.key)?;
     check_data_dir(destination)
 }
