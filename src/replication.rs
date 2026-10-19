@@ -2370,7 +2370,7 @@ pub(crate) fn follow_primary(
             match client.connect(&name, stream) {
                 Ok(mut secure) => read_primary(&mut secure, link, outstanding, stop),
                 Err(error) => {
-                    warn!(%error, primary = %address, "replication tls handshake failed");
+                    warn!(%error, primary = ?addresses, "replication tls handshake failed");
 
                     (!stop.load(Ordering::Acquire), false)
                 }
