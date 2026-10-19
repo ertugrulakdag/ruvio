@@ -60,6 +60,17 @@ fn ruvio_extension_strings_and_set_ifeq() {
     assert!(db.set_if_eq_keep_ttl("k", "v3", "v2").unwrap());
     assert!(db.pttl("k").unwrap() > 0);
     assert!(!db.set_if_eq("missing", "x", "y", None).unwrap());
+
+    assert!(db.set_if_greater("wm", 10, None).unwrap());
+    assert!(!db.set_if_greater("wm", 10, None).unwrap());
+    assert!(
+        db.set_if_greater("wm", 11, Some(Duration::from_secs(60)))
+            .unwrap()
+    );
+    assert!(db.pttl("wm").unwrap() > 0);
+    assert!(!db.set_if_less("wm", 12, None).unwrap());
+    assert!(db.set_if_less("wm", -1, None).unwrap());
+    assert_eq!(db.get("wm").unwrap(), Some(b"-1".to_vec()));
     assert!(!db.delex("k", "v2").unwrap());
     assert!(db.delex("k", "v3").unwrap());
     assert_eq!(db.exists_key("k").unwrap(), 0);

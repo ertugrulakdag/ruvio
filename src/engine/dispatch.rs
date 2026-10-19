@@ -506,6 +506,13 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
             expected,
             options,
         } => set_if_eq_key(shard, sink, key, value, &expected, options),
+        Command::SetIfCmp {
+            key,
+            value,
+            number,
+            greater,
+            options,
+        } => set_if_cmp_key(shard, sink, key, value, number, greater, options),
         Command::DelIfEq { key, expected } => del_if_eq_key(shard, sink, key, &expected),
         Command::ListPushCapped {
             key,

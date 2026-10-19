@@ -82,6 +82,7 @@ Ruvio-specific commands and options added in this pass:
 | Command / option | Method |
 |---|---|
 | `SET key value IFEQ expected [PX ms \| KEEPTTL]` | `SetIfEqualAsync(key, value, expected, expiry?)`, `SetIfEqualKeepingTimeToLiveAsync` |
+| `SET key value IFGT \| IFLT [PX ms]` | `SetIfGreaterAsync(key, long, expiry?)`, `SetIfLessAsync(key, long, expiry?)`; false when the stored number was not greater / smaller |
 | `DELEX key IFEQ value` | `DeleteIfEqualAsync` |
 | `LPUSHCAP` / `RPUSHCAP` | `PushListLeftCappedAsync` / `PushListRightCappedAsync(key, cap, values)` |
 | `BF.RESERVE ... EXPANSION n \| NONSCALING` | `ReserveBloomFilterAsync(key, error, capacity, expansion, nonScaling)` |

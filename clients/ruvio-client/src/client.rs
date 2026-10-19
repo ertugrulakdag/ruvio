@@ -894,6 +894,74 @@ impl Client {
             .is_null())
     }
 
+    /// Sends `SET key value IFGT [PX ms]` (Ruvio): writes when the key is missing or `value` is
+    /// greater than the stored integer. Use it to keep a watermark, version or highest bid.
+    ///
+    /// # Arguments
+    /// * `key`, `value` - key and the new number.
+    /// * `ttl` - `Some(ttl)` sets a new expiry in milliseconds; `None` clears any TTL.
+    ///
+    /// # Returns
+    /// `true` when written; `false` when the stored number is greater or equal.
+    ///
+    /// # Errors
+    /// [`Error::Server`] `WRONGTYPE` for a non-string key, or an error when the stored string is
+    /// not an integer.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ruvio_client::*;
+    /// # fn run(client: &mut Client) -> Result<(), Error> {
+    /// let advanced = client.set_if_greater("watermark", 1_700_000_000, None)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_if_greater(
+        &mut self,
+        key: &str,
+        value: i64,
+        ttl: Option<Duration>,
+    ) -> Result<bool, Error> {
+        self.set_if_compare(key, value, "IFGT", ttl)
+    }
+
+    /// Sends `SET key value IFLT [PX ms]` (Ruvio): like [`Client::set_if_greater`] but writes
+    /// when `value` is smaller than the stored integer (lowest price, earliest deadline).
+    pub fn set_if_less(
+        &mut self,
+        key: &str,
+        value: i64,
+        ttl: Option<Duration>,
+    ) -> Result<bool, Error> {
+        self.set_if_compare(key, value, "IFLT", ttl)
+    }
+
+    fn set_if_compare(
+        &mut self,
+        key: &str,
+        value: i64,
+        condition: &str,
+        ttl: Option<Duration>,
+    ) -> Result<bool, Error> {
+        let number = Num::int(value);
+        let millis = ttl.map(|ttl| Num::wide(duration_millis(ttl)));
+
+        let reply = match &millis {
+            Some(millis) => self.execute(&[
+                "SET",
+                key,
+                number.as_str(),
+                condition,
+                "PX",
+                millis.as_str(),
+            ])?,
+            None => self.execute(&["SET", key, number.as_str(), condition])?,
+        };
+
+        Ok(!reply.is_null())
+    }
+
     /// Sends `SET key value EX seconds`.
     ///
     /// # Arguments

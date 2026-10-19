@@ -465,6 +465,10 @@ pub(super) fn validate_command_payloads(
             validate_value(value, limits)?;
             validate_value(expected, limits)?;
         }
+        Command::SetIfCmp { key, value, .. } => {
+            validate_key(key, limits)?;
+            validate_value(value, limits)?;
+        }
         Command::BloomInsert { key, items, .. } => {
             validate_key(key, limits)?;
             validate_values(items, limits)?;

@@ -59,7 +59,7 @@ import { KW_AGGREGATE, KW_EXPIRE_COND, KW_BITOP, KW_BITUNIT, KW_CLIENT_TYPE, KW_
 const w = (s: string): Buffer => Buffer.from(s, 'latin1');
 const W = {
   EX: w('EX'), PX: w('PX'), EXAT: w('EXAT'), PXAT: w('PXAT'), KEEPTTL: w('KEEPTTL'), NX: w('NX'), XX: w('XX'),
-  GET: w('GET'), IFEQ: w('IFEQ'), MAX: w('MAX'), WAIT: w('WAIT'), SWR: w('SWR'), BEGIN: w('BEGIN'),
+  GET: w('GET'), IFEQ: w('IFEQ'), IFGT: w('IFGT'), IFLT: w('IFLT'), MAX: w('MAX'), WAIT: w('WAIT'), SWR: w('SWR'), BEGIN: w('BEGIN'),
   COMPLETE: w('COMPLETE'), START: w('START'), MATCH: w('MATCH'), COUNT: w('COUNT'), TYPE: w('TYPE'),
   ASYNC: w('ASYNC'), REPLACE: w('REPLACE'), ABSTTL: w('ABSTTL'), IDLETIME: w('IDLETIME'), FREQ: w('FREQ'),
   SAMPLES: w('SAMPLES'), DB: w('DB'), RANK: w('RANK'), MAXLEN: w('MAXLEN'), LIMIT: w('LIMIT'),
@@ -859,12 +859,12 @@ export abstract class Commands {
   }
   /**
    * Stores a string (`SET key value [EX|PX|EXAT|PXAT|KEEPTTL] [NX|XX] [GET]`), or Ruvio's compare-and-set form `SET key value IFEQ expected [...]`.
-   * Only one expiry option is sent, in the order `ex`, `px`, `exat`, `pxat`, `keepTtl`; `nx` wins over `xx`. A plain `set` removes any existing TTL. `ifEq` cannot be combined with `nx`, `xx` or `get`.
+   * Only one expiry option is sent, in the order `ex`, `px`, `exat`, `pxat`, `keepTtl`; `nx` wins over `xx`. A plain `set` removes any existing TTL. `ifEq`, `ifGt` and `ifLt` cannot be combined with `nx`, `xx` or `get`.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param value Value to store: string, Buffer or number (numbers are sent as ASCII text).
    * @param opts See {@link SetOptions}: `ex`/`px`/`exat`/`pxat`/`keepTtl` for expiry, `nx`/`xx` for conditions, `get` to return the old value, `ifEq` for compare-and-set.
-   * @returns `'OK'` when written. `null` when `nx`/`xx`/`ifEq` blocked the write. With `get`, the previous value instead (`null` if there was none).
+   * @returns `'OK'` when written. `null` when `nx`/`xx`/`ifEq`/`ifGt`/`ifLt` blocked the write. With `get`, the previous value instead (`null` if there was none).
    * @throws {@link RuvioError} `WRONGTYPE` when `get` is used and the key holds a non-string; `ERR` for an invalid expiry or an invalid option mix.
    *
    * @example
@@ -873,12 +873,15 @@ export abstract class Commands {
    * await client.set('session:9', 'tok', { ex: 3600 });          // expires in an hour
    * await client.set('lock:a', 'me', { nx: true, px: 5000 });    // null if already held
    * await client.set('cfg', 'v2', { ifEq: 'v1' });               // null if cfg is not 'v1'
+   * await client.set('watermark', 1700000000, { ifGt: true });   // null unless greater than the stored number
    * ```
    */
   set(key: Key, value: Value, opts?: SetOptions): R<string | null> {
     if (opts === undefined) return this._2(null, C.SET, key, value);
     const a: Arg[] = [key, value];
     if (opts.ifEq !== undefined) a.push(W.IFEQ, opts.ifEq);
+    else if (opts.ifGt) a.push(W.IFGT);
+    else if (opts.ifLt) a.push(W.IFLT);
     if (opts.ex !== undefined) a.push(W.EX, opts.ex);
     else if (opts.px !== undefined) a.push(W.PX, opts.px);
     else if (opts.exat !== undefined) a.push(W.EXAT, opts.exat);

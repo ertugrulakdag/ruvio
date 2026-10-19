@@ -153,6 +153,34 @@ func (c *cmds) SetIfEq(ctx context.Context, key, value, expected string, o SetOp
 	return err == nil && v.Kind != KindNil, err
 }
 
+// SetIfGreater writes value (Ruvio extension, SET key value IFGT) when the key is missing or
+// value is greater than the stored integer, and reports whether it wrote. Use it to keep a
+// watermark, a version or the highest bid.
+//
+// The result is false, with a nil error, when the stored number is greater or equal. TTL,
+// ExpireAt and KeepTTL in o apply to the write; NX and XX are ignored because IFGT cannot be
+// combined with them. A stored string that is not an integer returns an error and writes
+// nothing; a key that holds another type returns WRONGTYPE.
+//
+//	advanced, err := c.SetIfGreater(ctx, "watermark", 1700000000, ruvio.SetOptions{})
+func (c *cmds) SetIfGreater(ctx context.Context, key string, value int64, o SetOptions) (bool, error) {
+	return c.setIfCompare(ctx, key, value, tIFGT, o)
+}
+
+// SetIfLess is SetIfGreater for a smaller number (SET key value IFLT): lowest price,
+// earliest deadline.
+func (c *cmds) SetIfLess(ctx context.Context, key string, value int64, o SetOptions) (bool, error) {
+	return c.setIfCompare(ctx, key, value, tIFLT, o)
+}
+
+func (c *cmds) setIfCompare(ctx context.Context, key string, value int64, condition []byte, o SetOptions) (bool, error) {
+	o.NX, o.XX = false, false
+	r := newCmd(4+o.count(), cSET).s(key).i(value).t(condition)
+	o.append(r)
+	v, err := c.value(ctx, r)
+	return err == nil && v.Kind != KindNil, err
+}
+
 // SetEX stores value with a TTL given in whole seconds (SETEX key seconds value). The
 // duration is truncated to seconds, so a ttl below one second becomes 0 and the server
 // returns "ERR invalid expire time in 'setex' command". Use PSetEX or SetArgs for

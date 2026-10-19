@@ -22,6 +22,13 @@ test('strings', { skip: SKIP }, async () => {
     // SET IFEQ
     assert.equal(await c.set('s', 'z', { ifEq: 'nope' }), null);
     assert.equal(await c.set('s', 'z', { ifEq: 'y', px: 5000 }), 'OK');
+    // SET IFGT / IFLT
+    assert.equal(await c.set('wm', 10, { ifGt: true }), 'OK');
+    assert.equal(await c.set('wm', 10, { ifGt: true }), null);
+    assert.equal(await c.set('wm', 11, { ifGt: true, px: 5000 }), 'OK');
+    assert.equal(await c.set('wm', 12, { ifLt: true }), null);
+    assert.equal(await c.set('wm', -1, { ifLt: true }), 'OK');
+    assert.equal(await c.get('wm'), '-1');
     assert.equal(await c.get('s'), 'z');
     // binary safety
     const bin = Buffer.from([0, 1, 2, 255, 13, 10]);

@@ -57,6 +57,7 @@ r = ruvio.Ruvio("127.0.0.1", 6379, db=0)        # or ruvio.Ruvio.from_url("ruvio
 r.set("greeting", "hello", px=60_000)            # True
 r.get("greeting")                                # 'hello'  (None when missing)
 r.set("greeting", "hi", ifeq="hello")            # Ruvio: write only if the value matches
+r.set("watermark", 1700000000, ifgt=True)         # Ruvio: write only if greater than the stored number (iflt for smaller)
 r.incrby("stock", 5, max=100)                    # Ruvio: None (nothing written) past the limit
 r.delex("greeting", "hi")                        # Ruvio: delete only if the value matches
 r.raw.get("greeting")                            # bytes, on the same connection

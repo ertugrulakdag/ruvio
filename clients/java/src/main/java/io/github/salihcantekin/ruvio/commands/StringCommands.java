@@ -171,6 +171,68 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
     }
 
     /**
+     * Sends the Ruvio command {@code SET key value IFGT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is greater than the stored integer (a watermark, a version, the highest bid).
+     * Any TTL is cleared; use the overload with {@code SetOptions} to set one.
+     *
+     * <pre>{@code
+     * boolean advanced = client.setIfGreater("watermark", 1_700_000_000L);
+     * }</pre>
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @return {@code true} when the value was written, {@code false} when the stored number is greater or equal
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-string; an error when the stored string is not an integer
+     */
+    public CompletableFuture<Boolean> setIfGreater(K key, long value) {
+        return send(args().w(Cmd.SET).k(key).l(value).w(Cmd.IFGT), Reply.OK_BOOL);
+    }
+
+    /**
+     * Sends the Ruvio command {@code SET key value IFGT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is greater than the stored integer (a watermark, a version, the highest bid).
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @param expiry the expiry to apply
+     * @return {@code true} when written, {@code false} when refused
+     */
+    public CompletableFuture<Boolean> setIfGreater(K key, long value, SetOptions expiry) {
+        Args a = args().w(Cmd.SET).k(key).l(value).w(Cmd.IFGT);
+        expiry.writeExpiry(a);
+        return send(a, Reply.OK_BOOL);
+    }
+
+    /**
+     * Sends the Ruvio command {@code SET key value IFLT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is smaller than the stored integer (the lowest price, the earliest deadline).
+     * Any TTL is cleared; use the overload with {@code SetOptions} to set one.
+     *
+     * <pre>{@code
+     * boolean lowered = client.setIfLess("best:price", 4_99L);
+     * }</pre>
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @return {@code true} when the value was written, {@code false} when the stored number is smaller or equal
+     * @throws RuvioServerException {@code WRONGTYPE} when the key holds a non-string; an error when the stored string is not an integer
+     */
+    public CompletableFuture<Boolean> setIfLess(K key, long value) {
+        return send(args().w(Cmd.SET).k(key).l(value).w(Cmd.IFLT), Reply.OK_BOOL);
+    }
+
+    /**
+     * Sends the Ruvio command {@code SET key value IFLT [EX|PX|EXAT|PXAT|KEEPTTL]}: writes when the key is missing or {@code value} is smaller than the stored integer (the lowest price, the earliest deadline).
+     *
+     * @param key the key to write
+     * @param value the new number
+     * @param expiry the expiry to apply
+     * @return {@code true} when written, {@code false} when refused
+     */
+    public CompletableFuture<Boolean> setIfLess(K key, long value, SetOptions expiry) {
+        Args a = args().w(Cmd.SET).k(key).l(value).w(Cmd.IFLT);
+        expiry.writeExpiry(a);
+        return send(a, Reply.OK_BOOL);
+    }
+
+    /**
      * Sends the Ruvio command {@code SETV key value}: starts a versioned string and returns its version.
      * It works on a missing key or a plain string (the key becomes versioned, version 1). Once a key is
      * versioned, later writes must use {@link #setv(Object, Object, long)} with the current version.

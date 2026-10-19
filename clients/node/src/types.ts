@@ -10,7 +10,7 @@ export type Value = string | Buffer | number;
  * Options for {@link Commands.set}.
  *
  * Only one expiry option is sent, checked in the order `ex`, `px`, `exat`, `pxat`, `keepTtl`.
- * `nx` wins over `xx`. `ifEq` cannot be combined with `nx`, `xx` or `get`.
+ * `nx` wins over `xx`. `ifEq`, `ifGt` and `ifLt` cannot be combined with `nx`, `xx` or `get`.
  */
 export interface SetOptions {
   /** Time to live in seconds (`EX`). Must be positive. */
@@ -31,6 +31,10 @@ export interface SetOptions {
   get?: boolean;
   /** Ruvio compare-and-set (`IFEQ`): write only when the current string equals this value; otherwise the call returns `null`. */
   ifEq?: Value;
+  /** Ruvio watermark (`IFGT`): write the integer `value` only when the key is missing or `value` is greater than the stored integer; otherwise `null`. */
+  ifGt?: boolean;
+  /** Ruvio watermark (`IFLT`): like `ifGt` but writes when `value` is smaller than the stored integer. */
+  ifLt?: boolean;
 }
 
 /**

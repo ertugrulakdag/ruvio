@@ -6,6 +6,7 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 - TTL on create: `INCR`, `DECR`, `INCRBY`, `DECRBY`, `INCRBYFLOAT`, `HINCRBY`, `ZADD`, `ZINCRBY`, `GEOADD`, `XADD`, `SETBIT`, `JSON.SET` and `BF.INSERT` take `EX seconds` or `PX milliseconds`. The deadline is set only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record, so a crash never leaves the key without its TTL.
 - `EXPIRE`, `PEXPIRE`, `EXPIREAT` and `PEXPIREAT` accept `NX`, `XX`, `GT` or `LT`. `SADD`, `LPUSH` and the other variadic writes use `EXPIRE key ttl NX` in the same pipeline or `MULTI`.
+- New: `SET key value IFGT|IFLT [EX|PX|EXAT|PXAT|KEEPTTL]` writes an integer only when the key is missing or the number is greater (`IFGT`) or smaller (`IFLT`) than the stored one, so a watermark, version or best price needs no script. It answers `OK` or a null bulk; a non-integer argument or stored string is an error and writes nothing. Typed options in all six clients.
 - New `TRANSFER source destination amount [MAX cap]` and `HTRANSFER key from to amount [MAX cap]`: move an integer amount between two keys (same slot) or two fields of a hash only when the source holds enough, in one WAL record. Reply `[source, destination]` after, or a null bulk and no write.
 
 ## 0.3.4 - 2026-10-17

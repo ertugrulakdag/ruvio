@@ -43,6 +43,18 @@ func TestLiveStrings(t *testing.T) {
 	v, _, _ = c.Get(ctx, "a")
 	eq(t, v, "5")
 
+	// SET ... IFGT / IFLT
+	eq(t, mb(c.SetIfGreater(ctx, "wm", 10, SetOptions{})), true)
+	eq(t, mb(c.SetIfGreater(ctx, "wm", 10, SetOptions{})), false)
+	eq(t, mb(c.SetIfGreater(ctx, "wm", 11, SetOptions{TTL: time.Minute})), true)
+	if mi(c.TTL(ctx, "wm")) <= 0 {
+		t.Fatal("IFGT lost ttl")
+	}
+	eq(t, mb(c.SetIfLess(ctx, "wm", 12, SetOptions{})), false)
+	eq(t, mb(c.SetIfLess(ctx, "wm", -1, SetOptions{})), true)
+	v, _, _ = c.Get(ctx, "wm")
+	eq(t, v, "-1")
+
 	noErr(t, c.SetEX(ctx, "ex", "v", 100*time.Second))
 	if n := mi(c.TTL(ctx, "ex")); n < 99 || n > 100 {
 		t.Fatalf("setex ttl %d", n)
