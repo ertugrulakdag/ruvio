@@ -379,12 +379,15 @@ fn record_begin(state: &ShardState, session: &MoveSession) -> Result<(), String>
         return Ok(());
     };
 
-    history
-        .begin(session.first, session.last, session.to as u16, since)
+    // Changed in memory only once the file holds it, so a failed write leaves no trace.
+    let mut next = history.clone();
+
+    next.begin(session.first, session.last, session.to as u16, since)
         .map_err(|error| format!("slot table refused the move: {error}"))?;
-    history
-        .save(data_dir)
-        .map_err(|error| format!("could not write the slot table: {error}"))
+    next.save(data_dir)
+        .map_err(|error| format!("could not write the slot table: {error}"))?;
+    *history = next;
+    Ok(())
 }
 
 /// Target: logs and applies each key as the source holds it. A key absent from a database
@@ -506,11 +509,20 @@ fn take_over(state: &Rc<ShardState>, session: &Arc<MoveSession>) {
         let mut mover = forwarding.fabric.mover.lock();
 
         if let Some((history, data_dir)) = mover.durable.as_mut() {
-            let saved = history
+            // As in `record_begin`: memory follows the file, never leads it.
+            let mut next = history.clone();
+            let saved = next
                 .complete(session.until.load(Ordering::Acquire))
                 .map_err(str::to_string)
-                .and_then(|()| history.save(data_dir).map_err(|error| error.to_string()));
+                .and_then(|()| next.save(data_dir).map_err(|error| error.to_string()));
 
+            if saved.is_ok() {
+                *history = next;
+            } else if let Err(error) = history.save(data_dir) {
+                // The failed write may have replaced the file before it failed; without the
+                // old table back, a restart would give the range to the target.
+                error!(%error, "could not restore the slot table after a failed move");
+            }
             if let Err(error) = saved {
                 drop(mover);
                 *outcome = Outcome::Failed(format!("could not record the move: {error}"));
