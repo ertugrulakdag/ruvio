@@ -5,6 +5,7 @@ Notable changes to the Go client `github.com/salihcantekin/ruvio/clients/go`. A 
 ## Unreleased
 
 - `ZPopByScore` and `ZMoveDue` send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call.
+- New `Transfer`, `TransferMax`, `HTransfer` and `HTransferMax` for the server's `TRANSFER` and `HTRANSFER`: both balances after the move, and `ok == false` when nothing moved.
 
 ## v0.2.0 - 2026-10-17
 

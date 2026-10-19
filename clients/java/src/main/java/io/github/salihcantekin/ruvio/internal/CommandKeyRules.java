@@ -34,7 +34,7 @@ public final class CommandKeyRules {
     public static final Map<String, Rule> RULES;
 
     static {
-        Map<String, Rule> rules = new HashMap<>(520);
+        Map<String, Rule> rules = new HashMap<>(524);
         rules.put("ACL", new Rule(0, 0, 0, 0, new String[0], 0));
         rules.put("APPEND", new Rule(1, 1, 1, 1, new String[0], 13));
         rules.put("AUTH", new Rule(0, 0, 0, 0, new String[0], 4));
@@ -122,6 +122,7 @@ public final class CommandKeyRules {
         rules.put("HSET", new Rule(1, 1, 1, 1, new String[0], 13));
         rules.put("HSETNX", new Rule(1, 1, 1, 1, new String[0], 13));
         rules.put("HSTRLEN", new Rule(1, 1, 1, 1, new String[0], 6));
+        rules.put("HTRANSFER", new Rule(1, 1, 1, 1, new String[0], 13));
         rules.put("HTTL", new Rule(1, 1, 1, 1, new String[0], 6));
         rules.put("HVALS", new Rule(1, 1, 1, 1, new String[0], 2));
         rules.put("IDEM", new Rule(1, 1, 1, 1, new String[0], 9));
@@ -243,6 +244,7 @@ public final class CommandKeyRules {
         rules.put("SWAPDB", new Rule(0, 0, 0, 0, new String[0], 5));
         rules.put("TAKE", new Rule(1, 1, 1, 1, new String[0], 5));
         rules.put("TOUCH", new Rule(1, 1, -1, 1, new String[0], 6));
+        rules.put("TRANSFER", new Rule(1, 1, 2, 1, new String[0], 13));
         rules.put("TTL", new Rule(1, 1, 1, 1, new String[0], 6));
         rules.put("TYPE", new Rule(1, 1, 1, 1, new String[0], 6));
         rules.put("UNLINK", new Rule(1, 1, -1, 1, new String[0], 1));

@@ -615,6 +615,8 @@ const TEMPLATES: &[&str] = &[
     "COPY @str @missing DB 1",
     "LIMIT @missing 10 1000",
     "TAKE @str 1",
+    "TRANSFER @str @missing 1",
+    "HTRANSFER @hash f g 1",
     "ONCE @missing 1000",
     "LEASE @missing 1000",
     "SEMAPHORE @missing 10 1000",

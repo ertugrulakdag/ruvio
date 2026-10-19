@@ -5,6 +5,7 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 ## Unreleased
 
 - `PopSortedSetByScoreAsync` and `MoveDueSortedSetAsync` send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call. Not compiled or run in the cloud session that added them.
+- New `TransferAsync(source, destination, amount, max)` and `TransferHashFieldAsync(key, from, to, amount, max)` for the server's `TRANSFER` and `HTRANSFER`: they return the two balances after the move, or `null` when nothing moved. Not built or tested in the environment this was written in (no .NET SDK).
 
 ## 0.3.4 - 2026-10-17
 

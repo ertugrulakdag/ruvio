@@ -99,6 +99,24 @@ func (c *cmds) intNil(ctx context.Context, r *request) (int64, bool, error) {
 	return n, err == nil, err
 }
 
+// pairNil reads the two-integer reply of TRANSFER and HTRANSFER; a nil reply is ok == false.
+func (c *cmds) pairNil(ctx context.Context, r *request) (first, second int64, ok bool, err error) {
+	v, err := c.ex.exec(ctx, r)
+	if err != nil || v.Kind == KindNil {
+		return 0, 0, false, err
+	}
+	if !v.isAgg() || len(v.Array) != 2 {
+		return 0, 0, false, unexpected(v)
+	}
+	if first, err = v.Array[0].AsInt64(); err != nil {
+		return 0, 0, false, err
+	}
+	if second, err = v.Array[1].AsInt64(); err != nil {
+		return 0, 0, false, err
+	}
+	return first, second, true, nil
+}
+
 func (c *cmds) boolR(ctx context.Context, r *request) (bool, error) {
 	n, err := c.intR(ctx, r)
 	return n == 1, err

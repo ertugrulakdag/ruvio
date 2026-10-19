@@ -5,6 +5,7 @@ Notable changes to the Rust client crate `ruvio-client`. New entries go under "U
 ## Unreleased
 
 - `zpopbyscore` and `zmovedue` send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call.
+- New `transfer` and `htransfer` for the server's `TRANSFER` and `HTRANSFER`: they return `Some((a, b))` after the move, or `None` when nothing moved.
 
 ## 0.4.0 - 2026-10-17
 

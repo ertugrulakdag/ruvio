@@ -5,6 +5,7 @@ Notable changes to the Python client `ruvio-client` on PyPI. New entries go unde
 ## Unreleased
 
 - `zpopbyscore` and `zmovedue` send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call.
+- New `transfer(source, destination, amount, max=None)` and `htransfer(key, from_field, to_field, amount, max=None)` for the server's `TRANSFER` and `HTRANSFER`: they return a `(a, b)` tuple after the move, or `None` when nothing moved.
 
 ## 0.1.2 - 2026-10-17
 

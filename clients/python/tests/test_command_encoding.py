@@ -259,3 +259,14 @@ def test_due_commands_encode_their_options():
 
     assert r.zmovedue("{t}z", "{t}l", "+inf", count=4) == 2
     assert r.args == ["ZMOVEDUE", "{t}z", "{t}l", "+inf", "COUNT", "4"]
+def test_transfer_commands_encode_the_optional_cap_and_return_a_pair():
+    r = Rec(reply=[6, 4])
+    assert r.transfer("a", "b", 4) == (6, 4)
+    assert r.args == ["TRANSFER", "a", "b", "4"]
+    assert r.transfer("a", "b", 4, max=9) == (6, 4)
+    assert r.args == ["TRANSFER", "a", "b", "4", "MAX", "9"]
+    assert r.htransfer("h", "f", "g", 1, max=5) == (6, 4)
+    assert r.args == ["HTRANSFER", "h", "f", "g", "1", "MAX", "5"]
+    r.reply = None
+    assert r.transfer("a", "b", 4) is None
+    assert r.htransfer("h", "f", "g", 1) is None
