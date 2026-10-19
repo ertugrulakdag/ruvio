@@ -177,6 +177,16 @@ pub(super) fn apply_sharded_pubsub(
     output: &mut BoundedOutput,
     command: &Command<'_>,
 ) -> io::Result<bool> {
+    // Inside MULTI a PUBLISH is queued (and sent at EXEC); SPUBLISH is refused there.
+    if session.is_multi()
+        && matches!(
+            command,
+            Command::Publish { .. } | Command::ShardPublish { .. }
+        )
+    {
+        return Ok(false);
+    }
+
     let (channels, subscribe, _) = match command {
         Command::ShardPublish { channel, message } => {
             let delivered = publish_sharded(state, channel.as_ref(), message.as_ref());

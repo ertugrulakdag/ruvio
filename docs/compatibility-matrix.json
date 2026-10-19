@@ -1932,7 +1932,7 @@
       "family": "transactions",
       "status": "supported",
       "same_slot": true,
-      "limitations": "Same-slot, shard-local only. At most 1,024 queued commands.",
+      "limitations": "Same-slot, shard-local only. At most 1,024 queued commands. EVAL, EVALSHA and FCALL queue and run in their place at EXEC, their writes in the transaction's one WAL record; a queued PUBLISH is sent after EXEC is recorded (DISCARD sends nothing). Not queueable: blocking commands, SELECT, SPUBLISH, SUBSCRIBE and the other subscribe commands, SCRIPT and FUNCTION management, AUTH, HELLO, ACL, CONFIG SET/REWRITE, SAVE/BGSAVE, REPLICAOF/ROLE and cluster discovery.",
       "coverage": [
         "scripts/resp_conformance.py",
         "scripts/redis_differential.py"
