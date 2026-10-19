@@ -940,6 +940,7 @@ const ACL_SUBCOMMANDS: &[&str] = &[
     "config|set",
     "ruvio|bigkeys",
     "ruvio|hotkeys",
+    "ruvio|moveslots",
 ];
 
 fn known_subcommand(name: &str) -> Option<&'static str> {
