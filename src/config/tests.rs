@@ -1225,3 +1225,31 @@ fn replication_leaves_the_host_only_for_a_non_loopback_peer() {
     replication.primary_name = Some(("primary.internal".into(), 7000));
     assert!(replication.leaves_the_host());
 }
+
+#[test]
+fn replication_tls_needs_its_material_and_stops_the_cleartext_warning() {
+    let mut config = AppConfig::default();
+
+    config
+        .apply_toml("[persistence]\nprofile = \"always\"\n")
+        .unwrap();
+
+    config.replication.role = ReplicationRole::Replica;
+    config.replication.primary_name = Some(("primary.internal".into(), 7000));
+    assert!(config.replication.leaves_the_host());
+
+    config.replication.tls = true;
+    assert!(!config.replication.leaves_the_host());
+    assert!(config.validate().unwrap_err().contains("tls_ca"));
+
+    config.replication.tls_ca = "ca.pem".into();
+    config.replication.tls_client_cert = "client.pem".into();
+    assert!(config.validate().unwrap_err().contains("go together"));
+
+    config.replication.tls_client_cert = Default::default();
+    config.validate().unwrap();
+
+    config.replication.role = ReplicationRole::Primary;
+    config.replication.listen = Some("127.0.0.1:7000".parse().unwrap());
+    assert!(config.validate().unwrap_err().contains("tls_cert"));
+}

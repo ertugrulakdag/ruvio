@@ -92,6 +92,7 @@ fn spawn_shipper(
         newer_epoch: Arc::clone(&state.newer_epoch),
         snapshot_requests: Arc::clone(&state.snapshot_requests),
         announce: client_endpoint(&state.published_config, shard_id),
+        tls: replication_acceptor(state)?,
     })
     .map(Some)
 }
@@ -117,6 +118,32 @@ pub(super) fn client_endpoint(
             port,
         }
     })
+}
+
+fn replication_acceptor(state: &ShardState) -> io::Result<Option<Arc<crate::tls::TlsAcceptor>>> {
+    let config = &state.published_config;
+
+    if !config.replication.tls {
+        return Ok(None);
+    }
+
+    Ok(crate::tls::TlsAcceptor::from_security(&config.security)?.map(Arc::new))
+}
+
+fn replication_client(state: &ShardState) -> io::Result<Option<Arc<crate::tls::ReplicaTlsClient>>> {
+    let replication = &state.published_config.replication;
+
+    if !replication.tls {
+        return Ok(None);
+    }
+
+    let pair = (!replication.tls_client_cert.as_os_str().is_empty()).then_some((
+        replication.tls_client_cert.as_path(),
+        replication.tls_client_key.as_path(),
+    ));
+
+    crate::tls::ReplicaTlsClient::load(&replication.tls_ca, pair)
+        .map(|client| Some(Arc::new(client)))
 }
 
 /// Starts following `primary` (the base address; this shard dials its own port).
@@ -156,6 +183,7 @@ fn spawn_reader(
         announce: client_endpoint(&state.published_config, shard_id)
             .filter(|_| state.published_config.replication.announced),
         peers: Arc::clone(&state.durable_acks),
+        tls: replication_client(state)?,
     });
 
     *state.replica_frames.borrow_mut() = Some(outbound);
