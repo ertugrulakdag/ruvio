@@ -604,6 +604,12 @@ to it. `tls_client_auth` / `RUVIO_TLS_CLIENT_AUTH` / `--tls-client-auth`
 rejects a handshake that does not present one. Neither setting is consulted
 on a plaintext connection.
 
+TLS covers client connections only. The replication port (WAL and snapshot
+stream, and the replication password in its handshake) is not encrypted, even
+when `tls_cert` is set. Keep it on a private network, a VPN or a tunnel; with
+TLS on and a replication listener or primary on another machine, the server logs
+a warning at startup. TLS on the replication port is tracked in issue #37.
+
 ACL users are configured in `[[security.users]]` with Redis-style rule tokens:
 `on`/`off`, `>password`, `nopass`, `~pattern`, `+@category`, `-@category`,
 `+command`, and `-command`. The implicit `default` user is `on nopass ~* +@all`

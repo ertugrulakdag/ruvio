@@ -2414,3 +2414,21 @@ fn only_announced_replicas_that_acknowledged_are_listed() {
     acks.set_primary(Some(endpoint(6379)));
     assert_eq!(acks.primary(), Some(endpoint(6379)));
 }
+
+#[test]
+fn dial_address_adds_the_shard_id_to_the_port_and_refuses_an_overflow() {
+    let directory = tempfile::tempdir().unwrap();
+    let primary: SocketAddr = "127.0.0.1:1".parse().unwrap();
+    let (mut link, _outbound) = link_to(primary, directory.path());
+
+    link.primary_name = Some(("127.0.0.1".to_owned(), 7000));
+    link.shard_id = 3;
+    assert_eq!(dial_address(&link).unwrap().port(), 7003);
+
+    link.primary_name = Some(("127.0.0.1".to_owned(), 65_535));
+    assert!(dial_address(&link).is_err());
+
+    link.primary_name = Some(("127.0.0.1".to_owned(), 7000));
+    link.shard_id = 70_000;
+    assert!(dial_address(&link).is_err());
+}

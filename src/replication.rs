@@ -2283,7 +2283,15 @@ fn dial_address(link: &ReplicaLink) -> io::Result<SocketAddr> {
         return Ok(link.primary);
     };
 
-    let port = port.wrapping_add(link.shard_id as u16);
+    let port = u16::try_from(link.shard_id)
+        .ok()
+        .and_then(|shard| port.checked_add(shard))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "replication port plus shard id is above 65535",
+            )
+        })?;
     let mut addresses = (host.as_str(), port).to_socket_addrs()?;
 
     addresses.next().ok_or_else(|| {

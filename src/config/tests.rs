@@ -1205,3 +1205,23 @@ fn the_configuration_tables_show_every_live_setting() {
         assert_eq!(sorted, live);
     }
 }
+
+#[test]
+fn replication_leaves_the_host_only_for_a_non_loopback_peer() {
+    let mut replication = ReplicationConfig::default();
+
+    assert!(!replication.leaves_the_host());
+
+    replication.role = ReplicationRole::Primary;
+    replication.listen = Some("127.0.0.1:7000".parse().unwrap());
+    assert!(!replication.leaves_the_host());
+    replication.listen = Some("10.0.0.5:7000".parse().unwrap());
+    assert!(replication.leaves_the_host());
+
+    replication.role = ReplicationRole::Replica;
+    replication.primary = Some("127.0.0.1:7000".parse().unwrap());
+    assert!(!replication.leaves_the_host());
+    replication.primary = None;
+    replication.primary_name = Some(("primary.internal".into(), 7000));
+    assert!(replication.leaves_the_host());
+}

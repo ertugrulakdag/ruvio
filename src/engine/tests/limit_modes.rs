@@ -309,3 +309,15 @@ fn limit_options_are_validated() {
         assert!(parse_command(&frame).is_err(), "{parts:?} should not parse");
     }
 }
+
+#[test]
+fn a_huge_fixed_maximum_never_reports_a_negative_remaining_count() {
+    let mut shard = KvShard::with_clock(TestClock::new(10_000));
+    let mut log = DatabaseLog::default();
+    let huge = "18446744073709551615";
+
+    assert_eq!(
+        call(&mut shard, &mut log, &["LIMIT", "k", huge, "1000"]),
+        Response::Integer(i64::MAX)
+    );
+}
