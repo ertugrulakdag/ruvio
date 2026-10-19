@@ -1,4 +1,4 @@
-FROM rust:1.97.1-slim-bookworm AS builder
+FROM rust:1.97.1-slim-bookworm@sha256:2775a09d208ff0d7c1f50490c45b62db929e87ba1dcbc3f2132ac71a704bcdd3 AS builder
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential \
@@ -8,7 +8,7 @@ WORKDIR /src
 COPY . .
 RUN cargo build --locked --release --bin ruvio --bin ruvio-ctl
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
 
 LABEL org.opencontainers.image.title="Ruvio" \
       org.opencontainers.image.description="Ruvio server: a memory-first key-value store that speaks the Redis protocol (RESP2)." \
@@ -36,5 +36,7 @@ ENV RUVIO_PROTECTED_MODE=false
 ENV RUVIO_CONFIG=/data/ruvio.toml
 VOLUME ["/data"]
 EXPOSE 6379
+# PING over the RESP port. With TLS on, override with `ruvio-ctl ping --connect-only`.
+HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=3 CMD ["ruvio-ctl", "ping"]
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/ruvio"]
