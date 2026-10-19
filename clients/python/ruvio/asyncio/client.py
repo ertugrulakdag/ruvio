@@ -44,6 +44,7 @@ from .._commands import Commands, Conv, KeyT, KeyTypeT
 from .._models import Message
 from .._pipeline import PipelineBase
 from .._resp import NEED, Push, encode, make_parser
+from .._cluster import ReadPolicy, policy_code
 from ..client import _SUB_KINDS, _message, _Options, _parse_seeds, parse_url
 from ..errors import ConnectionError, LockError, ResponseError, RuvioError, TimeoutError, WatchError
 
@@ -291,6 +292,9 @@ class Ruvio(Commands):
             cannot be reached is skipped, while a refused ``AUTH`` or ``SELECT`` raises at once. After a lost
             connection the next reconnect starts with the seed after the one that dropped. With
             ``cluster=True`` the seeds are also asked for the slot table when no known node answers.
+        read_policy: Cluster clients only: where reads go. A :class:`ruvio.ReadPolicy` or its string value:
+            ``"primary"`` (default), ``"prefer-replica"`` or ``"replica"``. See
+            :class:`ruvio.asyncio.ClusterRuvio`. Ignored by a standalone server and without ``cluster=True``.
 
     The connection opens on the first command, or on ``await client.connect()`` / ``async with``.
 
@@ -327,6 +331,7 @@ class Ruvio(Commands):
         on_push: Optional[Callable[[List[Any]], None]] = None,
         cluster: bool = False,
         seeds: Optional[Sequence[Union[str, Tuple[str, int]]]] = None,
+        read_policy: Union[None, str, ReadPolicy] = None,
     ) -> None:
         """Creates the client (nothing is connected yet). See the class docstring for every argument.
 
@@ -345,15 +350,17 @@ class Ruvio(Commands):
             cluster: Route by key over several shards.
             seeds: ``"host:port"`` strings or ``(host, port)`` tuples tried in order in place of
                 ``host``/``port``.
+            read_policy: ``"primary"`` (default), ``"prefer-replica"`` or ``"replica"``; cluster clients only.
 
         Raises:
-            ValueError: A seed has an empty host or a port outside 1-65535.
+            ValueError: A seed has an empty host or a port outside 1-65535, or ``read_policy`` is unknown.
         """
         seed_list = _parse_seeds(seeds)
         if seed_list:
             if unix_socket_path:
                 raise ValueError("seeds cannot be combined with unix_socket_path")
             host, port = seed_list[0]
+        policy_code(read_policy)  # rejects an unknown value now rather than at the first command
         self._st = _State(
             _Options(
                 host=host,
@@ -367,6 +374,7 @@ class Ruvio(Commands):
                 unix_socket_path=unix_socket_path,
                 parser=parser,
                 on_push=on_push,
+                read_policy=read_policy,
             )
         )
         self._decode = decode_responses

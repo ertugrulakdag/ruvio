@@ -50,6 +50,8 @@ public final class RuvioOptions {
     public final Consumer<Object> pushListener;
     /** Whether cluster routing was requested. */
     public final boolean cluster;
+    /** Where a cluster client sends read-only commands (default {@link ReadPolicy#PRIMARY}); ignored when standalone. */
+    public final ReadPolicy readPolicy;
 
     private RuvioOptions(Builder b) {
         this.host = b.host;
@@ -64,11 +66,12 @@ public final class RuvioOptions {
         this.maxInFlight = b.maxInFlight;
         this.pushListener = b.pushListener;
         this.cluster = b.cluster;
+        this.readPolicy = b.readPolicy;
     }
 
     /**
      * Starts a builder with the defaults: host {@code 127.0.0.1}, port 6379, no authentication,
-     * database 0, 5 s connect timeout, no command timeout, 16384 outstanding replies, standalone.
+     * database 0, 5 s connect timeout, no command timeout, 16384 outstanding replies, standalone, reads from primaries.
      *
      * @return a new builder
      */
@@ -157,6 +160,7 @@ public final class RuvioOptions {
         b.maxInFlight = maxInFlight;
         b.pushListener = pushListener;
         b.cluster = cluster;
+        b.readPolicy = readPolicy;
         return b;
     }
 
@@ -178,6 +182,7 @@ public final class RuvioOptions {
         private int maxInFlight = 16_384;
         private Consumer<Object> pushListener;
         private boolean cluster;
+        private ReadPolicy readPolicy = ReadPolicy.PRIMARY;
 
         /**
          * Sets the server host.
@@ -337,6 +342,19 @@ public final class RuvioOptions {
          */
         public Builder cluster(boolean enabled) {
             this.cluster = enabled;
+            return this;
+        }
+
+        /**
+         * Sets where a cluster client sends read-only commands; see {@link ReadPolicy}. Reads with a key go to one
+         * replica of the key's shard, picked at random whenever the slot map is loaded. Replication is asynchronous,
+         * so a replica read may miss recent writes, including your own. Ignored by a standalone connection.
+         *
+         * @param policy the policy (default {@link ReadPolicy#PRIMARY})
+         * @return this builder
+         */
+        public Builder readPolicy(ReadPolicy policy) {
+            this.readPolicy = java.util.Objects.requireNonNull(policy, "policy");
             return this;
         }
 

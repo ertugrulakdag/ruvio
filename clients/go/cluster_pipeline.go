@@ -42,6 +42,9 @@ func (cl *cluster) execMany(ctx context.Context, r *request, n int) ([]Value, er
 	defer pipePool.Put(s)
 	s.offs, s.target = s.offs[:0], s.target[:0]
 	seedIndex := len(t.nodes) // keyless commands, and slots without an owner, go to the seed
+	// A pipeline goes to replicas only when every command in it is a read, so it never reads
+	// its own writes from a replica that has not received them.
+	replicaReads := cl.policy != ReadPrimary
 	cur := -1
 	off := 0
 	for i := 0; i < n; i++ {
@@ -57,6 +60,9 @@ func (cl *cluster) execMany(ctx context.Context, r *request, n int) ([]Value, er
 			return nil, ErrProtocol
 		}
 		off += end
+		if replicaReads && !spec.reads() {
+			replicaReads = false
+		}
 		if upperEq(cmdName(r.buf[off-end:]), "MULTI") {
 			sawMulti = true
 		}
@@ -91,6 +97,9 @@ func (cl *cluster) execMany(ctx context.Context, r *request, n int) ([]Value, er
 		s.target = append(s.target, cur)
 	}
 	s.offs = append(s.offs, off)
+	if replicaReads && n > 0 {
+		return cl.pipeReads(ctx, t, r, n, s, split)
+	}
 	if sawMulti && differ {
 		putReq(r)
 		return nil, fmt.Errorf("%w (MULTI)", ErrCrossSlot)
@@ -109,6 +118,53 @@ func (cl *cluster) execMany(ctx context.Context, r *request, n int) ([]Value, er
 		return cl.pipeMany(ctx, t, r, n, split)
 	}
 	return cl.pipeSpread(ctx, t, r, n, s)
+}
+
+// pipeReads sends a pipeline of reads: each command goes to the replica of its slot's node
+// (or to the primary where there is none), keyless commands to the seed. s holds the frame
+// offsets of the pipeline. A split command in it is read on its own, so the pipeline runs one
+// command at a time. It recycles r.
+func (cl *cluster) pipeReads(ctx context.Context, t *topology, r *request, n int, s *pipeScratch, split bool) ([]Value, error) {
+	if split {
+		return cl.pipeReadsEach(ctx, r, n, s)
+	}
+	s.target = s.target[:0]
+	for i := 0; i < n; i++ {
+		_, slot, _, _ := routeFrame(r.buf[s.offs[i]:])
+		ni := len(t.nodes) // the seed
+		if slot >= 0 {
+			rt, err := cl.replicaFor(ctx, t, slot)
+			if err != nil {
+				putReq(r)
+				return nil, err
+			}
+			if o := int(t.owner[slot]); rt != nil {
+				ni = o + len(t.nodes) + 1 // the replica of node o
+			} else if o != noOwner {
+				ni = o
+			}
+		}
+		s.target = append(s.target, ni)
+	}
+	return cl.pipeSpread(ctx, t, r, n, s)
+}
+
+// pipeReadsEach runs the commands of a pipeline of reads one after the other, each through
+// the routing of a plain command.
+func (cl *cluster) pipeReadsEach(ctx context.Context, r *request, n int, s *pipeScratch) ([]Value, error) {
+	out := make([]Value, n)
+	for i := 0; i < n; i++ {
+		sub := getReq()
+		sub.buf = append(sub.buf, r.buf[s.offs[i]:s.offs[i+1]]...)
+		v, err := cl.exec(ctx, sub)
+		if err != nil && v.Kind != KindError {
+			putReq(r)
+			return nil, err
+		}
+		out[i] = v
+	}
+	putReq(r)
+	return out, nil
 }
 
 // pipeScratch is the per-pipeline routing state of execMany, pooled so a pipeline spread over
@@ -143,6 +199,9 @@ func (cl *cluster) pipeSpread(ctx context.Context, t *topology, r *request, n in
 		}
 	}
 	nodes := len(t.nodes) + 1
+	if len(t.read) > 0 {
+		nodes += len(t.nodes) // the replicas follow the seed
+	}
 	for len(s.subs) < nodes {
 		s.subs = append(s.subs, nil)
 		s.vals = append(s.vals, nil)
@@ -177,6 +236,8 @@ func (cl *cluster) pipeSpread(ctx context.Context, t *topology, r *request, n in
 		node := cl.seed
 		if ni < len(t.nodes) {
 			node = t.nodes[ni]
+		} else if ni > len(t.nodes) {
+			node = t.read[ni-len(t.nodes)-1].node
 		}
 		// A non-nil reply slice marks a pipeline for the reader, even for one command.
 		if sub.vals = s.vals[ni][:0]; sub.vals == nil {

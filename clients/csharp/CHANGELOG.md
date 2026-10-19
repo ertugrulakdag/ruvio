@@ -4,6 +4,7 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 
 ## Unreleased
 
+- `RuvioClientOptions.ReadPolicy` (`ReadPolicy.Primary` by default, `PreferReplica`, `Replica`): a cluster client sends reads (commands the server flags `readonly` and not blocking) to one replica per shard, picked when the slot map loads. Pipelines go to replicas only when every command reads. A replica that cannot be opened or answers `LOADING` is skipped until the next load. `Ruvio.Client.AspNetCore` is unchanged.
 - `ReplicaOfAsync(host, port)`, `ReplicaOfNoOneAsync(force)` and `GetRoleAsync()` for `REPLICAOF` and `ROLE`.
 - `RuvioClientOptions.Seeds`: `host:port` seed addresses tried in order instead of `Host`/`Port`. A dropped standalone connection reconnects starting with the next seed; a cluster reloads its slot map from the other known nodes and then the seeds when no open socket answers. `Ruvio.Client.AspNetCore` binds a `Seeds` array from configuration.
 - TTL on create: overloads that take a `TimeSpan ttl` and set the deadline only when the call creates the key (an existing key keeps its deadline; whole seconds are sent as `EX`, otherwise `PX`): `IncrementAsync`, `DecrementAsync`, `IncrementByAsync`, `DecrementByAsync`, `IncrementWithLimitAsync`, `IncrementByFloatAsync`, `IncrementHashFieldAsync`, `IncrementSortedSetAsync`, `SetBitAsync`, `AddSortedSetAsync`, `AddGeoAsync`, `AddStreamEntryAsync` and `JsonSetAsync`; `BloomInsertOptions.Ttl` for `BF.INSERT`. A zero or negative `ttl` throws `ArgumentOutOfRangeException`.

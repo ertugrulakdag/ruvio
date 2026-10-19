@@ -32,6 +32,8 @@ public final class Link implements AutoCloseable {
     private volatile int current;
     private volatile Connection connection;
     private volatile boolean closed;
+    /** Send {@code READONLY} right after every (re)connect: this is a replica that serves reads. */
+    private final boolean readOnly;
     /** The database selected on (re)connect; follows {@code SELECT}. */
     public volatile int database;
 
@@ -51,11 +53,22 @@ public final class Link implements AutoCloseable {
      * @param lazy {@code true} to open the socket on the first command (cluster nodes)
      */
     public Link(RuvioOptions options, boolean lazy) {
-        this(options, lazy, addressesOf(options));
+        this(options, lazy, addressesOf(options), false);
     }
 
-    private Link(RuvioOptions options, boolean lazy, Address[] addresses) {
+    /**
+     * Creates a lazily opened link to a replica: {@code READONLY} is sent right after every (re)connect.
+     *
+     * @param options the connection settings, naming the replica
+     * @return the link
+     */
+    public static Link replica(RuvioOptions options) {
+        return new Link(options, true, addressesOf(options), true);
+    }
+
+    private Link(RuvioOptions options, boolean lazy, Address[] addresses, boolean readOnly) {
         this.options = options;
+        this.readOnly = readOnly;
         this.addresses = addresses;
         this.database = options.database;
         this.name = "ruvio-" + IDS.incrementAndGet();
@@ -84,7 +97,7 @@ public final class Link implements AutoCloseable {
         RuvioConnectionException last = null;
         for (Address a : addressesOf(options)) {
             try {
-                return new Link(options, false, new Address[] {a});
+                return new Link(options, false, new Address[] {a}, false);
             } catch (RuvioConnectionException e) {
                 last = e;
             }
@@ -187,6 +200,10 @@ public final class Link implements AutoCloseable {
             }
             try {
                 handshake(c, options, db);
+                if (readOnly && remember) {
+                    // Redis replicas serve reads only to connections that sent READONLY; Ruvio replicas serve them anyway.
+                    await(new Raw(c).send(Reply.OK, "READONLY"), options.connectTimeoutMillis);
+                }
             } catch (RuntimeException e) {
                 c.close();
                 throw e;

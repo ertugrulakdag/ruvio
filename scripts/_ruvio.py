@@ -133,6 +133,27 @@ def wait_ready(
         time.sleep(0.05)
 
 
+def wait_replicas(port: int, replicas: int, host: str = "127.0.0.1", timeout: float = 20.0) -> None:
+    """Waits until every range in `CLUSTER SLOTS` on `host:port` lists `replicas` replicas."""
+    deadline = time.monotonic() + timeout
+    last = "no answer"
+    while True:
+        try:
+            with socket.create_connection((host, port), timeout=2) as client:
+                prefix, ranges = request(client.makefile("rwb"), b"CLUSTER", b"SLOTS")
+                if prefix != b"*" or not ranges:
+                    last = f"CLUSTER SLOTS answered {prefix!r}"
+                elif all(len(entry[1]) >= 3 + replicas for entry in ranges):
+                    return
+                else:
+                    last = "a range has too few replicas"
+        except (OSError, AssertionError, ValueError, TypeError) as error:
+            last = f"{type(error).__name__}: {error}"
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"{host}:{port} did not list {replicas} replica(s) within {timeout} s ({last})")
+        time.sleep(0.05)
+
+
 def _serves(stream, data_dir: str) -> bool:
     prefix, value = request(stream, b"CONFIG", b"GET", b"dir")
     if prefix != b"*" or not value or len(value) < 2 or value[1][1] is None:
@@ -151,7 +172,19 @@ def main(argv: list[str]) -> int:
     ready.add_argument("--pid", type=int, help="fail at once when this process exits")
     ready.add_argument("--data-dir", help="the data directory the server must report")
     ready.add_argument("--cluster", action="store_true", help="also wait for cluster_state:ok")
+    replicas = commands.add_parser("wait-replicas")
+    replicas.add_argument("--host", default="127.0.0.1")
+    replicas.add_argument("--port", type=int, required=True)
+    replicas.add_argument("--timeout", type=float, default=20.0)
+    replicas.add_argument("--replicas", type=int, default=1)
     options = parser.parse_args(argv)
+    if options.command == "wait-replicas":
+        try:
+            wait_replicas(options.port, options.replicas, host=options.host, timeout=options.timeout)
+        except TimeoutError as error:
+            print(error, file=sys.stderr)
+            return 1
+        return 0
     try:
         wait_ready(
             options.port,

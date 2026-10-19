@@ -209,10 +209,11 @@ The process does not elect a primary. You stop writers, wait until the replica's
 | `replication_replicas` | Replica sockets connected to this primary. `0` on a replica |
 | `replication_replica_sequence` | Oldest sequence this primary has written to a connected replica socket |
 | `replication_send_lag` | `wal_durable_sequence` minus that oldest send |
+| `slave0`, `slave1`, ... | One line per replica that announced its client address and finished copying: `ip`, `port`, `state=online`, `offset` (acknowledged sequence), `lag` (seconds since its last acknowledgement) |
 
 `replication_send_lag` `0` means the bytes left the primary. The copy you can serve is the replica's `wal_durable_sequence`.
 
-1. Stop clients from writing to the primary. A replica answers `READONLY` to a write.
+1. Stop clients from writing to the primary. A replica answers `READONLY` to a write. Clients with a replica read policy may keep reading from replicas meanwhile; those reads can miss the last writes.
 2. On each primary shard, wait until `wal_last_sequence` equals `wal_durable_sequence`. With `everysec` this is the sync interval. With `always` they already match after an acknowledged write.
 3. On each replica shard, wait until `wal_durable_sequence` equals that same number. `replication_send_lag` `0` on the primary is not this check.
 4. If the replica's replication stream stopped because a WAL prefix was missing and no checkpoint covered it, do not treat it as complete. Its memory is the generation it had when the stream stopped. An interrupted snapshot/WAL catch-up leaves a durable per-shard `REPLICA_CATCHUP_0000` (and corresponding shard-numbered) marker. Reads return `LOADING`, then `MASTERDOWN` after 30 seconds if recovery stalls; neither response exposes partial data. While still configured as a replica, the process retries a fresh snapshot when the primary returns. Do not remove these marker files manually.
