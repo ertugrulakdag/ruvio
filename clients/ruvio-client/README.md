@@ -187,6 +187,30 @@ With the `serde` feature, `json_set_value`, `json_set_value_with`, `json_merge_v
 `json_arrappend_value`, `json_get_value`, `json_arrpop_value` and `json_find_value` take and return
 typed values.
 
+## TTL on create
+
+Commands that can create a key take a deadline that is set only when the call creates the key; an existing key keeps the deadline it has. A `Duration` is sent as `EX` for whole seconds and as `PX` otherwise; zero is refused with `Error::Protocol` before anything is sent.
+
+```rust,no_run
+use ruvio_client::*;
+use std::time::Duration;
+
+fn run(client: &mut Client) -> Result<(), Error> {
+    // A per-minute counter: the first hit starts the minute, later hits keep it.
+    let hits = client.incr_with_ttl("hits:ada", Duration::from_secs(60))?;
+
+    // Sorted set, geo, Bloom filter: a `ttl` field on the options.
+    let options = SortedSetAddOptions { ttl: Some(Duration::from_secs(3600)), ..Default::default() };
+    client.zadd_with("board", options, &[("ada", 120.0)])?;
+
+    // EXPIRE with a condition (NX, XX, GT or LT).
+    client.expire_if("hits:ada", Duration::from_secs(120), ExpireCondition::Gt)?;
+    Ok(())
+}
+```
+
+Methods: `incr_with_ttl`, `decr_with_ttl`, `incr_by_with_ttl`, `decr_by_with_ttl`, `incr_by_max_with_ttl`, `incr_by_float_with_ttl`, `hincr_by_with_ttl`, `zincr_by_with_ttl`, `setbit_with_ttl`, `xadd_with_ttl`, `xadd_trim_with_ttl`, `json_set_with_ttl` (and `json_set_value_with_ttl` with the `serde` feature). `SortedSetAddOptions` (`zadd_with`, `zadd_incr`, `geo_add_with`) and `BloomInsertOptions` (`bf_insert`) have a `ttl` field. `expire_if`, `pexpire_if`, `expire_at_if` and `pexpire_at_if` take an `ExpireCondition`; a key without a deadline counts as an infinite one, and a failed condition returns `false`.
+
 ## Binary values
 
 `get` returns bytes. `set_bytes`, `restore` (for `dump` payloads), `idem_complete` and

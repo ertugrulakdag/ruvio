@@ -27,6 +27,29 @@ in-memory representation. `DEL`/`UNLINK` remove all types. `TYPE` reports
 `bloomfilter`, `stream`, `lease`, `limit`, `semaphore`, `once`, or `none`;
 `SCAN ... TYPE` accepts the same names.
 
+## TTL on create
+
+A counter, a daily set or a short-lived hash needs its deadline set once, when the key is created, and left alone by later writes. These commands take `EX seconds` or `PX milliseconds` for that:
+
+```text
+INCR key [EX s | PX ms]                     (also DECR)
+INCRBY key n [EX s | PX ms] [MAX limit]     (also DECRBY without MAX, INCRBYFLOAT)
+HINCRBY key field n [EX s | PX ms]
+ZADD key [EX s | PX ms] [NX|XX] [GT|LT] [CH] [INCR] score member ...
+ZINCRBY key n member [EX s | PX ms]
+GEOADD key [EX s | PX ms] [NX|XX] [CH] lon lat member ...
+XADD key [EX s | PX ms] [NOMKSTREAM] ... id field value ...
+SETBIT key offset bit [EX s | PX ms]
+JSON.SET key path value [NX|XX] [EX s | PX ms]
+BF.INSERT key [EX s | PX ms] ... ITEMS item ...
+```
+
+The deadline is applied only when the call creates the key. A call on an existing key, with or without a deadline, leaves the deadline as it is. A call that creates nothing (`ZADD ... XX` on a missing key, an `INCRBY ... MAX` that is refused) sets no deadline. `EX 0`, a negative value and a deadline that overflows are errors. The write and the deadline are logged as one WAL record, so a crash cannot leave the key without its TTL, and replicas apply both together. Inside `MULTI` the pair joins the batch.
+
+Variadic commands (`SADD`, `LPUSH`, `RPUSH`, `HSET`, `PFADD`, `BF.MADD`) take no such option, because a member may be called `PX`. Send `EXPIRE key seconds NX` after them in the same pipeline or `MULTI`: `NX` sets the deadline only when the key has none.
+
+`EXPIRE`, `PEXPIRE`, `EXPIREAT` and `PEXPIREAT` accept one of `NX` (only without a deadline), `XX` (only with one), `GT` (only later than the current one) and `LT` (only earlier). A key without a deadline counts as infinite. A condition that does not hold replies 0 and changes nothing.
+
 ## Current Limits
 
 Native `IDEM` uses the existing byte-value representation, not a new field

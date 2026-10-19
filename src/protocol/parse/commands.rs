@@ -236,7 +236,16 @@ pub(in crate::protocol) fn cmd_json_mget<'a>(args: &Args<'a, '_>) -> Parsed<'a> 
 }
 
 pub(in crate::protocol) fn cmd_json_set<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
-    match args.len() {
+    // `JSON.SET key path value [NX|XX] [EX s | PX ms]`: the deadline is for a key it creates.
+    let (length, ttl) = match args.len() {
+        length @ (5 | 6) => match create_ttl_option(args, length - 2)? {
+            Some(ttl) => (length - 2, Some(ttl)),
+            None => return Err(ProtocolError::Invalid("syntax error")),
+        },
+        length => (length, None),
+    };
+
+    let command = match length {
         3 => Ok(Command::JsonSet {
             key: args.arg(0),
             path: json_path(args.arg(1)),
@@ -260,9 +269,11 @@ pub(in crate::protocol) fn cmd_json_set<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
             })
         }
         _ => Err(ProtocolError::Invalid(
-            "JSON.SET expects key, path, JSON value and an optional NX or XX",
+            "JSON.SET expects key, path, JSON value, an optional NX or XX and an optional EX or PX",
         )),
-    }
+    }?;
+
+    Ok(with_create_ttl(ttl, command))
 }
 
 /// `JSON.MERGE` and its `JMERGE` alias.
@@ -1021,6 +1032,7 @@ pub(in crate::protocol) fn cmd_bf_insert<'a>(args: &Args<'a, '_>) -> Parsed<'a> 
     let mut no_create = false;
     let mut index = 1;
     let mut items_at = None;
+    let mut ttl = None;
 
     while index < args.len() {
         let name = args.bytes(index);
@@ -1028,6 +1040,15 @@ pub(in crate::protocol) fn cmd_bf_insert<'a>(args: &Args<'a, '_>) -> Parsed<'a> 
         if name.eq_ignore_ascii_case(b"ITEMS") {
             items_at = Some(index + 1);
             break;
+        }
+
+        if ttl.is_none()
+            && let Some(found) = create_ttl_option(args, index)?
+        {
+            ttl = Some(found);
+            index += 2;
+
+            continue;
         }
 
         if name.eq_ignore_ascii_case(b"NOCREATE") {
@@ -1064,14 +1085,17 @@ pub(in crate::protocol) fn cmd_bf_insert<'a>(args: &Args<'a, '_>) -> Parsed<'a> 
         ));
     };
 
-    Ok(Command::BloomInsert {
-        key: args.arg(0),
-        error_rate,
-        capacity,
-        expansion: expansion.unwrap_or(crate::store::BLOOM_DEFAULT_EXPANSION),
-        no_create,
-        items: args.rest(items_at),
-    })
+    Ok(with_create_ttl(
+        ttl,
+        Command::BloomInsert {
+            key: args.arg(0),
+            error_rate,
+            capacity,
+            expansion: expansion.unwrap_or(crate::store::BLOOM_DEFAULT_EXPANSION),
+            no_create,
+            items: args.rest(items_at),
+        },
+    ))
 }
 
 pub(in crate::protocol) fn cmd_bf_info<'a>(name: &[u8], args: &Args<'a, '_>) -> Parsed<'a> {

@@ -298,6 +298,7 @@ var (
 	tDROP              = preEnc("DROP")
 	tENCODING          = preEnc("ENCODING")
 	tERROR             = preEnc("ERROR")
+	tEX                = preEnc("EX")
 	tEXISTS            = preEnc("EXISTS")
 	tEXPANSION         = preEnc("EXPANSION")
 	tFIELDS            = preEnc("FIELDS")

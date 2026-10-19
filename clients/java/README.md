@@ -120,6 +120,21 @@ c.zrangebyscore("board", RangeBounds.NEGATIVE_INFINITY, RangeBounds.exclusive(10
 c.bitfield("bits", BitFieldArgs.builder().get(BitFieldArgs.Type.unsigned(8), 0));
 ```
 
+## TTL on create
+
+Counters and other keys that are created by their first write can get their deadline in the same command. The `Duration` overloads send `EX` for a whole number of seconds and `PX` otherwise; the deadline is set only when the call creates the key, and an existing key keeps its own. A zero, negative or too large duration throws `IllegalArgumentException` before anything is sent.
+
+```java
+c.incr("hits:1.2.3.4", Duration.ofMinutes(1));                  // INCR key EX 60
+c.incrbyMax("quota:u1", 1, 100, Duration.ofMillis(1500));       // INCRBY key 1 PX 1500 MAX 100
+c.hincrby("h", "f", 1, ttl); c.zincrby("z", 1, "m", ttl); c.setbit("b", 7, true, ttl);
+c.zadd("z", ZAddArgs.builder().ttl(ttl).nx(), Map.of("a", 1.0));  // also XAddArgs, BfInsertArgs
+c.geoadd("g", false, false, false, ttl, GeoValue.of(13.36, 38.11, "p"));
+c.jsonSet("j", "$", "{}", ttl);                                  // also jsonSetNx, jsonSetXx
+```
+
+Also: `incr`, `decr`, `incrby`, `decrby`, `incrbyfloat` take a trailing `Duration`. `expire`, `pexpire`, `expireat` and `pexpireat` accept an `ExpireCondition` (`NX`, `XX`, `GT`, `LT`; `ALWAYS` sends no flag). A key without a deadline counts as infinite, so `GT` never applies to it and `LT` always does; a failed condition returns `false`.
+
 ## Helpers
 
 | Helper | Built on |

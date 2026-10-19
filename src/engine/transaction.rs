@@ -361,3 +361,82 @@ thread_local! {
     /// Keys copied into an undo log on this thread, for tests that check what is copied.
     pub(crate) static UNDO_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
+
+/// Runs a write that sets a deadline only when it creates the key (`EX`/`PX` on `INCRBY`,
+/// `ZADD`, ...). A key that exists keeps its deadline. For a new key the write and the
+/// deadline are logged as one record, and undone together if the log refuses it.
+pub(super) fn create_with_ttl<'a, C: Clock, I: StorageIndex, S: MutationSink, W: ListWaiterSink>(
+    shard: &'a mut KvShard<C, I>,
+    sink: &mut S,
+    waiters: &mut W,
+    ttl_ms: u64,
+    inner: Command<'a>,
+    database: u8,
+) -> Result<Response<'a>, S::Error> {
+    let Some(key) = crate::routing::command_keys(&inner)
+        .first()
+        .map(|key| key.to_vec())
+    else {
+        return execute_in_database(shard, inner, sink, waiters, database);
+    };
+
+    shard.expire_due();
+    shard.enter(database);
+
+    if shard.contains_key(&key) {
+        return execute_in_database(shard, inner, sink, waiters, database);
+    }
+
+    let mut undo = Vec::new();
+    let mut collected = BufferingSink::default();
+    let rolls_back = sink.persists();
+
+    if rolls_back {
+        capture_undo(shard, &inner, &mut undo, database);
+    }
+
+    let before = sink.written_sequence();
+
+    waiters.hold_deliveries();
+
+    let response = match execute_in_database(&mut *shard, inner, &mut collected, waiters, database)
+    {
+        Ok(response) => response.into_owned(),
+        Err(error) => match error {},
+    };
+
+    if shard.contains_key(&key) {
+        let now = shard.now_unix_millis();
+
+        if let Some(deadline) = now.checked_add(ttl_ms) {
+            shard.expire_at(&key, deadline);
+            collected.mutations.push(
+                Mutation::ExpireAt {
+                    key: &key,
+                    unix_millis: deadline.get(),
+                }
+                .to_owned(),
+            );
+        }
+    }
+
+    if !collected.mutations.is_empty() {
+        sink.select_database(database);
+
+        if let Err(error) = sink.record_now(Mutation::Transaction {
+            mutations: &collected.mutations,
+        }) {
+            for step in undo.into_iter().rev() {
+                step.revert(shard);
+            }
+            waiters.release_deliveries(false);
+
+            return Err(error);
+        }
+    }
+
+    waiters.served_by(written_since(before, sink.written_sequence()));
+    waiters.release_deliveries(true);
+
+    Ok(response)
+}

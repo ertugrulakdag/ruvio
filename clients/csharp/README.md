@@ -43,4 +43,26 @@ await db.SetAsync("session:ada", "hello");
 string? value = await db.GetStringAsync("session:ada");
 ```
 
+## TTL on create
+
+These commands take a `TimeSpan ttl` that is applied only when the call creates the key. A key that already exists keeps its own deadline. Whole seconds are sent as `EX`, anything with a sub-second part as `PX` (rounded up to milliseconds). A zero or negative `ttl` throws `ArgumentOutOfRangeException` before anything is sent.
+
+| Methods | Command |
+| --- | --- |
+| `IncrementAsync`, `DecrementAsync`, `IncrementByAsync`, `DecrementByAsync`, `IncrementByFloatAsync`, `IncrementWithLimitAsync` | `INCR`, `DECR`, `INCRBY`, `DECRBY`, `INCRBYFLOAT`, `INCRBY ... MAX` |
+| `IncrementHashFieldAsync`, `IncrementSortedSetAsync`, `SetBitAsync` | `HINCRBY`, `ZINCRBY`, `SETBIT` |
+| `AddSortedSetAsync(key, ttl, flags, ...)`, `AddGeoAsync(key, ttl, ...)`, `AddStreamEntryAsync(key, ttl, id, ...)` | `ZADD`, `GEOADD`, `XADD` |
+| `JsonSetAsync(key, path, json, mode, ttl)`, `BloomInsertOptions.Ttl` | `JSON.SET`, `BF.INSERT` |
+
+```csharp
+long hits = await db.IncrementAsync("rate:ada", TimeSpan.FromSeconds(60)); // the 60 second window starts with the first hit
+await db.AddSortedSetAsync("board:daily", TimeSpan.FromDays(1), SortedSetAddFlags.None, ("ada", 120));
+```
+
+`ExpireAsync` and `ExpireAtAsync` also take an `ExpireCondition` (`Nx`, `Xx`, `Gt`, `Lt`). A key without a deadline counts as an infinite deadline for `Gt` and `Lt`, and a failed condition returns `false`.
+
+```csharp
+bool extended = await db.ExpireAsync("session:ada", TimeSpan.FromMinutes(30), ExpireCondition.Gt);
+```
+
 Run the tests from this folder with `dotnet test`. Start a local server first and set `RUVIO_TEST_ADDR=127.0.0.1:6379` to include the live tests. The client is MIT licensed ([license](../LICENSE)). The [.NET integrations](../../integrations/dotnet/README.md) build on it.

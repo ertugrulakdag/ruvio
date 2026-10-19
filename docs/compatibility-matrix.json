@@ -387,7 +387,7 @@
       "family": "strings",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Signed 64-bit decimal integers.",
+      "limitations": "Signed 64-bit decimal integers. `EX seconds` or `PX milliseconds` sets a deadline only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record.",
       "coverage": [
         "scripts/resp_conformance.py",
         "scripts/redis_differential.py"
@@ -398,7 +398,7 @@
       "family": "strings",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Signed 64-bit decimal integers.",
+      "limitations": "Signed 64-bit decimal integers. `EX seconds` or `PX milliseconds` sets a deadline only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record.",
       "coverage": [
         "scripts/resp_conformance.py",
         "scripts/redis_differential.py"
@@ -409,7 +409,7 @@
       "family": "strings",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Signed 64-bit decimal integers. INCRBY key n MAX limit returns a null bulk and writes nothing when the result would pass limit.",
+      "limitations": "Signed 64-bit decimal integers. INCRBY key n MAX limit returns a null bulk and writes nothing when the result would pass limit. `EX seconds` or `PX milliseconds` sets a deadline only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record. Order with `MAX`: `[EX|PX] [MAX]`.",
       "coverage": [
         "scripts/resp_conformance.py",
         "scripts/redis_differential.py"
@@ -420,7 +420,7 @@
       "family": "strings",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Signed 64-bit decimal integers.",
+      "limitations": "Signed 64-bit decimal integers. `EX seconds` or `PX milliseconds` sets a deadline only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record.",
       "coverage": [
         "scripts/resp_conformance.py",
         "scripts/redis_differential.py"
@@ -563,7 +563,7 @@
       "family": "keys",
       "status": "supported",
       "same_slot": false,
-      "limitations": "A relative expire of zero or less deletes the key and returns 1, as Redis does.",
+      "limitations": "A relative expire of zero or less deletes the key and returns 1, as Redis does. Accepts one of `NX`, `XX`, `GT`, `LT` (a key without a deadline counts as infinite). A condition that does not hold replies 0.",
       "coverage": [
         "scripts/resp_conformance.py"
       ]
@@ -573,7 +573,7 @@
       "family": "keys",
       "status": "supported",
       "same_slot": false,
-      "limitations": "A relative expire of zero or less deletes the key and returns 1, as Redis does.",
+      "limitations": "A relative expire of zero or less deletes the key and returns 1, as Redis does. Accepts one of `NX`, `XX`, `GT`, `LT` (a key without a deadline counts as infinite). A condition that does not hold replies 0.",
       "coverage": [
         "scripts/resp_conformance.py"
       ]
@@ -583,7 +583,7 @@
       "family": "keys",
       "status": "supported",
       "same_slot": false,
-      "limitations": "A deadline in the past leaves the key absent and still replies OK.",
+      "limitations": "A deadline in the past leaves the key absent and still replies OK. Accepts one of `NX`, `XX`, `GT`, `LT` (a key without a deadline counts as infinite). A condition that does not hold replies 0.",
       "coverage": [
         "scripts/resp_conformance.py"
       ]
@@ -593,7 +593,7 @@
       "family": "keys",
       "status": "supported",
       "same_slot": false,
-      "limitations": "A deadline in the past leaves the key absent and still replies OK.",
+      "limitations": "A deadline in the past leaves the key absent and still replies OK. Accepts one of `NX`, `XX`, `GT`, `LT` (a key without a deadline counts as infinite). A condition that does not hold replies 0.",
       "coverage": [
         "scripts/resp_conformance.py"
       ]
@@ -1008,7 +1008,7 @@
       "family": "hashes",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Stores the decimal result. Non-integers and overflow are rejected without a write.",
+      "limitations": "Stores the decimal result. Non-integers and overflow are rejected without a write. `EX seconds` or `PX milliseconds` sets a deadline only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record. The deadline is the key's.",
       "coverage": [
         "scripts/resp_conformance.py",
         "scripts/redis_differential.py"
@@ -1150,7 +1150,7 @@
       "family": "zsets",
       "status": "supported",
       "same_slot": false,
-      "limitations": "NX, XX, GT, LT, CH, and INCR. Without CH the reply counts new members. INCR returns the new score or nil. GT and LT still add a missing member.",
+      "limitations": "NX, XX, GT, LT, CH, and INCR. Without CH the reply counts new members. INCR returns the new score or nil. GT and LT still add a missing member. `EX seconds` or `PX milliseconds` sets a deadline only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record. Placed with the other options before the first score.",
       "coverage": [
         "scripts/resp_conformance.py",
         "scripts/redis_differential.py"
@@ -1227,7 +1227,7 @@
       "family": "zsets",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Records the resulting score.",
+      "limitations": "Records the resulting score. `EX seconds` or `PX milliseconds` sets a deadline only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record.",
       "coverage": [
         "scripts/resp_conformance.py",
         "scripts/redis_differential.py"
@@ -1377,7 +1377,7 @@
       "family": "geo",
       "status": "supported",
       "same_slot": false,
-      "limitations": "One sorted set. Score is the 52-bit geohash. NX, XX, and CH.",
+      "limitations": "One sorted set. Score is the 52-bit geohash. NX, XX, and CH. `EX seconds` or `PX milliseconds` sets a deadline only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record. Placed with the other options before the first longitude.",
       "coverage": [
         "src/protocol/"
       ]
@@ -1489,7 +1489,7 @@
       "family": "bloom",
       "status": "supported",
       "same_slot": false,
-      "limitations": "RedisBloom wire shape: `CAPACITY`, `ERROR`, `EXPANSION`, `NOCREATE`, `NONSCALING`, `ITEMS`. The creation options apply only when the key is new. `NOCREATE` on a missing key answers `ERR not found`.",
+      "limitations": "RedisBloom wire shape: `CAPACITY`, `ERROR`, `EXPANSION`, `NOCREATE`, `NONSCALING`, `ITEMS`. The creation options apply only when the key is new. `NOCREATE` on a missing key answers `ERR not found`. `EX seconds` or `PX milliseconds` sets a deadline only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record. Placed with the creation options before `ITEMS`.",
       "coverage": [
         "src/engine/tests/bloom.rs"
       ]
@@ -1580,7 +1580,7 @@
       "family": "json",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Whole-document updates; only existing intermediate nodes; maximum resulting document 16 MiB. `NX` / `XX` as a fourth argument write only when the path is missing / present, and answer null otherwise.",
+      "limitations": "Whole-document updates; only existing intermediate nodes; maximum resulting document 16 MiB. `NX` / `XX` as a fourth argument write only when the path is missing / present, and answer null otherwise. `EX seconds` or `PX milliseconds` sets a deadline only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record. After the optional `NX` or `XX`.",
       "coverage": [
         "src/protocol/tests.rs",
         "src/engine/tests/json_ops_more.rs"
@@ -1601,7 +1601,7 @@
       "family": "streams",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Auto id is * or ms-*. Explicit ids are ms-seq. DELAY holds the new entry from XREADGROUP until that many milliseconds pass. The hold is a WAL record and a snapshot trailer, written only when a delay is set. A millisecond behind the top id is rejected. MAXLEN and MINID, including ~ and =, both trim exactly. They cannot be combined. NOMKSTREAM returns a null bulk and does not create a missing key. The assigned id is the WAL record. The approximate trim option LIMIT is not accepted.",
+      "limitations": "Auto id is * or ms-*. Explicit ids are ms-seq. DELAY holds the new entry from XREADGROUP until that many milliseconds pass. The hold is a WAL record and a snapshot trailer, written only when a delay is set. A millisecond behind the top id is rejected. MAXLEN and MINID, including ~ and =, both trim exactly. They cannot be combined. NOMKSTREAM returns a null bulk and does not create a missing key. The assigned id is the WAL record. The approximate trim option LIMIT is not accepted. `EX seconds` or `PX milliseconds` sets a deadline only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record. Placed with the other options before the id.",
       "coverage": [
         "src/engine/"
       ]
@@ -2424,7 +2424,7 @@
       "family": "bitmap",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Bitmap limited to 16 MiB (offset < 134,217,728); each call rewrites the value, O(value size). Keeps an existing TTL.",
+      "limitations": "Bitmap limited to 16 MiB (offset < 134,217,728); each call rewrites the value, O(value size). Keeps an existing TTL. `EX seconds` or `PX milliseconds` sets a deadline only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record.",
       "coverage": [
         "scripts/redis_differential.py"
       ]
@@ -2594,7 +2594,7 @@
       "family": "strings",
       "status": "supported",
       "same_slot": false,
-      "limitations": "Computed in double precision and printed with 15 significant digits; Redis uses long double, so results with more digits can differ in the last places (Redis prints 153.10000000000000001 where Ruvio prints 153.1). Keeps the TTL.",
+      "limitations": "Computed in double precision and printed with 15 significant digits; Redis uses long double, so results with more digits can differ in the last places (Redis prints 153.10000000000000001 where Ruvio prints 153.1). Keeps the TTL. `EX seconds` or `PX milliseconds` sets a deadline only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record.",
       "coverage": [
         "scripts/redis_differential.py"
       ]

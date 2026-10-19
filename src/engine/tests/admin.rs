@@ -99,6 +99,7 @@ fn every_current_mutating_command_crosses_the_boundary() {
         Command::Del(vec![owned(b"scores"), owned(b"seen")].into()),
         Command::set(owned(b"ttl"), owned(b"value")),
         Command::Expire {
+            condition: crate::protocol::ExpireCondition::Always,
             key: owned(b"ttl"),
             milliseconds: 5_000,
         },

@@ -524,6 +524,7 @@ fn getset_clears_ttl_append_and_incr_preserve_it() {
     execute(
         &mut shard,
         Command::Expire {
+            condition: crate::protocol::ExpireCondition::Always,
             key: owned(b"counter"),
             milliseconds: 60_000,
         },

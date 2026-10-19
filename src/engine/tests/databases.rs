@@ -79,6 +79,7 @@ fn swapdb_exchanges_every_key_and_replays() {
         &mut sink,
         2,
         Command::Expire {
+            condition: crate::protocol::ExpireCondition::Always,
             key: owned(b"k"),
             milliseconds: 60_000,
         },

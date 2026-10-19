@@ -11,6 +11,7 @@ import io.github.salihcantekin.ruvio.internal.Cmd;
 import io.github.salihcantekin.ruvio.internal.Reply;
 import io.github.salihcantekin.ruvio.internal.Request;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -206,6 +207,22 @@ public abstract class ScriptingCommands<K, V> extends JsonCommands<K, V> {
      */
     public CompletableFuture<Long> setbit(K key, long offset, boolean value) {
         return kll(Cmd.SETBIT, key, offset, value ? 1 : 0, Reply.LONG);
+    }
+
+    /**
+     * Sends {@code SETBIT key offset value EX|PX ttl}: like {@link #setbit(Object, long, boolean)}, and a bitmap this call creates
+     * gets a time to live. An existing key keeps its deadline.
+     *
+     * @param key the bitmap key
+     * @param offset the bit position, from 0 to 134,217,727
+     * @param value the new bit
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the previous bit, {@code 0} or {@code 1}
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR bit offset is not an integer or out of range}; {@code WRONGTYPE} for a non-string
+     */
+    public CompletableFuture<Long> setbit(K key, long offset, boolean value, Duration ttl) {
+        return send(args().w(Cmd.SETBIT).k(key).l(offset).l(value ? 1 : 0).ttl(ttl), Reply.LONG);
     }
 
     /**

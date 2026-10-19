@@ -10,6 +10,7 @@ import io.github.salihcantekin.ruvio.internal.Cmd;
 import io.github.salihcantekin.ruvio.internal.Reply;
 import io.github.salihcantekin.ruvio.model.FillResult;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -471,6 +472,24 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
     }
 
     /**
+     * Sends {@code INCR key EX|PX ttl}: like {@link #incr(Object)}, and a counter this call creates gets a time to live.
+     * An existing key keeps its deadline.
+     *
+     * <pre>{{@code
+     * long hits = client.incr("page:hits", Duration.ofMinutes(1));
+     * }}</pre>
+     *
+     * @param key the counter key
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the value after the increment
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer or the result overflows; {@code WRONGTYPE} for a non-string
+     */
+    public CompletableFuture<Long> incr(K key, Duration ttl) {
+        return send(args().w(Cmd.INCR).k(key).ttl(ttl), Reply.LONG);
+    }
+
+    /**
      * Sends {@code DECR key}: subtracts one from a decimal integer string. A missing key counts as 0; an existing TTL is kept.
      *
      * @param key the counter key
@@ -479,6 +498,20 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
      */
     public CompletableFuture<Long> decr(K key) {
         return k(Cmd.DECR, key, Reply.LONG);
+    }
+
+    /**
+     * Sends {@code DECR key EX|PX ttl}: like {@link #decr(Object)}, and a counter this call creates gets a time to live.
+     * An existing key keeps its deadline.
+     *
+     * @param key the counter key
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the value after the decrement
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer or the result overflows; {@code WRONGTYPE} for a non-string
+     */
+    public CompletableFuture<Long> decr(K key, Duration ttl) {
+        return send(args().w(Cmd.DECR).k(key).ttl(ttl), Reply.LONG);
     }
 
     /**
@@ -492,6 +525,21 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
      */
     public CompletableFuture<Long> incrby(K key, long delta) {
         return kl(Cmd.INCRBY, key, delta, Reply.LONG);
+    }
+
+    /**
+     * Sends {@code INCRBY key delta EX|PX ttl}: like {@link #incrby(Object, long)}, and a counter this call creates gets a time
+     * to live. An existing key keeps its deadline.
+     *
+     * @param key the counter key
+     * @param delta the signed amount to add
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the value after the addition
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer or the result overflows; {@code WRONGTYPE} for a non-string
+     */
+    public CompletableFuture<Long> incrby(K key, long delta, Duration ttl) {
+        return send(args().w(Cmd.INCRBY).k(key).l(delta).ttl(ttl), Reply.LONG);
     }
 
     /**
@@ -514,6 +562,26 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
     }
 
     /**
+     * Sends {@code INCRBY key delta EX|PX ttl MAX limit}: like {@link #incrbyMax(Object, long, long)}, and a counter this call
+     * creates gets a time to live (a fixed-window quota in one command). An existing key keeps its deadline.
+     *
+     * <pre>{{@code
+     * Long used = client.incrbyMax("quota:user1", 1, 100, Duration.ofMinutes(1)); // null once 100 is reached
+     * }}</pre>
+     *
+     * @param key the counter key
+     * @param delta the signed amount to add
+     * @param limit the highest value the counter may reach
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the value after the addition, or {@code null} when the result would pass {@code limit} (nothing is written)
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer; {@code WRONGTYPE} for a non-string
+     */
+    public CompletableFuture<Long> incrbyMax(K key, long delta, long limit, Duration ttl) {
+        return send(args().w(Cmd.INCRBY).k(key).l(delta).ttl(ttl).w(Cmd.MAX).l(limit), Reply.LONG);
+    }
+
+    /**
      * Sends {@code DECRBY key delta}: subtracts {@code delta} from a decimal integer string. A missing key counts as 0; an existing TTL is kept.
      *
      * @param key the counter key
@@ -523,6 +591,21 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
      */
     public CompletableFuture<Long> decrby(K key, long delta) {
         return kl(Cmd.DECRBY, key, delta, Reply.LONG);
+    }
+
+    /**
+     * Sends {@code DECRBY key delta EX|PX ttl}: like {@link #decrby(Object, long)}, and a counter this call creates gets a time
+     * to live. An existing key keeps its deadline.
+     *
+     * @param key the counter key
+     * @param delta the amount to subtract (a negative value adds)
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the value after the subtraction
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer or the result overflows; {@code WRONGTYPE} for a non-string
+     */
+    public CompletableFuture<Long> decrby(K key, long delta, Duration ttl) {
+        return send(args().w(Cmd.DECRBY).k(key).l(delta).ttl(ttl), Reply.LONG);
     }
 
     /**
@@ -536,6 +619,21 @@ public abstract class StringCommands<K, V> extends BaseCommands<K, V> {
      */
     public CompletableFuture<Double> incrbyfloat(K key, double delta) {
         return send(args().w(Cmd.INCRBYFLOAT).k(key).d(delta), Reply.DOUBLE);
+    }
+
+    /**
+     * Sends {@code INCRBYFLOAT key delta EX|PX ttl}: like {@link #incrbyfloat(Object, double)}, and a key this call creates gets a
+     * time to live. An existing key keeps its deadline.
+     *
+     * @param key the key to change
+     * @param delta the amount to add (may be negative)
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the value after the addition
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} when the value is not a number or the result is NaN or infinite; {@code WRONGTYPE} for a non-string
+     */
+    public CompletableFuture<Double> incrbyfloat(K key, double delta, Duration ttl) {
+        return send(args().w(Cmd.INCRBYFLOAT).k(key).d(delta).ttl(ttl), Reply.DOUBLE);
     }
 
     /**
