@@ -58,8 +58,15 @@ export interface ConnectionOptions {
   name?: string;
   /** RESP protocol version: 2 (default) or 3 (sends `HELLO 3` on connect; enables push messages such as client-side-cache invalidation). */
   protocol?: 2 | 3;
-  /** Abort a connection attempt after this many milliseconds with a {@link ConnectionError}. Default: no timeout. There is no per-command timeout. */
+  /** Abort a connection attempt after this many milliseconds with a {@link ConnectionError}. Default 5000; `0` for no limit. */
   connectTimeoutMs?: number;
+  /**
+   * Fail the connection with a {@link ConnectionError} when replies are outstanding and none has arrived for
+   * this many milliseconds (checked on a timer, so it fires up to a quarter of this later). Every pending call
+   * rejects and a later command reconnects. Default `0`: no limit, so a half-open peer blocks callers until
+   * the socket drops. It also applies to blocking commands (`blpop` and the like): set it above their own timeout.
+   */
+  commandTimeoutMs?: number;
   /** Disable Nagle's algorithm (`TCP_NODELAY`). Default true. */
   noDelay?: boolean;
   /** Enable TCP keep-alive probes after 30 s idle. Default true. */
@@ -215,6 +222,12 @@ export class Connection extends EventEmitter {
   private rFB: (Buffer | null)[] | null = null;
   private rFO: Int32Array | null = null;
   private rFN: Int32Array | null = null;
+  // Command timeout watchdog (only when `commandTimeoutMs` is set): `rx` counts socket reads, and a tick that
+  // finds replies pending and `rx` unchanged since `markAt` has seen a stall.
+  private watchdog: NodeJS.Timeout | null = null;
+  private rx = 0;
+  private markRx = -1;
+  private markAt = 0;
   private lastBuf: Buffer | null = null;
   private lastOff = 0;
   private lastLen = 0;
@@ -239,6 +252,31 @@ export class Connection extends EventEmitter {
       this.scheduled = false;
       this.enc.flush();
     };
+    const limit = opts.commandTimeoutMs ?? 0;
+    if (limit > 0) {
+      this.watchdog = setInterval(() => this.stallCheck(limit), Math.max(10, Math.min(250, limit / 4)));
+      this.watchdog.unref();
+    }
+  }
+
+  private stallCheck(limit: number): void {
+    if (this.closed) {
+      if (this.watchdog !== null) clearInterval(this.watchdog);
+      this.watchdog = null;
+      return;
+    }
+    if (this.count === 0 || this.socket === null) {
+      this.markRx = -1;
+      return;
+    }
+    const now = Date.now();
+    if (this.markRx !== this.rx) {
+      this.markRx = this.rx;
+      this.markAt = now;
+    } else if (now - this.markAt >= limit) {
+      this.markRx = -1;
+      this.abort(new ConnectionError(`ruvio: command timeout after ${limit} ms`));
+    }
   }
 
   /** Pending replies. */
@@ -486,8 +524,8 @@ export class Connection extends EventEmitter {
     const socket = this.newSocket(o.host ?? '127.0.0.1', o.port ?? 6379);
     this.socket = socket;
     let timer: NodeJS.Timeout | null = null;
-    if (o.connectTimeoutMs !== undefined && o.connectTimeoutMs > 0) {
-      timer = setTimeout(() => socket.destroy(new ConnectionError('ruvio: connect timeout')), o.connectTimeoutMs);
+    if ((o.connectTimeoutMs ?? 5000) > 0) {
+      timer = setTimeout(() => socket.destroy(new ConnectionError('ruvio: connect timeout')), o.connectTimeoutMs ?? 5000);
     }
     socket.once(o.tls ? 'secureConnect' : 'connect', () => {
       if (timer !== null) clearTimeout(timer);
@@ -514,8 +552,8 @@ export class Connection extends EventEmitter {
     const socket = this.newSocket(addr.host, addr.port);
     dial.pending = socket;
     let timer: NodeJS.Timeout | null = null;
-    if (o.connectTimeoutMs !== undefined && o.connectTimeoutMs > 0) {
-      timer = setTimeout(() => socket.destroy(new ConnectionError('ruvio: connect timeout')), o.connectTimeoutMs);
+    if ((o.connectTimeoutMs ?? 5000) > 0) {
+      timer = setTimeout(() => socket.destroy(new ConnectionError('ruvio: connect timeout')), o.connectTimeoutMs ?? 5000);
     }
     socket.once(o.tls ? 'secureConnect' : 'connect', () => {
       if (timer !== null) clearTimeout(timer);
@@ -671,6 +709,8 @@ export class Connection extends EventEmitter {
   /** Closes now; pending calls reject. */
   disconnect(): void {
     this.closed = true;
+    if (this.watchdog !== null) clearInterval(this.watchdog);
+    this.watchdog = null;
     const s = this.socket;
     if (s !== null) {
       this.enc.flush();
@@ -686,6 +726,7 @@ export class Connection extends EventEmitter {
   // ---- replies -------------------------------------------------------------------------
 
   private onData(chunk: Buffer, n: number): void {
+    this.rx++;
     const p = this.parser;
     const gen = this.gen;
     p.feed(chunk, n);

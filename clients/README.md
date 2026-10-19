@@ -30,6 +30,21 @@
 | Python | [`ruvio-client`](python/README.md) | `pip install ruvio-client` | `python -m pytest` |
 | Node.js | [`ruvio-client`](node/README.md) | `npm install ruvio-client` | `npm test` |
 
+The matrix counts a subcommand such as `CLIENT ID` as its own command; the client spec in `testdata/commands.json` has one entry per command name (`CLIENT`), so it lists fewer entries. The client count is the six language directories; `ruvio-ui` is not a client.
+
+## Timeouts
+
+Every client has the same two limits. The connect timeout is on by default; the command timeout is off by default, because blocking commands (`BLPOP`, `WAIT`, ...) legitimately wait. With it off, a half-open peer (the network dropped without a reset) blocks a call until the socket drops, so set it in production, above the longest blocking command you use.
+
+| Client | Connect timeout (default 5 s) | Command timeout (default none) | On expiry |
+| --- | --- | --- | --- |
+| Rust | `ClientOptions::connect_timeout` | `ClientOptions::command_timeout` (or `set_read_timeout`) | `Error::Io` |
+| C# | `ConnectTimeout` | `CommandTimeout` | `TimeoutException` |
+| Go | `Options.DialTimeout` | `Options.CommandTimeout` (or a context deadline) | `context.DeadlineExceeded` |
+| Java | `connectTimeoutMillis` | `commandTimeoutMillis` | `RuvioException` |
+| Python | `connect_timeout` | `socket_timeout` | `ruvio.TimeoutError` |
+| Node.js | `connectTimeoutMs` | `commandTimeoutMs` | `ConnectionError` |
+
 Also here: [`ruvio-ui`](ruvio-ui/README.md), the browser operator UI (AGPL-3.0). The clients are MIT licensed ([license](LICENSE)).
 
 Live tests skip unless `RUVIO_TEST_ADDR` is set; cluster tests need `RUVIO_CLUSTER_ADDR` (a server started with `shards = 3` and `port_mode = "per-shard"`). Details are in each client's README.

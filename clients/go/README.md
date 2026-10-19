@@ -215,7 +215,8 @@ by `TestRoutingCoversMatrix`; the key table is in `cluster_keys.go`):
 again to the named node (the server did not run it, so this is safe). The whole table is
 reloaded with `CLUSTER SLOTS` only when the named node is unknown or from the second `MOVED` for
 the same command. A command follows at most **3** redirects; a fourth `MOVED` is returned to
-the caller as `*Error`.
+the caller as `*Error`. `-ASK` is not followed and `ASKING` is never sent (Ruvio forwards instead of
+answering `-ASK`); an `-ASK` reply comes back as `*Error`.
 
 Pipelines: commands are grouped by node, each group is one pipelined write, groups run
 concurrently, replies come back in the caller's order; `MOVED` replies inside a pipeline are

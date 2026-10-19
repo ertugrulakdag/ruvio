@@ -79,6 +79,12 @@ pub struct ClientOptions {
     /// Upper bound for each TCP connect attempt (not for reads). Defaults to 5 seconds. A
     /// timeout surfaces as [`Error::Io`].
     pub connect_timeout: Duration,
+    /// Read timeout applied to every socket right after connecting, as
+    /// [`Client::set_read_timeout`] does later. `None` (the default) waits for a reply
+    /// forever, so a half-open peer blocks a call until the socket drops. It also caps
+    /// blocking commands (`blpop` and the like): set it above their own timeout. A timeout
+    /// surfaces as [`Error::Io`].
+    pub command_timeout: Option<Duration>,
     /// When true (the default) connecting sends `CLUSTER SLOTS`. If the server returns a slot
     /// map with more than one node the client becomes a router that sends each key to its
     /// owning shard; a server that has cluster support off (or a single shard) keeps one plain
@@ -172,6 +178,7 @@ impl Default for ClientOptions {
             password: None,
             database: 0,
             connect_timeout: Duration::from_secs(5),
+            command_timeout: None,
             discover_cluster: true,
             reconnect: true,
             max_reconnect_attempts: 8,
@@ -384,6 +391,17 @@ impl Client {
     /// # }
     /// ```
     pub fn connect_with(options: ClientOptions) -> Result<Self, Error> {
+        let command_timeout = options.command_timeout;
+        let mut client = Self::open_with(options)?;
+
+        if command_timeout.is_some() {
+            client.set_read_timeout(command_timeout)?;
+        }
+
+        Ok(client)
+    }
+
+    fn open_with(options: ClientOptions) -> Result<Self, Error> {
         let addresses = options.addresses();
 
         if addresses.iter().any(|(host, _)| host.is_empty()) {
@@ -1990,6 +2008,24 @@ mod tests {
         server.write_all(b"+PONG\r\n").unwrap();
 
         assert_eq!(ping.join().unwrap(), "PONG");
+    }
+
+    #[test]
+    fn command_timeout_option_fails_a_call_whose_reply_never_comes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accepted = thread::spawn(move || bound(crate::test_support::accept(&listener).0));
+        let mut client = Client::connect_with(ClientOptions {
+            host: "127.0.0.1".to_owned(),
+            port,
+            discover_cluster: false,
+            command_timeout: Some(Duration::from_millis(150)),
+            ..ClientOptions::default()
+        })
+        .unwrap();
+        let _server = accepted.join().unwrap();
+
+        assert!(matches!(client.ping(), Err(crate::Error::Io(_))));
     }
 
     #[test]

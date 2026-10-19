@@ -75,7 +75,7 @@ public class ReplicaReadTests
 
         // The same keys in a pipeline of reads: each goes to its slot's replica.
         IReadOnlyList<RespValue> pipeline = await client.ExecuteManyAsync([["GET", low], ["GET", high], ["MGET", low, high]]);
-        Assert.Equal(["r0", "r1"], new[] { pipeline[0].AsString(), pipeline[1].AsString() });
+        Assert.Equal(new[] { "r0", "r1" }, new[] { pipeline[0].AsString(), pipeline[1].AsString() });
         Assert.Equal(["r0", "r1"], pipeline[2].Items!.Select(item => item.AsString()));
     }
 

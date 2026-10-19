@@ -209,8 +209,8 @@ it cannot go back to a release before slot moves. Changing
 
 Host and cluster examples live in `deploy/`. Give the process one core per
 shard. Set `LimitNOFILE` above `max_global` (the example uses 65535). Size the
-volume for the data set plus WAL until the next checkpoint. `GET /metrics` on
-`metrics_address` is the scrape endpoint. It is not a readiness probe. Readiness
+volume for the data set plus WAL until the next checkpoint. `INFO prometheus` is the
+metrics read. It is not a readiness probe. Readiness
 is the RESP port opening, because the listen happens after recovery.
 `INFO server` reports `ruvio_health:ok` and `ruvio_readiness:ready` once that
 listen has started.
