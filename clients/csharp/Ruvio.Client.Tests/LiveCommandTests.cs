@@ -108,6 +108,16 @@ public sealed class LiveCommandTests(ITestOutputHelper output)
         Assert.True(await db.SetAsync("stock", "5"));
         Assert.Equal(2, await db.TakeAsync("stock", 3));
         Assert.Null(await db.TakeAsync("stock", 3));
+
+        Assert.True(await db.SetAsync("{w}a", "10"));
+        Assert.Equal((6L, 4L), await db.TransferAsync("{w}a", "{w}b", 4));
+        Assert.Null(await db.TransferAsync("{w}a", "{w}b", 7));
+        Assert.Null(await db.TransferAsync("{w}a", "{w}b", 3, 6));
+        Assert.Equal((4L, 6L), await db.TransferAsync("{w}a", "{w}b", 2, 6));
+        Assert.Equal(1, await db.SetHashFieldsAsync("th", ("f", "10")));
+        Assert.Equal((6L, 4L), await db.TransferHashFieldAsync("th", "f", "g", 4));
+        Assert.Null(await db.TransferHashFieldAsync("th", "f", "g", 3, 5));
+
         Assert.Equal(1, await db.OnceAsync("once", 10000));
         Assert.Equal(0, await db.OnceAsync("once", 10000));
         Assert.Equal(1, await db.LimitAsync("lim", 2, 10000));

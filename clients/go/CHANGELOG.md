@@ -4,6 +4,8 @@ Notable changes to the Go client `github.com/salihcantekin/ruvio/clients/go`. A 
 
 ## Unreleased
 
+- New `Transfer`, `TransferMax`, `HTransfer` and `HTransferMax` for the server's `TRANSFER` and `HTRANSFER`: both balances after the move, and `ok == false` when nothing moved.
+
 ## v0.2.0 - 2026-10-17
 
 Breaking for callers that pass a plain `string` variable where a typed keyword is now expected (see the first item); string literals still compile.

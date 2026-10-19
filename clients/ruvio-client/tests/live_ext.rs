@@ -1061,3 +1061,30 @@ fn helpers_cache_idempotency_recent() {
     assert_eq!(db.recent("recent", 2).unwrap(), ["d", "c"]);
     assert!(db.recent("recent", 0).unwrap().is_empty());
 }
+
+#[test]
+fn transfer_and_htransfer_move_amounts_atomically() {
+    let Some(mut db) = connect(8) else { return };
+
+    db.set("{w}:a", "10").unwrap();
+    assert_eq!(
+        db.transfer("{w}:a", "{w}:b", 4, None).unwrap(),
+        Some((6, 4))
+    );
+    assert_eq!(db.transfer("{w}:a", "{w}:b", 7, None).unwrap(), None);
+    assert_eq!(db.transfer("{w}:a", "{w}:b", 3, Some(6)).unwrap(), None);
+    assert_eq!(
+        db.transfer("{w}:a", "{w}:b", 2, Some(6)).unwrap(),
+        Some((4, 6))
+    );
+    assert_eq!(db.transfer("{w}:none", "{w}:b", 1, None).unwrap(), None);
+    assert_eq!(db.get("{w}:a").unwrap().as_deref(), Some(&b"4"[..]));
+    assert!(db.transfer("{w}:a", "{w}:a", 1, None).is_err());
+    assert!(db.transfer("{w}:a", "{w}:b", 0, None).is_err());
+
+    db.hset("h", &[("f", "10")]).unwrap();
+    assert_eq!(db.htransfer("h", "f", "g", 4, None).unwrap(), Some((6, 4)));
+    assert_eq!(db.htransfer("h", "f", "g", 7, None).unwrap(), None);
+    assert_eq!(db.htransfer("h", "f", "g", 2, Some(5)).unwrap(), None);
+    assert_eq!(db.hget("h", "g").unwrap().as_deref(), Some("4"));
+}

@@ -4,6 +4,8 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 
 ## Unreleased
 
+- New `TransferAsync(source, destination, amount, max)` and `TransferHashFieldAsync(key, from, to, amount, max)` for the server's `TRANSFER` and `HTRANSFER`: they return the two balances after the move, or `null` when nothing moved. Not built or tested in the environment this was written in (no .NET SDK).
+
 ## 0.3.4 - 2026-10-17
 
 - Wave 2 of typed keywords: `StreamTrim` (`MaxLen` or `MinId`, `StreamTrimMode.Exact` `=` or `Approximate` `~`) for `XADD` and `XTRIM` (`AddStreamEntryAsync` and `TrimStreamAsync` overloads; the server does not accept `LIMIT`); `InfoSection` for `GetInfoAsync`; `ClientType` for `GetClientListAsync`; `StreamIds`, `ScoreBound` and `LexBound` constants and builders for the stream and sorted-set range arguments. `XTRIM`, `INFO` and `CLIENT LIST` write the keyword from a shared pre-encoded token. The client has no `CHANGES SUBSCRIBE` wrapper, so no change-type set was added.

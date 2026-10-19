@@ -4,6 +4,8 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+- New `TRANSFER source destination amount [MAX cap]` and `HTRANSFER key from to amount [MAX cap]`: move an integer amount between two keys (same slot) or two fields of a hash only when the source holds enough, in one WAL record. Reply `[source, destination]` after, or a null bulk and no write.
+
 ## 0.3.4 - 2026-10-17
 
 - `XADD ... MAXLEN` accepts `=` as well as `~` before the count, like `XTRIM` and `XADD ... MINID` already did.
