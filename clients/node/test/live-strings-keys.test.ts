@@ -352,3 +352,58 @@ test('bitmaps and hyperloglog', { skip: SKIP }, async () => {
     await c.quit();
   }
 });
+
+test('ttl on create: the deadline is set once and kept', { skip: SKIP }, async () => {
+  const c = await live(1);
+  try {
+    const within = async (key: string, lo: number, hi: number) => {
+      const t = await c.pttl(key);
+      assert.ok(t > lo && t <= hi, `${key} pttl ${t}`);
+    };
+    await c.incr('t:incr', { ttl: 100 });
+    await within('t:incr', 90_000, 100_000);
+    await c.incr('t:incr', { ttl: 5000 }); // existing key keeps its deadline
+    await within('t:incr', 90_000, 100_000);
+    await c.decr('t:decr', { ttl: 100 });
+    await within('t:decr', 90_000, 100_000);
+    assert.equal(await c.incrby('t:by', 3, { ttl: 100 }), 3);
+    assert.equal(await c.decrby('t:dby', 3, { ttl: 0.5 }), -3);
+    await within('t:dby', 0, 500);
+    assert.equal(await c.incrbyMax('t:max', 2, 10, { ttl: 100 }), 2);
+    await within('t:max', 90_000, 100_000);
+    assert.equal(await c.incrbyfloat('t:f', 1.5, { ttl: 100 }), 1.5);
+    await within('t:f', 90_000, 100_000);
+    assert.equal(await c.setbit('t:bit', 7, 1, { ttl: 100 }), 0);
+    await within('t:bit', 90_000, 100_000);
+    await c.setbit('t:bit', 8, 1, { ttl: 5000 });
+    await within('t:bit', 90_000, 100_000);
+    // a non-positive TTL never reaches the server
+    assert.ok((await rejects(c.incr('t:bad', { ttl: 0 }))) instanceof RangeError);
+    assert.equal(await c.exists('t:bad'), 0);
+  } finally {
+    await c.quit();
+  }
+});
+
+test('EXPIRE conditions', { skip: SKIP }, async () => {
+  const c = await live(1);
+  try {
+    await c.set('e', 'v');
+    assert.equal(await c.expire('e', 100, 'XX'), false); // no deadline yet
+    assert.equal(await c.expire('e', 100, 'LT'), true); // no deadline counts as infinite
+    assert.equal(await c.expire('e', 100, 'NX'), false); // has a deadline now
+    assert.equal(await c.expire('e', 50, 'GT'), false);
+    assert.equal(await c.expire('e', 200, 'GT'), true);
+    assert.equal(await c.pexpire('e', 300_000, 'GT'), true);
+    assert.equal(await c.pexpire('e', 400_000, 'LT'), false);
+    const now = Date.now();
+    assert.equal(await c.pexpireat('e', now + 100_000, 'LT'), true);
+    assert.equal(await c.expireat('e', Math.floor(now / 1000) + 500, 'LT'), false);
+    assert.equal(await c.expireat('e', Math.floor(now / 1000) + 50, 'LT'), true);
+    assert.equal(await c.expire('missing', 10, 'NX'), false);
+    const t = await c.pttl('e');
+    assert.ok(t > 0 && t <= 51_000, `pttl ${t}`);
+  } finally {
+    await c.quit();
+  }
+});

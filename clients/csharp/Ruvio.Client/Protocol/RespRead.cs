@@ -329,6 +329,22 @@ internal static class RespRead
 
     internal static long Seconds(TimeSpan span) => (long)Math.Ceiling(span.TotalSeconds);
 
+    /// <summary>
+    /// The <c>EX</c> or <c>PX</c> word and value for a deadline that is set only when a command creates the key:
+    /// <c>EX</c> for a whole number of seconds, otherwise <c>PX</c> with the time rounded up to milliseconds.
+    /// </summary>
+    internal static (string Word, long Value) CreateTtl(TimeSpan ttl, string name)
+    {
+        if (ttl <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(name, "Expiry must be positive.");
+        }
+
+        long milliseconds = Milliseconds(ttl);
+
+        return milliseconds % 1000 == 0 ? ("EX", milliseconds / 1000) : ("PX", milliseconds);
+    }
+
     internal static string Word(BitOperation operation) => operation switch
     {
         BitOperation.And => "AND",

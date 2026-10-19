@@ -195,4 +195,20 @@ class CollectionsLiveTest {
         assertEquals(50, c.sscan("sbig", "0", ScanArgs.count(100)).items().size());
         assertEquals("0", c.sscan("none", "0").cursor());
     }
+
+    @Test
+    void ttlOnCreateHincrby() {
+        assertEquals(2L, c.hincrby("ttl:h", "f", 2, LONG_TTL));
+        assertEquals(4L, c.hincrby("ttl:h", "f", 2, LONGER_TTL));
+        assertDeadlineKept("ttl:h");
+    }
+
+    private static final java.time.Duration LONG_TTL = java.time.Duration.ofSeconds(100);
+    private static final java.time.Duration LONGER_TTL = java.time.Duration.ofSeconds(1000);
+
+    /** The key got the first call's deadline (at most 100 s), not the second call's 1000 s. */
+    private void assertDeadlineKept(String key) {
+        long ms = c.pttl(key);
+        assertTrue(ms > 0 && ms <= 100_000, "pttl " + ms);
+    }
 }

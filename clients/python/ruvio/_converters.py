@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json as _json
+from datetime import timedelta
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, Union
 
 from ._models import AutoClaimResult, FillResult, GeoResult, IdemResult, PendingEntry, PendingSummary, StreamEntry
@@ -260,6 +261,29 @@ def _limit_args(args: List[Any], offset: Optional[int], count: Optional[int]) ->
         if offset is None or count is None:
             raise ValueError("offset and count must be given together")
         args += ["LIMIT", offset, count]
+
+
+def _ttl_args(ttl: Any) -> List[Any]:
+    """``["EX", s]`` or ``["PX", ms]`` for a TTL-on-create argument (seconds or ``timedelta``).
+
+    Whole seconds send ``EX``; a value with a sub-second part sends ``PX``. Zero, negative, ``bool`` and
+    non-numeric values raise ``ValueError`` / ``TypeError`` before anything is sent.
+    """
+    if isinstance(ttl, timedelta):
+        ms = ttl // timedelta(milliseconds=1)
+        if ms <= 0:
+            raise ValueError("ttl must be positive")
+        return ["EX", ms // 1000] if ms % 1000 == 0 else ["PX", ms]
+    if isinstance(ttl, bool) or not isinstance(ttl, (int, float)):
+        raise TypeError("ttl must be seconds (int or float) or a timedelta")
+    if not ttl > 0 or ttl == float("inf"):
+        raise ValueError("ttl must be positive and finite")
+    if isinstance(ttl, int) or ttl == int(ttl):
+        return ["EX", int(ttl)]
+    ms = int(round(ttl * 1000))
+    if ms <= 0:
+        raise ValueError("ttl must be at least 1 millisecond")
+    return ["PX", ms]
 
 
 def _expire_cond(nx: bool, xx: bool, gt: bool, lt: bool) -> List[str]:

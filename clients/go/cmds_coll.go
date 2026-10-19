@@ -524,6 +524,17 @@ func (c *cmds) HIncrBy(ctx context.Context, key, field string, delta int64) (int
 	return c.intR(ctx, newCmd(4, cHINCRBY).s(key).s(field).i(delta))
 }
 
+// HIncrByWithTTL is HIncrBy that also sets a deadline on the key when the call creates
+// it (HINCRBY key field delta EX|PX). EX is sent for whole seconds, PX otherwise; an
+// existing hash keeps its deadline. A ttl of zero or less returns ErrInvalidTTL.
+func (c *cmds) HIncrByWithTTL(ctx context.Context, key, field string, delta int64, ttl time.Duration) (int64, error) {
+	tok, v, err := ttlArg(ttl)
+	if err != nil {
+		return 0, err
+	}
+	return c.intR(ctx, newCmd(6, cHINCRBY).s(key).s(field).i(delta).t(tok).i(v))
+}
+
 // HIncrByFloat adds a float to field and returns the new value (HINCRBYFLOAT). A missing
 // field counts as 0; a non-numeric value is a server error.
 func (c *cmds) HIncrByFloat(ctx context.Context, key, field string, delta float64) (float64, error) {

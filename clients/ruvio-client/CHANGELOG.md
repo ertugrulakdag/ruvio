@@ -4,6 +4,11 @@ Notable changes to the Rust client crate `ruvio-client`. New entries go under "U
 
 ## Unreleased
 
+- TTL on create: a deadline set only when the call creates the key (an existing key keeps its deadline), sent as `EX` for whole seconds and `PX` otherwise.
+  - New methods `incr_with_ttl`, `decr_with_ttl`, `incr_by_with_ttl`, `decr_by_with_ttl`, `incr_by_max_with_ttl`, `incr_by_float_with_ttl`, `hincr_by_with_ttl`, `zincr_by_with_ttl`, `setbit_with_ttl`, `xadd_with_ttl`, `xadd_trim_with_ttl`, `json_set_with_ttl` and, with `serde`, `json_set_value_with_ttl`.
+  - `SortedSetAddOptions` (`zadd_with`, `zadd_incr`, `geo_add_with`) and `BloomInsertOptions` (`bf_insert`) gain `ttl: Option<Duration>`. Code that builds them with a struct literal needs `..Default::default()`.
+- `ExpireCondition` (`Nx`, `Xx`, `Gt`, `Lt`) with `expire_if`, `pexpire_if`, `expire_at_if` and `pexpire_at_if`.
+
 ## 0.4.0 - 2026-10-17
 
 - New typed trim, `INFO`, `CLIENT LIST` and change-feed keywords (all constant strings, nothing formatted per call).

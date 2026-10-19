@@ -258,3 +258,33 @@ test('geo', { skip: SKIP }, async () => {
     await c.quit();
   }
 });
+
+test('ttl on create: hash, sorted set, geo', { skip: SKIP }, async () => {
+  const c = await live(2);
+  try {
+    const within = async (key: string) => {
+      const t = await c.pttl(key);
+      assert.ok(t > 90_000 && t <= 100_000, `${key} pttl ${t}`);
+    };
+    assert.equal(await c.hincrby('t:h', 'f', 2, { ttl: 100 }), 2);
+    await within('t:h');
+    await c.hincrby('t:h', 'f', 1, { ttl: 5000 });
+    await within('t:h');
+    assert.equal(await c.zincrby('t:zi', 1.5, 'm', { ttl: 100 }), 1.5);
+    await within('t:zi');
+    await c.zincrby('t:zi', 1, 'm', { ttl: 5000 });
+    await within('t:zi');
+    assert.equal(await c.zadd('t:z', 1, 'a', { ttl: 100 }), 1);
+    await within('t:z');
+    assert.equal(await c.zadd('t:z', [[2, 'b']], { ttl: 5000 }), 1);
+    await within('t:z');
+    assert.equal(await c.zaddIncr('t:z2', 3, 'a', { ttl: 100 }), 3);
+    await within('t:z2');
+    assert.equal(await c.geoadd('t:g', [{ longitude: 13.36, latitude: 38.11, member: 'p' }], { ttl: 100 }), 1);
+    await within('t:g');
+    await c.geoadd('t:g', [{ longitude: 15.08, latitude: 37.5, member: 'q' }], { ttl: 5000 });
+    await within('t:g');
+  } finally {
+    await c.quit();
+  }
+});

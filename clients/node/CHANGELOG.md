@@ -4,6 +4,9 @@ Notable changes to the Node.js client `ruvio-client` on npm. New entries go unde
 
 ## Unreleased
 
+- TTL on create: an optional `ttl` (seconds; whole numbers send `EX`, fractions send `PX`) on `incr`, `decr`, `incrby`, `decrby`, `incrbyMax`, `incrbyfloat`, `hincrby`, `zincrby`, `setbit`, `jsonSet`, `jsonSetAs`, and in `ZAddOptions`, `GeoAddOptions` (new type), `XAddOptions` and `BfInsertOptions`. The deadline is set only when the call creates the key. A `ttl` that is not positive and finite rejects with `RangeError` before anything is sent. New `TtlOptions` type.
+- `expire`, `pexpire`, `expireat` and `pexpireat` take an optional trailing `ExpireCondition` (`NX`, `XX`, `GT`, `LT`).
+
 ## 0.2.0 - 2026-10-17
 
 - Named keyword constants next to the string unions (`GeoUnit.Km`, `GeoOrder`, `ListSide`, `InsertPosition`, `BitOp`, `BitUnit`, `Aggregate`, `ScanType`, `ExpireCondition`), sent from pre-encoded buffers. `ScanOptions.type` is typed by `ScanType`; `BitfieldType` is now `` `i${number}` | `u${number}` ``; `BitfieldOp` builds `BITFIELD` sub-operations. String literals keep working.

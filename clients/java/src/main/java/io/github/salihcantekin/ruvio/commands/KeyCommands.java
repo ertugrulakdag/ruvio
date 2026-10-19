@@ -3,6 +3,7 @@ package io.github.salihcantekin.ruvio.commands;
 
 import io.github.salihcantekin.ruvio.RuvioCodec;
 import io.github.salihcantekin.ruvio.RuvioServerException;
+import io.github.salihcantekin.ruvio.args.ExpireCondition;
 import io.github.salihcantekin.ruvio.args.KeyType;
 import io.github.salihcantekin.ruvio.args.RestoreArgs;
 import io.github.salihcantekin.ruvio.args.ScanArgs;
@@ -13,6 +14,7 @@ import io.github.salihcantekin.ruvio.model.ChangeNote;
 import io.github.salihcantekin.ruvio.model.IdemResult;
 import io.github.salihcantekin.ruvio.model.ScanResult;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -447,6 +449,23 @@ public abstract class KeyCommands<K, V> extends StringCommands<K, V> {
     }
 
     /**
+     * Sends {@code EXPIRE key seconds NX|XX|GT|LT}: like {@link #expire(Object, long)}, applied only when the condition holds. A key
+     * without a deadline counts as infinite, so {@code GT} never applies to it and {@code LT} always does.
+     *
+     * @param key the key
+     * @param seconds seconds from now
+     * @param condition when to apply it: {@code NX} only without a deadline, {@code XX} only with one, {@code GT} only when later, {@code LT} only when earlier; {@link ExpireCondition#ALWAYS} sends no flag
+     * @return {@code true} when the deadline was set, {@code false} when the key does not exist or the condition failed
+     */
+    public CompletableFuture<Boolean> expire(K key, long seconds, ExpireCondition condition) {
+        Args a = args().w(Cmd.EXPIRE).k(key).l(seconds);
+        if (condition != null && condition != ExpireCondition.ALWAYS) {
+            a.w(condition.fragment());
+        }
+        return send(a, Reply.BOOL);
+    }
+
+    /**
      * Sends {@code PEXPIRE key milliseconds}: like {@link #expire(Object, long)} in milliseconds.
      *
      * @param key the key
@@ -455,6 +474,23 @@ public abstract class KeyCommands<K, V> extends StringCommands<K, V> {
      */
     public CompletableFuture<Boolean> pexpire(K key, long millis) {
         return kl(Cmd.PEXPIRE, key, millis, Reply.BOOL);
+    }
+
+    /**
+     * Sends {@code PEXPIRE key millis NX|XX|GT|LT}: like {@link #pexpire(Object, long)}, applied only when the condition holds. A key
+     * without a deadline counts as infinite, so {@code GT} never applies to it and {@code LT} always does.
+     *
+     * @param key the key
+     * @param millis milliseconds from now
+     * @param condition when to apply it: {@code NX} only without a deadline, {@code XX} only with one, {@code GT} only when later, {@code LT} only when earlier; {@link ExpireCondition#ALWAYS} sends no flag
+     * @return {@code true} when the deadline was set, {@code false} when the key does not exist or the condition failed
+     */
+    public CompletableFuture<Boolean> pexpire(K key, long millis, ExpireCondition condition) {
+        Args a = args().w(Cmd.PEXPIRE).k(key).l(millis);
+        if (condition != null && condition != ExpireCondition.ALWAYS) {
+            a.w(condition.fragment());
+        }
+        return send(a, Reply.BOOL);
     }
 
     /**
@@ -469,6 +505,23 @@ public abstract class KeyCommands<K, V> extends StringCommands<K, V> {
     }
 
     /**
+     * Sends {@code EXPIREAT key unixSeconds NX|XX|GT|LT}: like {@link #expireat(Object, long)}, applied only when the condition holds. A key
+     * without a deadline counts as infinite, so {@code GT} never applies to it and {@code LT} always does.
+     *
+     * @param key the key
+     * @param unixSeconds seconds since 1970-01-01 UTC
+     * @param condition when to apply it: {@code NX} only without a deadline, {@code XX} only with one, {@code GT} only when later, {@code LT} only when earlier; {@link ExpireCondition#ALWAYS} sends no flag
+     * @return {@code true} when the deadline was set, {@code false} when the key does not exist or the condition failed
+     */
+    public CompletableFuture<Boolean> expireat(K key, long unixSeconds, ExpireCondition condition) {
+        Args a = args().w(Cmd.EXPIREAT).k(key).l(unixSeconds);
+        if (condition != null && condition != ExpireCondition.ALWAYS) {
+            a.w(condition.fragment());
+        }
+        return send(a, Reply.BOOL);
+    }
+
+    /**
      * Sends {@code PEXPIREAT key timestamp}: expires a key at an absolute Unix time in milliseconds.
      *
      * @param key the key
@@ -477,6 +530,23 @@ public abstract class KeyCommands<K, V> extends StringCommands<K, V> {
      */
     public CompletableFuture<Boolean> pexpireat(K key, long unixMillis) {
         return kl(Cmd.PEXPIREAT, key, unixMillis, Reply.BOOL);
+    }
+
+    /**
+     * Sends {@code PEXPIREAT key unixMillis NX|XX|GT|LT}: like {@link #pexpireat(Object, long)}, applied only when the condition holds. A key
+     * without a deadline counts as infinite, so {@code GT} never applies to it and {@code LT} always does.
+     *
+     * @param key the key
+     * @param unixMillis milliseconds since 1970-01-01 UTC
+     * @param condition when to apply it: {@code NX} only without a deadline, {@code XX} only with one, {@code GT} only when later, {@code LT} only when earlier; {@link ExpireCondition#ALWAYS} sends no flag
+     * @return {@code true} when the deadline was set, {@code false} when the key does not exist or the condition failed
+     */
+    public CompletableFuture<Boolean> pexpireat(K key, long unixMillis, ExpireCondition condition) {
+        Args a = args().w(Cmd.PEXPIREAT).k(key).l(unixMillis);
+        if (condition != null && condition != ExpireCondition.ALWAYS) {
+            a.w(condition.fragment());
+        }
+        return send(a, Reply.BOOL);
     }
 
     /**

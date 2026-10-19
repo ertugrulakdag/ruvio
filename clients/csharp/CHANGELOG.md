@@ -4,6 +4,9 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 
 ## Unreleased
 
+- TTL on create: overloads that take a `TimeSpan ttl` and set the deadline only when the call creates the key (an existing key keeps its deadline; whole seconds are sent as `EX`, otherwise `PX`): `IncrementAsync`, `DecrementAsync`, `IncrementByAsync`, `DecrementByAsync`, `IncrementWithLimitAsync`, `IncrementByFloatAsync`, `IncrementHashFieldAsync`, `IncrementSortedSetAsync`, `SetBitAsync`, `AddSortedSetAsync`, `AddGeoAsync`, `AddStreamEntryAsync` and `JsonSetAsync`; `BloomInsertOptions.Ttl` for `BF.INSERT`. A zero or negative `ttl` throws `ArgumentOutOfRangeException`.
+- New `ExpireCondition` (`Nx`, `Xx`, `Gt`, `Lt`) and `ExpireAsync` / `ExpireAtAsync` overloads that send it with `EXPIRE`, `PEXPIRE`, `EXPIREAT` or `PEXPIREAT`. The new `IRuvioClient` members have default implementations, so existing implementations keep compiling.
+
 ## 0.3.4 - 2026-10-17
 
 - Wave 2 of typed keywords: `StreamTrim` (`MaxLen` or `MinId`, `StreamTrimMode.Exact` `=` or `Approximate` `~`) for `XADD` and `XTRIM` (`AddStreamEntryAsync` and `TrimStreamAsync` overloads; the server does not accept `LIMIT`); `InfoSection` for `GetInfoAsync`; `ClientType` for `GetClientListAsync`; `StreamIds`, `ScoreBound` and `LexBound` constants and builders for the stream and sorted-set range arguments. `XTRIM`, `INFO` and `CLIENT LIST` write the keyword from a shared pre-encoded token. The client has no `CHANGES SUBSCRIBE` wrapper, so no change-type set was added.

@@ -294,6 +294,75 @@ func (c *cmds) IncrByFloat(ctx context.Context, key string, delta float64) (floa
 	return c.floatR(ctx, newCmd(3, cINCRBYFLOAT).s(key).f(delta))
 }
 
+// ---- TTL on create ----------------------------------------------------------
+//
+// The WithTTL methods below send EX seconds (when ttl is a whole number of seconds) or
+// PX milliseconds (otherwise). The deadline is set only when the call creates the key; an
+// existing key keeps its current deadline. A ttl of zero or less returns ErrInvalidTTL
+// without contacting the server.
+
+// IncrWithTTL is Incr that also sets a deadline when it creates the key (INCR key EX|PX).
+// An existing key keeps its deadline.
+func (c *cmds) IncrWithTTL(ctx context.Context, key string, ttl time.Duration) (int64, error) {
+	tok, v, err := ttlArg(ttl)
+	if err != nil {
+		return 0, err
+	}
+	return c.intR(ctx, newCmd(4, cINCR).s(key).t(tok).i(v))
+}
+
+// DecrWithTTL is Decr that also sets a deadline when it creates the key (DECR key
+// EX|PX). An existing key keeps its deadline.
+func (c *cmds) DecrWithTTL(ctx context.Context, key string, ttl time.Duration) (int64, error) {
+	tok, v, err := ttlArg(ttl)
+	if err != nil {
+		return 0, err
+	}
+	return c.intR(ctx, newCmd(4, cDECR).s(key).t(tok).i(v))
+}
+
+// IncrByWithTTL is IncrBy that also sets a deadline when it creates the key (INCRBY key
+// delta EX|PX). An existing key keeps its deadline.
+func (c *cmds) IncrByWithTTL(ctx context.Context, key string, delta int64, ttl time.Duration) (int64, error) {
+	tok, v, err := ttlArg(ttl)
+	if err != nil {
+		return 0, err
+	}
+	return c.intR(ctx, newCmd(5, cINCRBY).s(key).i(delta).t(tok).i(v))
+}
+
+// DecrByWithTTL is DecrBy that also sets a deadline when it creates the key (DECRBY key
+// delta EX|PX). An existing key keeps its deadline.
+func (c *cmds) DecrByWithTTL(ctx context.Context, key string, delta int64, ttl time.Duration) (int64, error) {
+	tok, v, err := ttlArg(ttl)
+	if err != nil {
+		return 0, err
+	}
+	return c.intR(ctx, newCmd(5, cDECRBY).s(key).i(delta).t(tok).i(v))
+}
+
+// IncrByMaxWithTTL is IncrByMax that also sets a deadline when it creates the key
+// (INCRBY key delta EX|PX MAX limit). The deadline is set only when the add is applied
+// and creates the key; when the result would pass limit nothing is written (ok is false)
+// and no key is created.
+func (c *cmds) IncrByMaxWithTTL(ctx context.Context, key string, delta, limit int64, ttl time.Duration) (int64, bool, error) {
+	tok, v, err := ttlArg(ttl)
+	if err != nil {
+		return 0, false, err
+	}
+	return c.intNil(ctx, newCmd(7, cINCRBY).s(key).i(delta).t(tok).i(v).t(tMAX).i(limit))
+}
+
+// IncrByFloatWithTTL is IncrByFloat that also sets a deadline when it creates the key
+// (INCRBYFLOAT key delta EX|PX). An existing key keeps its deadline.
+func (c *cmds) IncrByFloatWithTTL(ctx context.Context, key string, delta float64, ttl time.Duration) (float64, error) {
+	tok, v, err := ttlArg(ttl)
+	if err != nil {
+		return 0, err
+	}
+	return c.floatR(ctx, newCmd(5, cINCRBYFLOAT).s(key).f(delta).t(tok).i(v))
+}
+
 // GetRange returns the substring of the string at key between the byte offsets start and
 // end, both inclusive (GETRANGE). Negative offsets count from the end (-1 is the last
 // byte). Offsets beyond the string are clamped. A missing key, or a range that lies
@@ -616,6 +685,17 @@ func (c *cmds) RuvioOwner(ctx context.Context) (string, error) {
 // returns WRONGTYPE.
 func (c *cmds) SetBit(ctx context.Context, key string, offset int64, bit int) (int64, error) {
 	return c.intR(ctx, newCmd(4, cSETBIT).s(key).i(offset).i(int64(bit)))
+}
+
+// SetBitWithTTL is SetBit that also sets a deadline when it creates the key (SETBIT key
+// offset bit EX|PX). An existing key keeps its deadline. A ttl of zero or less returns
+// ErrInvalidTTL.
+func (c *cmds) SetBitWithTTL(ctx context.Context, key string, offset int64, bit int, ttl time.Duration) (int64, error) {
+	tok, v, err := ttlArg(ttl)
+	if err != nil {
+		return 0, err
+	}
+	return c.intR(ctx, newCmd(6, cSETBIT).s(key).i(offset).i(int64(bit)).t(tok).i(v))
 }
 
 // GetBit returns the bit at offset (GETBIT): 0 for a missing key or an offset beyond the

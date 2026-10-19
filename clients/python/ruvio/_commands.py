@@ -11,6 +11,7 @@ hover to read the per-command notes: arguments, return value, errors and an exam
 from __future__ import annotations
 
 import json as _json
+from datetime import timedelta
 from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 from ._constants import (
@@ -18,6 +19,7 @@ from ._constants import (
     BitOperation,
     BitUnit,
     ClientType,
+    ExpireCondition,
     GeoOrder,
     GeoUnit,
     InfoSection,
@@ -35,6 +37,8 @@ Arg = Union[str, bytes, int, float]
 GeoUnitT = Union[GeoUnit, Literal["m", "km", "ft", "mi"]]
 GeoOrderT = Union[GeoOrder, Literal["ASC", "DESC"]]
 InsertPositionT = Union[InsertPosition, Literal["BEFORE", "AFTER"]]
+ExpireConditionT = Union[ExpireCondition, Literal["NX", "XX", "GT", "LT"]]
+TtlT = Union[int, float, timedelta]
 ListSideT = Union[ListSide, Literal["LEFT", "RIGHT"]]
 BitOperationT = Union[BitOperation, Literal["AND", "OR", "XOR", "NOT"]]
 BitUnitT = Union[BitUnit, Literal["BYTE", "BIT"]]
@@ -79,6 +83,7 @@ from ._converters import (  # noqa: F401
     _pairs,
     _pairs_text_keys,
     _s,
+    _ttl_args,
     _scan,
     _scan_pairs,
     _scan_scored,
@@ -922,13 +927,16 @@ class Commands:
         """
         return self._c(None, "STRLEN", key)
 
-    def incr(self, key: KeyT) -> Any:
-        """``INCR key`` - adds 1 to a decimal integer. A missing key counts as 0.
+    def incr(self, key: KeyT, *, ttl: Optional[TtlT] = None) -> Any:
+        """``INCR key [EX seconds|PX ms]`` - adds 1 to a decimal integer. A missing key counts as 0.
 
         Counters are signed 64-bit integers and keep an existing TTL.
 
         Args:
             key: The key.
+            ttl: Optional time to live for a key this call creates, in seconds (``int`` or ``float``) or a
+                :class:`~datetime.timedelta`. The deadline is set only when the call creates the key; an existing
+                key keeps its own deadline. Whole seconds send ``EX``, a sub-second part sends ``PX``.
 
         Returns:
             The new value (``int``).
@@ -936,21 +944,28 @@ class Commands:
         Raises:
             ResponseError: The value is not an integer or the result would overflow (value unchanged).
             WrongTypeError: The key holds a non-string type.
+            ValueError: ``ttl`` is zero or negative (nothing is sent).
 
         Example:
             client.incr("hits")   # -> 1
             client.incr("hits")   # -> 2
+            client.incr("window", ttl=60)   # creates "window" with a 60 s deadline on first use
         """
+        if ttl is not None:
+            return self._c(None, "INCR", key, *_ttl_args(ttl))
         if type(key) is str:
             key = key.encode("utf-8", "surrogateescape")
         n = len(key)
         return self._x(None, b"".join((_INCR, _BULK_LEN[n] if n < _TABLE else b"$%d\r\n" % n, key, _CRLF)))
 
-    def decr(self, key: KeyT) -> Any:
-        """``DECR key`` - subtracts 1 from a decimal integer. A missing key counts as 0.
+    def decr(self, key: KeyT, *, ttl: Optional[TtlT] = None) -> Any:
+        """``DECR key [EX seconds|PX ms]`` - subtracts 1 from a decimal integer. A missing key counts as 0.
 
         Args:
             key: The key.
+            ttl: Optional time to live for a key this call creates, in seconds (``int`` or ``float``) or a
+                :class:`~datetime.timedelta`. The deadline is set only when the call creates the key; an existing
+                key keeps its own deadline. Whole seconds send ``EX``, a sub-second part sends ``PX``.
 
         Returns:
             The new value (``int``).
@@ -958,11 +973,12 @@ class Commands:
         Raises:
             ResponseError: The value is not an integer or the result would overflow.
             WrongTypeError: The key holds a non-string type.
+            ValueError: ``ttl`` is zero or negative (nothing is sent).
         """
-        return self._c(None, "DECR", key)
+        return self._c(None, "DECR", key, *_ttl_args(ttl)) if ttl is not None else self._c(None, "DECR", key)
 
-    def incrby(self, key: KeyT, amount: int = 1, max: Optional[int] = None) -> Any:  # noqa: A002
-        """``INCRBY key amount [MAX limit]`` - adds an integer; with ``max`` it refuses to pass a ceiling.
+    def incrby(self, key: KeyT, amount: int = 1, max: Optional[int] = None, *, ttl: Optional[TtlT] = None) -> Any:  # noqa: A002
+        """``INCRBY key amount [EX seconds|PX ms] [MAX limit]`` - adds an integer; with ``max`` it refuses to pass a ceiling.
 
         The ``MAX`` option is a Ruvio extension, useful for quotas: the check and the increment are
         one atomic step.
@@ -971,6 +987,9 @@ class Commands:
             key: The key (a missing key counts as 0).
             amount: Integer to add; may be negative.
             max: Optional ceiling. When the result would be greater than ``max`` nothing is written.
+            ttl: Optional time to live for a key this call creates, in seconds (``int`` or ``float``) or a
+                :class:`~datetime.timedelta`. The deadline is set only when the call creates the key; an existing
+                key keeps its own deadline. Whole seconds send ``EX``, a sub-second part sends ``PX``.
 
         Returns:
             The new value (``int``), or ``None`` when ``max`` would have been exceeded.
@@ -978,20 +997,26 @@ class Commands:
         Raises:
             ResponseError: The value is not an integer or the result would overflow 64 bits.
             WrongTypeError: The key holds a non-string type.
+            ValueError: ``ttl`` is zero or negative (nothing is sent).
 
         Example:
             client.incrby("quota", 1, max=3)   # -> 1, 2, 3 and then None
+            client.incrby("quota:day", 1, max=100, ttl=86400)   # the day window starts on the first call
         """
-        if max is None:
-            return self._c(None, "INCRBY", key, amount)
-        return self._c(None, "INCRBY", key, amount, "MAX", max)
+        args: List[Any] = _ttl_args(ttl) if ttl is not None else []
+        if max is not None:
+            args += ["MAX", max]
+        return self._c(None, "INCRBY", key, amount, *args)
 
-    def decrby(self, key: KeyT, amount: int = 1) -> Any:
-        """``DECRBY key amount`` - subtracts an integer.
+    def decrby(self, key: KeyT, amount: int = 1, *, ttl: Optional[TtlT] = None) -> Any:
+        """``DECRBY key amount [EX seconds|PX ms]`` - subtracts an integer.
 
         Args:
             key: The key (a missing key counts as 0).
             amount: Integer to subtract.
+            ttl: Optional time to live for a key this call creates, in seconds (``int`` or ``float``) or a
+                :class:`~datetime.timedelta`. The deadline is set only when the call creates the key; an existing
+                key keeps its own deadline. Whole seconds send ``EX``, a sub-second part sends ``PX``.
 
         Returns:
             The new value (``int``).
@@ -999,11 +1024,12 @@ class Commands:
         Raises:
             ResponseError: The value is not an integer or the result would overflow.
             WrongTypeError: The key holds a non-string type.
+            ValueError: ``ttl`` is zero or negative (nothing is sent).
         """
-        return self._c(None, "DECRBY", key, amount)
+        return self._c(None, "DECRBY", key, amount, *(_ttl_args(ttl) if ttl is not None else ()))
 
-    def incrbyfloat(self, key: KeyT, amount: float) -> Any:
-        """``INCRBYFLOAT key amount`` - adds a float. A missing key counts as 0; keeps the TTL.
+    def incrbyfloat(self, key: KeyT, amount: float, *, ttl: Optional[TtlT] = None) -> Any:
+        """``INCRBYFLOAT key amount [EX seconds|PX ms]`` - adds a float. A missing key counts as 0; keeps the TTL.
 
         The sum is computed in double precision and stored with at most 15 significant digits (Redis
         uses ``long double``, so the last digits can differ).
@@ -1011,6 +1037,9 @@ class Commands:
         Args:
             key: The key.
             amount: Number to add; may be negative.
+            ttl: Optional time to live for a key this call creates, in seconds (``int`` or ``float``) or a
+                :class:`~datetime.timedelta`. The deadline is set only when the call creates the key; an existing
+                key keeps its own deadline. Whole seconds send ``EX``, a sub-second part sends ``PX``.
 
         Returns:
             The new value as ``float``.
@@ -1018,8 +1047,9 @@ class Commands:
         Raises:
             ResponseError: The value is not a valid float, or the result would be NaN or infinite.
             WrongTypeError: The key holds a non-string type.
+            ValueError: ``ttl`` is zero or negative (nothing is sent).
         """
-        return self._c(float, "INCRBYFLOAT", key, amount)
+        return self._c(float, "INCRBYFLOAT", key, amount, *(_ttl_args(ttl) if ttl is not None else ()))
 
     def setex(self, key: KeyT, seconds: int, value: Arg) -> Any:
         """``SETEX key seconds value`` - writes a string with a TTL in seconds (same as ``SET ... EX``).
@@ -1606,53 +1636,73 @@ class Commands:
         """
         return self._c(_bool, "MOVE", key, db)
 
-    def expire(self, key: KeyT, seconds: int) -> Any:
-        """``EXPIRE key seconds`` - sets a TTL in seconds.
+    def expire(self, key: KeyT, seconds: int, condition: Optional[ExpireConditionT] = None) -> Any:
+        """``EXPIRE key seconds [NX|XX|GT|LT]`` - sets a TTL in seconds.
 
         Args:
             key: The key.
             seconds: Time to live. Zero or negative deletes the key (and returns ``True``).
+            condition: Optional :class:`ExpireCondition` (or ``"NX"``, ``"XX"``, ``"GT"``, ``"LT"``). ``NX`` sets
+                the deadline only when the key has none, ``XX`` only when it has one, ``GT`` only when the new
+                deadline is later, ``LT`` only when it is earlier. A key without a deadline counts as infinite.
 
         Returns:
-            ``True`` when the key exists and the TTL was set, ``False`` when the key is missing.
+            ``True`` when the key exists and the TTL was set, ``False`` when the key is missing or the condition failed.
         """
-        return self._c(_bool, "EXPIRE", key, seconds)
+        if condition is None:
+            return self._c(_bool, "EXPIRE", key, seconds)
+        return self._c(_bool, "EXPIRE", key, seconds, condition)
 
-    def pexpire(self, key: KeyT, ms: int) -> Any:
-        """``PEXPIRE key ms`` - sets a TTL in milliseconds.
+    def pexpire(self, key: KeyT, ms: int, condition: Optional[ExpireConditionT] = None) -> Any:
+        """``PEXPIRE key ms [NX|XX|GT|LT]`` - sets a TTL in milliseconds.
 
         Args:
             key: The key.
             ms: Time to live. Zero or negative deletes the key (and returns ``True``).
+            condition: Optional :class:`ExpireCondition` (or ``"NX"``, ``"XX"``, ``"GT"``, ``"LT"``). ``NX`` sets
+                the deadline only when the key has none, ``XX`` only when it has one, ``GT`` only when the new
+                deadline is later, ``LT`` only when it is earlier. A key without a deadline counts as infinite.
 
         Returns:
-            ``True`` when set, ``False`` when the key is missing.
+            ``True`` when set, ``False`` when the key is missing or the condition failed.
         """
-        return self._c(_bool, "PEXPIRE", key, ms)
+        if condition is None:
+            return self._c(_bool, "PEXPIRE", key, ms)
+        return self._c(_bool, "PEXPIRE", key, ms, condition)
 
-    def expireat(self, key: KeyT, when: int) -> Any:
-        """``EXPIREAT key when`` - sets an absolute expiry.
+    def expireat(self, key: KeyT, when: int, condition: Optional[ExpireConditionT] = None) -> Any:
+        """``EXPIREAT key when [NX|XX|GT|LT]`` - sets an absolute expiry.
 
         Args:
             key: The key.
             when: Unix time in seconds. A time in the past removes the key.
+            condition: Optional :class:`ExpireCondition` (or ``"NX"``, ``"XX"``, ``"GT"``, ``"LT"``). ``NX`` sets
+                the deadline only when the key has none, ``XX`` only when it has one, ``GT`` only when the new
+                deadline is later, ``LT`` only when it is earlier. A key without a deadline counts as infinite.
 
         Returns:
-            ``True`` when set, ``False`` when the key is missing.
+            ``True`` when set, ``False`` when the key is missing or the condition failed.
         """
-        return self._c(_bool, "EXPIREAT", key, when)
+        if condition is None:
+            return self._c(_bool, "EXPIREAT", key, when)
+        return self._c(_bool, "EXPIREAT", key, when, condition)
 
-    def pexpireat(self, key: KeyT, when_ms: int) -> Any:
-        """``PEXPIREAT key when_ms`` - sets an absolute expiry in milliseconds.
+    def pexpireat(self, key: KeyT, when_ms: int, condition: Optional[ExpireConditionT] = None) -> Any:
+        """``PEXPIREAT key when_ms [NX|XX|GT|LT]`` - sets an absolute expiry in milliseconds.
 
         Args:
             key: The key.
             when_ms: Unix time in milliseconds. A time in the past removes the key.
+            condition: Optional :class:`ExpireCondition` (or ``"NX"``, ``"XX"``, ``"GT"``, ``"LT"``). ``NX`` sets
+                the deadline only when the key has none, ``XX`` only when it has one, ``GT`` only when the new
+                deadline is later, ``LT`` only when it is earlier. A key without a deadline counts as infinite.
 
         Returns:
-            ``True`` when set, ``False`` when the key is missing.
+            ``True`` when set, ``False`` when the key is missing or the condition failed.
         """
-        return self._c(_bool, "PEXPIREAT", key, when_ms)
+        if condition is None:
+            return self._c(_bool, "PEXPIREAT", key, when_ms)
+        return self._c(_bool, "PEXPIREAT", key, when_ms, condition)
 
     def ttl(self, key: KeyT) -> Any:
         """``TTL key`` - remaining time to live in seconds.
@@ -2707,13 +2757,16 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
         """
         return self._c(None, "HVALS", key)
 
-    def hincrby(self, key: KeyT, field: Arg, amount: int = 1) -> Any:
-        """``HINCRBY key field amount`` - adds an integer to a field (missing counts as 0). Keeps a field TTL.
+    def hincrby(self, key: KeyT, field: Arg, amount: int = 1, *, ttl: Optional[TtlT] = None) -> Any:
+        """``HINCRBY key field amount [EX seconds|PX ms]`` - adds an integer to a field (missing counts as 0). Keeps a field TTL.
 
         Args:
             key: The hash key.
             field: Field name.
             amount: Integer to add (default 1); may be negative.
+            ttl: Optional time to live for a hash key this call creates, in seconds (``int`` or ``float``) or a
+                :class:`~datetime.timedelta`. The deadline is set only when the call creates the key; an existing
+                key keeps its own deadline. Whole seconds send ``EX``, a sub-second part sends ``PX``.
 
         Returns:
             The new value (``int``).
@@ -2721,8 +2774,9 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
         Raises:
             ResponseError: The field is not an integer or the result overflows.
             WrongTypeError: The key holds a non-hash type.
+            ValueError: ``ttl`` is zero or negative (nothing is sent).
         """
-        return self._c(None, "HINCRBY", key, field, amount)
+        return self._c(None, "HINCRBY", key, field, amount, *(_ttl_args(ttl) if ttl is not None else ()))
 
     def hincrbyfloat(self, key: KeyT, field: Arg, amount: float) -> Any:
         """``HINCRBYFLOAT key field amount`` - adds a float to a field (15 significant digits). Keeps a field TTL.
@@ -2962,8 +3016,10 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
         lt: bool = False,
         ch: bool = False,
         incr: bool = False,
+        *,
+        ttl: Optional[TtlT] = None,
     ) -> Any:
-        """``ZADD key [NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]`` - adds or updates sorted-set members.
+        """``ZADD key [EX seconds|PX ms] [NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]`` - adds or updates sorted-set members.
 
         Args:
             key: The sorted-set key (created when missing).
@@ -2975,6 +3031,9 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
             lt: Update only when the new score is lower (new members are still added).
             ch: Count changed members (new plus updated) instead of only new ones.
             incr: Treat the single pair as an increment, like :meth:`zincrby`.
+            ttl: Optional time to live for a sorted-set key this call creates, in seconds (``int`` or ``float``) or a
+                :class:`~datetime.timedelta`. Set only when the call creates the key; an existing key keeps its
+                own deadline. Whole seconds send ``EX``, a sub-second part sends ``PX``. Keyword-only.
 
         Returns:
             The number of new members (or changed ones with ``ch``). With ``incr``: the new score as
@@ -2983,12 +3042,16 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
         Raises:
             WrongTypeError: The key holds a non-sorted-set type.
             ResponseError: Conflicting options or a score that is not a number.
+            ValueError: ``ttl`` is zero or negative (nothing is sent).
 
         Example:
             client.zadd("board", {"ann": 10, "bob": 7})   # -> 2
             client.zadd("board", {"ann": 12}, ch=True)    # -> 1
         """
-        args: List[Any] = [key, *_expire_cond(nx, xx, gt, lt)]
+        args: List[Any] = [key]
+        if ttl is not None:
+            args += _ttl_args(ttl)
+        args += _expire_cond(nx, xx, gt, lt)
         if ch:
             args.append("CH")
         if incr:
@@ -3157,18 +3220,24 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
         """
         return self._c(None, "ZREM", key, *members)
 
-    def zincrby(self, key: KeyT, amount: float, member: Arg) -> Any:
-        """``ZINCRBY key amount member`` - adds to a member's score (member created at ``amount`` if new).
+    def zincrby(self, key: KeyT, amount: float, member: Arg, *, ttl: Optional[TtlT] = None) -> Any:
+        """``ZINCRBY key amount member [EX seconds|PX ms]`` - adds to a member's score (member created at ``amount`` if new).
 
         Args:
             key: The sorted-set key.
             amount: Number to add; may be negative.
             member: The member.
+            ttl: Optional time to live for a sorted-set key this call creates, in seconds (``int`` or ``float``) or a
+                :class:`~datetime.timedelta`. The deadline is set only when the call creates the key; an existing
+                key keeps its own deadline. Whole seconds send ``EX``, a sub-second part sends ``PX``.
 
         Returns:
             The new score as ``float``.
+
+        Raises:
+            ValueError: ``ttl`` is zero or negative (nothing is sent).
         """
-        return self._c(float, "ZINCRBY", key, amount, member)
+        return self._c(float, "ZINCRBY", key, amount, member, *(_ttl_args(ttl) if ttl is not None else ()))
 
     def zcard(self, key: KeyT) -> Any:
         """``ZCARD key`` - number of members.
@@ -3516,9 +3585,16 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
 
     # ======================================================= geo
     def geoadd(
-        self, key: KeyT, values: Iterable[Tuple[float, float, Arg]], nx: bool = False, xx: bool = False, ch: bool = False
+        self,
+        key: KeyT,
+        values: Iterable[Tuple[float, float, Arg]],
+        nx: bool = False,
+        xx: bool = False,
+        ch: bool = False,
+        *,
+        ttl: Optional[TtlT] = None,
     ) -> Any:
-        """``GEOADD key [NX|XX] [CH] longitude latitude member [...]`` - adds places to a geo index.
+        """``GEOADD key [EX seconds|PX ms] [NX|XX] [CH] longitude latitude member [...]`` - adds places to a geo index.
 
         A geo index is a sorted set whose score is a 52-bit geohash, so ``type`` reports ``zset`` and the
         ``z*`` commands work on it. Coordinates are stored with about 0.6 m precision, so
@@ -3531,6 +3607,9 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
             nx: Only add new members.
             xx: Only update existing members.
             ch: Count changed members instead of only new ones.
+            ttl: Optional time to live for a geo key this call creates, in seconds (``int`` or ``float``) or a
+                :class:`~datetime.timedelta`. Set only when the call creates the key; an existing key keeps its
+                own deadline. Whole seconds send ``EX``, a sub-second part sends ``PX``. Keyword-only.
 
         Returns:
             The number of members added (or changed with ``ch``).
@@ -3538,11 +3617,14 @@ Same as ``lmove(src, dst, "RIGHT", "LEFT")``.
         Raises:
             ResponseError: A coordinate is out of range (``invalid longitude,latitude pair``).
             WrongTypeError: The key holds a non-sorted-set type.
+            ValueError: ``ttl`` is zero or negative (nothing is sent).
 
         Example:
             client.geoadd("shops", [(13.361389, 38.115556, "palermo"), (15.087269, 37.502669, "catania")])
         """
         args: List[Any] = [key]
+        if ttl is not None:
+            args += _ttl_args(ttl)
         if nx:
             args.append("NX")
         if xx:
@@ -3931,10 +4013,12 @@ Sends ``GEORADIUS key lon lat radius unit [WITH...] [COUNT n [ANY]] [ASC|DESC] [
         expansion: Optional[int] = None,
         nocreate: bool = False,
         nonscaling: bool = False,
+        *,
+        ttl: Optional[TtlT] = None,
     ) -> Any:
         """``BF.INSERT`` - adds items, optionally creating the filter with given options.
 
-Sends ``BF.INSERT key [CAPACITY c] [ERROR e] [EXPANSION n] [NOCREATE] [NONSCALING] ITEMS item...``.
+Sends ``BF.INSERT key [EX seconds|PX ms] [CAPACITY c] [ERROR e] [EXPANSION n] [NOCREATE] [NONSCALING] ITEMS item...``.
 
         The creation options apply only when the key is new.
 
@@ -3946,14 +4030,20 @@ Sends ``BF.INSERT key [CAPACITY c] [ERROR e] [EXPANSION n] [NOCREATE] [NONSCALIN
             expansion: Growth factor for a new filter.
             nocreate: Fail instead of creating the filter.
             nonscaling: Create a non-scaling filter.
+            ttl: Optional time to live for a filter this call creates, in seconds (``int`` or ``float``) or a
+                :class:`~datetime.timedelta`. Set only when the call creates the key; an existing key keeps its
+                own deadline. Whole seconds send ``EX``, a sub-second part sends ``PX``. Keyword-only.
 
         Returns:
             A list of booleans as in :meth:`bf_madd`.
 
         Raises:
             ResponseError: ``ERR not found`` - ``nocreate`` and the key is missing.
+            ValueError: ``ttl`` is zero or negative (nothing is sent).
         """
         args: List[Any] = [key]
+        if ttl is not None:
+            args += _ttl_args(ttl)
         if capacity is not None:
             args += ["CAPACITY", capacity]
         if error is not None:
@@ -4060,8 +4150,10 @@ Sends ``BF.INSERT key [CAPACITY c] [ERROR e] [EXPANSION n] [NOCREATE] [NONSCALIN
         """
         return self._c(None, "JSON.GET", key) if path is None else self._c(None, "JSON.GET", key, path)
 
-    def json_set(self, key: KeyT, path: str, value: Arg, nx: bool = False, xx: bool = False) -> Any:
-        """``JSON.SET key path json [NX|XX]`` - writes JSON text at a path.
+    def json_set(
+        self, key: KeyT, path: str, value: Arg, nx: bool = False, xx: bool = False, *, ttl: Optional[TtlT] = None
+    ) -> Any:
+        """``JSON.SET key path json [NX|XX] [EX seconds|PX ms]`` - writes JSON text at a path.
 
         A missing key can only be created at ``$``. The document is limited to 16 MiB. Only existing
         intermediate nodes are used; a final object field may be created. Keeps the key's TTL.
@@ -4072,6 +4164,9 @@ Sends ``BF.INSERT key [CAPACITY c] [ERROR e] [EXPANSION n] [NOCREATE] [NONSCALIN
             value: The value as JSON text, e.g. ``'{"a":1}'``, ``'"text"'``, ``'42'``.
             nx: Write only when the path does not exist.
             xx: Write only when the path exists.
+            ttl: Optional time to live for a JSON key this call creates, in seconds (``int`` or ``float``) or a
+                :class:`~datetime.timedelta`. Set only when the call creates the key; an existing key keeps its
+                own deadline. Whole seconds send ``EX``, a sub-second part sends ``PX``. Keyword-only.
 
         Returns:
             ``True`` when written, ``False`` when the path could not be reached or ``nx``/``xx`` refused.
@@ -4079,16 +4174,20 @@ Sends ``BF.INSERT key [CAPACITY c] [ERROR e] [EXPANSION n] [NOCREATE] [NONSCALIN
         Raises:
             ResponseError: ``invalid JSON value`` or ``invalid JSON path``.
             WrongTypeError: The key holds a non-JSON type.
+            ValueError: ``ttl`` is zero or negative (nothing is sent).
 
         Example:
             client.json_set("user:1", "$", '{"name":"Ada","tags":[]}')
             client.json_set("user:1", "$.name", '"Grace"')
         """
+        args: List[Any] = [key, path, value]
         if nx:
-            return self._c(_ok, "JSON.SET", key, path, value, "NX")
+            args.append("NX")
         if xx:
-            return self._c(_ok, "JSON.SET", key, path, value, "XX")
-        return self._c(_ok, "JSON.SET", key, path, value)
+            args.append("XX")
+        if ttl is not None:
+            args += _ttl_args(ttl)
+        return self._c(_ok, "JSON.SET", *args)
 
     def json_get_obj(self, key: KeyT, path: Optional[str] = None) -> Any:
         """Typed JSON helper: :meth:`json_get` decoded with :func:`json.loads`.
@@ -4105,7 +4204,9 @@ Sends ``BF.INSERT key [CAPACITY c] [ERROR e] [EXPANSION n] [NOCREATE] [NONSCALIN
         """
         return self._c(_json_load, "JSON.GET", key) if path is None else self._c(_json_load, "JSON.GET", key, path)
 
-    def json_set_obj(self, key: KeyT, obj: Any, path: str = "$", nx: bool = False, xx: bool = False) -> Any:
+    def json_set_obj(
+        self, key: KeyT, obj: Any, path: str = "$", nx: bool = False, xx: bool = False, *, ttl: Optional[TtlT] = None
+    ) -> Any:
         """Typed JSON helper: encodes ``obj`` with :func:`json.dumps` (compact) and calls :meth:`json_set`.
 
         Args:
@@ -4114,6 +4215,9 @@ Sends ``BF.INSERT key [CAPACITY c] [ERROR e] [EXPANSION n] [NOCREATE] [NONSCALIN
             path: Path to write (default ``$``).
             nx: Write only when the path does not exist.
             xx: Write only when the path exists.
+            ttl: Optional time to live for a JSON key this call creates, in seconds (``int`` or ``float``) or a
+                :class:`~datetime.timedelta`. Set only when the call creates the key; an existing key keeps its
+                own deadline. Whole seconds send ``EX``, a sub-second part sends ``PX``. Keyword-only.
 
         Returns:
             ``True`` when written, ``False`` otherwise (see :meth:`json_set`).
@@ -4121,7 +4225,7 @@ Sends ``BF.INSERT key [CAPACITY c] [ERROR e] [EXPANSION n] [NOCREATE] [NONSCALIN
         Raises:
             TypeError: ``obj`` is not JSON serializable.
         """
-        return self.json_set(key, path, _json.dumps(obj, separators=(",", ":")), nx=nx, xx=xx)
+        return self.json_set(key, path, _json.dumps(obj, separators=(",", ":")), nx=nx, xx=xx, ttl=ttl)
 
     def json_mget_obj(self, keys: Sequence[KeyT], path: str = "$") -> Any:
         """Typed JSON helper: :meth:`json_mget` with every value decoded by :func:`json.loads`.
@@ -4531,8 +4635,10 @@ Sends ``JSON.INDEX CREATE name PREFIX p PATH $.field [TYPE string|number|bool]``
         nomkstream: bool = False,
         delay_ms: Optional[int] = None,
         trim: Optional[StreamTrim] = None,
+        *,
+        ttl: Optional[TtlT] = None,
     ) -> Any:
-        """``XADD key [NOMKSTREAM] [DELAY ms] [MAXLEN|MINID [~] n] id field value [...]`` - appends an entry to a stream.
+        """``XADD key [EX seconds|PX ms] [NOMKSTREAM] [DELAY ms] [MAXLEN|MINID [~] n] id field value [...]`` - appends an entry to a stream.
 
         Args:
             key: The stream key (created unless ``nomkstream``).
@@ -4547,6 +4653,9 @@ Sends ``JSON.INDEX CREATE name PREFIX p PATH $.field [TYPE string|number|bool]``
                 (delayed jobs). ``xread`` and ``xrange`` still see it.
             trim: A :class:`StreamTrim` (``MAXLEN`` or ``MINID``, ``=`` or ``~``, threshold); use it instead of
                 ``maxlen`` / ``minid`` / ``approximate``. Example: ``trim=StreamTrim.maxlen(10000, TrimMode.APPROXIMATE)``.
+            ttl: Optional time to live for a stream key this call creates, in seconds (``int`` or ``float``) or a
+                :class:`~datetime.timedelta`. Set only when the call creates the key; an existing key keeps its
+                own deadline. Whole seconds send ``EX``, a sub-second part sends ``PX``. Keyword-only.
 
         Returns:
             The new entry id as text, or ``None`` with ``nomkstream`` on a missing key.
@@ -4554,11 +4663,14 @@ Sends ``JSON.INDEX CREATE name PREFIX p PATH $.field [TYPE string|number|bool]``
         Raises:
             ResponseError: Id not greater than the top id, or invalid options.
             WrongTypeError: The key holds a non-stream type.
+            ValueError: ``ttl`` is zero or negative (nothing is sent).
 
         Example:
             client.xadd("events", {"type": "signup", "user": "7"}, maxlen=10000)
         """
         args: List[Any] = [key]
+        if ttl is not None:
+            args += _ttl_args(ttl)
         if nomkstream:
             args.append("NOMKSTREAM")
         if delay_ms is not None:
@@ -5413,8 +5525,8 @@ Sends ``XCLAIM key group consumer min_idle_ms id... [IDLE ms] [TIME ms] [RETRYCO
         return self._c(None, "SPUBLISH", channel, message)
 
     # ======================================================= bitmaps / hyperloglog
-    def setbit(self, key: KeyT, offset: int, value: int) -> Any:
-        """``SETBIT key offset value`` - sets one bit of a string (bitmap).
+    def setbit(self, key: KeyT, offset: int, value: int, *, ttl: Optional[TtlT] = None) -> Any:
+        """``SETBIT key offset value [EX seconds|PX ms]`` - sets one bit of a string (bitmap).
 
         The string grows with zero bytes as needed and is limited to 16 MiB (offset below 134,217,728).
         Each call rewrites the value; an existing TTL is kept.
@@ -5423,6 +5535,9 @@ Sends ``XCLAIM key group consumer min_idle_ms id... [IDLE ms] [TIME ms] [RETRYCO
             key: The key.
             offset: Bit offset, ``>= 0``.
             value: ``0`` or ``1``.
+            ttl: Optional time to live for a key this call creates, in seconds (``int`` or ``float``) or a
+                :class:`~datetime.timedelta`. The deadline is set only when the call creates the key; an existing
+                key keeps its own deadline. Whole seconds send ``EX``, a sub-second part sends ``PX``.
 
         Returns:
             The previous bit value (``0`` or ``1``).
@@ -5430,8 +5545,9 @@ Sends ``XCLAIM key group consumer min_idle_ms id... [IDLE ms] [TIME ms] [RETRYCO
         Raises:
             ResponseError: Offset too large or value not 0/1.
             WrongTypeError: The key holds a non-string type.
+            ValueError: ``ttl`` is zero or negative (nothing is sent).
         """
-        return self._c(None, "SETBIT", key, offset, value)
+        return self._c(None, "SETBIT", key, offset, value, *(_ttl_args(ttl) if ttl is not None else ()))
 
     def getbit(self, key: KeyT, offset: int) -> Any:
         """``GETBIT key offset`` - reads one bit.

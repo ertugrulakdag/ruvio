@@ -173,4 +173,30 @@ class SortedSetGeoLiveTest {
         assertEquals(2L, c.georadiusStore("g", 15, 37, 200, GeoUnit.KM, "gr", false));
         assertEquals(2L, c.georadiusbymemberStore("g", "Palermo", 200, GeoUnit.KM, "gr2", true));
     }
+
+    @Test
+    void ttlOnCreateSortedSetAndGeo() {
+        assertEquals(2.5, c.zincrby("ttl:z", 2.5, "m", LONG_TTL));
+        assertEquals(5.0, c.zincrby("ttl:z", 2.5, "m", LONGER_TTL));
+        assertDeadlineKept("ttl:z");
+
+        assertEquals(1L, c.zadd("ttl:za", ZAddArgs.builder().ttl(LONG_TTL), Map.of("a", 1.0)));
+        assertEquals(1L, c.zadd("ttl:za", ZAddArgs.builder().ttl(LONGER_TTL).nx(), Map.of("b", 2.0)));
+        assertDeadlineKept("ttl:za");
+        assertEquals(3.0, c.zaddIncr("ttl:zi", ZAddArgs.builder().ttl(LONG_TTL), 3.0, "a"));
+        assertDeadlineKept("ttl:zi");
+
+        assertEquals(1L, c.geoadd("ttl:g", false, false, false, LONG_TTL, GeoValue.of(13.36, 38.11, "p1")));
+        assertEquals(1L, c.geoadd("ttl:g", false, false, false, LONGER_TTL, GeoValue.of(15.08, 37.50, "p2")));
+        assertDeadlineKept("ttl:g");
+    }
+
+    private static final java.time.Duration LONG_TTL = java.time.Duration.ofSeconds(100);
+    private static final java.time.Duration LONGER_TTL = java.time.Duration.ofSeconds(1000);
+
+    /** The key got the first call's deadline (at most 100 s), not the second call's 1000 s. */
+    private void assertDeadlineKept(String key) {
+        long ms = c.pttl(key);
+        assertTrue(ms > 0 && ms <= 100_000, "pttl " + ms);
+    }
 }

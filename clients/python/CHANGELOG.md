@@ -4,6 +4,9 @@ Notable changes to the Python client `ruvio-client` on PyPI. New entries go unde
 
 ## Unreleased
 
+- Added keyword-only `ttl=` (seconds as `int`/`float`, or `timedelta`) to `incr`, `decr`, `incrby`, `decrby`, `incrbyfloat`, `hincrby`, `zincrby`, `setbit`, `zadd`, `geoadd`, `xadd`, `json_set`, `json_set_obj` and `bf_insert`. The deadline is set only when the call creates the key; an existing key keeps its deadline. Whole seconds send `EX`, a sub-second part sends `PX`; zero or negative raises `ValueError`.
+- Added `ExpireCondition` (`NX`, `XX`, `GT`, `LT`) and the optional `condition=` argument on `expire`, `pexpire`, `expireat` and `pexpireat`. A key without a deadline counts as infinite; a failed condition returns `False`.
+
 ## 0.1.2 - 2026-10-17
 
 - Added `StreamTrim` (`MAXLEN` or `MINID`, `=` or `~`, threshold) for `xadd(trim=...)` and `xtrim(trim=...)`, the `InfoSection`, `ClientType` and `ChangeType` enums (with `change_types()`), `StreamId`, `ScoreBound` and `LexBound` constants, and `score_exclusive()`, `lex_inclusive()` and `lex_exclusive()` bound builders. Existing string arguments keep working.

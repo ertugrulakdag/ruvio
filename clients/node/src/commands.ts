@@ -15,11 +15,13 @@ import type {
   SortedSetEntry,
   PoppedEntry,
   ZAddOptions,
+  TtlOptions,
   ZRangeOptions,
   ZStoreOptions,
   ListPopResult,
   LPosOptions,
   GeoMember,
+  GeoAddOptions,
   GeoUnit,
   GeoSearchOptions,
   GeoRadiusOptions,
@@ -50,7 +52,7 @@ import type {
   InsertPosition,
   BitfieldType,
 } from './types.js';
-import { KW_AGGREGATE, KW_BITOP, KW_BITUNIT, KW_CLIENT_TYPE, KW_GEO_UNIT, KW_INFO_SECTION, KW_ORDER, KW_SCAN_TYPE, KW_SIDE, KW_TRIM_MODE, KW_TRIM_STRATEGY, KW_WHERE, kw } from './keywords.js';
+import { KW_AGGREGATE, KW_EXPIRE_COND, KW_BITOP, KW_BITUNIT, KW_CLIENT_TYPE, KW_GEO_UNIT, KW_INFO_SECTION, KW_ORDER, KW_SCAN_TYPE, KW_SIDE, KW_TRIM_MODE, KW_TRIM_STRATEGY, KW_WHERE, kw } from './keywords.js';
 
 
 // Option words as Buffers: encoded with a single copy, no string scan.
@@ -83,6 +85,18 @@ function pushScan(a: Arg[], o?: ScanOptions): Arg[] {
     if (o.count !== undefined) a.push(W.COUNT, o.count);
     if (o.type !== undefined) a.push(W.TYPE, kw(KW_SCAN_TYPE, o.type));
   }
+  return a;
+}
+
+/**
+ * Appends `EX seconds` (whole seconds) or `PX milliseconds` (a sub-second part) for a TTL-on-create option.
+ * A TTL that is not a positive finite number is queued as a RangeError, so the call rejects before anything is sent.
+ */
+function pushTtl(a: Arg[], seconds: number): Arg[] {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
+    a.push(new RangeError('ruvio: ttl must be a positive, finite number of seconds') as unknown as Arg);
+  } else if (Number.isInteger(seconds)) a.push(W.EX, seconds);
+  else a.push(W.PX, Math.max(1, Math.round(seconds * 1000)));
   return a;
 }
 
@@ -1056,48 +1070,55 @@ export abstract class Commands {
    * Values are signed 64-bit; integers beyond 2^53 arrive as `bigint` at runtime even though the type says `number`.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param opts {@link TtlOptions}: `ttl` in seconds, applied only when this call creates the key (`INCR key EX|PX ...`).
    * @returns The new value.
    * @throws {@link RuvioError} `ERR` when the value is not an integer or the result overflows 64 bits.
+   * @throws RangeError when `opts.ttl` is not a positive finite number (the call rejects before sending).
    *
    * @example
    * ```ts
    * await client.incr('hits'); // 1
    * await client.incr('hits'); // 2
+   * await client.incr('hits:today', { ttl: 86_400 }); // the deadline is set once, on creation
    * ```
    */
-  incr(key: Key): R<number> {
-    return this._1(null, C.INCR, key);
+  incr(key: Key, opts?: TtlOptions): R<number> {
+    return opts?.ttl === undefined ? this._1(null, C.INCR, key) : this._v(null, C.INCR, pushTtl([key], opts.ttl));
   }
   /**
    * Subtracts 1 from an integer string, creating it as `0` first when missing (`DECR`). Signed 64-bit.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param opts {@link TtlOptions}: `ttl` in seconds, applied only when this call creates the key.
    * @returns The new value.
    * @throws {@link RuvioError} `ERR` when the value is not an integer or the result overflows.
+   * @throws RangeError when `opts.ttl` is not a positive finite number (the call rejects before sending).
    *
    * @example
    * ```ts
    * await client.decr('stock');
    * ```
    */
-  decr(key: Key): R<number> {
-    return this._1(null, C.DECR, key);
+  decr(key: Key, opts?: TtlOptions): R<number> {
+    return opts?.ttl === undefined ? this._1(null, C.DECR, key) : this._v(null, C.DECR, pushTtl([key], opts.ttl));
   }
   /**
    * Adds an integer to an integer string, creating it as `0` first when missing (`INCRBY`). Signed 64-bit.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param delta Whole number to add (may be negative).
+   * @param opts {@link TtlOptions}: `ttl` in seconds, applied only when this call creates the key.
    * @returns The new value.
    * @throws {@link RuvioError} `ERR` when the value is not an integer or the result overflows.
+   * @throws RangeError when `opts.ttl` is not a positive finite number (the call rejects before sending).
    *
    * @example
    * ```ts
    * await client.incrby('score', 10);
    * ```
    */
-  incrby(key: Key, delta: number): R<number> {
-    return this._2(null, C.INCRBY, key, delta);
+  incrby(key: Key, delta: number, opts?: TtlOptions): R<number> {
+    return opts?.ttl === undefined ? this._2(null, C.INCRBY, key, delta) : this._v(null, C.INCRBY, pushTtl([key, delta], opts.ttl));
   }
   /**
    * Adds to a counter but refuses to pass a ceiling (`INCRBY key delta MAX limit`, Ruvio extension).
@@ -1105,32 +1126,37 @@ export abstract class Commands {
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param delta Whole number to add.
    * @param limit Highest value the counter may reach.
+   * @param opts {@link TtlOptions}: `ttl` in seconds, applied only when this call creates the key (`INCRBY key delta EX|PX ... MAX limit`).
    * @returns The new value, or `null` (and nothing is written) when the result would exceed `limit`.
    * @throws {@link RuvioError} `ERR` when the value is not an integer.
+   * @throws RangeError when `opts.ttl` is not a positive finite number (the call rejects before sending).
    *
    * @example
    * ```ts
    * await client.incrbyMax('seats', 1, 100); // null once 100 is reached
    * ```
    */
-  incrbyMax(key: Key, delta: number, limit: number): R<number | null> {
-    return this._4(null, C.INCRBY, key, delta, W.MAX, limit);
+  incrbyMax(key: Key, delta: number, limit: number, opts?: TtlOptions): R<number | null> {
+    if (opts?.ttl === undefined) return this._4(null, C.INCRBY, key, delta, W.MAX, limit);
+    return this._v(null, C.INCRBY, pushTtl([key, delta], opts.ttl).concat(W.MAX, limit));
   }
   /**
    * Subtracts an integer from an integer string, creating it as `0` first when missing (`DECRBY`). Signed 64-bit.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param delta Whole number to subtract.
+   * @param opts {@link TtlOptions}: `ttl` in seconds, applied only when this call creates the key.
    * @returns The new value.
    * @throws {@link RuvioError} `ERR` when the value is not an integer or the result overflows.
+   * @throws RangeError when `opts.ttl` is not a positive finite number (the call rejects before sending).
    *
    * @example
    * ```ts
    * await client.decrby('stock', 5);
    * ```
    */
-  decrby(key: Key, delta: number): R<number> {
-    return this._2(null, C.DECRBY, key, delta);
+  decrby(key: Key, delta: number, opts?: TtlOptions): R<number> {
+    return opts?.ttl === undefined ? this._2(null, C.DECRBY, key, delta) : this._v(null, C.DECRBY, pushTtl([key, delta], opts.ttl));
   }
   /**
    * Stores a string with a TTL in seconds (`SETEX`). Same as `set(key, value, { ex: seconds })`.
@@ -1202,16 +1228,18 @@ export abstract class Commands {
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param delta Number to add (may be negative).
+   * @param opts {@link TtlOptions}: `ttl` in seconds, applied only when this call creates the key.
    * @returns The new value.
    * @throws {@link RuvioError} `ERR` when the value is not a number or the result is not finite.
+   * @throws RangeError when `opts.ttl` is not a positive finite number (the call rejects before sending).
    *
    * @example
    * ```ts
    * await client.incrbyfloat('balance', 0.5);
    * ```
    */
-  incrbyfloat(key: Key, delta: number): R<number> {
-    return this._2(T.float, C.INCRBYFLOAT, key, delta);
+  incrbyfloat(key: Key, delta: number, opts?: TtlOptions): R<number> {
+    return opts?.ttl === undefined ? this._2(T.float, C.INCRBYFLOAT, key, delta) : this._v(T.float, C.INCRBYFLOAT, pushTtl([key, delta], opts.ttl));
   }
   /**
    * Returns part of a string (`GETRANGE`).
@@ -1657,65 +1685,70 @@ export abstract class Commands {
     return this._2(T.bool, C.MOVE, key, db);
   }
   /**
-   * Sets a TTL in seconds (`EXPIRE`). Ruvio takes no `NX`/`XX`/`GT`/`LT` option here.
+   * Sets a TTL in seconds (`EXPIRE key seconds [NX|XX|GT|LT]`).
    * A TTL of zero or less deletes the key and still returns `true`, as Redis does.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param seconds Time to live in seconds.
-   * @returns `true` when applied; `false` when the key does not exist.
+   * @param cond Optional {@link ExpireCondition}: `NX` (no deadline yet), `XX` (has a deadline), `GT` (new deadline later), `LT` (new deadline earlier). A key without a deadline counts as infinite.
+   * @returns `true` when applied; `false` when the key does not exist or the condition failed.
    *
    * @example
    * ```ts
    * await client.expire('session:9', 3600);
+   * await client.expire('session:9', 7200, ExpireCondition.Gt); // only ever extends
    * ```
    */
-  expire(key: Key, seconds: number): R<boolean> {
-    return this._2(T.bool, C.EXPIRE, key, seconds);
+  expire(key: Key, seconds: number, cond?: ExpireCondition): R<boolean> {
+    return cond === undefined ? this._2(T.bool, C.EXPIRE, key, seconds) : this._3(T.bool, C.EXPIRE, key, seconds, kw(KW_EXPIRE_COND, cond));
   }
   /**
-   * Sets a TTL in milliseconds (`PEXPIRE`). A value of zero or less deletes the key and returns `true`.
+   * Sets a TTL in milliseconds (`PEXPIRE key ms [NX|XX|GT|LT]`). A value of zero or less deletes the key and returns `true`.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param ms Time to live in milliseconds.
-   * @returns `true` when applied; `false` when the key does not exist.
+   * @param cond Optional {@link ExpireCondition} (see {@link expire}).
+   * @returns `true` when applied; `false` when the key does not exist or the condition failed.
    *
    * @example
    * ```ts
    * await client.pexpire('session:9', 1500);
    * ```
    */
-  pexpire(key: Key, ms: number): R<boolean> {
-    return this._2(T.bool, C.PEXPIRE, key, ms);
+  pexpire(key: Key, ms: number, cond?: ExpireCondition): R<boolean> {
+    return cond === undefined ? this._2(T.bool, C.PEXPIRE, key, ms) : this._3(T.bool, C.PEXPIRE, key, ms, kw(KW_EXPIRE_COND, cond));
   }
   /**
-   * Sets an absolute deadline in Unix seconds (`EXPIREAT`). A deadline in the past deletes the key and still returns `true`.
+   * Sets an absolute deadline in Unix seconds (`EXPIREAT key unixSeconds [NX|XX|GT|LT]`). A deadline in the past deletes the key and still returns `true`.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param unixSeconds Deadline as Unix time in seconds.
-   * @returns `true` when applied; `false` when the key does not exist.
+   * @param cond Optional {@link ExpireCondition} (see {@link expire}).
+   * @returns `true` when applied; `false` when the key does not exist or the condition failed.
    *
    * @example
    * ```ts
    * await client.expireat('promo', Math.floor(Date.now() / 1000) + 86_400);
    * ```
    */
-  expireat(key: Key, unixSeconds: number): R<boolean> {
-    return this._2(T.bool, C.EXPIREAT, key, unixSeconds);
+  expireat(key: Key, unixSeconds: number, cond?: ExpireCondition): R<boolean> {
+    return cond === undefined ? this._2(T.bool, C.EXPIREAT, key, unixSeconds) : this._3(T.bool, C.EXPIREAT, key, unixSeconds, kw(KW_EXPIRE_COND, cond));
   }
   /**
-   * Sets an absolute deadline in Unix milliseconds (`PEXPIREAT`). A deadline in the past deletes the key and still returns `true`.
+   * Sets an absolute deadline in Unix milliseconds (`PEXPIREAT key unixMs [NX|XX|GT|LT]`). A deadline in the past deletes the key and still returns `true`.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param unixMs Deadline as Unix time in milliseconds.
-   * @returns `true` when applied; `false` when the key does not exist.
+   * @param cond Optional {@link ExpireCondition} (see {@link expire}).
+   * @returns `true` when applied; `false` when the key does not exist or the condition failed.
    *
    * @example
    * ```ts
    * await client.pexpireat('promo', Date.now() + 5000);
    * ```
    */
-  pexpireat(key: Key, unixMs: number): R<boolean> {
-    return this._2(T.bool, C.PEXPIREAT, key, unixMs);
+  pexpireat(key: Key, unixMs: number, cond?: ExpireCondition): R<boolean> {
+    return cond === undefined ? this._2(T.bool, C.PEXPIREAT, key, unixMs) : this._3(T.bool, C.PEXPIREAT, key, unixMs, kw(KW_EXPIRE_COND, cond));
   }
   /**
    * Remaining time to live in seconds (`TTL`).
@@ -3006,17 +3039,19 @@ export abstract class Commands {
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param field Hash field name.
    * @param delta Whole number to add (may be negative).
+   * @param opts {@link TtlOptions}: `ttl` in seconds, applied to the key only when this call creates it.
    * @returns The new value.
    * @throws {@link RuvioError} `ERR` when the field is not an integer or the result overflows; nothing is written then.
    * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   * @throws RangeError when `opts.ttl` is not a positive finite number (the call rejects before sending).
    *
    * @example
    * ```ts
    * await client.hincrby('stats', 'views', 1);
    * ```
    */
-  hincrby(key: Key, field: Key, delta: number): R<number> {
-    return this._3(null, C.HINCRBY, key, field, delta);
+  hincrby(key: Key, field: Key, delta: number, opts?: TtlOptions): R<number> {
+    return opts?.ttl === undefined ? this._3(null, C.HINCRBY, key, field, delta) : this._v(null, C.HINCRBY, pushTtl([key, field, delta], opts.ttl));
   }
   /**
    * Adds a decimal number to a field (`HINCRBYFLOAT`). Computed in double precision and printed with 15 significant digits (Redis uses long double). Keeps a field TTL.
@@ -3328,7 +3363,7 @@ export abstract class Commands {
    * @param score Score of the member (single form). Doubles, `-Infinity` and `Infinity` are accepted.
    * @param member Member name (single form).
    * @param members Array of `{ member, score }` objects or `[score, member]` pairs (multi form).
-   * @param opts {@link ZAddOptions}: `nx` only add, `xx` only update, `gt`/`lt` only update when the new score is greater/smaller, `ch` count changed members too.
+   * @param opts {@link ZAddOptions}: `nx` only add, `xx` only update, `gt`/`lt` only update when the new score is greater/smaller, `ch` count changed members too, `ttl` (seconds) sets a deadline only when this call creates the key (`EX`/`PX`).
    * @returns The number of members added; with `ch`, added plus changed.
    * @throws {@link RuvioError} `ERR` for a non-numeric score or a bad option mix; `WRONGTYPE`.
    *
@@ -3348,7 +3383,7 @@ export abstract class Commands {
    * @param score Score of the member (single form). Doubles, `-Infinity` and `Infinity` are accepted.
    * @param member Member name (single form).
    * @param members Array of `{ member, score }` objects or `[score, member]` pairs (multi form).
-   * @param opts {@link ZAddOptions}: `nx` only add, `xx` only update, `gt`/`lt` only update when the new score is greater/smaller, `ch` count changed members too.
+   * @param opts {@link ZAddOptions}: `nx` only add, `xx` only update, `gt`/`lt` only update when the new score is greater/smaller, `ch` count changed members too, `ttl` (seconds) sets a deadline only when this call creates the key (`EX`/`PX`).
    * @returns The number of members added; with `ch`, added plus changed.
    * @throws {@link RuvioError} `ERR` for a non-numeric score or a bad option mix; `WRONGTYPE`.
    *
@@ -3368,7 +3403,7 @@ export abstract class Commands {
    * @param score Score of the member (single form). Doubles, `-Infinity` and `Infinity` are accepted.
    * @param member Member name (single form).
    * @param members Array of `{ member, score }` objects or `[score, member]` pairs (multi form).
-   * @param opts {@link ZAddOptions}: `nx` only add, `xx` only update, `gt`/`lt` only update when the new score is greater/smaller, `ch` count changed members too.
+   * @param opts {@link ZAddOptions}: `nx` only add, `xx` only update, `gt`/`lt` only update when the new score is greater/smaller, `ch` count changed members too, `ttl` (seconds) sets a deadline only when this call creates the key (`EX`/`PX`).
    * @returns The number of members added; with `ch`, added plus changed.
    * @throws {@link RuvioError} `ERR` for a non-numeric score or a bad option mix; `WRONGTYPE`.
    *
@@ -3394,7 +3429,7 @@ export abstract class Commands {
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param increment Amount added to the score (the member is created with it if missing).
    * @param member Member name.
-   * @param opts {@link ZAddOptions} conditions (`nx`, `xx`, `gt`, `lt`).
+   * @param opts {@link ZAddOptions} conditions (`nx`, `xx`, `gt`, `lt`) and `ttl`.
    * @returns The new score, or `null` when a condition blocked the update.
    * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
    *
@@ -3582,16 +3617,18 @@ export abstract class Commands {
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param increment Amount to add (may be negative).
    * @param member Member name.
+   * @param opts {@link TtlOptions}: `ttl` in seconds, applied to the key only when this call creates it.
    * @returns The new score.
    * @throws {@link RuvioError} `WRONGTYPE` when `key` holds a value of another type.
+   * @throws RangeError when `opts.ttl` is not a positive finite number (the call rejects before sending).
    *
    * @example
    * ```ts
    * await client.zincrby('board', 10, 'ada');
    * ```
    */
-  zincrby(key: Key, increment: number, member: Value): R<number> {
-    return this._3(T.float, C.ZINCRBY, key, increment, member);
+  zincrby(key: Key, increment: number, member: Value, opts?: TtlOptions): R<number> {
+    return opts?.ttl === undefined ? this._3(T.float, C.ZINCRBY, key, increment, member) : this._v(T.float, C.ZINCRBY, pushTtl([key, increment, member], opts.ttl));
   }
   /**
    * Number of members (`ZCARD`).
@@ -4066,12 +4103,12 @@ export abstract class Commands {
   // ---- geo -------------------------------------------------------------------------------
 
   /**
-   * Adds geographic points to a key (`GEOADD key [NX|XX] [CH] longitude latitude member ...`). The key is stored as a sorted set whose score is a 52-bit geohash, so the `z*` commands work on it too.
+   * Adds geographic points to a key (`GEOADD key [EX|PX] [NX|XX] [CH] longitude latitude member ...`). The key is stored as a sorted set whose score is a 52-bit geohash, so the `z*` commands work on it too.
    * Valid coordinates: longitude -180 to 180 and latitude -85.05112878 to 85.05112878 (degrees). Anything else is rejected and nothing is written.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param members Points to add: `{ longitude, latitude, member }`.
-   * @param opts `nx` only add new members, `xx` only update existing ones, `ch` count changed members too.
+   * @param opts `nx` only add new members, `xx` only update existing ones, `ch` count changed members too, `ttl` (seconds) sets a deadline only when this call creates the key.
    * @returns The number of members added; with `ch`, added plus changed.
    * @throws {@link RuvioError} `ERR` when a longitude/latitude pair is out of range; `WRONGTYPE`.
    *
@@ -4083,8 +4120,9 @@ export abstract class Commands {
    * ]);
    * ```
    */
-  geoadd(key: Key, members: GeoMember[], opts?: { nx?: boolean; xx?: boolean; ch?: boolean }): R<number> {
+  geoadd(key: Key, members: GeoMember[], opts?: GeoAddOptions): R<number> {
     const a: Arg[] = [key];
+    if (opts?.ttl !== undefined) pushTtl(a, opts.ttl);
     if (opts?.nx) a.push(W.NX);
     else if (opts?.xx) a.push(W.XX);
     if (opts?.ch) a.push(W.CH);
@@ -4293,12 +4331,12 @@ export abstract class Commands {
     return this._kv(T.boolArr, C.BF_MADD, key, items);
   }
   /**
-   * Adds items, creating the filter with options if needed (`BF.INSERT`).
+   * Adds items, creating the filter with options if needed (`BF.INSERT key [EX|PX] ...`).
    * The creation options apply only when the key is new.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param items Items to add.
-   * @param opts {@link BfInsertOptions}: `capacity`, `error`, `expansion`, `nonScaling` (creation only) and `noCreate` (fail instead of creating).
+   * @param opts {@link BfInsertOptions}: `capacity`, `error`, `expansion`, `nonScaling` (creation only), `noCreate` (fail instead of creating) and `ttl` (seconds; a deadline set only when this call creates the filter).
    * @returns Per item: `true` when added, `false` when probably present.
    * @throws {@link RuvioError} `ERR not found` with `noCreate` on a missing key; `ERR` when a non-scaling filter is full.
    *
@@ -4310,6 +4348,7 @@ export abstract class Commands {
   bfInsert(key: Key, items: Value[], opts?: BfInsertOptions): R<boolean[]> {
     const a: Arg[] = [key];
     if (opts !== undefined) {
+      if (opts.ttl !== undefined) pushTtl(a, opts.ttl);
       if (opts.capacity !== undefined) a.push(W.CAPACITY, opts.capacity);
       if (opts.error !== undefined) a.push(W.ERROR, opts.error);
       if (opts.expansion !== undefined) a.push(W.EXPANSION, opts.expansion);
@@ -4448,13 +4487,14 @@ export abstract class Commands {
     return path === undefined ? this._1(tf, C.JSON_GET, key) : this._2(tf, C.JSON_GET, key, path);
   }
   /**
-   * Writes a JSON value at a path (`JSON.SET key path json [NX|XX]`).
+   * Writes a JSON value at a path (`JSON.SET key path json [NX|XX] [EX|PX]`).
    * Whole-document updates; only existing intermediate nodes are allowed, and the document is limited to 16 MiB. Writing at `[N]` where N equals the array length appends.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param path Path to write; `$` for the whole document.
    * @param json The JSON text to store (a string such as `'{"a":1}'`, `'"text"'` or `'42'`).
    * @param cond `'NX'` write only when the path is missing; `'XX'` only when it exists.
+   * @param opts {@link TtlOptions}: `ttl` in seconds, applied only when this call creates the key.
    * @returns `true` when written; `false` when `NX`/`XX` blocked the write.
    * @throws {@link RuvioError} `ERR` for invalid JSON, a missing parent node or an oversized document; `WRONGTYPE`.
    *
@@ -4464,7 +4504,12 @@ export abstract class Commands {
    * await client.jsonSet('user:1', '$.age', '36', 'NX');
    * ```
    */
-  jsonSet(key: Key, path: string, json: Value, cond?: 'NX' | 'XX'): R<boolean> {
+  jsonSet(key: Key, path: string, json: Value, cond?: 'NX' | 'XX', opts?: TtlOptions): R<boolean> {
+    if (opts?.ttl !== undefined) {
+      const a: Arg[] = [key, path, json];
+      if (cond !== undefined) a.push(cond === 'NX' ? W.NX : W.XX);
+      return this._v(T.okBool, C.JSON_SET, pushTtl(a, opts.ttl));
+    }
     return cond === undefined
       ? this._3(T.okBool, C.JSON_SET, key, path, json)
       : this._4(T.okBool, C.JSON_SET, key, path, json, cond === 'NX' ? W.NX : W.XX);
@@ -4476,6 +4521,7 @@ export abstract class Commands {
    * @param path Path to write; `$` for the whole document.
    * @param value Any JSON-serialisable value.
    * @param cond `'NX'` or `'XX'`.
+   * @param opts {@link TtlOptions}: `ttl` in seconds, applied only when this call creates the key.
    * @returns `true` when written; `false` when `NX`/`XX` blocked the write.
    * @throws {@link RuvioError} as for {@link jsonSet}.
    *
@@ -4484,8 +4530,8 @@ export abstract class Commands {
    * await client.jsonSetAs('user:1', '$', { name: 'Ada', tags: ['a'] });
    * ```
    */
-  jsonSetAs<T>(key: Key, path: string, value: T, cond?: 'NX' | 'XX'): R<boolean> {
-    return this.jsonSet(key, path, JSON.stringify(value), cond);
+  jsonSetAs<T>(key: Key, path: string, value: T, cond?: 'NX' | 'XX', opts?: TtlOptions): R<boolean> {
+    return this.jsonSet(key, path, JSON.stringify(value), cond, opts);
   }
   /**
    * Deletes a value at a path (`JSON.DEL`).
@@ -4895,13 +4941,13 @@ export abstract class Commands {
   // ---- streams ---------------------------------------------------------------------------
 
   /**
-   * Appends an entry to a stream (`XADD key [NOMKSTREAM] [MAXLEN|MINID [~] n] [DELAY ms] id field value ...`).
+   * Appends an entry to a stream (`XADD key [EX|PX] [NOMKSTREAM] [MAXLEN|MINID [~] n] [DELAY ms] id field value ...`).
    * `maxLen` and `minId` both trim exactly (also with `approximate`) and cannot be combined. An id that is not above the top id is rejected.
    *
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param id `'*'` for an automatic id, `'ms-*'` for an automatic sequence, or an explicit `'ms-seq'`.
    * @param fields Object `{ field: value }` or a flat array `[field, value, ...]`.
-   * @param opts {@link XAddOptions}: `noMkStream`, `trim` (a {@link StreamTrim}) or the older `maxLen`, `minId`, `approximate`, and Ruvio's `delayMs` which hides the entry from {@link xreadgroup} for that long.
+   * @param opts {@link XAddOptions}: `noMkStream`, `trim` (a {@link StreamTrim}) or the older `maxLen`, `minId`, `approximate`, Ruvio's `delayMs` which hides the entry from {@link xreadgroup} for that long, and `ttl` (seconds) which sets a deadline only when this call creates the stream.
    * @returns The entry id, or `null` when `noMkStream` is set and the key does not exist.
    * @throws {@link RuvioError} `ERR` for an id not above the top id or a bad trim option; `WRONGTYPE`.
    *
@@ -4913,6 +4959,7 @@ export abstract class Commands {
   xadd(key: Key, id: string, fields: Record<string, Value> | Value[], opts?: XAddOptions): R<string | null> {
     const a: Arg[] = [key];
     if (opts !== undefined) {
+      if (opts.ttl !== undefined) pushTtl(a, opts.ttl);
       if (opts.noMkStream) a.push(W.NOMKSTREAM);
       pushStreamId(a, opts);
       if (opts.delayMs !== undefined) a.push(W.DELAY, opts.delayMs);
@@ -5735,16 +5782,18 @@ export abstract class Commands {
    * @param key Key to operate on (string, or Buffer for binary keys).
    * @param offset Bit position, 0 to 134,217,727.
    * @param bit `0` or `1`.
+   * @param opts {@link TtlOptions}: `ttl` in seconds, applied only when this call creates the key.
    * @returns The previous value of the bit.
    * @throws {@link RuvioError} `ERR` for an offset out of range; `WRONGTYPE`.
+   * @throws RangeError when `opts.ttl` is not a positive finite number (the call rejects before sending).
    *
    * @example
    * ```ts
    * await client.setbit('online', 1234, 1);
    * ```
    */
-  setbit(key: Key, offset: number, bit: 0 | 1): R<number> {
-    return this._3(null, C.SETBIT, key, offset, bit);
+  setbit(key: Key, offset: number, bit: 0 | 1, opts?: TtlOptions): R<number> {
+    return opts?.ttl === undefined ? this._3(null, C.SETBIT, key, offset, bit) : this._v(null, C.SETBIT, pushTtl([key, offset, bit], opts.ttl));
   }
   /**
    * Reads one bit (`GETBIT`).
@@ -5922,6 +5971,7 @@ function pushZAddFlags(a: Arg[], o?: ZAddOptions): void {
   if (o.gt) a.push(W.GT);
   else if (o.lt) a.push(W.LT);
   if (o.ch) a.push(W.CH);
+  if (o.ttl !== undefined) pushTtl(a, o.ttl);
 }
 
 function zrangeArgs(key: Key, start: Value, stop: Value, o: ZRangeOptions | undefined, scores: boolean): Arg[] {

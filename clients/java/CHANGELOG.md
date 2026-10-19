@@ -4,6 +4,9 @@ Notable changes to the Java client `io.github.salihcantekin:ruvio-client`. New e
 
 ## Unreleased
 
+- TTL on create: `Duration` overloads `incr`, `decr`, `incrby`, `decrby`, `incrbyMax`, `incrbyfloat`, `hincrby`, `zincrby`, `setbit` and `geoadd(key, nx, xx, ch, ttl, members)`, `jsonSet`/`jsonSetNx`/`jsonSetXx(key, path, json, ttl)`, and `ttl(Duration)` on `ZAddArgs`, `XAddArgs` and `BfInsertArgs`. The deadline is set only when the call creates the key; whole seconds are sent as `EX`, anything finer as `PX`.
+- `expire`, `pexpire`, `expireat` and `pexpireat` overloads take an `ExpireCondition` (`NX`, `XX`, `GT`, `LT`); `ExpireCondition` now also has `fragment()`, like the other keyword enums.
+
 ## 0.1.2 - 2026-10-17
 
 - Typed keyword constants: new enums `InsertPosition` (`linsert`), `BitUnit` (`bitcount`), `GeoOrder` (`GeoSearchArgs.order`) and `KeyType` (`ScanArgs.type`), and `BitFieldArgs.Type.signed(n)` / `unsigned(n)` for BITFIELD types. The existing boolean and string overloads still work. Every enum, including `GeoUnit`, `ListDirection`, `BitOp`, `Overflow` and `Aggregate`, writes a pre-encoded constant, so the keyword costs no per-call encoding.

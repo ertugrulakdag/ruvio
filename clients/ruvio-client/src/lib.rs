@@ -94,6 +94,7 @@ mod models;
 mod scan;
 #[cfg(test)]
 mod test_support;
+mod ttl;
 mod value;
 
 pub use client::{Client, ClientOptions, ConnectionNotice, SetMode};
@@ -103,8 +104,8 @@ pub use cluster::{hash_slot, hash_slot_bytes};
 pub use error::Error;
 pub use helpers::{CacheOptions, IdemOutcome, LeaseGuard, LockGuard, SemaphorePermit, new_token};
 pub use keywords::{
-    ChangeType, ChangeTypes, ClientType, InfoSection, StreamTrim, TrimMode, TrimStrategy, bound,
-    stream_id,
+    ChangeType, ChangeTypes, ClientType, ExpireCondition, InfoSection, StreamTrim, TrimMode,
+    TrimStrategy, bound, stream_id,
 };
 pub use models::{
     Aggregate, BitFieldOffset, BitFieldOp, BitFieldOverflow, BitFieldType, BitOperation, BitUnit,

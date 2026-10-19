@@ -44,6 +44,7 @@ import io.github.salihcantekin.ruvio.model.ScanResult;
 import io.github.salihcantekin.ruvio.model.ScoredValue;
 import io.github.salihcantekin.ruvio.model.StreamEntry;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -429,6 +430,24 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Sends {@code INCR key EX|PX ttl}: like {@link #incr(Object)}, and a counter this call creates gets a time to live.
+     * An existing key keeps its deadline.
+     *
+     * <pre>{{@code
+     * long hits = client.incr("page:hits", Duration.ofMinutes(1));
+     * }}</pre>
+     *
+     * @param key the counter key
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the value after the increment
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer or the result overflows; {@code WRONGTYPE} for a non-string
+     */
+    public Long incr(K key, Duration ttl) {
+        return await(async.incr(key, ttl));
+    }
+
+    /**
      * Sends {@code DECR key}: subtracts one from a decimal integer string. A missing key counts as 0; an existing TTL is kept.
      *
      * @param key the counter key
@@ -437,6 +456,20 @@ public abstract class RuvioSyncCommands<K, V> {
      */
     public Long decr(K key) {
         return await(async.decr(key));
+    }
+
+    /**
+     * Sends {@code DECR key EX|PX ttl}: like {@link #decr(Object)}, and a counter this call creates gets a time to live.
+     * An existing key keeps its deadline.
+     *
+     * @param key the counter key
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the value after the decrement
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer or the result overflows; {@code WRONGTYPE} for a non-string
+     */
+    public Long decr(K key, Duration ttl) {
+        return await(async.decr(key, ttl));
     }
 
     /**
@@ -450,6 +483,21 @@ public abstract class RuvioSyncCommands<K, V> {
      */
     public Long incrby(K key, long delta) {
         return await(async.incrby(key, delta));
+    }
+
+    /**
+     * Sends {@code INCRBY key delta EX|PX ttl}: like {@link #incrby(Object, long)}, and a counter this call creates gets a time
+     * to live. An existing key keeps its deadline.
+     *
+     * @param key the counter key
+     * @param delta the signed amount to add
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the value after the addition
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer or the result overflows; {@code WRONGTYPE} for a non-string
+     */
+    public Long incrby(K key, long delta, Duration ttl) {
+        return await(async.incrby(key, delta, ttl));
     }
 
     /**
@@ -472,6 +520,26 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Sends {@code INCRBY key delta EX|PX ttl MAX limit}: like {@link #incrbyMax(Object, long, long)}, and a counter this call
+     * creates gets a time to live (a fixed-window quota in one command). An existing key keeps its deadline.
+     *
+     * <pre>{{@code
+     * Long used = client.incrbyMax("quota:user1", 1, 100, Duration.ofMinutes(1)); // null once 100 is reached
+     * }}</pre>
+     *
+     * @param key the counter key
+     * @param delta the signed amount to add
+     * @param limit the highest value the counter may reach
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the value after the addition, or {@code null} when the result would pass {@code limit} (nothing is written)
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer; {@code WRONGTYPE} for a non-string
+     */
+    public Long incrbyMax(K key, long delta, long limit, Duration ttl) {
+        return await(async.incrbyMax(key, delta, limit, ttl));
+    }
+
+    /**
      * Sends {@code DECRBY key delta}: subtracts {@code delta} from a decimal integer string. A missing key counts as 0; an existing TTL is kept.
      *
      * @param key the counter key
@@ -481,6 +549,21 @@ public abstract class RuvioSyncCommands<K, V> {
      */
     public Long decrby(K key, long delta) {
         return await(async.decrby(key, delta));
+    }
+
+    /**
+     * Sends {@code DECRBY key delta EX|PX ttl}: like {@link #decrby(Object, long)}, and a counter this call creates gets a time
+     * to live. An existing key keeps its deadline.
+     *
+     * @param key the counter key
+     * @param delta the amount to subtract (a negative value adds)
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the value after the subtraction
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} when the value is not a signed 64-bit integer or the result overflows; {@code WRONGTYPE} for a non-string
+     */
+    public Long decrby(K key, long delta, Duration ttl) {
+        return await(async.decrby(key, delta, ttl));
     }
 
     /**
@@ -494,6 +577,21 @@ public abstract class RuvioSyncCommands<K, V> {
      */
     public Double incrbyfloat(K key, double delta) {
         return await(async.incrbyfloat(key, delta));
+    }
+
+    /**
+     * Sends {@code INCRBYFLOAT key delta EX|PX ttl}: like {@link #incrbyfloat(Object, double)}, and a key this call creates gets a
+     * time to live. An existing key keeps its deadline.
+     *
+     * @param key the key to change
+     * @param delta the amount to add (may be negative)
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the value after the addition
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} when the value is not a number or the result is NaN or infinite; {@code WRONGTYPE} for a non-string
+     */
+    public Double incrbyfloat(K key, double delta, Duration ttl) {
+        return await(async.incrbyfloat(key, delta, ttl));
     }
 
     /**
@@ -1045,6 +1143,19 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Sends {@code EXPIRE key seconds NX|XX|GT|LT}: like {@link #expire(Object, long)}, applied only when the condition holds. A key
+     * without a deadline counts as infinite, so {@code GT} never applies to it and {@code LT} always does.
+     *
+     * @param key the key
+     * @param seconds seconds from now
+     * @param condition when to apply it: {@code NX} only without a deadline, {@code XX} only with one, {@code GT} only when later, {@code LT} only when earlier; {@link ExpireCondition#ALWAYS} sends no flag
+     * @return {@code true} when the deadline was set, {@code false} when the key does not exist or the condition failed
+     */
+    public Boolean expire(K key, long seconds, ExpireCondition condition) {
+        return await(async.expire(key, seconds, condition));
+    }
+
+    /**
      * Sends {@code PEXPIRE key milliseconds}: like {@link #expire(Object, long)} in milliseconds.
      *
      * @param key the key
@@ -1053,6 +1164,19 @@ public abstract class RuvioSyncCommands<K, V> {
      */
     public Boolean pexpire(K key, long millis) {
         return await(async.pexpire(key, millis));
+    }
+
+    /**
+     * Sends {@code PEXPIRE key millis NX|XX|GT|LT}: like {@link #pexpire(Object, long)}, applied only when the condition holds. A key
+     * without a deadline counts as infinite, so {@code GT} never applies to it and {@code LT} always does.
+     *
+     * @param key the key
+     * @param millis milliseconds from now
+     * @param condition when to apply it: {@code NX} only without a deadline, {@code XX} only with one, {@code GT} only when later, {@code LT} only when earlier; {@link ExpireCondition#ALWAYS} sends no flag
+     * @return {@code true} when the deadline was set, {@code false} when the key does not exist or the condition failed
+     */
+    public Boolean pexpire(K key, long millis, ExpireCondition condition) {
+        return await(async.pexpire(key, millis, condition));
     }
 
     /**
@@ -1067,6 +1191,19 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Sends {@code EXPIREAT key unixSeconds NX|XX|GT|LT}: like {@link #expireat(Object, long)}, applied only when the condition holds. A key
+     * without a deadline counts as infinite, so {@code GT} never applies to it and {@code LT} always does.
+     *
+     * @param key the key
+     * @param unixSeconds seconds since 1970-01-01 UTC
+     * @param condition when to apply it: {@code NX} only without a deadline, {@code XX} only with one, {@code GT} only when later, {@code LT} only when earlier; {@link ExpireCondition#ALWAYS} sends no flag
+     * @return {@code true} when the deadline was set, {@code false} when the key does not exist or the condition failed
+     */
+    public Boolean expireat(K key, long unixSeconds, ExpireCondition condition) {
+        return await(async.expireat(key, unixSeconds, condition));
+    }
+
+    /**
      * Sends {@code PEXPIREAT key timestamp}: expires a key at an absolute Unix time in milliseconds.
      *
      * @param key the key
@@ -1075,6 +1212,19 @@ public abstract class RuvioSyncCommands<K, V> {
      */
     public Boolean pexpireat(K key, long unixMillis) {
         return await(async.pexpireat(key, unixMillis));
+    }
+
+    /**
+     * Sends {@code PEXPIREAT key unixMillis NX|XX|GT|LT}: like {@link #pexpireat(Object, long)}, applied only when the condition holds. A key
+     * without a deadline counts as infinite, so {@code GT} never applies to it and {@code LT} always does.
+     *
+     * @param key the key
+     * @param unixMillis milliseconds since 1970-01-01 UTC
+     * @param condition when to apply it: {@code NX} only without a deadline, {@code XX} only with one, {@code GT} only when later, {@code LT} only when earlier; {@link ExpireCondition#ALWAYS} sends no flag
+     * @return {@code true} when the deadline was set, {@code false} when the key does not exist or the condition failed
+     */
+    public Boolean pexpireat(K key, long unixMillis, ExpireCondition condition) {
+        return await(async.pexpireat(key, unixMillis, condition));
     }
 
     /**
@@ -1422,6 +1572,22 @@ public abstract class RuvioSyncCommands<K, V> {
      */
     public Long hincrby(K key, K field, long delta) {
         return await(async.hincrby(key, field, delta));
+    }
+
+    /**
+     * Sends {@code HINCRBY key field delta EX|PX ttl}: like {@link #hincrby(Object, Object, long)}, and a hash this call creates
+     * gets a time to live. An existing key keeps its deadline.
+     *
+     * @param key the hash key
+     * @param field the field to change
+     * @param delta the signed amount to add
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the field value after the addition
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} when the field is not a signed 64-bit integer or the result overflows; {@code WRONGTYPE} when the key holds a non-hash
+     */
+    public Long hincrby(K key, K field, long delta, Duration ttl) {
+        return await(async.hincrby(key, field, delta, ttl));
     }
 
     /**
@@ -2680,6 +2846,22 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Sends {@code ZINCRBY key increment member EX|PX ttl}: like {@link #zincrby(Object, double, Object)}, and a sorted set this
+     * call creates gets a time to live. An existing key keeps its deadline.
+     *
+     * @param key the sorted set key
+     * @param increment the amount to add
+     * @param member the member
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the new score
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code WRONGTYPE} for a non-sorted-set
+     */
+    public Double zincrby(K key, double increment, V member, Duration ttl) {
+        return await(async.zincrby(key, increment, member, ttl));
+    }
+
+    /**
      * Sends {@code ZCARD key}.
      *
      * @param key the sorted set key
@@ -3154,6 +3336,29 @@ public abstract class RuvioSyncCommands<K, V> {
     @SafeVarargs
     public final Long geoadd(K key, boolean nx, boolean xx, boolean ch, GeoValue<V>... members) {
         return await(async.geoadd(key, nx, xx, ch, members));
+    }
+
+    /**
+     * Sends {@code GEOADD key EX|PX ttl [NX|XX] [CH] longitude latitude member ...}: like the overload without {@code ttl}, and a geo
+     * key this call creates gets a time to live. An existing key keeps its deadline.
+     *
+     * <pre>{@code
+     * client.geoadd("drivers", false, false, false, Duration.ofMinutes(5), GeoValue.of(13.36, 38.11, "d1"));
+     * }</pre>
+     *
+     * @param key the geo key
+     * @param nx {@code true} to add only new members (existing ones are not moved)
+     * @param xx {@code true} to update only existing members (new ones are not added)
+     * @param ch {@code true} to count members whose position changed as well as new ones
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @param members the places; longitude -180 to 180, latitude -85.05112878 to 85.05112878
+     * @return how many members were new, or with {@code ch} new plus changed
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} for an out-of-range coordinate or {@code nx} together with {@code xx}; {@code WRONGTYPE} for a non-sorted-set
+     */
+    @SafeVarargs
+    public final Long geoadd(K key, boolean nx, boolean xx, boolean ch, Duration ttl, GeoValue<V>... members) {
+        return await(async.geoadd(key, nx, xx, ch, ttl, members));
     }
 
     /**
@@ -3898,6 +4103,22 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Sends {@code JSON.SET key path json EX|PX ttl}: like {@link #jsonSet(Object, String, String)}, and a document this call
+     * creates gets a time to live. An existing key keeps its deadline.
+     *
+     * @param key the JSON key
+     * @param path where to write
+     * @param json the new value as JSON text
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return {@code true} when written, {@code false} when the target cannot be reached
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR invalid JSON value} or {@code ERR invalid JSON path}; {@code WRONGTYPE} when the key holds a non-JSON value
+     */
+    public Boolean jsonSet(K key, String path, String json, Duration ttl) {
+        return await(async.jsonSet(key, path, json, ttl));
+    }
+
+    /**
      * Sends {@code JSON.SET key path json NX}: writes only when the path does not exist yet.
      *
      * @param key the JSON key
@@ -3911,6 +4132,22 @@ public abstract class RuvioSyncCommands<K, V> {
     }
 
     /**
+     * Sends {@code JSON.SET key path json NX EX|PX ttl}: like {@link #jsonSetNx(Object, String, String)}, and a document this call
+     * creates gets a time to live. An existing key keeps its deadline.
+     *
+     * @param key the JSON key
+     * @param path where to write
+     * @param json the new value as JSON text
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return {@code true} when written, {@code false} when the path already exists (or cannot be reached)
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR invalid JSON value} or {@code ERR invalid JSON path}; {@code WRONGTYPE} when the key holds a non-JSON value
+     */
+    public Boolean jsonSetNx(K key, String path, String json, Duration ttl) {
+        return await(async.jsonSetNx(key, path, json, ttl));
+    }
+
+    /**
      * Sends {@code JSON.SET key path json XX}: writes only when the path already exists.
      *
      * @param key the JSON key
@@ -3921,6 +4158,22 @@ public abstract class RuvioSyncCommands<K, V> {
      */
     public Boolean jsonSetXx(K key, String path, String json) {
         return await(async.jsonSetXx(key, path, json));
+    }
+
+    /**
+     * Sends {@code JSON.SET key path json XX EX|PX ttl}: like {@link #jsonSetXx(Object, String, String)}, and a document this call
+     * creates gets a time to live. An existing key keeps its deadline.
+     *
+     * @param key the JSON key
+     * @param path where to write
+     * @param json the new value as JSON text
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return {@code true} when written, {@code false} when the path does not exist
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR invalid JSON value} or {@code ERR invalid JSON path}; {@code WRONGTYPE} when the key holds a non-JSON value
+     */
+    public Boolean jsonSetXx(K key, String path, String json, Duration ttl) {
+        return await(async.jsonSetXx(key, path, json, ttl));
     }
 
     /**
@@ -4539,6 +4792,22 @@ public abstract class RuvioSyncCommands<K, V> {
      */
     public Long setbit(K key, long offset, boolean value) {
         return await(async.setbit(key, offset, value));
+    }
+
+    /**
+     * Sends {@code SETBIT key offset value EX|PX ttl}: like {@link #setbit(Object, long, boolean)}, and a bitmap this call creates
+     * gets a time to live. An existing key keeps its deadline.
+     *
+     * @param key the bitmap key
+     * @param offset the bit position, from 0 to 134,217,727
+     * @param value the new bit
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the previous bit, {@code 0} or {@code 1}
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR bit offset is not an integer or out of range}; {@code WRONGTYPE} for a non-string
+     */
+    public Long setbit(K key, long offset, boolean value, Duration ttl) {
+        return await(async.setbit(key, offset, value, ttl));
     }
 
     /**

@@ -33,7 +33,29 @@ export interface SetOptions {
   ifEq?: Value;
 }
 
-/** Condition for `HEXPIRE` and friends. */
+/**
+ * TTL-on-create option shared by the counter, bitmap and JSON write commands.
+ * The deadline is set only when the call creates the key; an existing key keeps the deadline it has.
+ */
+export interface TtlOptions {
+  /**
+   * Time to live in seconds. A whole number is sent as `EX`, a fractional value as `PX` (milliseconds, rounded, at least 1).
+   * Must be positive and finite; anything else rejects the call with a `RangeError` before it is sent.
+   */
+  ttl?: number;
+}
+
+/** Options for {@link Commands.geoadd}. */
+export interface GeoAddOptions extends TtlOptions {
+  /** Only add new members; never update existing ones. */
+  nx?: boolean;
+  /** Only update existing members; never add new ones. */
+  xx?: boolean;
+  /** Count changed members too: the reply is added plus updated instead of added only. */
+  ch?: boolean;
+}
+
+/** Condition for `EXPIRE`, `PEXPIRE`, `EXPIREAT`, `PEXPIREAT` and the `HEXPIRE` family. */
 export type ExpireCondition = 'NX' | 'XX' | 'GT' | 'LT';
 /**
  * Named {@link ExpireCondition} values for autocomplete, e.g. `c.hexpire('k', 60, ['f'], ExpireCondition.Nx)`.
@@ -99,6 +121,8 @@ export interface ZAddOptions {
   lt?: boolean;
   /** Count changed members too: the reply is added plus updated instead of added only. */
   ch?: boolean;
+  /** Time to live in seconds, set only when this call creates the key; an existing key keeps its deadline (`EX`, or `PX` for a fractional value). Must be positive and finite. */
+  ttl?: number;
 }
 
 /** Options for {@link Commands.zrange} and {@link Commands.zrangeWithScores}. */
@@ -251,6 +275,8 @@ export interface BfInsertOptions {
   noCreate?: boolean;
   /** Create a fixed-size filter. */
   nonScaling?: boolean;
+  /** Time to live in seconds, set only when this call creates the filter; an existing filter keeps its deadline. Must be positive and finite. */
+  ttl?: number;
 }
 
 /** One stream entry. */
@@ -438,6 +464,8 @@ export interface XAddOptions {
   approximate?: boolean;
   /** Ruvio: hold the entry back from `XREADGROUP` for this many milliseconds. */
   delayMs?: number;
+  /** Time to live in seconds, set only when this call creates the stream; an existing stream keeps its deadline. Must be positive and finite. */
+  ttl?: number;
 }
 
 /** Options for {@link Commands.xtrim}. Give `maxLen` or `minId`, not both. */

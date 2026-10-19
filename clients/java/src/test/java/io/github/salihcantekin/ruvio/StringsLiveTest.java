@@ -186,4 +186,55 @@ class StringsLiveTest {
             throw new RuntimeException(e);
         }
     }
+
+    @Test
+    void ttlOnCreateCounters() {
+        c.incr("ttl:incr", LONG_TTL);
+        assertDeadlineKept("ttl:incr");
+        assertEquals(2L, c.incr("ttl:incr", LONGER_TTL));
+        assertDeadlineKept("ttl:incr");
+
+        assertEquals(-1L, c.decr("ttl:decr", LONG_TTL));
+        assertEquals(-2L, c.decr("ttl:decr", LONGER_TTL));
+        assertDeadlineKept("ttl:decr");
+
+        assertEquals(5L, c.incrby("ttl:by", 5, LONG_TTL));
+        assertEquals(10L, c.incrby("ttl:by", 5, LONGER_TTL));
+        assertDeadlineKept("ttl:by");
+
+        assertEquals(-5L, c.decrby("ttl:dby", 5, LONG_TTL));
+        assertEquals(-10L, c.decrby("ttl:dby", 5, LONGER_TTL));
+        assertDeadlineKept("ttl:dby");
+
+        assertEquals(2L, c.incrbyMax("ttl:max", 2, 3, LONG_TTL));
+        assertNull(c.incrbyMax("ttl:max", 2, 3, LONGER_TTL));
+        assertEquals(3L, c.incrbyMax("ttl:max", 1, 3, LONGER_TTL));
+        assertDeadlineKept("ttl:max");
+
+        assertEquals(1.5, c.incrbyfloat("ttl:f", 1.5, LONG_TTL));
+        assertEquals(3.0, c.incrbyfloat("ttl:f", 1.5, LONGER_TTL));
+        assertDeadlineKept("ttl:f");
+
+        c.incr("ttl:ms", java.time.Duration.ofMillis(90_500));
+        long ms = c.pttl("ttl:ms");
+        assertTrue(ms > 0 && ms <= 90_500, "pttl " + ms);
+    }
+
+    @Test
+    void ttlOnCreateSetbitAndErrors() {
+        assertEquals(0L, c.setbit("ttl:bit", 7, true, LONG_TTL));
+        assertEquals(1L, c.setbit("ttl:bit", 7, true, LONGER_TTL));
+        assertDeadlineKept("ttl:bit");
+        assertThrows(IllegalArgumentException.class, () -> c.incr("ttl:bad", java.time.Duration.ZERO));
+        assertEquals(0L, c.exists("ttl:bad"));
+    }
+
+    private static final java.time.Duration LONG_TTL = java.time.Duration.ofSeconds(100);
+    private static final java.time.Duration LONGER_TTL = java.time.Duration.ofSeconds(1000);
+
+    /** The key got the first call's deadline (at most 100 s), not the second call's 1000 s. */
+    private void assertDeadlineKept(String key) {
+        long ms = c.pttl(key);
+        assertTrue(ms > 0 && ms <= 100_000, "pttl " + ms);
+    }
 }

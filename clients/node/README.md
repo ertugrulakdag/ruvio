@@ -88,6 +88,24 @@ including the Ruvio options: `set(k, v, { ifEq })`, `incrbyMax`, `fillget`/`fill
 
 `Symbol.asyncDispose` is polyfilled for Node 18/20. The `await using` syntax itself is not available in plain JavaScript on Node 22 (it failed in a `.mjs` file on Node 22.22): use it from TypeScript 5.2+ (the compiler lowers it), or call `lock.release()` / `c.withLock(...)` instead.
 
+### TTL on create
+
+Counters, bitmaps and other write commands can set a deadline in the same call that creates the key. Pass `ttl` in seconds
+(a whole number is sent as `EX`, a fraction as `PX`); the deadline is set only when the call creates the key, and an existing
+key keeps the deadline it already has. A `ttl` that is not positive and finite rejects with `RangeError` before anything is sent.
+
+```ts
+await c.incr('hits:today', { ttl: 86_400 });                 // INCR hits:today EX 86400
+await c.incrbyMax('seats', 1, 100, { ttl: 3600 });           // INCRBY seats 1 EX 3600 MAX 100
+await c.zadd('board', 10, 'ada', { ttl: 600 });              // ZADD board EX 600 10 ada
+await c.jsonSet('user:1', '$', '{"a":1}', 'NX', { ttl: 60 }); // JSON.SET user:1 $ {...} NX EX 60
+```
+
+Supported on `incr`, `decr`, `incrby`, `decrby`, `incrbyMax`, `incrbyfloat`, `hincrby`, `zincrby`, `setbit`, `jsonSet`,
+`jsonSetAs` (as a trailing `{ ttl }` argument) and through the `ttl` field of the options of `zadd`/`zaddIncr`, `geoadd`,
+`xadd` and `bfInsert`. `expire`, `pexpire`, `expireat` and `pexpireat` take an optional last argument, an `ExpireCondition`
+(`NX`, `XX`, `GT`, `LT`); a key without a deadline counts as infinite, and a failed condition returns `false`.
+
 ## Cluster
 
 ```ts

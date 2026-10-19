@@ -4,6 +4,7 @@ package ruvio
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -297,6 +298,33 @@ func ms(d time.Duration) int64 {
 		m = 1
 	}
 	return m
+}
+
+// ErrInvalidTTL is returned by the WithTTL methods and the TTL option fields when the
+// duration is zero or negative. Nothing is sent to the server in that case.
+var ErrInvalidTTL = errors.New("ruvio: TTL must be a positive duration")
+
+// ttlArg turns a create-time TTL into the option the server expects: EX with whole
+// seconds when ttl is a whole number of seconds, otherwise PX with milliseconds (a
+// positive sub-millisecond duration is rounded up to 1 ms). Zero or negative durations
+// return ErrInvalidTTL.
+func ttlArg(ttl time.Duration) ([]byte, int64, error) {
+	if ttl <= 0 {
+		return nil, 0, ErrInvalidTTL
+	}
+	if ttl%time.Second == 0 {
+		return tEX, int64(ttl / time.Second), nil
+	}
+	return tPX, ms(ttl), nil
+}
+
+// optTTL is ttlArg for an optional TTL field: zero means "no TTL" (nil token, no error)
+// and a negative value is ErrInvalidTTL.
+func optTTL(ttl time.Duration) ([]byte, int64, error) {
+	if ttl == 0 {
+		return nil, 0, nil
+	}
+	return ttlArg(ttl)
 }
 
 // secs converts a timeout to the decimal-seconds argument used by blocking commands.

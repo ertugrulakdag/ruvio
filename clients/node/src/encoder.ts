@@ -217,7 +217,7 @@ export class Encoder {
     else if (typeof a === 'number') this.num(a);
     else if (a instanceof Uint8Array) this.bytes(a as Buffer);
     else if (typeof a === 'bigint') this.ascii(a.toString());
-    else throw new TypeError('ruvio: unsupported argument type ' + typeof a);
+    else throw (a as unknown) instanceof Error ? a : new TypeError('ruvio: unsupported argument type ' + typeof a);
   }
 
   /** Writes a string argument as UTF-8 without measuring it first (write, then fix header). */

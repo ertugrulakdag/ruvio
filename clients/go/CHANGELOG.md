@@ -4,6 +4,9 @@ Notable changes to the Go client `github.com/salihcantekin/ruvio/clients/go`. A 
 
 ## Unreleased
 
+- TTL on create: `IncrWithTTL`, `DecrWithTTL`, `IncrByWithTTL`, `DecrByWithTTL`, `IncrByMaxWithTTL`, `IncrByFloatWithTTL`, `HIncrByWithTTL`, `ZIncrByWithTTL`, `SetBitWithTTL`, `JSONSetWithTTL` and `JSONSetModeWithTTL` send `EX` (whole seconds) or `PX` and set the deadline only when the call creates the key. New `TTL` field on `ZAddOptions`, `GeoAddOptions`, `XAddArgs` and `BFInsertOptions`. A zero or negative TTL returns the new `ErrInvalidTTL` without contacting the server.
+- Conditional expiry: typed `ExpireCondition` (`ExpireNx`, `ExpireXx`, `ExpireGt`, `ExpireLt`) and `ExpireIf`, `PExpireIf`, `ExpireAtIf`, `PExpireAtIf`.
+
 ## v0.2.0 - 2026-10-17
 
 Breaking for callers that pass a plain `string` variable where a typed keyword is now expected (see the first item); string literals still compile.
