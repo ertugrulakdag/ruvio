@@ -1047,14 +1047,32 @@ impl<'a> Command<'a> {
                 count,
                 just_id,
             },
-            Self::Expire { key, milliseconds } => Command::Expire {
+            Self::Expire {
+                key,
+                milliseconds,
+                condition,
+            } => Command::Expire {
                 key: owned(key),
                 milliseconds,
+                condition,
             },
-            Self::PExpireAt { key, unix_millis } => Command::PExpireAt {
+            Self::PExpireAt {
+                key,
+                unix_millis,
+                condition,
+            } => Command::PExpireAt {
                 key: owned(key),
                 unix_millis,
+                condition,
             },
+            Self::CreateTtl { ttl_ms, inner } => {
+                let (inner, bytes) = (*inner).into_owned_measured();
+                copied.set(copied.get().saturating_add(bytes));
+                Command::CreateTtl {
+                    ttl_ms,
+                    inner: Box::new(inner),
+                }
+            }
             Self::Ttl(key) => Command::Ttl(owned(key)),
             Self::PTtl(key) => Command::PTtl(owned(key)),
             Self::Persist(key) => Command::Persist(owned(key)),

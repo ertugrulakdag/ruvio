@@ -121,6 +121,7 @@ fn eligible_outside_multi(command: WalGroupCommand<'_, '_>) -> bool {
                 | Command::Exists { .. }
                 | Command::Type { .. }
                 | Command::Del { .. }
+                | Command::CreateTtl { .. }
                 | Command::Expire { .. }
                 | Command::PExpireAt { .. }
                 | Command::Ttl { .. }

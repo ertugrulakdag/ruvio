@@ -4,6 +4,9 @@ Notable changes to the Ruvio server (`ruvio`, `ruvio-ctl`, the Docker image and 
 
 ## Unreleased
 
+- TTL on create: `INCR`, `DECR`, `INCRBY`, `DECRBY`, `INCRBYFLOAT`, `HINCRBY`, `ZADD`, `ZINCRBY`, `GEOADD`, `XADD`, `SETBIT`, `JSON.SET` and `BF.INSERT` take `EX seconds` or `PX milliseconds`. The deadline is set only when the call creates the key; an existing key keeps its deadline. The write and the deadline are one WAL record, so a crash never leaves the key without its TTL.
+- `EXPIRE`, `PEXPIRE`, `EXPIREAT` and `PEXPIREAT` accept `NX`, `XX`, `GT` or `LT`. `SADD`, `LPUSH` and the other variadic writes use `EXPIRE key ttl NX` in the same pipeline or `MULTI`.
+
 ## 0.3.4 - 2026-10-17
 
 - `XADD ... MAXLEN` accepts `=` as well as `~` before the count, like `XTRIM` and `XADD ... MINID` already did.

@@ -88,10 +88,20 @@ pub(in crate::protocol) fn parse_xadd<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
     let mut min_id = None;
     let mut delay_ms = None;
     let mut nomkstream = false;
+    let mut ttl = None;
     let mut index = 1;
 
     while index < args.len() {
         let argument = args.bytes(index);
+
+        if ttl.is_none()
+            && let Some(found) = create_ttl_option(args, index)?
+        {
+            ttl = Some(found);
+            index += 2;
+
+            continue;
+        }
 
         if argument.eq_ignore_ascii_case(b"DELAY") {
             if delay_ms.is_some() {
@@ -192,15 +202,18 @@ pub(in crate::protocol) fn parse_xadd<'a>(args: &Args<'a, '_>) -> Parsed<'a> {
         fields.push((args.arg(at), args.arg(at + 1)));
     }
 
-    Ok(Command::StreamAdd {
-        key: args.arg(0),
-        id,
-        max_len,
-        min_id,
-        delay_ms,
-        nomkstream,
-        fields,
-    })
+    Ok(with_create_ttl(
+        ttl,
+        Command::StreamAdd {
+            key: args.arg(0),
+            id,
+            max_len,
+            min_id,
+            delay_ms,
+            nomkstream,
+            fields,
+        },
+    ))
 }
 
 pub(in crate::protocol) fn parse_xrange<'a>(reverse: bool, args: &Args<'a, '_>) -> Parsed<'a> {

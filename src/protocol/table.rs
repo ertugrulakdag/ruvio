@@ -168,7 +168,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
     ),
     CommandSpec::migrated(
         "incr",
-        2,
+        -2,
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["write", "string", "fast"],
@@ -176,7 +176,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
     ),
     CommandSpec::migrated(
         "decr",
-        2,
+        -2,
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["write", "string", "fast"],
@@ -192,7 +192,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
     ),
     CommandSpec::migrated(
         "decrby",
-        3,
+        -3,
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["write", "string", "fast"],
@@ -264,7 +264,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
     ),
     CommandSpec::migrated(
         "incrbyfloat",
-        3,
+        -3,
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["write", "string", "fast"],
@@ -496,7 +496,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
     ),
     CommandSpec::migrated(
         "setbit",
-        4,
+        -4,
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "bitmap", "slow"],
@@ -832,7 +832,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
     ),
     CommandSpec::migrated(
         "json.set",
-        4,
+        -4,
         WRITE | DENYOOM,
         (1, 1, 1),
         &["write", "slow"],
@@ -1537,7 +1537,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
     ),
     CommandSpec::migrated(
         "hincrby",
-        4,
+        -4,
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["write", "hash", "fast"],
@@ -1785,7 +1785,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
     ),
     CommandSpec::migrated(
         "zincrby",
-        4,
+        -4,
         WRITE | DENYOOM | FAST,
         (1, 1, 1),
         &["write", "sortedset", "fast"],
