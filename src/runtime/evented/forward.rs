@@ -2021,6 +2021,20 @@ async fn scan_all(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn keys_and_slots_are_routed_by_the_slot_table_not_the_formula() {
+        let fabric = Fabric::new(2);
+        let slot = crate::routing::hash_slot(b"user:1");
+        let formula = crate::routing::shard_for_slot(slot, 2);
+
+        assert_eq!(fabric.owner_of(b"user:1"), formula);
+        fabric.slots.assign(slot, 1 - formula);
+        assert_eq!(fabric.owner_of(b"user:1"), 1 - formula);
+        assert_eq!(fabric.slot_owner(slot), 1 - formula);
+        // The route each shard gets shares the same table.
+        assert_eq!(fabric.slot_table().owner(slot), 1 - formula);
+    }
+
+    #[test]
     fn publish_budget_bounds_messages_and_bytes_per_shard_and_is_returned_on_delivery() {
         let fabric = Fabric::new(2);
         let small = PublishDelivery {

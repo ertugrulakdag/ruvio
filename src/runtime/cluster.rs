@@ -1489,4 +1489,49 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn a_slot_given_to_another_shard_moves_its_redirect_and_splits_the_ranges() {
+        let route = two_shard_route(0);
+
+        // Slot 100 belongs to shard 0 by the formula; give it to shard 1.
+        assert!(!redirect_if_remote(&mut Vec::new(), Some(&route), 100).unwrap());
+        route.slots.assign(100, 1);
+        let mut moved = Vec::new();
+
+        assert!(redirect_if_remote(&mut moved, Some(&route), 100).unwrap());
+        assert_eq!(moved, b"-MOVED 100 127.0.0.1:6380\r\n");
+
+        let mut slots = Vec::new();
+
+        write_cluster_slots(&mut slots, Some(&route)).unwrap();
+        let slots = String::from_utf8(slots).unwrap();
+
+        // Shard 0 now owns 0-99 and 101-8191, shard 1 owns 100 and 8192-16383.
+        assert!(slots.starts_with("*4\r\n*3\r\n:0\r\n:99\r\n"), "{slots}");
+        assert!(slots.contains(":100\r\n:100\r\n"), "{slots}");
+        assert!(slots.contains(":101\r\n:8191\r\n"), "{slots}");
+
+        let mut nodes = Vec::new();
+
+        write_cluster_nodes(&mut nodes, Some(&route)).unwrap();
+        let nodes = String::from_utf8(nodes).unwrap();
+
+        assert!(nodes.contains("connected 0-99 101-8191\n"), "{nodes}");
+        assert!(nodes.contains("connected 100 8192-16383\n"), "{nodes}");
+
+        let mut shards = Vec::new();
+
+        write_cluster_shards(&mut shards, Some(&route)).unwrap();
+        let shards = String::from_utf8(shards).unwrap();
+
+        assert!(
+            shards.contains("$5\r\nslots\r\n*4\r\n:0\r\n:99\r\n:101\r\n:8191\r\n"),
+            "{shards}"
+        );
+        assert!(
+            shards.contains("$5\r\nslots\r\n*4\r\n:100\r\n:100\r\n:8192\r\n:16383\r\n"),
+            "{shards}"
+        );
+    }
 }

@@ -47,6 +47,12 @@ impl SlotTable {
         usize::from(self.0[usize::from(slot)].load(std::sync::atomic::Ordering::Relaxed))
     }
 
+    /// Gives `slot` to `owner`. Only tests move slots until a migration protocol exists.
+    #[cfg(test)]
+    pub fn assign(&self, slot: u16, owner: usize) {
+        self.0[usize::from(slot)].store(owner as u16, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Consecutive slots of one owner as `(first, last, owner)`, in slot order.
     pub fn ranges(&self) -> Vec<(u16, u16, usize)> {
         let mut ranges: Vec<(u16, u16, usize)> = Vec::new();
