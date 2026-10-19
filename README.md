@@ -233,11 +233,11 @@ The differences are about ownership, the durability contract, and how much of th
 | Runtime | C | C++ | .NET, Tsavorite | Rust, in-memory shard + WAL |
 | Wire | RESP2/3, full surface | Redis and Memcached | Redis-compatible | RESP2 subset, listed in CI |
 | Hot path | Shared engine, I/O threads | Single-node throughput | Separate string and object stores | One owner per shard, no lock on apply |
-| Cluster | Bus, migration, failover | Its own scale story | Cluster-capable store | Static 16,384 slots, misrouted keys forwarded, no election |
+| Cluster | Bus, migration, failover | Its own scale story | Cluster-capable store | Static 16,384 slots, misrouted keys forwarded; automatic failover of a primary and its replicas with `ruvio coordinator` |
 | Durability | RDB, AOF, combinations | Snapshots | Tsavorite on disk | `memory`, `snapshot`, `everysec`, `always` |
-| Keep the other when | You need Sentinel, modules, or a command Ruvio does not list | You want that single-node scale claim | You want a .NET stack and Tsavorite as the store | The written subset and the shard contract are enough |
+| Keep the other when | You need modules, the full Sentinel feature set, or a command Ruvio does not list | You want that single-node scale claim | You want a .NET stack and Tsavorite as the store | The written subset and the shard contract are enough |
 
-Not claimed: a cluster bus, online slot migration, failover, replica acknowledgement, or a hardware latency number. Replication copies a WAL tail to a bounded set of replicas. Classic `PUBLISH` reaches subscribers on every shard of one process, not other processes.
+Not claimed: a cluster bus, online slot migration, failover across a multi-node cluster (failover covers one primary and its replicas, through `ruvio coordinator`), or a hardware latency number. Replication copies a WAL tail to a bounded set of replicas. Classic `PUBLISH` reaches subscribers on every shard of one process, not other processes.
 
 ### Docker Desktop and memory density
 
@@ -267,7 +267,8 @@ Docker RSS is not the bare-metal result; the memory detail is in [the string mem
 | [Configuration](https://ruviodb.com/docs/configuration/) | TOML, environment, ACL users |
 | [Commands](https://ruviodb.com/docs/commands/) | The supported surface |
 | [Durability](https://ruviodb.com/docs/recovery/) | Acknowledgement boundaries |
-| [Replication](https://ruviodb.com/docs/recovery/) | WAL tail, reads from replicas, no failover |
+| [Replication](https://ruviodb.com/docs/recovery/) | WAL tail, reads from replicas, `REPLICAOF` |
+| [Automatic failover](https://ruviodb.com/docs/coordinator/) | `ruvio coordinator`: Raft-agreed failover, Sentinel-compatible discovery |
 | [Operations](https://ruviodb.com/docs/observability/) | Limits, metrics, shutdown |
 | [Testing and evidence](https://ruviodb.com/docs/testing/) | Test coverage, recorded results, open production evidence gates |
 | [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | What the process does and does not defend |

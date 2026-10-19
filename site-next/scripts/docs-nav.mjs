@@ -93,6 +93,7 @@ export const GROUPS = [
     label: "Operate",
     items: [
       { src: "docs/RECOVERY.md", label: "Recovery and backup" },
+      { src: "docs/COORDINATOR.md", label: "Automatic failover" },
       { src: "docs/RESILIENCE.md", label: "Resilience tests" },
       { src: "docs/OBSERVABILITY.md", label: "Observability" },
       { src: "docs/THREAT_MODEL.md", label: "Threat model" },

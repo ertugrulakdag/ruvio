@@ -31,6 +31,7 @@ Each shard is owned by one thread: it parses, records to the WAL, applies and re
 | Storage | `store/` (values, collections, eviction, expiry), `index.rs`, `arena.rs`, `chunked.rs`, `hot_store/`, `stream.rs` (packed blocks in `stream/blocks.rs`), `id_map.rs`, `json.rs` (field indexes in `json/index.rs`), `geo.rs`, `hashbrown/` | `hashbrown/` is a trimmed copy of hashbrown 0.17.1 (`HashTable` only); its README lists every change |
 | Durability | `mutation.rs` (the change vocabulary), `persistence/` (`wal.rs`, `codec.rs`, `snapshot.rs`, `sync_worker.rs`), `dump.rs`, `changes.rs` (CDC) | Format changes need a format-minor bump and a fixture |
 | Replication | `replication.rs`, `runtime/evented/replica.rs` | The preflight matches list every `OwnedMutation`; a new variant does not compile until classified |
+| Coordinator | `coordinator/` (`config.rs`, `raft.rs`, `monitor.rs`, `resp.rs`), behind the default `coordinator` feature | A separate process (`ruvio coordinator`); it reaches data nodes only through RESP commands, never through server internals |
 | Operations | `config.rs`, `acl.rs`, `security.rs`, `metrics.rs`, `latency.rs`, `slowlog.rs`, `keystats.rs`, `memory.rs`, `import.rs`, `shutdown.rs` | |
 
 ## Fast loop

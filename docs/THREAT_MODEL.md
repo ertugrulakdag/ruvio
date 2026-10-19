@@ -257,6 +257,12 @@ the default quota).
    primary and have its data replaced by that primary's copy, or promote a
    replica next to a running primary. Deny `replicaof` to users that do not
    operate the deployment.
+8. The coordinator port (`ruvio coordinator`) carries Raft votes and the
+   Sentinel API. With `secret` unset anyone who reaches it can read the
+   topology and take part in failover decisions; with it set, calls without the
+   secret are refused and clients must `AUTH`. The secret is sent in clear text:
+   keep coordinators on a private network. The coordinators' data-node user
+   (`auth`) needs only `ROLE`, `INFO`, `CONFIG GET` and `REPLICAOF`.
 
 ## Operator checklist
 
