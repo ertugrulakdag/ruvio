@@ -55,6 +55,9 @@ pub struct SortedSetAddOptions {
     pub less_than: bool,
     /// Count changed members as well as new ones (`CH`).
     pub changed: bool,
+    /// Deadline for the key, sent as `EX` / `PX`; set only when the call creates the key (an
+    /// existing key keeps its deadline). A zero `Duration` is refused before sending.
+    pub ttl: Option<Duration>,
 }
 
 /// `XREAD` and `XREADGROUP` options.
@@ -213,6 +216,9 @@ pub struct BloomInsertOptions {
     pub no_create: bool,
     /// `NONSCALING` for a new filter.
     pub non_scaling: bool,
+    /// Deadline for the key, sent as `EX` / `PX`; set only when the call creates the filter (an
+    /// existing key keeps its deadline). A zero `Duration` is refused before sending.
+    pub ttl: Option<Duration>,
 }
 
 /// The `BF.INFO` reply.

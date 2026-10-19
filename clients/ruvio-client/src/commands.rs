@@ -17,6 +17,7 @@ use crate::models::{
 };
 
 use crate::args::Num;
+use crate::ttl::ttl_words;
 use crate::value::RespValue;
 
 macro_rules! args {
@@ -1540,7 +1541,9 @@ impl Client {
         self.zadd_with(key, SortedSetAddOptions::default(), entries)
     }
 
-    /// Sends `ZADD` with [`SortedSetAddOptions`] (`NX`, `XX`, `GT`, `LT`, `CH`).
+    /// Sends `ZADD` with [`SortedSetAddOptions`] (`EX`/`PX` via `ttl`, `NX`, `XX`, `GT`, `LT`, `CH`).
+    ///
+    /// With `ttl` set the key's deadline is set only when this call creates the key.
     ///
     /// Returns the number of new members, or with `changed` set the number of new **and**
     /// updated members. The server rejects `NX` with `XX`/`GT`/`LT`, and `GT` with `LT`
@@ -1567,9 +1570,14 @@ impl Client {
             .iter()
             .map(|(_, score)| Num::float(*score))
             .collect();
-        let mut arguments: Vec<&str> = Vec::with_capacity(7 + entries.len() * 2);
+        let ttl = options.ttl.map(ttl_words).transpose()?;
+        let mut arguments: Vec<&str> = Vec::with_capacity(9 + entries.len() * 2);
 
         arguments.extend(["ZADD", key]);
+
+        if let Some((word, count)) = &ttl {
+            arguments.extend([*word, count.as_str()]);
+        }
 
         for (enabled, flag) in [
             (options.if_not_exists, "NX"),
@@ -1601,7 +1609,7 @@ impl Client {
         delta: f64,
         options: SortedSetAddOptions,
     ) -> Result<Option<f64>, Error> {
-        let mut arguments = zadd_arguments(key, options);
+        let mut arguments = zadd_arguments(key, options)?;
 
         arguments.extend(args!["INCR", delta, member]);
         self.bulk_or_null(arguments)?
@@ -3680,8 +3688,15 @@ fn push_streams(arguments: &mut Vec<String>, streams: &[(&str, &str)]) {
     arguments.extend(streams.iter().map(|(_, id)| (*id).to_owned()));
 }
 
-fn zadd_arguments(key: &str, options: SortedSetAddOptions) -> Vec<String> {
+fn zadd_arguments(key: &str, options: SortedSetAddOptions) -> Result<Vec<String>, Error> {
+    let ttl = options.ttl.map(ttl_words).transpose()?;
     let mut arguments = args!["ZADD", key];
+
+    if let Some((word, count)) = ttl {
+        arguments.push(word.to_owned());
+        arguments.push(count.as_str().to_owned());
+    }
+
     let flags = [
         (options.if_not_exists, "NX"),
         (options.if_exists, "XX"),
@@ -3696,7 +3711,7 @@ fn zadd_arguments(key: &str, options: SortedSetAddOptions) -> Vec<String> {
         }
     }
 
-    arguments
+    Ok(arguments)
 }
 
 fn claim_arguments(

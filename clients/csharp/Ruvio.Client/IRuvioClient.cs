@@ -130,7 +130,7 @@ public partial interface IRuvioClient
     ValueTask<int?> GetInt32Async(string key, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Sends <c>GET</c> and parses the value as a 64-bit decimal integer, such as a counter written by <see cref="IncrementAsync"/>.
+    /// Sends <c>GET</c> and parses the value as a 64-bit decimal integer, such as a counter written by <see cref="IncrementAsync(string, CancellationToken)"/>.
     /// </summary>
     /// <param name="key">The key.</param>
     /// <param name="cancellationToken">Abandons the wait for the reply with an <see cref="OperationCanceledException"/>. A command that was already sent still runs on the server.</param>

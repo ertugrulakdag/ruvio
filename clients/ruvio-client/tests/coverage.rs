@@ -501,4 +501,20 @@ fn methods_exist() {
     let _ = Client::zunion;
     let _ = Client::zunion_with_scores;
     let _ = Client::zunionstore;
+    let _ = Client::expire_if;
+    let _ = Client::pexpire_if;
+    let _ = Client::expire_at_if;
+    let _ = Client::pexpire_at_if;
+    let _ = Client::incr_with_ttl;
+    let _ = Client::decr_with_ttl;
+    let _ = Client::incr_by_with_ttl;
+    let _ = Client::decr_by_with_ttl;
+    let _ = Client::incr_by_max_with_ttl;
+    let _ = Client::incr_by_float_with_ttl;
+    let _ = Client::hincr_by_with_ttl;
+    let _ = Client::zincr_by_with_ttl;
+    let _ = Client::setbit_with_ttl;
+    let _ = Client::xadd_with_ttl;
+    let _ = Client::xadd_trim_with_ttl;
+    let _ = Client::json_set_with_ttl;
 }

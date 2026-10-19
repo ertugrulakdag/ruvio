@@ -384,7 +384,7 @@
     },
     {
       "name": "DECR",
-      "arity": 2,
+      "arity": -2,
       "flags": [
         "write",
         "fast",
@@ -399,7 +399,7 @@
     },
     {
       "name": "DECRBY",
-      "arity": 3,
+      "arity": -3,
       "flags": [
         "write",
         "fast",
@@ -939,7 +939,7 @@
     },
     {
       "name": "HINCRBY",
-      "arity": 4,
+      "arity": -4,
       "flags": [
         "write",
         "fast",
@@ -1208,7 +1208,7 @@
     },
     {
       "name": "INCR",
-      "arity": 2,
+      "arity": -2,
       "flags": [
         "write",
         "fast",
@@ -1238,7 +1238,7 @@
     },
     {
       "name": "INCRBYFLOAT",
-      "arity": 3,
+      "arity": -3,
       "flags": [
         "write",
         "fast",
@@ -1508,7 +1508,7 @@
     },
     {
       "name": "JSON.SET",
-      "arity": 4,
+      "arity": -4,
       "flags": [
         "write",
         "denyoom"
@@ -2391,7 +2391,7 @@
     },
     {
       "name": "SETBIT",
-      "arity": 4,
+      "arity": -4,
       "flags": [
         "write",
         "denyoom"
@@ -3115,7 +3115,7 @@
     },
     {
       "name": "ZINCRBY",
-      "arity": 4,
+      "arity": -4,
       "flags": [
         "write",
         "fast",

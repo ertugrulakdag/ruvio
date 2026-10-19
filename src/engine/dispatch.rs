@@ -1573,8 +1573,19 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
             Ok(info) => Response::Integer(info.map_or(0, |info| info.items as i64)),
             Err(error) => bloom_error(error),
         }),
-        Command::Expire { key, milliseconds } => expire_key(shard, sink, key, milliseconds, false),
-        Command::PExpireAt { key, unix_millis } => expire_key(shard, sink, key, unix_millis, true),
+        Command::CreateTtl { ttl_ms, inner } => {
+            transaction::create_with_ttl(shard, sink, waiters, ttl_ms, *inner, database)
+        }
+        Command::Expire {
+            key,
+            milliseconds,
+            condition,
+        } => expire_key(shard, sink, key, milliseconds, false, condition),
+        Command::PExpireAt {
+            key,
+            unix_millis,
+            condition,
+        } => expire_key(shard, sink, key, unix_millis, true, condition),
         Command::Ttl(key) => Ok(Response::Integer(shard.ttl_seconds(&key))),
         Command::PTtl(key) => Ok(Response::Integer(shard.pttl(&key))),
         Command::Persist(key) => persist_key(shard, sink, key),

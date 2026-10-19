@@ -8,6 +8,7 @@ import io.github.salihcantekin.ruvio.model.IdemResult;
 import io.github.salihcantekin.ruvio.model.RateLimitResult;
 import io.github.salihcantekin.ruvio.model.ScanResult;
 
+import io.github.salihcantekin.ruvio.args.ExpireCondition;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.HashSet;
@@ -181,5 +182,31 @@ class KeysLiveTest {
         List<ChangeNote> notes = c.changes(cursor);
         assertTrue(notes.stream().anyMatch(n -> n.text().contains("k:chg")), notes.toString());
         assertTrue(notes.get(0).sequence() > cursor);
+    }
+
+    @Test
+    void expireConditions() {
+        c.set("xc:k", "v");
+        assertFalse(c.expire("xc:k", 100, ExpireCondition.XX), "no deadline yet");
+        assertFalse(c.expire("xc:k", 100, ExpireCondition.GT), "no deadline counts as infinite");
+        assertTrue(c.expire("xc:k", 100, ExpireCondition.LT));
+        assertFalse(c.expire("xc:k", 200, ExpireCondition.NX), "already has a deadline");
+        assertTrue(c.expire("xc:k", 200, ExpireCondition.GT));
+        assertTrue(c.expire("xc:k", 150, ExpireCondition.LT));
+        assertTrue(c.expire("xc:k", 100, ExpireCondition.XX));
+        long ms = c.pttl("xc:k");
+        assertTrue(ms > 0 && ms <= 100_000, "pttl " + ms);
+        assertTrue(c.expire("xc:k", 500, ExpireCondition.ALWAYS));
+
+        assertTrue(c.pexpire("xc:k", 50_000, ExpireCondition.LT));
+        assertFalse(c.pexpire("xc:k", 60_000, ExpireCondition.LT));
+        long future = System.currentTimeMillis() / 1000 + 10_000;
+        assertTrue(c.expireat("xc:k", future, ExpireCondition.GT));
+        assertFalse(c.expireat("xc:k", future - 5_000, ExpireCondition.GT));
+        assertTrue(c.pexpireat("xc:k", future * 1000 - 1_000_000, ExpireCondition.LT));
+        assertFalse(c.pexpireat("xc:k", future * 1000, ExpireCondition.LT));
+        c.set("xc:n", "v");
+        assertTrue(c.pexpireat("xc:n", future * 1000, ExpireCondition.NX));
+        assertFalse(c.expire("xc:missing", 10, ExpireCondition.NX));
     }
 }

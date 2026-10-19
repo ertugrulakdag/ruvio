@@ -11,6 +11,7 @@ import io.github.salihcantekin.ruvio.internal.Reply;
 import io.github.salihcantekin.ruvio.model.KeyValue;
 import io.github.salihcantekin.ruvio.model.ScanResult;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -210,6 +211,22 @@ public abstract class HashCommands<K, V> extends KeyCommands<K, V> {
     }
 
     /**
+     * Sends {@code HINCRBY key field delta EX|PX ttl}: like {@link #hincrby(Object, Object, long)}, and a hash this call creates
+     * gets a time to live. An existing key keeps its deadline.
+     *
+     * @param key the hash key
+     * @param field the field to change
+     * @param delta the signed amount to add
+     * @param ttl time to live of a newly created key: whole seconds are sent as {@code EX}, anything finer as {@code PX}
+     * @return the field value after the addition
+     * @throws IllegalArgumentException when {@code ttl} is null, zero, negative or too large
+     * @throws RuvioServerException {@code ERR} when the field is not a signed 64-bit integer or the result overflows; {@code WRONGTYPE} when the key holds a non-hash
+     */
+    public CompletableFuture<Long> hincrby(K key, K field, long delta, Duration ttl) {
+        return send(args().w(Cmd.HINCRBY).k(key).k(field).l(delta).ttl(ttl), Reply.LONG);
+    }
+
+    /**
      * Sends {@code HTRANSFER key from to amount}: moves {@code amount} between two integer fields of one hash
      * in one step, only when {@code from} holds at least that much. A missing {@code to} field starts at 0 and
      * field TTLs stay.
@@ -351,7 +368,7 @@ public abstract class HashCommands<K, V> extends KeyCommands<K, V> {
     private CompletableFuture<List<Long>> fieldTtl(byte[] cmd, K key, long time, ExpireCondition condition, K[] fields) {
         Args a = args().w(cmd).k(key).l(time);
         if (condition != null && condition != ExpireCondition.ALWAYS) {
-            a.s(condition.name());
+            a.w(condition.fragment());
         }
         a.w(Cmd.FIELDS).l(fields.length).keys(fields);
         return send(a, Reply.LONG_LIST);

@@ -43,6 +43,7 @@ pub(super) fn validate_command_payloads(
     limits: ProtocolLimits,
 ) -> Result<(), ProtocolError> {
     match command {
+        Command::CreateTtl { inner, .. } => validate_command_payloads(inner, limits)?,
         Command::Ping(message) | Command::Ruvio(message) | Command::Info(message) => {
             if let Some(message) = message {
                 validate_value(message, limits)?;

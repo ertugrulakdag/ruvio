@@ -3,6 +3,7 @@
 package ruvio
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"testing"
@@ -385,3 +386,100 @@ func TestLiveBitsAndHLL(t *testing.T) {
 }
 
 func must2[T any](_ T, err error) error { return err }
+
+// ttlRange asserts that key has a deadline in (0, max].
+func ttlRange(t *testing.T, c *Client, ctx context.Context, key string, max time.Duration) {
+	t.Helper()
+	p, err := c.PTTL(ctx, key)
+	noErr(t, err)
+	if p <= 0 || p > max.Milliseconds() {
+		t.Fatalf("%s: PTTL %d not in (0, %d]", key, p, max.Milliseconds())
+	}
+}
+
+func TestLiveTTLOnCreate(t *testing.T) {
+	c, ctx := live(t)
+	const long = 1000 * time.Second
+	// Each case creates a key with a deadline, then calls again with a different TTL: the
+	// deadline of the existing key must stay.
+	cases := []struct {
+		key  string
+		call func(ttl time.Duration) error
+	}{
+		{"incr", func(d time.Duration) error { _, e := c.IncrWithTTL(ctx, "incr", d); return e }},
+		{"decr", func(d time.Duration) error { _, e := c.DecrWithTTL(ctx, "decr", d); return e }},
+		{"incrby", func(d time.Duration) error { _, e := c.IncrByWithTTL(ctx, "incrby", 2, d); return e }},
+		{"decrby", func(d time.Duration) error { _, e := c.DecrByWithTTL(ctx, "decrby", 2, d); return e }},
+		{"incrbymax", func(d time.Duration) error { _, _, e := c.IncrByMaxWithTTL(ctx, "incrbymax", 1, 99, d); return e }},
+		{"incrbyfloat", func(d time.Duration) error { _, e := c.IncrByFloatWithTTL(ctx, "incrbyfloat", 0.5, d); return e }},
+		{"hincrby", func(d time.Duration) error { _, e := c.HIncrByWithTTL(ctx, "hincrby", "f", 1, d); return e }},
+		{"zincrby", func(d time.Duration) error { _, e := c.ZIncrByWithTTL(ctx, "zincrby", 1, "m", d); return e }},
+		{"setbit", func(d time.Duration) error { _, e := c.SetBitWithTTL(ctx, "setbit", 3, 1, d); return e }},
+		{"zadd", func(d time.Duration) error {
+			_, e := c.ZAddArgs(ctx, "zadd", ZAddOptions{TTL: d}, Z{Member: "m", Score: 1})
+			return e
+		}},
+		{"geoadd", func(d time.Duration) error {
+			_, e := c.GeoAdd(ctx, "geoadd", GeoAddOptions{TTL: d}, GeoLocation{Name: "p", Longitude: 13.36, Latitude: 38.11})
+			return e
+		}},
+		{"xadd", func(d time.Duration) error {
+			_, _, e := c.XAdd(ctx, XAddArgs{Stream: "xadd", TTL: d, Values: []string{"a", "b"}})
+			return e
+		}},
+		{"jsonset", func(d time.Duration) error { return c.JSONSetWithTTL(ctx, "jsonset", "$", `{"a":1}`, d) }},
+		{"bfinsert", func(d time.Duration) error {
+			_, e := c.BFInsert(ctx, "bfinsert", BFInsertOptions{TTL: d}, "x")
+			return e
+		}},
+	}
+	for _, tc := range cases {
+		noErr(t, tc.call(long))
+		ttlRange(t, c, ctx, tc.key, long)
+		// A short TTL on the now existing key must not shorten it.
+		noErr(t, tc.call(2500*time.Millisecond))
+		p, err := c.PTTL(ctx, tc.key)
+		noErr(t, err)
+		if p <= 3000 {
+			t.Fatalf("%s: existing deadline changed, PTTL %d", tc.key, p)
+		}
+	}
+	// PX path on create.
+	_, err := c.IncrWithTTL(ctx, "px", 1500*time.Millisecond)
+	noErr(t, err)
+	ttlRange(t, c, ctx, "px", 1500*time.Millisecond)
+	// A zero TTL never reaches the server and creates nothing.
+	if _, err := c.IncrWithTTL(ctx, "none", 0); !errors.Is(err, ErrInvalidTTL) {
+		t.Fatalf("got %v", err)
+	}
+	eq(t, must[int64](t)(c.Exists(ctx, "none")), int64(0))
+	// IncrByMax over the limit writes nothing and creates no key.
+	_, ok, err := c.IncrByMaxWithTTL(ctx, "capped", 5, 3, long)
+	noErr(t, err)
+	eq(t, ok, false)
+	eq(t, must[int64](t)(c.Exists(ctx, "capped")), int64(0))
+}
+
+func TestLiveExpireConditions(t *testing.T) {
+	c, ctx := live(t)
+	mb := must[bool](t)
+	noErr(t, c.Set(ctx, "e", "v"))
+	// No deadline counts as infinite: NX and LT apply, XX and GT do not.
+	eq(t, mb(c.ExpireIf(ctx, "e", 100*time.Second, ExpireXx)), false)
+	eq(t, mb(c.ExpireIf(ctx, "e", 100*time.Second, ExpireGt)), false)
+	eq(t, mb(c.ExpireIf(ctx, "e", 100*time.Second, ExpireNx)), true)
+	eq(t, mb(c.ExpireIf(ctx, "e", 200*time.Second, ExpireNx)), false)
+	eq(t, mb(c.ExpireIf(ctx, "e", 200*time.Second, ExpireGt)), true)
+	eq(t, mb(c.ExpireIf(ctx, "e", 300*time.Second, ExpireLt)), false)
+	eq(t, mb(c.ExpireIf(ctx, "e", 150*time.Second, ExpireLt)), true)
+	eq(t, mb(c.ExpireIf(ctx, "e", 150*time.Second, ExpireXx)), true)
+	ttlRange(t, c, ctx, "e", 150*time.Second)
+	eq(t, mb(c.PExpireIf(ctx, "e", 400*time.Second, ExpireGt)), true)
+	eq(t, mb(c.PExpireIf(ctx, "e", 500*time.Second, ExpireLt)), false)
+	now := time.Now()
+	eq(t, mb(c.ExpireAtIf(ctx, "e", now.Add(1000*time.Second), ExpireGt)), true)
+	eq(t, mb(c.ExpireAtIf(ctx, "e", now.Add(2000*time.Second), ExpireLt)), false)
+	eq(t, mb(c.PExpireAtIf(ctx, "e", now.Add(3000*time.Second), ExpireGt)), true)
+	eq(t, mb(c.PExpireAtIf(ctx, "e", now.Add(4000*time.Second), ExpireLt)), false)
+	eq(t, mb(c.ExpireIf(ctx, "missing", 10*time.Second, ExpireNx)), false)
+}

@@ -524,6 +524,17 @@ func (c *cmds) HIncrBy(ctx context.Context, key, field string, delta int64) (int
 	return c.intR(ctx, newCmd(4, cHINCRBY).s(key).s(field).i(delta))
 }
 
+// HIncrByWithTTL is HIncrBy that also sets a deadline on the key when the call creates
+// it (HINCRBY key field delta EX|PX). EX is sent for whole seconds, PX otherwise; an
+// existing hash keeps its deadline. A ttl of zero or less returns ErrInvalidTTL.
+func (c *cmds) HIncrByWithTTL(ctx context.Context, key, field string, delta int64, ttl time.Duration) (int64, error) {
+	tok, v, err := ttlArg(ttl)
+	if err != nil {
+		return 0, err
+	}
+	return c.intR(ctx, newCmd(6, cHINCRBY).s(key).s(field).i(delta).t(tok).i(v))
+}
+
 // HTransfer is Transfer between two integer fields of one hash (HTRANSFER key from to
 // amount). A missing to field starts at 0 and field TTLs stay. ok is false, and nothing
 // is written, when the key or the from field is missing or short or to would overflow.

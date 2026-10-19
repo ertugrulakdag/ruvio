@@ -872,3 +872,73 @@ async def test_execute_escape_hatch(c):
     assert await c.execute_command("SET", "e", "1", "PX", 100000) == "OK"
     assert await c.execute_command("GET", "e") == "1"
     assert await c.execute_command(b"PING") == "PONG"
+
+
+async def test_ttl_on_create(c):
+    from datetime import timedelta
+
+    async def check(key, first, again):
+        """``first`` creates the key; ``again`` is a second call asking for a much longer TTL."""
+        await first()
+        pttl = await c.pttl(key)
+        assert 0 < pttl <= 100_000, (key, pttl)
+        await again()
+        pttl = await c.pttl(key)
+        assert 0 < pttl <= 100_000, (key, pttl)  # an existing key keeps its deadline
+
+    await check("t:incr", lambda: c.incr("t:incr", ttl=100), lambda: c.incr("t:incr", ttl=5000))
+    await check("t:decr", lambda: c.decr("t:decr", ttl=100), lambda: c.decr("t:decr", ttl=5000))
+    await check("t:incrby", lambda: c.incrby("t:incrby", 2, max=10, ttl=100), lambda: c.incrby("t:incrby", 2, ttl=5000))
+    await check("t:decrby", lambda: c.decrby("t:decrby", 2, ttl=100), lambda: c.decrby("t:decrby", 2, ttl=5000))
+    await check("t:float", lambda: c.incrbyfloat("t:float", 1.5, ttl=100), lambda: c.incrbyfloat("t:float", 1.5, ttl=5000))
+    await check("t:hash", lambda: c.hincrby("t:hash", "f", 1, ttl=100), lambda: c.hincrby("t:hash", "f", 1, ttl=5000))
+    await check("t:zset", lambda: c.zincrby("t:zset", 1, "m", ttl=100), lambda: c.zincrby("t:zset", 1, "m", ttl=5000))
+    await check("t:bit", lambda: c.setbit("t:bit", 3, 1, ttl=100), lambda: c.setbit("t:bit", 4, 1, ttl=5000))
+    await check("t:zadd", lambda: c.zadd("t:zadd", {"a": 1}, ttl=100), lambda: c.zadd("t:zadd", {"b": 1}, ttl=5000))
+    await check(
+        "t:geo",
+        lambda: c.geoadd("t:geo", [(13.36, 38.11, "p")], ttl=100),
+        lambda: c.geoadd("t:geo", [(15.08, 37.5, "q")], ttl=5000),
+    )
+    await check("t:xadd", lambda: c.xadd("t:xadd", {"f": "v"}, ttl=100), lambda: c.xadd("t:xadd", {"f": "w"}, ttl=5000))
+    await check("t:json", lambda: c.json_set("t:json", "$", '{"a":1}', ttl=100), lambda: c.json_set("t:json", "$", '{"a":2}', ttl=5000))
+    await check("t:bf", lambda: c.bf_insert("t:bf", ["x"], ttl=100), lambda: c.bf_insert("t:bf", ["y"], ttl=5000))
+    # Sub-second part and timedelta send PX.
+    await c.incr("t:px", ttl=timedelta(milliseconds=90_500))
+    assert 0 < await c.pttl("t:px") <= 90_500
+    await c.incr("t:px2", ttl=90.5)
+    assert 0 < await c.pttl("t:px2") <= 90_500
+    # Without ttl a created key has no deadline.
+    await c.incr("t:none")
+    assert await c.pttl("t:none") == -1
+    # A zero or negative ttl never reaches the server.
+    with pytest.raises(ValueError):
+        await c.incr("t:bad", ttl=0)
+    assert await c.exists("t:bad") == 0
+
+
+async def test_expire_conditions(c):
+    from ruvio import ExpireCondition
+
+    await c.set("x:k", "v")
+    # No deadline counts as infinite: NX sets, XX and GT refuse, LT sets.
+    assert await c.expire("x:k", 100, condition=ExpireCondition.XX) is False
+    assert await c.expire("x:k", 100, condition=ExpireCondition.GT) is False
+    assert await c.pttl("x:k") == -1
+    assert await c.expire("x:k", 100, condition=ExpireCondition.NX) is True
+    assert 0 < await c.pttl("x:k") <= 100_000
+    # Now it has a deadline: NX refuses, XX sets, GT needs a later one, LT an earlier one.
+    assert await c.expire("x:k", 200, condition="NX") is False
+    assert await c.expire("x:k", 50, condition=ExpireCondition.GT) is False
+    assert await c.expire("x:k", 200, condition=ExpireCondition.GT) is True
+    assert 100_000 < await c.pttl("x:k") <= 200_000
+    assert await c.expire("x:k", 300, condition=ExpireCondition.LT) is False
+    assert await c.expire("x:k", 100, condition=ExpireCondition.LT) is True
+    assert await c.expire("x:k", 150, condition=ExpireCondition.XX) is True
+    # The other three commands accept a condition too.
+    assert await c.pexpire("x:k", 400_000, condition=ExpireCondition.GT) is True
+    assert 150_000 < await c.pttl("x:k") <= 400_000
+    far = int(time.time()) + 100_000
+    assert await c.expireat("x:k", far, condition=ExpireCondition.GT) is True
+    assert await c.pexpireat("x:k", far * 1000 + 1000, condition=ExpireCondition.LT) is False
+    assert await c.expire("missing", 10, condition=ExpireCondition.NX) is False

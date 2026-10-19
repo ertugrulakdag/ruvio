@@ -115,6 +115,21 @@ for m := range ps.Channel() { fmt.Println(m.Kind, m.Channel, m.Payload) }
 
 `Tx.Multi` / `Tx.Queue` / `Tx.ExecQueued` / `Tx.Discard` give the explicit step-by-step form.
 
+### TTL on create
+
+A counter or a first write often needs a deadline that is set once, when the key appears, and not moved by later writes. The `...WithTTL` methods and the `TTL` option fields do this in one command. The deadline is set only when the call creates the key; a key that already exists keeps its deadline.
+
+```go
+n, err := c.IncrWithTTL(ctx, "rate:ada", time.Minute)             // INCR rate:ada EX 60
+_, err = c.IncrByWithTTL(ctx, "hits", 5, 1500*time.Millisecond)   // INCRBY hits 5 PX 1500
+_, err = c.ZAddArgs(ctx, "board", ruvio.ZAddOptions{TTL: time.Hour}, ruvio.Z{Member: "ada", Score: 10})
+err = c.JSONSetWithTTL(ctx, "user:1", "$", `{"name":"Ada"}`, time.Hour)
+```
+
+Whole seconds are sent as `EX`, anything else as `PX` in milliseconds. A zero or negative duration returns `ErrInvalidTTL` and nothing is sent. Available on `Incr`, `Decr`, `IncrBy`, `DecrBy`, `IncrByMax`, `IncrByFloat`, `HIncrBy`, `ZIncrBy`, `SetBit` and `JSONSet`/`JSONSetMode` as `...WithTTL` methods, and on `ZAddOptions`, `GeoAddOptions`, `XAddArgs` and `BFInsertOptions` as a `TTL` field.
+
+`ExpireIf`, `PExpireIf`, `ExpireAtIf` and `PExpireAtIf` take an `ExpireCondition` (`ExpireNx`, `ExpireXx`, `ExpireGt`, `ExpireLt`). A key without a deadline counts as having an infinite one, and a failed condition returns `false`.
+
 ### Typed keywords
 
 String-typed constants encode through pre-built RESP fragments (no per-call allocation); plain string literals still compile.

@@ -145,4 +145,23 @@ class StreamsLiveTest {
             assertTrue(d.xread(XReadArgs.builder().block(20), s).isEmpty());
         }
     }
+
+    @Test
+    void ttlOnCreateXadd() {
+        Map<String, String> f = new LinkedHashMap<>();
+        f.put("a", "1");
+        assertNotNull(c.xadd("ttl:s", XAddArgs.builder().ttl(LONG_TTL), f));
+        assertNotNull(c.xadd("ttl:s", XAddArgs.builder().ttl(LONGER_TTL), f));
+        assertDeadlineKept("ttl:s");
+        assertEquals(2L, c.xlen("ttl:s"));
+    }
+
+    private static final java.time.Duration LONG_TTL = java.time.Duration.ofSeconds(100);
+    private static final java.time.Duration LONGER_TTL = java.time.Duration.ofSeconds(1000);
+
+    /** The key got the first call's deadline (at most 100 s), not the second call's 1000 s. */
+    private void assertDeadlineKept(String key) {
+        long ms = c.pttl(key);
+        assertTrue(ms > 0 && ms <= 100_000, "pttl " + ms);
+    }
 }
