@@ -341,6 +341,10 @@ script's writes whose record is larger than `wal_segment_bytes` is refused with
 the shard stays healthy (this is not a `MISCONF` state), and the refusal is
 logged at most once a minute. Raise `wal_segment_bytes` or split the write.
 
+`wal_segment_bytes` can be lowered between restarts: older, longer segments are still
+read (with a warning) and new records go to segments of the new size. `ruvio-ctl` reads
+segments of any length.
+
 ### Sequence-barrier sync worker
 
 `persistence.sync_worker = "auto" | "on" | "off"` (env `RUVIO_SYNC_WORKER`) moves
