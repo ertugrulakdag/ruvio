@@ -81,7 +81,12 @@ fn check(server: &Server, keys: &[String], outside: &str, counters: &[String], a
     let owner = owner_port(&mut left);
     let on_left: usize = left.call(&["DBSIZE"]).parse().unwrap();
     let on_right: usize = other.call(&["DBSIZE"]).parse().unwrap();
-    let moving_keys = keys.len() + counters.len();
+    // A counter the writer never reached does not exist.
+    let counted = counters
+        .iter()
+        .filter(|key| left.call(&["EXISTS", key]) == "1")
+        .count();
+    let moving_keys = keys.len() + counted;
 
     // Each key exactly once, on the shard that owns its slot.
     if owner == server.ports().port_at(0).to_string() {
