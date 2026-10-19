@@ -273,7 +273,7 @@ def validate(matrix: dict, root: Path = ROOT) -> list[str]:
 # Phrases that state how many commands the matrix holds, in the site and the READMEs.
 COUNT_PHRASES = [
     re.compile(r"\b(\d{2,4}) of \1 commands"),
-    re.compile(r"\ball (\d{2,4}) (?:matrix |listed )?commands"),
+    re.compile(r"\b[Aa]ll (\d{2,4}) (?:matrix |listed )?commands"),
     re.compile(r"\bthe (\d{2,4})-command (?:matrix|check)"),
     re.compile(r"\b(\d{2,4}) (?:matrix|listed) commands"),
     re.compile(r"\*\*(\d{2,4})\*\* commands"),
