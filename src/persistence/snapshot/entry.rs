@@ -92,6 +92,7 @@ pub(crate) fn encode_entry_with(
 /// source already accepted the value, so the only bound is the frame itself.
 pub(crate) fn decode_entry_frame(bytes: &[u8]) -> Result<SnapshotEntry, PersistenceError> {
     let limits = ProtocolLimits {
+        max_arguments: bytes.len(),
         max_key_bytes: bytes.len(),
         max_value_bytes: bytes.len(),
         max_command_bytes: bytes.len(),

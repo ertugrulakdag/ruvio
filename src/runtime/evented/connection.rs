@@ -790,6 +790,8 @@ pub(super) async fn handle_client(
                             // Every key in one slot (true without a fabric): the lean path
                             // may skip the `CROSSSLOT` check of the generic one.
                             let mut one_slot = true;
+                            // Routed, then awaited before it runs here (see the re-check below).
+                            let mut waited = false;
 
                             // A subscribed client may only run (local) pub/sub commands;
                             // `gate` refuses the rest, so nothing is forwarded.
@@ -878,6 +880,7 @@ pub(super) async fn handle_client(
                                         }
                                     }
                                 } else {
+                                    waited = true;
                                     // Neither a plain command nor this shard's alone: it
                                     // may wait on another shard (see `MAX_PENDING_FORWARDS`).
                                     if !wal_group.always {
@@ -1000,12 +1003,14 @@ pub(super) async fn handle_client(
                                 {
                                     wal_group.begin();
                                 } else {
+                                    waited = true;
                                     wal_group.commit().await?;
                                 }
                             }
                             // A command that waited above may find its slot taken over by
                             // another shard meanwhile: it goes through routing again.
-                            if let Some(forwarding) = state.forwarding.as_ref()
+                            if waited
+                                && let Some(forwarding) = state.forwarding.as_ref()
                                 && forwarding.fabric.mover.moved()
                                 && !session.in_pubsub
                                 && super::moveslots::runs_elsewhere(&state, &session, &command)

@@ -182,6 +182,9 @@ pub(super) struct CopyBatch {
     keys: u32,
 }
 
+/// A key of a [`CopyBatch`] and its checkpoint entry frames.
+type KeyFrames<'a> = (&'a [u8], Vec<&'a [u8]>);
+
 impl CopyBatch {
     fn push(&mut self, store: &KvShard, key: &[u8]) -> Result<(), crate::PersistenceError> {
         let start = self.bytes.len();
@@ -210,7 +213,7 @@ impl CopyBatch {
     }
 
     /// Each key with its frames, in order; `None` for a buffer that does not parse.
-    fn entries(&self) -> Option<Vec<(&[u8], Vec<&[u8]>)>> {
+    fn entries(&self) -> Option<Vec<KeyFrames<'_>>> {
         let mut at = 0;
         let mut out = Vec::with_capacity(self.keys as usize);
         let u32_at = |bytes: &[u8], at: usize| {
@@ -348,14 +351,20 @@ fn start(
 }
 
 fn status(mover: &SlotMover) -> Response<'static> {
-    let state = mover.lock();
-    let report = match (&state.current, &state.last) {
+    // The mover lock is let go before a session's own lock is taken: the hand-over takes
+    // them the other way round.
+    let (current, last) = {
+        let state = mover.lock();
+
+        (state.current.clone(), state.last.clone())
+    };
+    let report = match (current, last) {
         (Some(session), _) => Some(match session.outcome() {
             Outcome::Copying => session.report("copying", None),
             Outcome::HandedOver { .. } => session.report("cleaning", None),
             Outcome::Failed(reason) => session.report("cancelling", Some(reason)),
         }),
-        (None, Some(last)) => Some(last.clone()),
+        (None, Some(last)) => Some(last),
         (None, None) => None,
     };
     let Some(report) = report else {
@@ -561,6 +570,20 @@ fn take_over(state: &Rc<ShardState>, session: &Arc<MoveSession>) {
     let Some(forwarding) = state.forwarding.as_ref() else {
         return;
     };
+    // The copy on disk, then the move recorded: the one point a restart sees it happen. The
+    // sync runs before the source's lock is taken, so the source's time limit still holds
+    // while it runs.
+    let synced = {
+        let mut persistence = state
+            .persistence
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+
+        persistence
+            .flush()
+            .map(|()| persistence.last_sequence())
+            .map_err(|error| format!("target could not sync the copy: {error}"))
+    };
     let mut outcome = session
         .outcome
         .lock()
@@ -571,20 +594,14 @@ fn take_over(state: &Rc<ShardState>, session: &Arc<MoveSession>) {
         return;
     }
 
-    // The copy on disk, then the move recorded: the one point a restart sees it happen.
-    let position = {
-        let mut persistence = state
-            .persistence
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-
-        if let Err(error) = persistence.flush() {
-            *outcome = Outcome::Failed(format!("target could not sync the copy: {error}"));
+    let position = match synced {
+        Ok(position) => position,
+        Err(reason) => {
+            *outcome = Outcome::Failed(reason);
             drop(outcome);
             session.handed_over.notify_all();
             return;
         }
-        persistence.last_sequence()
     };
     {
         let mut mover = forwarding.fabric.mover.lock();
@@ -775,13 +792,19 @@ fn hand_over(
         );
     }
     // Nothing runs on this shard until the wait below ends, so its next record is the
-    // first after the hand-over.
-    let until = state
-        .persistence
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .last_sequence()
-        + 1;
+    // first after the hand-over. Its log is synced first: a restart that lost a tail below
+    // `until` would reuse sequences the slot table already gave away.
+    let until = {
+        let mut persistence = state
+            .persistence
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+
+        persistence
+            .flush()
+            .map_err(|error| format!("source could not sync its log: {error}"))?;
+        persistence.last_sequence() + 1
+    };
 
     session.until.store(until, Ordering::Release);
     fabric.send(
@@ -954,9 +977,11 @@ async fn forget_range(state: Rc<ShardState>, session: Arc<MoveSession>, ended: &
         Outcome::Failed(reason) => Some(reason),
         _ => None,
     };
+    // Built before the mover lock is taken (see `status`).
+    let report = session.report(ended, error);
     let mut mover = forwarding.fabric.mover.lock();
 
-    mover.last = Some(session.report(ended, error));
+    mover.last = Some(report);
     if mover
         .current
         .as_ref()
@@ -979,16 +1004,25 @@ pub(super) fn runs_elsewhere(
     let slot = if matches!(command, Command::Exec) {
         match transaction_slot(session.queued()) {
             Ok(Some(slot)) => Some(slot),
-            _ => session.watch_slot(),
+            Ok(None) => session.watch_slot(),
+            // Keys of several slots on this shard: any of them moved away is enough.
+            Err(_) => {
+                return session.queued().iter().any(|queued| {
+                    crate::routing::command_keys(queued)
+                        .into_iter()
+                        .any(|key| forwarding.fabric.owner_of(key) != forwarding.me)
+                });
+            }
         }
     } else if session.is_multi() {
         // Queued, not run: EXEC decides.
         None
     } else {
-        // As routing decides it: a hot key never leaves, a split stays refused here.
-        return matches!(
+        // As routing decides it (a hot key never leaves). A command whose keys are now on
+        // two shards does not run here either: routed again, it is refused as a split.
+        return !matches!(
             super::forward::command_owner(state, forwarding, command).0,
-            super::forward::Owner::Remote(_)
+            super::forward::Owner::Local
         );
     };
 

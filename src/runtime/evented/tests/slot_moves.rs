@@ -812,3 +812,41 @@ fn the_old_owner_change_stream_reports_where_a_moved_range_continues() {
 
     stop_pair(shutdown, server);
 }
+
+#[test]
+fn keys_split_by_a_move_are_refused_together_and_still_work_apart() {
+    let (left, right, shutdown, server) = serve_memory_pair();
+
+    wait_until_listening(left, &server);
+    wait_until_listening(right, &server);
+    let moved = key_in_slots("split-a", 0, 99);
+    let stays = key_in_slots("split-b", 100, 8191);
+    let mut client = Client::connect(left);
+
+    client.call(&[b"SET", moved.as_bytes(), b"1"]);
+    client.call(&[b"SET", stays.as_bytes(), b"1"]);
+    client.call(&[b"RUVIO", b"MOVESLOTS", b"0-99", b"1"]);
+    assert_eq!(wait_for_move(&mut client)["state"], "done");
+
+    // One shard each now: a command over both is refused, never a write on the old owner.
+    let Value::Error(error) =
+        client.call(&[b"MSET", moved.as_bytes(), b"2", stays.as_bytes(), b"2"])
+    else {
+        panic!("MSET across the move was accepted");
+    };
+    assert!(error.starts_with("CROSSSLOT"), "{error}");
+    for (key, port) in [(&moved, right), (&stays, left)] {
+        assert_eq!(
+            Client::connect(port).call(&[b"GET", key.as_bytes()]),
+            Value::Bulk(Some(b"1".to_vec()))
+        );
+    }
+    // Moving status reads while a move runs do not block it.
+    client.call(&[b"RUVIO", b"MOVESLOTS", b"0-99", b"0"]);
+    for _ in 0..50 {
+        move_status(&mut client);
+    }
+    assert_eq!(wait_for_move(&mut client)["state"], "done");
+
+    stop_pair(shutdown, server);
+}

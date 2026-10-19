@@ -1266,3 +1266,18 @@ fn a_slot_copy_record_replays_the_value_and_its_deadline_or_removes_the_key() {
     };
     assert!(crate::persistence::apply_mutation(&mut shard, 2, &damaged).is_err());
 }
+
+#[test]
+fn a_slot_copy_larger_than_any_command_still_decodes() {
+    let copy = OwnedMutation::SlotCopy {
+        key: b"big".to_vec(),
+        entry: Some(vec![7; 4096]),
+    };
+    let record = encode_record(0, 1, 0, &copy).unwrap();
+    let small = ProtocolLimits {
+        max_command_bytes: 1024,
+        ..ProtocolLimits::default()
+    };
+
+    assert_eq!(decode_record(&record, 0, small).unwrap().mutation, copy);
+}

@@ -1501,13 +1501,14 @@ fn decode_payload(
             key: decoder.key(limits)?,
             destination: decoder.u8()?,
         },
-        // Minor 4: written only by a slot move. The entry is a checkpoint entry frame, as
-        // large as one there may be.
+        // Minor 4: written only by a slot move. The entry is a checkpoint entry frame of a
+        // value the source already held, so only the record itself bounds it (a value may
+        // be larger than any one command).
         record::SLOT_COPY => OwnedMutation::SlotCopy {
             key: decoder.key(limits)?,
             entry: match decoder.u8()? {
                 0 => None,
-                1 => Some(decoder.bytes(limits.max_command_bytes)?),
+                1 => Some(decoder.bytes(payload.len())?),
                 _ => {
                     return Err(PersistenceError::Corruption(
                         "invalid slot copy presence flag".into(),
