@@ -180,3 +180,25 @@ SET {order:7}:total 120
 MGET {order:7}:items {order:7}:total
 EVAL "return ruvio.call('GET', KEYS[1])" 1 {order:7}:total
 ```
+
+## Replicas and failover
+
+### Can another machine hold a copy of the data?
+
+Yes. A replica follows a primary over the network and keeps its own copy, shard by shard
+(`replication.role = "replica"`, or `REPLICAOF host port` while it runs). Replication is
+asynchronous: the primary does not wait for replicas unless a client asks with `WAIT`. Clients can
+send read-only commands to replicas with a read policy. See [RECOVERY.md](RECOVERY.md).
+
+### What happens when the primary goes down?
+
+Without coordinators, nothing on its own: you promote a replica with `REPLICAOF NO ONE` and point the
+others at it. With three `ruvio coordinator` processes running, they notice, agree among themselves,
+promote the replica with the most data and repoint the rest, usually within a few seconds; when the
+old primary comes back it becomes a replica. Clients with Redis Sentinel support ask the coordinators
+where the primary is. See [COORDINATOR.md](COORDINATOR.md).
+
+### Do I need the coordinator?
+
+Only for automatic failover. A single server, or a primary with replicas you promote by hand, runs
+without it. The coordinator is part of the same `ruvio` binary and image (`ruvio coordinator`).
