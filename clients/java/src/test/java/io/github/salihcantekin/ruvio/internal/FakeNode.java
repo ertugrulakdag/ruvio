@@ -46,7 +46,15 @@ final class FakeNode implements AutoCloseable {
             try {
                 Socket s = server.accept();
                 s.setTcpNoDelay(true);
-                sockets.add(s);
+                // A connection accepted while close() runs must not outlive it: close() drops
+                // the sockets it finds under this lock, and one added after that sees closed.
+                synchronized (sockets) {
+                    if (closed) {
+                        s.close();
+                        return;
+                    }
+                    sockets.add(s);
+                }
                 Thread t = new Thread(() -> serve(s), "fake-conn-" + port);
                 t.setDaemon(true);
                 t.start();
@@ -137,7 +145,9 @@ final class FakeNode implements AutoCloseable {
 
     @Override
     public void close() {
-        closed = true;
+        synchronized (sockets) {
+            closed = true;
+        }
         try {
             server.close();
         } catch (IOException ignored) {
