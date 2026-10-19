@@ -1,6 +1,6 @@
 use std::{io, path::PathBuf, time::Duration};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(version, about = "Ruvio key-value server")]
@@ -102,6 +102,20 @@ struct Cli {
     /// Print Ruvio's license and the third-party notices embedded in this binary.
     #[arg(long, default_value_t = false)]
     licenses: bool,
+    #[command(subcommand)]
+    mode: Option<Mode>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Mode {
+    /// Run a coordinator: watch replication groups and fail them over automatically. It holds
+    /// no data; run three or five of them.
+    #[cfg(feature = "coordinator")]
+    Coordinator {
+        /// The coordinator's TOML file (see docs/COORDINATOR.md).
+        #[arg(long)]
+        config: PathBuf,
+    },
 }
 
 #[cfg(feature = "mimalloc-allocator")]
@@ -162,6 +176,11 @@ fn run() -> io::Result<()> {
         return Ok(());
     }
 
+    #[cfg(feature = "coordinator")]
+    if let Some(Mode::Coordinator { config }) = &cli.mode {
+        return run_coordinator(config);
+    }
+
     let config_path = ruvio::config::resolve_config_path(cli.config.as_deref());
 
     ruvio::config::ensure_config_file(&config_path).map_err(invalid_config)?;
@@ -212,6 +231,22 @@ fn run() -> io::Result<()> {
     ignore_hangup();
 
     ruvio::runtime::evented::run_with_force(&config, shutdown, force_promote_incomplete)
+}
+
+#[cfg(feature = "coordinator")]
+fn run_coordinator(path: &std::path::Path) -> io::Result<()> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| invalid_config(format!("failed to read {}: {error}", path.display())))?;
+    let config = ruvio::coordinator::CoordinatorConfig::parse(&text).map_err(invalid_config)?;
+    let shutdown = ruvio::ShutdownToken::default();
+    let signal_token = shutdown.clone();
+
+    ctrlc::set_handler(move || signal_token.request())
+        .map_err(|error| io::Error::other(format!("failed to install signal handler: {error}")))?;
+    #[cfg(unix)]
+    ignore_hangup();
+
+    ruvio::coordinator::run(config, shutdown)
 }
 
 /// `ctrlc`'s `termination` feature also routes SIGHUP to the shutdown handler, so a closed

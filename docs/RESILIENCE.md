@@ -174,7 +174,7 @@ These classes of bugs were found by this testing and are fixed:
 
 | Not covered | Notes |
 | --- | --- |
-| Failover | Promotion is manual and is not part of these runs |
+| Failover | Promotion is manual in these runs. Automatic failover with `ruvio coordinator` has its own fault runs: `scripts/coordinator_faults.py` (partitions through a TCP proxy, a coordinator leader killed, no majority, restart, loss under load) and `tests/coordinator_live.rs`; see [COORDINATOR.md](COORDINATOR.md) |
 | Power loss beyond WAL contents | Directory entries and checkpoint files are not part of the power-loss model |
 | Network partitions | Replica tests kill and restart processes; they do not cut or delay the link alone |
 | Part of the command surface | The checker's workload has no MOVE, SWAPDB, multiple databases or JSON commands |

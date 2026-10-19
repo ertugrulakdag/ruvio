@@ -2292,8 +2292,8 @@ pub(crate) fn follow_primary(
         return (false, false);
     }
 
-    let address = match dial_address(link) {
-        Ok(address) => address,
+    let addresses = match dial_addresses(link) {
+        Ok(addresses) => addresses,
         Err(error) => {
             warn!(%error, "replication dial failed");
 
@@ -2301,10 +2301,20 @@ pub(crate) fn follow_primary(
         }
     };
 
-    let mut stream = match TcpStream::connect_timeout(&address, Duration::from_millis(200)) {
+    // A name can resolve to several addresses (`localhost` to ::1 and 127.0.0.1); the primary
+    // may listen on only one of them, so each is tried in the resolver's order.
+    let mut dialed = Err(io::Error::from(io::ErrorKind::NotFound));
+
+    for address in &addresses {
+        dialed = TcpStream::connect_timeout(address, Duration::from_millis(200));
+        if dialed.is_ok() {
+            break;
+        }
+    }
+    let mut stream = match dialed {
         Ok(stream) => stream,
         Err(error) => {
-            warn!(%error, primary = %address, "replication dial failed");
+            warn!(%error, primary = ?addresses, "replication dial failed");
 
             return (!stop.load(Ordering::Acquire), false);
         }
@@ -2330,9 +2340,9 @@ pub(crate) fn follow_primary(
     (retry, steady)
 }
 
-fn dial_address(link: &ReplicaLink) -> io::Result<SocketAddr> {
+fn dial_addresses(link: &ReplicaLink) -> io::Result<Vec<SocketAddr>> {
     let Some((host, port)) = &link.primary_name else {
-        return Ok(link.primary);
+        return Ok(vec![link.primary]);
     };
 
     let port = u16::try_from(link.shard_id)
@@ -2344,14 +2354,16 @@ fn dial_address(link: &ReplicaLink) -> io::Result<SocketAddr> {
                 "replication port plus shard id is above 65535",
             )
         })?;
-    let mut addresses = (host.as_str(), port).to_socket_addrs()?;
+    let addresses: Vec<SocketAddr> = (host.as_str(), port).to_socket_addrs()?.collect();
 
-    addresses.next().ok_or_else(|| {
-        io::Error::new(
+    if addresses.is_empty() {
+        return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "replication primary did not resolve",
-        )
-    })
+        ));
+    }
+
+    Ok(addresses)
 }
 
 struct CatchupReconnect<'a> {
