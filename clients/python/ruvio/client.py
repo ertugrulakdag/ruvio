@@ -23,7 +23,7 @@ from __future__ import annotations
 import socket
 import time
 import uuid
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 from ._commands import Commands, Conv, KeyT, KeyTypeT, _s
@@ -75,10 +75,50 @@ def parse_url(url: str) -> Dict[str, Any]:
     return opts
 
 
+def _parse_seeds(seeds: Optional[Sequence[Union[str, Tuple[str, int]]]]) -> Optional[List[Tuple[str, int]]]:
+    """Normalizes a seed list into ``(host, port)`` pairs; ``None`` for no seeds.
+
+    Each entry is ``"host:port"`` (IPv6 as ``"[::1]:6379"``) or a ``(host, port)`` tuple.
+
+    Raises:
+        ValueError: An entry has an empty host or a port outside 1-65535.
+        TypeError: An entry is neither a string nor a ``(host, port)`` pair.
+    """
+    if seeds is None:
+        return None
+    if isinstance(seeds, str):
+        seeds = [seeds]
+    out: List[Tuple[str, int]] = []
+    for entry in seeds:
+        if isinstance(entry, str):
+            host, sep, text = entry.rpartition(":")
+            if not sep:
+                raise ValueError(f"seed {entry!r} must be host:port")
+            if host.startswith("[") and host.endswith("]"):
+                host = host[1:-1]
+            try:
+                port = int(text)
+            except ValueError:
+                raise ValueError(f"seed {entry!r} has an invalid port") from None
+        elif isinstance(entry, tuple) and len(entry) == 2:
+            host, port = entry
+            if isinstance(port, bool) or not isinstance(port, int) or not isinstance(host, str):
+                raise TypeError(f"seed {entry!r} must be (host: str, port: int)")
+        else:
+            raise TypeError(f"seed {entry!r} must be a 'host:port' string or a (host, port) tuple")
+        if not host:
+            raise ValueError(f"seed {entry!r} has an empty host")
+        if not 0 < port < 65536:
+            raise ValueError(f"seed {entry!r} has a port outside 1-65535")
+        out.append((host, port))
+    return out or None
+
+
 class _Options:
     __slots__ = (
         "host",
         "port",
+        "seeds",
         "db",
         "username",
         "password",
@@ -112,16 +152,27 @@ class _Options:
 
 
 class _Conn:
-    """The socket plus its parser. Shared by a client and its ``raw`` view."""
+    """The socket plus its parser. Shared by a client and its ``raw`` view.
 
-    __slots__ = ("sock", "parser", "opts")
+    With seeds, ``pos`` is the seed an open starts at (the one after the seed last connected, so a
+    reconnect ends with the address that dropped) and ``at`` the seed the socket is on (-1 before the
+    first connect). A failed open leaves both alone.
+    """
+
+    __slots__ = ("sock", "parser", "opts", "pos", "at")
 
     def __init__(self, opts: _Options) -> None:
         self.opts = opts
         self.sock: Optional[socket.socket] = None
         self.parser: Any = None
+        self.pos = 0
+        self.at = -1
 
-    def open(self) -> None:
+    def resume(self) -> int:
+        """The seed index a new connection that should join this one starts at."""
+        return self.at if self.at >= 0 else self.pos
+
+    def _dial(self) -> socket.socket:
         o = self.opts
         try:
             if o.unix_socket_path:
@@ -136,6 +187,31 @@ class _Conn:
             raise TimeoutError(f"connect to {o.host}:{o.port} timed out") from exc
         except OSError as exc:
             raise ConnectionError(f"cannot connect to {o.host}:{o.port}: {exc}") from exc
+        return sock
+
+    def _dial_seeds(self, seeds: List[Tuple[str, int]]) -> socket.socket:
+        """One connect attempt per seed, from ``pos`` round to the seed before it; the last connect
+        error when none answers. ``opts.host``/``opts.port`` follow the seed that connected."""
+        o = self.opts
+        n = len(seeds)
+        error: Optional[ConnectionError] = None
+        for k in range(n):
+            i = (self.pos + k) % n
+            o.host, o.port = seeds[i]
+            try:
+                sock = self._dial()
+            except ConnectionError as exc:
+                error = exc
+                continue
+            self.at = i
+            self.pos = (i + 1) % n
+            return sock
+        raise error  # type: ignore[misc]
+
+    def open(self) -> None:
+        o = self.opts
+        seeds = o.seeds
+        sock = self._dial_seeds(seeds) if seeds else self._dial()
         self.sock = sock
         self.parser = make_parser(o.parser or "auto")
         hs = o.handshake()
@@ -209,6 +285,11 @@ class Ruvio(Commands):
             :class:`ruvio.ConnectionError` if the server is unreachable.
         cluster: ``True`` returns a :class:`ruvio.ClusterRuvio`, which routes each key to its shard.
             A standalone server is detected on the first command and used as usual.
+        seeds: Addresses to try in order instead of ``host``/``port``: ``"host:port"`` strings (IPv6 as
+            ``"[::1]:6379"``) or ``(host, port)`` tuples. Connecting keeps the first seed that answers; one that
+            cannot be reached is skipped, while a refused ``AUTH`` or ``SELECT`` raises at once. After a
+            dropped connection the next reconnect starts with the seed after the one that dropped. With
+            ``cluster=True`` the seeds are also asked for the slot table when no known node answers.
 
     Example:
         from ruvio import Ruvio
@@ -245,6 +326,7 @@ class Ruvio(Commands):
         on_push: Optional[Callable[[List[Any]], None]] = None,
         lazy: bool = True,
         cluster: bool = False,
+        seeds: Optional[Sequence[Union[str, Tuple[str, int]]]] = None,
     ) -> None:
         """Creates the client. See the class docstring for the meaning of every argument.
 
@@ -263,13 +345,22 @@ class Ruvio(Commands):
             on_push: Callback for RESP3 push messages.
             lazy: Connect on first use (``True``) or immediately (``False``).
             cluster: Route by key over several shards (see :class:`ruvio.ClusterRuvio`).
+            seeds: ``"host:port"`` strings or ``(host, port)`` tuples tried in order in place of
+                ``host``/``port``.
 
         Raises:
+            ValueError: A seed has an empty host or a port outside 1-65535.
             ConnectionError: ``lazy=False`` and the server cannot be reached or rejects the handshake.
         """
+        seed_list = _parse_seeds(seeds)
+        if seed_list:
+            if unix_socket_path:
+                raise ValueError("seeds cannot be combined with unix_socket_path")
+            host, port = seed_list[0]
         opts = _Options(
             host=host,
             port=port,
+            seeds=seed_list,
             db=db,
             password=password,
             username=username,
@@ -544,7 +635,9 @@ class Ruvio(Commands):
                 ps.subscribe("news")
                 msg = ps.get_message(timeout=1.0)
         """
-        return PubSub(self._conn.opts, self._decode, ignore_subscribe_messages)
+        ps = PubSub(self._conn.opts, self._decode, ignore_subscribe_messages)
+        ps._conn.pos = self._conn.resume()
+        return ps
 
     # ---------------------------------------------------------------- helpers
     def lock(

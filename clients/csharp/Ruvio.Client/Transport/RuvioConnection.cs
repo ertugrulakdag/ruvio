@@ -329,6 +329,7 @@ public sealed class RuvioConnection : IRuvioConnection
     {
         Host = options.Host,
         Port = options.Port,
+        Seeds = options.Seeds is { Count: > 0 } ? [.. options.Seeds] : [],
         Username = options.Username,
         Password = options.Password,
         Database = database,

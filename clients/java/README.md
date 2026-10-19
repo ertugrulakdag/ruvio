@@ -206,6 +206,31 @@ pipelined commands; use `{hashtag}` keys to keep related keys in one slot.
   only issue single-key commands, so they work unchanged; `ClusterLiveTest` runs them on the cluster.
 * Replicas, `ASK` redirects, `READONLY` reads and `CLUSTERDOWN` handling: not implemented.
 
+## Seed addresses
+
+`seeds(...)` takes `host:port` strings (an IPv6 address as `[::1]:6379`) and replaces `host`/`port`; without it
+`host` and `port` work as before.
+
+```java
+RuvioOptions options = RuvioOptions.builder()
+        .seeds("10.0.0.1:6379", "10.0.0.2:6379", "[::1]:6379")
+        .build();
+RuvioClient<String, String> client = RuvioClient.connect(options);
+```
+
+* **Connect**: the seeds are tried in order, one connect attempt each, and the first that answers is kept. A seed
+  that cannot be reached is skipped; a refused `AUTH` or `SELECT` stops at once. When none answers, the last
+  connect error is thrown.
+* **Standalone reconnect**: each reconnect attempt tries every seed once, starting with the seed after the
+  address that dropped and ending with it. The command that hit the drop still fails. A `pubSub(...)` subscriber
+  opened later starts at the address the command connection is on.
+* **Cluster**: `CLUSTER SLOTS` comes from the first reachable seed. A slot map reload asks the nodes that have an
+  open socket first; when none answers it opens every other known node and then every seed, one connect attempt
+  each, until one returns a slot map. A node that cannot be opened again triggers that reload and the command
+  goes to the owner the new map names; a keyless command goes to the first reachable node of the new map.
+  Seeds are not asked while the known nodes answer, so routing is unchanged. Pipelines are not re-routed: a
+  group whose node cannot be opened fails, as before.
+
 ## Tests and benchmark
 
 ```

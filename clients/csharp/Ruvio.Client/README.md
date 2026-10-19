@@ -499,6 +499,21 @@ IReadOnlyList<string?> values = await cluster.GetManyAsync("session:ada", "somek
 
 `RuvioClient.GetHashSlot(key)` is the same 0–16383 slot Ruvio uses, including `{hash tags}`. Set `RuvioClientOptions.DiscoverCluster` to `false` to stay on the seed socket.
 
+### Seed addresses
+
+`RuvioClientOptions.Seeds` is a list of `host:port` strings (an IPv6 host in brackets, `[::1]:6379`). It is empty by default; when it is not empty it replaces `Host` and `Port`, which keep working unchanged when no seeds are given. An empty host or a bad port is an `ArgumentException` / `ArgumentOutOfRangeException`.
+
+```csharp
+await using var connection = await RuvioConnection.ConnectAsync(new RuvioClientOptions
+{
+    Seeds = ["10.0.0.5:6379", "10.0.0.6:6379", "10.0.0.7:6379"],
+});
+```
+
+Connect tries the seeds in order, one attempt each, and keeps the first that answers. A seed that cannot be reached (refused, timed out) is skipped; a refused `AUTH` stops at once; when none answers, the last connect error is thrown. On a standalone server, each reconnect attempt tries every seed once, starting with the one after the address that dropped and ending with it, and `ReconnectDelay` / `ReconnectBaseDelay` run between attempts. The command that hit the drop still fails. A subscriber socket opened later starts at the address the command socket is on, and `ConnectionLost` / `ConnectionRestored` report the actual address.
+
+On a cluster, `CLUSTER SLOTS` comes from the first reachable seed. A slot map reload (after a `MOVED` to an unknown node, or when a node cannot be opened again) asks the nodes with an open socket first; when none answers, it opens every other known node and then every seed, one attempt each, until one returns a slot map. The command goes to the owner the new map names, and a command without a key goes to the first reachable node of the new map. Seeds are never asked while the known nodes answer. A pipeline that hits a node that cannot be opened fails; the next command reloads the map.
+
 ### Concurrent commands
 
 Command sockets multiplex concurrent calls: one writer sends complete RESP frames

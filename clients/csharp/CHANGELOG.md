@@ -4,6 +4,7 @@ Notable changes to the C# packages `Ruvio.Client` and `Ruvio.Client.AspNetCore`,
 
 ## Unreleased
 
+- `RuvioClientOptions.Seeds`: `host:port` seed addresses tried in order instead of `Host`/`Port`. A dropped standalone connection reconnects starting with the next seed; a cluster reloads its slot map from the other known nodes and then the seeds when no open socket answers. `Ruvio.Client.AspNetCore` binds a `Seeds` array from configuration.
 - TTL on create: overloads that take a `TimeSpan ttl` and set the deadline only when the call creates the key (an existing key keeps its deadline; whole seconds are sent as `EX`, otherwise `PX`): `IncrementAsync`, `DecrementAsync`, `IncrementByAsync`, `DecrementByAsync`, `IncrementWithLimitAsync`, `IncrementByFloatAsync`, `IncrementHashFieldAsync`, `IncrementSortedSetAsync`, `SetBitAsync`, `AddSortedSetAsync`, `AddGeoAsync`, `AddStreamEntryAsync` and `JsonSetAsync`; `BloomInsertOptions.Ttl` for `BF.INSERT`. A zero or negative `ttl` throws `ArgumentOutOfRangeException`.
 - New `ExpireCondition` (`Nx`, `Xx`, `Gt`, `Lt`) and `ExpireAsync` / `ExpireAtAsync` overloads that send it with `EXPIRE`, `PEXPIRE`, `EXPIREAT` or `PEXPIREAT`. The new `IRuvioClient` members have default implementations, so existing implementations keep compiling.
 - `PopSortedSetByScoreAsync` and `MoveDueSortedSetAsync` send `ZPOPBYSCORE` and `ZMOVEDUE`: take the due members of a sorted set (score up to a bound), or move them to the tail of a list, in one call. Not compiled or run in the cloud session that added them.

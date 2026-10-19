@@ -134,7 +134,7 @@ public final class RuvioClient<K, V> extends RuvioSyncCommands<K, V> implements 
         if (options.cluster) {
             // The server only has database 0 in cluster mode, so the seed connection never SELECTs.
             RuvioOptions seedOptions = options.database == 0 ? options : options.toBuilder().database(0).build();
-            Link seed = new Link(seedOptions);
+            Link seed = Link.openSeed(seedOptions);
             ClusterRouter router;
             try {
                 router = ClusterRouter.detect(seed, seedOptions);
@@ -315,8 +315,7 @@ public final class RuvioClient<K, V> extends RuvioSyncCommands<K, V> implements 
      * @throws RuvioConnectionException when the connection cannot be opened
      */
     public RuvioPubSub pubSub(Consumer<PubSubMessage> listener) {
-        RuvioOptions o = link.options;
-        return new RuvioPubSub(o, listener, router);
+        return new RuvioPubSub(link.siblingOptions(), listener, router);
     }
 
     /**

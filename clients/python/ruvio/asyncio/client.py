@@ -38,13 +38,13 @@ import inspect
 import time
 import uuid
 from collections import deque
-from typing import Any, AsyncIterator, Awaitable, Callable, Deque, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Awaitable, Callable, Deque, Dict, List, Optional, Sequence, Tuple, Union
 
 from .._commands import Commands, Conv, KeyT, KeyTypeT
 from .._models import Message
 from .._pipeline import PipelineBase
 from .._resp import NEED, Push, encode, make_parser
-from ..client import _SUB_KINDS, _message, _Options, parse_url
+from ..client import _SUB_KINDS, _message, _Options, _parse_seeds, parse_url
 from ..errors import ConnectionError, LockError, ResponseError, RuvioError, TimeoutError, WatchError
 
 __all__ = ["Ruvio", "Pipeline", "PubSub", "Lock"]
@@ -171,31 +171,80 @@ class _Proto(asyncio.BufferedProtocol):
         self.transport.write(wbuf[0] if len(wbuf) == 1 else b"".join(wbuf))  # type: ignore[union-attr]
 
 
+class _Cursor:
+    """Where the next connect starts in the seed list: ``pos`` is the seed after the one last connected
+    (so a reconnect ends with the address that dropped), ``at`` the seed connected to (-1 before the
+    first connect). A failed open leaves both alone."""
+
+    __slots__ = ("pos", "at")
+
+    def __init__(self) -> None:
+        self.pos = 0
+        self.at = -1
+
+    def resume(self) -> int:
+        """The seed index a new connection that should join this one starts at."""
+        return self.at if self.at >= 0 else self.pos
+
+
 class _State:
     """Connection state shared by a client and its ``raw`` view."""
 
-    __slots__ = ("opts", "proto", "lock", "loop")
+    __slots__ = ("opts", "proto", "lock", "loop", "cur")
 
     def __init__(self, opts: _Options) -> None:
+        self.cur = _Cursor()
         self.opts = opts
         self.proto: Optional[_Proto] = None
         self.lock: Optional[asyncio.Lock] = None
         self.loop: Optional[asyncio.AbstractEventLoop] = None
 
 
-async def _open(opts: _Options, on_push: Optional[Callable[[Any], None]] = None) -> _Proto:
+async def _dial(
+    opts: _Options, host: str, port: int, on_push: Optional[Callable[[Any], None]]
+) -> _Proto:
     loop = asyncio.get_running_loop()
     parser = make_parser(opts.parser or "auto")
     try:
         if opts.unix_socket_path:
             coro = loop.create_unix_connection(lambda: _Proto(parser, loop, on_push), opts.unix_socket_path)
         else:
-            coro = loop.create_connection(lambda: _Proto(parser, loop, on_push), opts.host, opts.port)
+            coro = loop.create_connection(lambda: _Proto(parser, loop, on_push), host, port)
         _, proto = await asyncio.wait_for(coro, opts.connect_timeout)
     except asyncio.TimeoutError as exc:
-        raise TimeoutError(f"connect to {opts.host}:{opts.port} timed out") from exc
+        raise TimeoutError(f"connect to {host}:{port} timed out") from exc
     except OSError as exc:
-        raise ConnectionError(f"cannot connect to {opts.host}:{opts.port}: {exc}") from exc
+        raise ConnectionError(f"cannot connect to {host}:{port}: {exc}") from exc
+    return proto
+
+
+async def _open(
+    opts: _Options, on_push: Optional[Callable[[Any], None]] = None, cur: Optional[_Cursor] = None
+) -> _Proto:
+    """Opens a connection and runs the handshake. With seeds, one connect attempt per seed from
+    ``cur.pos`` round to the seed before it; a seed that cannot be reached is skipped, the last connect
+    error is raised when none answers, and a refused handshake raises at once."""
+    seeds = opts.seeds
+    if seeds:
+        if cur is None:
+            cur = _Cursor()
+        n = len(seeds)
+        error: Optional[ConnectionError] = None
+        for k in range(n):
+            i = (cur.pos + k) % n
+            try:
+                proto = await _dial(opts, seeds[i][0], seeds[i][1], on_push)
+            except ConnectionError as exc:
+                error = exc
+                continue
+            cur.at = i
+            cur.pos = (i + 1) % n
+            break
+        else:
+            raise error  # type: ignore[misc]
+    else:
+        proto = await _dial(opts, opts.host, opts.port, on_push)
+    loop = proto.loop
     hs = opts.handshake()
     if hs:
         futs = []
@@ -237,6 +286,11 @@ class Ruvio(Commands):
         on_push: Callback for RESP3 push messages (for example client-tracking ``invalidate``).
         cluster: ``True`` returns :class:`ruvio.asyncio.ClusterRuvio`, which routes each key to its shard over
             one connection per node. A standalone server is detected on the first command.
+        seeds: Addresses to try in order instead of ``host``/``port``: ``"host:port"`` strings (IPv6 as
+            ``"[::1]:6379"``) or ``(host, port)`` tuples. Connecting keeps the first seed that answers; one that
+            cannot be reached is skipped, while a refused ``AUTH`` or ``SELECT`` raises at once. After a lost
+            connection the next reconnect starts with the seed after the one that dropped. With
+            ``cluster=True`` the seeds are also asked for the slot table when no known node answers.
 
     The connection opens on the first command, or on ``await client.connect()`` / ``async with``.
 
@@ -272,6 +326,7 @@ class Ruvio(Commands):
         parser: str = "auto",
         on_push: Optional[Callable[[List[Any]], None]] = None,
         cluster: bool = False,
+        seeds: Optional[Sequence[Union[str, Tuple[str, int]]]] = None,
     ) -> None:
         """Creates the client (nothing is connected yet). See the class docstring for every argument.
 
@@ -288,11 +343,22 @@ class Ruvio(Commands):
             parser: ``"auto"``, ``"python"`` or ``"hiredis"``.
             on_push: Callback for RESP3 push messages.
             cluster: Route by key over several shards.
+            seeds: ``"host:port"`` strings or ``(host, port)`` tuples tried in order in place of
+                ``host``/``port``.
+
+        Raises:
+            ValueError: A seed has an empty host or a port outside 1-65535.
         """
+        seed_list = _parse_seeds(seeds)
+        if seed_list:
+            if unix_socket_path:
+                raise ValueError("seeds cannot be combined with unix_socket_path")
+            host, port = seed_list[0]
         self._st = _State(
             _Options(
                 host=host,
                 port=port,
+                seeds=seed_list,
                 db=db,
                 password=password,
                 username=username,
@@ -356,7 +422,7 @@ class Ruvio(Commands):
             st.lock = asyncio.Lock()
         async with st.lock:
             if st.proto is None:
-                proto = await _open(st.opts, st.opts.on_push)
+                proto = await _open(st.opts, st.opts.on_push, st.cur)
 
                 def lost(p: _Proto, st: _State = st) -> None:
                     if st.proto is p:
@@ -518,6 +584,7 @@ This is a coroutine: ``ps = await client.pubsub()``.
                 msg = await ps.get_message(timeout=1.0)
         """
         ps = PubSub(self._st.opts, self._decode, ignore_subscribe_messages)
+        ps._cur.pos = self._st.cur.resume()
         await ps.connect()
         return ps
 
@@ -993,6 +1060,7 @@ class PubSub:
             ignore_subscribe_messages: Skip subscribe/unsubscribe confirmations.
         """
         self._opts = opts
+        self._cur = _Cursor()
         self._decode = decode
         self.ignore_subscribe_messages = ignore_subscribe_messages
         self._queue: "asyncio.Queue[Any]" = asyncio.Queue()
@@ -1009,7 +1077,7 @@ class PubSub:
         """
         if self._proto is not None and not self._proto.closed:
             return
-        proto = await _open(self._opts, self._queue.put_nowait)
+        proto = await _open(self._opts, self._queue.put_nowait, self._cur)
         proto.parser.decode = self._decode
         proto.on_lost = lambda p: self._queue.put_nowait(p.lost_exc or ConnectionError("pubsub connection lost"))
         self._proto = proto
