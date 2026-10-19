@@ -199,6 +199,13 @@ docker build -t ruvio .
 docker run --rm -p 6379:6379 -e RUVIO_REQUIREPASS=change-me ruvio
 ```
 
+The image has a `HEALTHCHECK` that runs `ruvio-ctl ping` (a RESP `PING` to `RUVIO_ADDR`'s port on
+127.0.0.1; a `NOAUTH` reply counts as alive). With TLS on, a plaintext `PING` cannot work: start the
+container with `--health-cmd 'ruvio-ctl ping --connect-only'` (it only opens the connection).
+
+The base images in both Dockerfiles are pinned by digest; Dependabot (`.github/dependabot.yml`,
+weekly) opens a PR when a digest moves, so security updates still arrive.
+
 `Dockerfile.linux` is the same runtime, used by the benchmark script. It does not need `seccomp=unconfined`.
 
 ## Operator UI
