@@ -778,6 +778,8 @@ pub enum Command<'a> {
         pattern: Option<Bytes<'a>>,
         count: usize,
         type_name: Option<Bytes<'a>>,
+        /// `SLOT n`: only keys of that hash slot; the command goes to the slot's owner.
+        slot: Option<u16>,
     },
     DbSize,
     Del(Keys<'a>),

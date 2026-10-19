@@ -1201,6 +1201,7 @@ fn parses_keyspace_commands() {
                 pattern: Some(owned(b"a*")),
                 count: 2,
                 type_name: None,
+                slot: None,
             },
             scan.len()
         ))
@@ -1953,4 +1954,37 @@ fn parses_config_set_pairs_and_config_rewrite() {
         parse_command(rewrite).unwrap(),
         Some((Command::ConfigRewrite, rewrite.len()))
     );
+}
+
+#[test]
+fn scan_takes_a_slot_and_routes_to_it() {
+    fn frame(args: &[&[u8]]) -> Vec<u8> {
+        let mut frame = format!("*{}\r\n", args.len()).into_bytes();
+
+        for arg in args {
+            frame.extend_from_slice(format!("${}\r\n", arg.len()).as_bytes());
+            frame.extend_from_slice(arg);
+            frame.extend_from_slice(b"\r\n");
+        }
+        frame
+    }
+    let parse =
+        |args: &[&[u8]]| parse_command(&frame(args)).map(|parsed| parsed.unwrap().0.into_owned());
+
+    let Command::Scan { slot, .. } = parse(&[b"SCAN", b"0", b"SLOT", b"16383"]).unwrap() else {
+        panic!("not a scan");
+    };
+
+    assert_eq!(slot, Some(16383));
+    assert_eq!(
+        crate::routing::command_slot(&parse(&[b"SCAN", b"7", b"SLOT", b"42"]).unwrap()),
+        Ok(Some(42))
+    );
+    assert_eq!(
+        crate::routing::command_slot(&parse(&[b"SCAN", b"0"]).unwrap()),
+        Ok(None)
+    );
+    for bad in [&b"16384"[..], b"-1", b"x"] {
+        assert!(parse(&[b"SCAN", b"0", b"SLOT", bad]).is_err());
+    }
 }
