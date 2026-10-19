@@ -49,6 +49,15 @@ pub struct ReplicationConfig {
     /// A replica announces its client address to its primary, which lists it in
     /// `CLUSTER SLOTS`, `ROLE` and `INFO`; off keeps it out of the topology.
     pub announced: bool,
+    /// Wrap the replication link in TLS. A primary reuses `security.tls_cert`/`tls_key`; a
+    /// replica verifies the primary against `tls_ca`. Off by default: nothing is loaded or
+    /// wrapped unless set.
+    pub tls: bool,
+    /// PEM issuer a replica trusts for the primary's certificate.
+    pub tls_ca: PathBuf,
+    /// Optional client certificate a replica presents when the primary asks for one.
+    pub tls_client_cert: PathBuf,
+    pub tls_client_key: PathBuf,
 }
 
 impl Default for ReplicationConfig {
@@ -61,6 +70,10 @@ impl Default for ReplicationConfig {
             min_replicas_to_write: 0,
             min_replicas_max_lag: Duration::from_secs(10),
             announced: true,
+            tls: false,
+            tls_ca: PathBuf::new(),
+            tls_client_cert: PathBuf::new(),
+            tls_client_key: PathBuf::new(),
         }
     }
 }
@@ -69,6 +82,10 @@ impl ReplicationConfig {
     /// Whether replication listens for, or dials, another machine. Replication traffic is
     /// not covered by `tls_cert`, so this is where its cleartext matters.
     pub fn leaves_the_host(&self) -> bool {
+        if self.tls {
+            return false;
+        }
+
         match self.role {
             ReplicationRole::Off => false,
             ReplicationRole::Primary => self
@@ -610,6 +627,29 @@ impl AppConfig {
         };
     }
 
+    fn validate_replication_tls(&self) -> Result<(), String> {
+        let replication = &self.replication;
+        let empty = |path: &Path| path.as_os_str().is_empty();
+
+        match replication.role {
+            ReplicationRole::Primary if !self.security.tls_enabled() => {
+                return Err("replication.tls on a primary requires tls_cert and tls_key".into());
+            }
+            ReplicationRole::Replica if empty(&replication.tls_ca) => {
+                return Err("replication.tls on a replica requires replication.tls_ca".into());
+            }
+            _ => {}
+        }
+
+        if empty(&replication.tls_client_cert) != empty(&replication.tls_client_key) {
+            return Err(
+                "replication.tls_client_cert and replication.tls_client_key go together".into(),
+            );
+        }
+
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.security.requirepass.len() > usize::from(u16::MAX) {
             return Err("requirepass must be at most 65535 bytes".into());
@@ -664,6 +704,10 @@ impl AppConfig {
             return Err(
                 "a public replication listener requires replication_password or requirepass".into(),
             );
+        }
+
+        if self.replication.tls && self.replication.role != ReplicationRole::Off {
+            self.validate_replication_tls()?;
         }
 
         if self.shards == 0 {
@@ -1490,6 +1534,10 @@ struct ReplicationFileConfig {
     /// Seconds, as Redis's `min-replicas-max-lag`.
     min_replicas_max_lag: Option<u64>,
     announced: Option<bool>,
+    tls: Option<bool>,
+    tls_ca: Option<PathBuf>,
+    tls_client_cert: Option<PathBuf>,
+    tls_client_key: Option<PathBuf>,
 }
 
 impl ReplicationFileConfig {
@@ -1528,6 +1576,10 @@ impl ReplicationFileConfig {
         if let Some(announced) = self.announced {
             replication.announced = announced;
         }
+        assign(&mut replication.tls, self.tls);
+        assign(&mut replication.tls_ca, self.tls_ca);
+        assign(&mut replication.tls_client_cert, self.tls_client_cert);
+        assign(&mut replication.tls_client_key, self.tls_client_key);
 
         Ok(())
     }
