@@ -43,6 +43,7 @@ public sealed class RuvioRateLimitingMiddleware(RequestDelegate next)
         var client = context.RequestServices.GetRequiredService<IRuvioClient>();
         using var activity = Telemetry.Source.StartActivity("ruvio.rate_limit");
         long? remaining;
+        long retryAfterMs = 0;
         long started = Stopwatch.GetTimestamp();
         string outcome = "error";
 
@@ -50,9 +51,23 @@ public sealed class RuvioRateLimitingMiddleware(RequestDelegate next)
         {
             // LIMIT checks and counts in one server command, so parallel requests cannot all read the
             // same count and pass.
-            remaining = await client.LimitAsync(
-                key, policy.Permits, (long)policy.WindowSeconds * 1000, context.RequestAborted);
-                
+            long windowMs = (long)policy.WindowSeconds * 1000;
+
+            if (policy.Algorithm == RuvioRateLimitAlgorithm.FixedWindow)
+            {
+                remaining = await client.LimitAsync(key, policy.Permits, windowMs, context.RequestAborted);
+            }
+            else
+            {
+                // WITHRETRY says when the same call would pass, so Retry-After is exact.
+                var result = policy.Algorithm == RuvioRateLimitAlgorithm.SlidingWindow
+                    ? await client.LimitSlidingWithRetryAsync(key, policy.Permits, windowMs, context.RequestAborted)
+                    : await client.LimitTokensWithRetryAsync(key, policy.Permits, windowMs, 1, context.RequestAborted);
+
+                remaining = result.Allowed ? result.Remaining : null;
+                retryAfterMs = result.RetryAfterMs;
+            }
+
             outcome = remaining is null ? "rejected" : "accepted";
         }
         catch (Exception error)
@@ -80,8 +95,10 @@ public sealed class RuvioRateLimitingMiddleware(RequestDelegate next)
 
             context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
             
-            // LIMIT does not return the deadline. A full window is a conservative retry delay.
-            context.Response.Headers.RetryAfter = policy.WindowSeconds.ToString(CultureInfo.InvariantCulture);
+            // Fixed window: LIMIT does not return the deadline, so a full window is a conservative delay.
+            long retrySeconds = retryAfterMs > 0 ? Math.Max(1, (retryAfterMs + 999) / 1000) : policy.WindowSeconds;
+
+            context.Response.Headers.RetryAfter = retrySeconds.ToString(CultureInfo.InvariantCulture);
 
             return;
         }

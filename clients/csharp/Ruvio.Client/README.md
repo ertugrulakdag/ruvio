@@ -140,6 +140,8 @@ await using RuvioLease? slot = await db.TryAcquireSemaphoreAsync("sem:export", m
 
 // Rate limit (LIMIT): (Allowed, Remaining); a refused call is not counted.
 RateLimitResult decision = await db.RateLimitAsync("rl:ada", max: 100, TimeSpan.FromMinutes(1));
+// Smoother: sliding window, or a token bucket that says how long to wait.
+LimitOutcome bucket = await db.LimitTokensWithRetryAsync("api:key-7", 10, 1_000, 2);
 
 // Cache-aside with stampede protection (FILLGET/FILLSET): one builder across all processes.
 string page = await db.GetOrCreateAsync("cache:home", TimeSpan.FromMinutes(5), ct => RenderAsync(ct));

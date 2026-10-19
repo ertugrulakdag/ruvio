@@ -1,5 +1,6 @@
 use super::*;
-use crate::protocol::{MAX_IDEMPOTENCY_RESULT_BYTES, MAX_IDEMPOTENCY_TTL_MS};
+use crate::protocol::{LimitMode, MAX_IDEMPOTENCY_RESULT_BYTES, MAX_IDEMPOTENCY_TTL_MS};
+use crate::store::LimitError;
 
 // Native state machine rather than a Lua script: the record is replicated and recovered like
 // any other mutation, so no script runs during replay (docs/IDEM.md).
@@ -179,6 +180,9 @@ fn state(value: &'static [u8]) -> Response<'static> {
     Response::Array(vec![Some(Cow::Borrowed(value))])
 }
 
+const LIMIT_MODE_ERROR: &[u8] = b"ERR LIMIT key was created in another mode";
+const LIMIT_RANGE_ERROR: &[u8] = b"ERR LIMIT values do not fit the stored state";
+
 #[inline(always)]
 pub(super) fn limit<'a, C: Clock, I: StorageIndex, S: MutationSink>(
     shard: &'a mut KvShard<C, I>,
@@ -186,22 +190,39 @@ pub(super) fn limit<'a, C: Clock, I: StorageIndex, S: MutationSink>(
     key: crate::protocol::Bytes<'a>,
     max: u64,
     window_ms: u64,
+    mode: LimitMode,
 ) -> Result<Response<'a>, S::Error> {
-    let planned = match shard.plan_limit(&key, max, window_ms) {
+    let (planned, with_retry) = match mode {
+        LimitMode::Fixed => (shard.plan_limit(&key, max, window_ms), false),
+        LimitMode::Sliding { with_retry } => {
+            (shard.plan_limit_sliding(&key, max, window_ms), with_retry)
+        }
+        LimitMode::Tokens { cost, with_retry } => (
+            shard.plan_limit_tokens(&key, max, window_ms, u64::from(cost)),
+            with_retry,
+        ),
+    };
+    let planned = match planned {
         Ok(planned) => planned,
-        Err(_) => return Ok(wrong_type()),
+        Err(LimitError::WrongType) => return Ok(wrong_type()),
+        Err(LimitError::Mode) => return Ok(Response::Error(LIMIT_MODE_ERROR)),
+        Err(LimitError::Range) => return Ok(Response::Error(LIMIT_RANGE_ERROR)),
     };
 
     let crate::store::LimitDecision::Allow {
         used,
         window_end,
         remaining,
+        fresh,
     } = planned
     else {
-        return Ok(Response::Bulk(None));
+        return Ok(match planned {
+            crate::store::LimitDecision::RejectRetry { retry_after_ms } if with_retry => {
+                retry_reply(-1, retry_after_ms)
+            }
+            _ => Response::Bulk(None),
+        });
     };
-
-    let fresh = used == 1;
 
     if let Some(rejected) = before_mutation(
         shard,
@@ -217,7 +238,7 @@ pub(super) fn limit<'a, C: Clock, I: StorageIndex, S: MutationSink>(
     }
 
     match window_end {
-        // A new window: the counter and its end in one record.
+        // A new window, or a moved deadline: the state and its end in one record.
         Some(expires_at) => sink.record(Mutation::Transaction {
             mutations: &[
                 OwnedMutation::LimitPut {
@@ -244,7 +265,19 @@ pub(super) fn limit<'a, C: Clock, I: StorageIndex, S: MutationSink>(
         shard.expire_at(&key, UnixMillis::new(expires_at));
     }
 
+    if with_retry {
+        return Ok(retry_reply(remaining as i64, 0));
+    }
+
     Ok(Response::Integer(remaining as i64))
+}
+
+/// `[remaining, retry_after_ms]`; `remaining` is -1 for a refused call.
+fn retry_reply(remaining: i64, retry_after_ms: u64) -> Response<'static> {
+    Response::Exec(vec![
+        Response::Integer(remaining),
+        Response::Integer(retry_after_ms as i64),
+    ])
 }
 
 #[cfg(test)]

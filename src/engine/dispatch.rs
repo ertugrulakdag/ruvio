@@ -423,7 +423,8 @@ pub fn execute_in_database<'a, C: Clock, I: StorageIndex, S: MutationSink, W: Li
             key,
             max,
             window_ms,
-        } => idempotency::limit(shard, sink, key, max, window_ms),
+            mode,
+        } => idempotency::limit(shard, sink, key, max, window_ms, mode),
 
         Command::Once { key, ttl_ms } => {
             let expires_at = match shard.plan_once(&key, ttl_ms) {

@@ -149,6 +149,8 @@ n, _ = c.ZCount(ctx, "board", ruvio.ScoreExclusive(5), ruvio.ScorePosInf)
 | `AcquireLease`, `WithLease` | `LEASE`/`RELEASE` | Fencing token grows with every grant. |
 | `AcquirePermit`, `WithPermit` | `SEMAPHORE`/`RELEASE` | One of `max` slots, each with its own TTL. |
 | `RateLimit(key, max, window)` | `LIMIT` | Returns `(allowed, remaining)`. |
+| `LimitSliding(key, max, window)`, `LimitTokens(key, capacity, refill, cost)` | `LIMIT ... SLIDING`, `LIMIT ... TOKENS` | Return `(remaining, allowed)`. |
+| `LimitSlidingWithRetry(...)`, `LimitTokensWithRetry(...)` | `LIMIT ... WITHRETRY` | Return a `LimitOutcome` with `Allowed`, `Remaining` and `RetryAfter`. |
 | `GetOrCreate`, `GetOrCreateJSON[T]` | `FILLGET`/`FILLSET` | One factory run across callers. On `BUSY` it polls plain `FILLGET` with 2..50 ms backoff, because `FILLGET ... WAIT` would park the shared connection. `Stale` enables SWR: stale readers return the old value and one refreshes in the background. |
 | `Idempotent(key, fingerprint, ttl, fn)` | `IDEM BEGIN/COMPLETE` | Returns the stored result to repeats; `ErrIdemPending` / `ErrIdemConflict`. Not exactly-once for external effects. |
 | `ScanIter`, `HScanIter`, `SScanIter`, `ZScanIter` (+ `Scanner.All` → `iter.Seq2` on Go 1.23+) | `SCAN`, `HSCAN`, `SSCAN`, `ZSCAN` | Lazy, one page per round trip. |

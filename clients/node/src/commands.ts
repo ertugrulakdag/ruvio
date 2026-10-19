@@ -6,6 +6,7 @@ import { C } from './command-names.js';
 import { cmd, Encoder, type Arg, type Cmd } from './encoder.js';
 import { T, type Tf } from './transforms.js';
 import type {
+  LimitOutcome,
   Key,
   Value,
   SetOptions,
@@ -60,6 +61,7 @@ const w = (s: string): Buffer => Buffer.from(s, 'latin1');
 const W = {
   EX: w('EX'), PX: w('PX'), EXAT: w('EXAT'), PXAT: w('PXAT'), KEEPTTL: w('KEEPTTL'), NX: w('NX'), XX: w('XX'),
   GET: w('GET'), IFEQ: w('IFEQ'), IFGT: w('IFGT'), IFLT: w('IFLT'), MAX: w('MAX'), WAIT: w('WAIT'), SWR: w('SWR'), BEGIN: w('BEGIN'),
+  SLIDING: w('SLIDING'), TOKENS: w('TOKENS'), COST: w('COST'), WITHRETRY: w('WITHRETRY'),
   COMPLETE: w('COMPLETE'), START: w('START'), MATCH: w('MATCH'), COUNT: w('COUNT'), TYPE: w('TYPE'),
   ASYNC: w('ASYNC'), REPLACE: w('REPLACE'), ABSTTL: w('ABSTTL'), IDLETIME: w('IDLETIME'), FREQ: w('FREQ'),
   SAMPLES: w('SAMPLES'), DB: w('DB'), RANK: w('RANK'), MAXLEN: w('MAXLEN'), LIMIT: w('LIMIT'),
@@ -78,6 +80,12 @@ const W = {
 } as const;
 
 type R<T> = Promise<T>;
+
+/** `LIMIT ... WITHRETRY` reply: `[remaining, retryAfterMs]`, `remaining` -1 when refused. */
+function limitOutcome(v: unknown): LimitOutcome {
+  const [remaining, retryAfterMs] = v as [number, number];
+  return { allowed: remaining >= 0, remaining: Math.max(remaining, 0), retryAfterMs: Math.max(retryAfterMs, 0) };
+}
 
 function pushScan(a: Arg[], o?: ScanOptions): Arg[] {
   if (o !== undefined) {
@@ -1408,6 +1416,70 @@ export abstract class Commands {
    */
   limit(key: Key, max: number, windowMs: number): R<number | null> {
     return this._3(null, C.LIMIT, key, max, windowMs);
+  }
+  /**
+   * Sliding-window rate limit on one key (`LIMIT key max windowMs SLIDING`, Ruvio extension).
+   * The previous window counts for the part of it that still overlaps the last `windowMs`, so a burst at a window edge is not doubled.
+   * The key keeps two counters, not one entry per call, and keeps the mode it was created with.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param max Calls allowed per window, at most 2147483647.
+   * @param windowMs Window length in milliseconds.
+   * @returns The calls left after this one, or `null` when the call is refused (nothing is counted).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds another type, or when it was created by another `LIMIT` mode.
+   *
+   * @example
+   * ```ts
+   * if ((await client.limitSliding('rl:user:7', 100, 60_000)) === null) throw new Error('slow down');
+   * ```
+   */
+  limitSliding(key: Key, max: number, windowMs: number): R<number | null> {
+    return this._v(null, C.LIMIT, [key, max, windowMs, W.SLIDING]);
+  }
+  /**
+   * Token-bucket rate limit on one key (`LIMIT key capacity refillMs TOKENS COST cost`, Ruvio extension).
+   * The bucket holds `capacity` tokens and refills completely over `refillMs`; a call takes `cost` tokens.
+   * The key keeps one timestamp and disappears when the bucket is full again.
+   *
+   * @param key Key to operate on (string, or Buffer for binary keys).
+   * @param capacity Bucket size, 1 to 1000000.
+   * @param refillMs Time to refill an empty bucket in milliseconds, up to 4294967295.
+   * @param cost Tokens this call takes, 1 to `capacity` (default 1).
+   * @returns The tokens left after this call, or `null` when the bucket holds too few (nothing is taken).
+   * @throws {@link RuvioError} `WRONGTYPE` when `key` holds another type, or when it was created by another `LIMIT` mode.
+   *
+   * @example
+   * ```ts
+   * const left = await client.limitTokens('rl:api:7', 10, 1_000, 2); // 10 per second, this call costs 2
+   * ```
+   */
+  limitTokens(key: Key, capacity: number, refillMs: number, cost = 1): R<number | null> {
+    return this._v(null, C.LIMIT, [key, capacity, refillMs, W.TOKENS, W.COST, cost]);
+  }
+  /**
+   * {@link limitSliding} with `WITHRETRY`: the answer also says how long to wait.
+   *
+   * @param key Key to operate on.
+   * @param max Calls allowed per window.
+   * @param windowMs Window length in milliseconds.
+   * @returns A {@link LimitOutcome}; `retryAfterMs` is the wait until the same call would pass.
+   * @throws {@link RuvioError} as {@link limitSliding}.
+   */
+  limitSlidingWithRetry(key: Key, max: number, windowMs: number): R<LimitOutcome> {
+    return this._v(limitOutcome, C.LIMIT, [key, max, windowMs, W.SLIDING, W.WITHRETRY]);
+  }
+  /**
+   * {@link limitTokens} with `WITHRETRY`: the answer also says how long to wait.
+   *
+   * @param key Key to operate on.
+   * @param capacity Bucket size.
+   * @param refillMs Time to refill an empty bucket in milliseconds.
+   * @param cost Tokens this call takes (default 1).
+   * @returns A {@link LimitOutcome}; `retryAfterMs` is the wait until the same call would pass.
+   * @throws {@link RuvioError} as {@link limitTokens}.
+   */
+  limitTokensWithRetry(key: Key, capacity: number, refillMs: number, cost = 1): R<LimitOutcome> {
+    return this._v(limitOutcome, C.LIMIT, [key, capacity, refillMs, W.TOKENS, W.COST, cost, W.WITHRETRY]);
   }
   /**
    * Starts an idempotent operation (`IDEM key BEGIN fingerprint owner ttlMs`, Ruvio extension). Most code should use {@link idempotent}.

@@ -258,6 +258,20 @@ const CASES: &[(&str, &[&[&str]])] = &[
         "limit",
         &[&["LIMIT", "k", "5", "60000"], &["LIMIT", "k", "5", "60000"]],
     ),
+    (
+        "limit",
+        &[
+            &["LIMIT", "k", "5", "60000", "SLIDING"],
+            &["LIMIT", "k", "5", "60000", "SLIDING", "WITHRETRY"],
+        ],
+    ),
+    (
+        "limit",
+        &[
+            &["LIMIT", "k", "5", "60000", "TOKENS", "COST", "2"],
+            &["LIMIT", "k", "5", "60000", "TOKENS", "WITHRETRY"],
+        ],
+    ),
     ("idem", &[&["IDEM", "k", "BEGIN", "fp", "owner", "5000"]]),
     ("once", &[&["ONCE", "k", "5000"]]),
     ("take", &[&["TAKE", "s", "3"]]),

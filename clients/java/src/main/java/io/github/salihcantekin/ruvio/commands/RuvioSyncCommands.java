@@ -38,6 +38,7 @@ import io.github.salihcantekin.ruvio.model.GeoResult;
 import io.github.salihcantekin.ruvio.model.GeoValue;
 import io.github.salihcantekin.ruvio.model.IdemResult;
 import io.github.salihcantekin.ruvio.model.KeyValue;
+import io.github.salihcantekin.ruvio.model.LimitOutcome;
 import io.github.salihcantekin.ruvio.model.PendingEntry;
 import io.github.salihcantekin.ruvio.model.PendingSummary;
 import io.github.salihcantekin.ruvio.model.ScanResult;
@@ -883,6 +884,73 @@ public abstract class RuvioSyncCommands<K, V> {
      */
     public Long limit(K key, long max, long windowMillis) {
         return await(async.limit(key, max, windowMillis));
+    }
+
+    /**
+     * Sends the Ruvio command {@code LIMIT key max window_ms SLIDING}: a sliding-window rate limiter.
+     * The previous window counts for the part of it that still overlaps the last {@code windowMillis}, so a burst
+     * at a window edge is not doubled. The key keeps two counters, not one entry per call. A key keeps the mode it
+     * was created with.
+     *
+     * <pre>{@code
+     * Long left = client.limitSliding("rl:user:1", 100, 60_000); // null when the call does not fit
+     * }</pre>
+     *
+     * @param key the limiter key
+     * @param max calls per window; from 1 to 2147483647
+     * @param windowMillis window length in milliseconds; must be greater than zero
+     * @return the calls left after this one, or {@code null} when it does not fit (nothing is counted)
+     * @throws RuvioServerException {@code ERR} when an argument is out of range or the key was created by another {@code LIMIT} mode; {@code WRONGTYPE} when the key holds another type
+     */
+    public Long limitSliding(K key, long max, long windowMillis) {
+        return await(async.limitSliding(key, max, windowMillis));
+    }
+
+    /**
+     * Sends the Ruvio command {@code LIMIT key capacity refill_ms TOKENS COST cost}: a token bucket.
+     * The bucket holds {@code capacity} tokens and refills completely over {@code refillMillis}; a call takes
+     * {@code cost} tokens. The key keeps one timestamp and disappears when the bucket is full again.
+     *
+     * <pre>{@code
+     * Long left = client.limitTokens("rl:api:7", 10, 1_000, 2); // 10 tokens per second, this call takes 2
+     * }</pre>
+     *
+     * @param key the limiter key
+     * @param capacity bucket size; from 1 to 1000000
+     * @param refillMillis time to refill an empty bucket in milliseconds; up to 4294967295
+     * @param cost tokens this call takes; from 1 to {@code capacity}
+     * @return the tokens left after this call, or {@code null} when the bucket holds too few (nothing is taken)
+     * @throws RuvioServerException {@code ERR} when an argument is out of range or the key was created by another {@code LIMIT} mode; {@code WRONGTYPE} when the key holds another type
+     */
+    public Long limitTokens(K key, long capacity, long refillMillis, long cost) {
+        return await(async.limitTokens(key, capacity, refillMillis, cost));
+    }
+
+    /**
+     * Sends {@code LIMIT key max window_ms SLIDING WITHRETRY}: {@link #limitSliding} that also says how long to wait.
+     *
+     * @param key the limiter key
+     * @param max calls per window; from 1 to 2147483647
+     * @param windowMillis window length in milliseconds; must be greater than zero
+     * @return the outcome; {@code retryAfterMillis} is the wait until the same call would pass
+     * @throws RuvioServerException as {@link #limitSliding}
+     */
+    public LimitOutcome limitSlidingWithRetry(K key, long max, long windowMillis) {
+        return await(async.limitSlidingWithRetry(key, max, windowMillis));
+    }
+
+    /**
+     * Sends {@code LIMIT key capacity refill_ms TOKENS COST cost WITHRETRY}: {@link #limitTokens} that also says how long to wait.
+     *
+     * @param key the limiter key
+     * @param capacity bucket size; from 1 to 1000000
+     * @param refillMillis time to refill an empty bucket in milliseconds; up to 4294967295
+     * @param cost tokens this call takes; from 1 to {@code capacity}
+     * @return the outcome; {@code retryAfterMillis} is the wait until the same call would pass
+     * @throws RuvioServerException as {@link #limitTokens}
+     */
+    public LimitOutcome limitTokensWithRetry(K key, long capacity, long refillMillis, long cost) {
+        return await(async.limitTokensWithRetry(key, capacity, refillMillis, cost));
     }
 
     /**

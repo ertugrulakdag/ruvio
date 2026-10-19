@@ -8,13 +8,22 @@ export const clientExamples: Record<string, Record<ClientSlug, string>> = {
 let mut db = Client::connect("127.0.0.1", 6379)?;
 let left = db.limit("api:key-7", 100, 60_000)?;
 // Some(99) -> 99 calls left in this 60 s window
-// None     -> window is full, nothing was counted`,
+// None     -> window is full, nothing was counted
+
+// Smoother: sliding window, or a token bucket that tells you how long to wait
+let sliding = db.limit_sliding("api:key-7", 100, 60_000)?;
+let bucket = db.limit_tokens_with_retry("api:key-7:burst", 10, 1_000, 2)?;
+// bucket.allowed, bucket.remaining, bucket.retry_after_ms`,
     csharp: `await using var connection = await RuvioConnection.ConnectAsync("127.0.0.1", 6379);
 var db = await connection.GetDefaultDatabaseAsync();
 
 long? left = await db.LimitAsync("api:key-7", 100, 60_000);
 // 99   -> 99 calls left in this 60 s window
-// null -> window is full, nothing was counted`,
+// null -> window is full, nothing was counted
+
+// Smoother: sliding window, or a token bucket that tells you how long to wait
+long? sliding = await db.LimitSlidingAsync("api:key-7", 100, 60_000);
+LimitOutcome bucket = await db.LimitTokensWithRetryAsync("api:key-7:burst", 10, 1_000, 2);`,
     go: `c, err := ruvio.Connect(ctx, ruvio.Options{Addr: "127.0.0.1:6379"})
 if err != nil { return err }
 
@@ -22,24 +31,42 @@ left, ok, err := c.Limit(ctx, "api:key-7", 100, time.Minute)
 if err != nil { return err }
 fmt.Println(left, ok)
 // 99 true -> 99 calls left in this 60 s window
-// 0 false -> window is full, nothing was counted`,
+// 0 false -> window is full, nothing was counted
+
+// Smoother: sliding window, or a token bucket that tells you how long to wait
+left, ok, err = c.LimitSliding(ctx, "api:key-7", 100, time.Minute)
+bucket, err := c.LimitTokensWithRetry(ctx, "api:key-7:burst", 10, time.Second, 2)
+// bucket.Allowed, bucket.Remaining, bucket.RetryAfter`,
     java: `var c = RuvioClient.connect("127.0.0.1", 6379);
 
 Long left = c.limit("api:key-7", 100, 60_000);
 // 99   -> 99 calls left in this 60 s window
-// null -> window is full, nothing was counted`,
+// null -> window is full, nothing was counted
+
+// Smoother: sliding window, or a token bucket that tells you how long to wait
+Long sliding = c.limitSliding("api:key-7", 100, 60_000);
+LimitOutcome bucket = c.limitTokensWithRetry("api:key-7:burst", 10, 1_000, 2);`,
     python: `import ruvio
 
 r = ruvio.Ruvio("127.0.0.1", 6379)
 left = r.limit("api:key-7", 100, 60_000)
 # 99   -> 99 calls left in this 60 s window
-# None -> window is full, nothing was counted`,
+# None -> window is full, nothing was counted
+
+# Smoother: sliding window, or a token bucket that tells you how long to wait
+sliding = r.limit_sliding("api:key-7", 100, 60_000)
+allowed, remaining, retry_after_ms = r.limit_tokens_with_retry("api:key-7:burst", 10, 1_000, 2)`,
     node: `import { createClient } from 'ruvio-client';
 
 const c = createClient({ host: '127.0.0.1', port: 6379 });
 const left = await c.limit('api:key-7', 100, 60_000);
 // 99   -> 99 calls left in this 60 s window
-// null -> window is full, nothing was counted`,
+// null -> window is full, nothing was counted
+
+// Smoother: sliding window, or a token bucket that tells you how long to wait
+const sliding = await c.limitSliding('api:key-7', 100, 60_000);
+const bucket = await c.limitTokensWithRetry('api:key-7:burst', 10, 1_000, 2);
+// bucket.allowed, bucket.remaining, bucket.retryAfterMs`,
   },
   locks: {
     rust: `use ruvio_client::Client;

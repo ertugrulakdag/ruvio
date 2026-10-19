@@ -422,11 +422,28 @@ pub struct LimitValue {
 pub(crate) enum LimitDecision {
     Allow {
         used: u64,
-        /// `Some` only when this call opens a new window.
+        /// `Some` when this call moves the key's deadline: it opens a window, rolls the
+        /// sliding window, or advances the token bucket.
         window_end: Option<u64>,
         remaining: u64,
+        /// This call creates the key.
+        fresh: bool,
     },
     Reject,
+    /// A refusal from `SLIDING` or `TOKENS`, with the wait until the same call would pass.
+    RejectRetry {
+        retry_after_ms: u64,
+    },
+}
+
+/// Why a `LIMIT` call could not run on the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LimitError {
+    WrongType,
+    /// The key holds a limit created by another mode.
+    Mode,
+    /// The clock and the arguments do not fit the packed state.
+    Range,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

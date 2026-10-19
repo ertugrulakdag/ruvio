@@ -111,10 +111,10 @@ pub use models::{
     Aggregate, BitFieldOffset, BitFieldOp, BitFieldOverflow, BitFieldType, BitOperation, BitUnit,
     BloomInfo, BloomInsertOptions, BloomReserveOptions, FieldExpireCondition, FillOutcome, GeoFrom,
     GeoMatch, GeoOrder, GeoSearch, GeoShape, GeoUnit, HashScanPage, IdemState, InsertPosition,
-    JsonIndexType, JsonSetCondition, KeyType, ListPositionOptions, ListSide, PubSubMessage,
-    RangeBy, RangeOptions, RateLimit, RestoreOptions, ScanPage, SetScanPage, SortedSetAddOptions,
-    SortedSetCombine, SortedSetEntry, SortedSetScanPage, StreamClaimOptions, StreamEntry,
-    StreamPendingEntry, StreamPendingFilter, StreamReadOptions, StreamReadResult,
+    JsonIndexType, JsonSetCondition, KeyType, LimitOutcome, ListPositionOptions, ListSide,
+    PubSubMessage, RangeBy, RangeOptions, RateLimit, RestoreOptions, ScanPage, SetScanPage,
+    SortedSetAddOptions, SortedSetCombine, SortedSetEntry, SortedSetScanPage, StreamClaimOptions,
+    StreamEntry, StreamPendingEntry, StreamPendingFilter, StreamReadOptions, StreamReadResult,
 };
 pub use scan::ScanIter;
 

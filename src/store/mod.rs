@@ -27,6 +27,7 @@ mod fill;
 mod hash;
 mod intset;
 pub(crate) mod json_indexing;
+mod limit;
 mod list;
 mod pool;
 mod set;
@@ -39,6 +40,7 @@ mod string;
 mod tests;
 mod value;
 pub(crate) use fill::FillState;
+pub(crate) use limit::{LIMIT_SLIDING_MAX, LIMIT_TOKENS_MAX_CAPACITY, LIMIT_TOKENS_MAX_REFILL_MS};
 pub(crate) use string::SMALL_JSON_EDIT;
 mod zset;
 

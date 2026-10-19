@@ -254,6 +254,24 @@ def test_flush_variants_and_geo_without_hash():
     assert r.georadius("g", 1, 2, 3, withcoord=True) == [GeoResult("m", None, None, (1.0, 2.0))]
 
 
+def test_limit_modes_encode_their_keywords_and_convert_the_retry_reply():
+    r = Rec(3)
+    assert r.limit_sliding("k", 5, 1000) == 3
+    assert r.args == ["LIMIT", "k", "5", "1000", "SLIDING"]
+    assert r.limit_tokens("k", 10, 2000, 2) == 3
+    assert r.args == ["LIMIT", "k", "10", "2000", "TOKENS", "COST", "2"]
+    assert r.limit_tokens("k", 10, 2000) == 3
+    assert r.args[-2:] == ["COST", "1"]
+
+    r = Rec([2, 0])
+    assert r.limit_sliding_with_retry("k", 5, 1000) == (True, 2, 0)
+    assert r.args == ["LIMIT", "k", "5", "1000", "SLIDING", "WITHRETRY"]
+    r = Rec([-1, 250])
+    out = r.limit_tokens_with_retry("k", 10, 2000)
+    assert (out.allowed, out.remaining, out.retry_after_ms) == (False, 0, 250)
+    assert r.args == ["LIMIT", "k", "10", "2000", "TOKENS", "COST", "1", "WITHRETRY"]
+
+
 def test_due_commands_encode_their_options():
     r = Rec(reply=[b"m", b"2"])
 
@@ -264,6 +282,8 @@ def test_due_commands_encode_their_options():
 
     assert r.zmovedue("{t}z", "{t}l", "+inf", count=4) == 2
     assert r.args == ["ZMOVEDUE", "{t}z", "{t}l", "+inf", "COUNT", "4"]
+
+
 def test_transfer_commands_encode_the_optional_cap_and_return_a_pair():
     r = Rec(reply=[6, 4])
     assert r.transfer("a", "b", 4) == (6, 4)
