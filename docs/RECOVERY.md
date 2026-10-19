@@ -197,6 +197,9 @@ listen has started.
 
 ## Promote a replica by hand
 
+To have this done automatically when a primary stops answering, run coordinators; see
+[COORDINATOR.md](COORDINATOR.md). The steps below are what they automate.
+
 The process does not elect a primary. You stop writers, wait until the replica's disk matches the primary's durable WAL, then make the replica the writer: with `REPLICAOF NO ONE` while it runs, or by restarting its data directory as the writer. Either way every shard is promoted. Shard `i` is the RESP port plus `i`, and the same offset on the replication port.
 
 `redis-cli -p <port> INFO` prints a `# Replication` block:

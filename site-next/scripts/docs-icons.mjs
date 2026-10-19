@@ -32,6 +32,7 @@ const PAGE_ICON = {
   "memory-accounting": "gauge",
   idem: "repeat",
   recovery: "lifebuoy",
+  coordinator: "shield",
   resilience: "shield",
   observability: "activity",
   "threat-model": "alert",

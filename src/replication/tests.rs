@@ -2423,14 +2423,34 @@ fn dial_address_adds_the_shard_id_to_the_port_and_refuses_an_overflow() {
 
     link.primary_name = Some(("127.0.0.1".to_owned(), 7000));
     link.shard_id = 3;
-    assert_eq!(dial_address(&link).unwrap().port(), 7003);
+    assert_eq!(dial_addresses(&link).unwrap()[0].port(), 7003);
 
     link.primary_name = Some(("127.0.0.1".to_owned(), 65_535));
-    assert!(dial_address(&link).is_err());
+    assert!(dial_addresses(&link).is_err());
 
     link.primary_name = Some(("127.0.0.1".to_owned(), 7000));
     link.shard_id = 70_000;
-    assert!(dial_address(&link).is_err());
+    assert!(dial_addresses(&link).is_err());
+}
+
+#[test]
+fn a_primary_named_by_host_is_dialed_at_every_address_the_name_resolves_to() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut link, _deliveries) = link_to("127.0.0.1:1".parse().unwrap(), directory.path());
+
+    link.primary_name = Some(("localhost".into(), 7000));
+    let addresses = dial_addresses(&link).unwrap();
+
+    // `localhost` usually resolves to ::1 first; a primary listening on 127.0.0.1 only must
+    // still be reached, so the IPv4 address is among those tried.
+    assert!(
+        addresses
+            .iter()
+            .any(|address| address.ip().is_loopback() && address.port() == 7000),
+        "{addresses:?}"
+    );
+    link.primary_name = None;
+    assert_eq!(dial_addresses(&link).unwrap(), vec![link.primary]);
 }
 
 #[test]

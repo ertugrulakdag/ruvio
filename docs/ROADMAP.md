@@ -317,8 +317,11 @@ slows a command or raises RSS for the same data does not land.
   remaining operational controls and failure evidence are not complete.
 - [ ] **P2 — Define consistency and acknowledgement policies for asynchronous
   and quorum-backed writes.**
-- [ ] **P2 — Add failure detection and leader/primary election with a documented
-  split-brain model.**
+- [x] **P2 — Add failure detection and leader/primary election with a documented
+  split-brain model.** `ruvio coordinator` (three or five, Raft): majority-confirmed
+  detection, failover with `REPLICAOF`, the old primary demoted on return; split
+  brain bounded by `min-replicas-to-write` and the epoch. See
+  [COORDINATOR.md](COORDINATOR.md).
 - [ ] **P2 — Prove failover with deterministic fault injection, partitions,
   delayed packets, process crashes, and disk loss.**
 - [ ] **P2 — Add rolling-upgrade and mixed-version compatibility tests.**

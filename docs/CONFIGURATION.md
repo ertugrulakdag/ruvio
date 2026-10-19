@@ -543,8 +543,8 @@ whose clock runs ahead can drop a key early; if the primary then extends that
 key's TTL, the replica no longer has it and requests a full copy of the shard.
 A TTL change whose new deadline has already passed is applied without a resync.
 
-Changing `replication.role` from `replica` to `off` or `primary` is a **manual
-promotion**, not an automatic failover. If any shard still has a catch-up
+Changing `replication.role` from `replica` to `off` or `primary` (or `REPLICAOF NO ONE`) is a
+**manual promotion**; for automatic failover run `ruvio coordinator` ([COORDINATOR.md](COORDINATOR.md)). If any shard still has a catch-up
 marker, normal writer startup refuses it. `ruvio --config ./ruvio.toml
 --force-promote-incomplete` allows a recoverable but possibly incomplete
 replica to start as a writer **only for that invocation**; it is a CLI flag,
