@@ -1064,7 +1064,7 @@ fn helpers_cache_idempotency_recent() {
 
 #[test]
 fn transfer_and_htransfer_move_amounts_atomically() {
-    let Some(mut db) = connect(8) else { return };
+    let Some(mut db) = connect(6) else { return };
 
     db.set("{w}:a", "10").unwrap();
     assert_eq!(
