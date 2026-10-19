@@ -262,6 +262,7 @@ fn serve_two_shards_with(
         shard_count: 2,
         advertised_host: advertised.clone(),
         advertised_port,
+        slots: crate::routing::SlotTable::from_formula(2),
     };
 
     let route1 = ClusterRoute {
@@ -269,6 +270,7 @@ fn serve_two_shards_with(
         shard_count: 2,
         advertised_host: advertised,
         advertised_port,
+        slots: crate::routing::SlotTable::from_formula(2),
     };
 
     let left = first.local_addr().unwrap();
