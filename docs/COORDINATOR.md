@@ -165,9 +165,9 @@ in its data directory (`TOPOLOGY`) and starts from the newer of that file and `c
 a failover in one group, the other groups' nodes answer that group's keys with `MOVED` naming the new
 primary within a ping or two. A map that would change a node's own slots is refused: slots do not move
 between groups yet. The data-node user in `auth` also needs `RUVIO` for this; a member that refuses
-the map is logged at most once a minute. The version only counts failovers: after editing the groups
-in `coordinator.toml`, raise the nodes to the new map by restarting them with an updated
-`cluster_topology` of a higher version.
+the map is logged at most once a minute. The version only counts failovers, so an edit of the groups in
+`coordinator.toml` (an address, the order) does not reach nodes that already serve that version; this
+version of the coordinator does not handle such edits.
 
 ## Limits of this version
 
