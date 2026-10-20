@@ -1035,6 +1035,21 @@ async fn serve_async(
             dropped, "dropped keys of slots another shard owns"
         );
     }
+    // A node of a multi-node cluster must not hold keys the map serves elsewhere: they
+    // would be unreachable here and missing there. One walk, only with a map.
+    if let Some(route) = route.as_ref().filter(|route| route.topology.is_some()) {
+        let foreign: Vec<bool> = (0..crate::routing::HASH_SLOT_COUNT as u16)
+            .map(|slot| route.slots.owner(slot) != shard_id as usize)
+            .collect();
+
+        if let (count @ 1.., Some(slot)) = store.count_in_slots(&foreign) {
+            return Err(io::Error::other(format!(
+                "shard {shard_id} holds {count} keys in slots it does not serve under \
+                 cluster_topology (first: slot {slot}); start with a map that gives this \
+                 group those slots, or with an empty data directory"
+            )));
+        }
+    }
     store.resume_expiration_after_replay(replay_clock);
     store.json_index_load_definitions();
     // Replay keeps expired keys, so each one expiry removes is logged as a delete before

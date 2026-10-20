@@ -161,6 +161,16 @@ impl Server {
         }
     }
 
+    /// Restarts and expects the process to refuse to start; returns its log.
+    pub fn restart_refused(&mut self) -> String {
+        self.stop();
+        self.wait_for_data_directory_lock();
+        self.spawn();
+        assert!(!self.wait_ready(), "server started on {}", self.address);
+        self.stop();
+        self.log_text()
+    }
+
     /// Sets a `RUVIO_*` setting for the next start (see `restart`).
     pub fn set_env(&mut self, key: &str, value: &str) {
         self.env.retain(|(known, _)| known != key);

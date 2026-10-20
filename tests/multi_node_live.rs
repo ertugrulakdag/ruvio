@@ -14,6 +14,39 @@ fn key_in(range: std::ops::Range<u16>, label: &str) -> String {
         .unwrap()
 }
 
+fn write_topology(path: &std::path::Path, a_port: u16, b_port: u16) {
+    std::fs::write(
+        path,
+        format!(
+            "version = 7\n\
+             [[groups]]\nname = \"a\"\naddress = \"127.0.0.1:{a_port}\"\nshards = 2\nslots = [\"0-8191\"]\n\
+             [[groups]]\nname = \"b\"\naddress = \"127.0.0.1:{b_port}\"\nshards = 2\nslots = [\"8192-16383\"]\n"
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_node_holding_keys_the_map_gives_away_refuses_to_start() {
+    let mut a = Server::start_with(&[("RUVIO_SHARDS", "2"), ("RUVIO_DURABILITY", "always")]);
+    let dir = tempfile::tempdir().unwrap();
+    let topology = dir.path().join("topology.toml");
+    let elsewhere = key_in(8192..16384, "elsewhere");
+
+    // Written while the node owned every slot.
+    Client::connect(&a.ports().address_at(1).to_string()).call(&["SET", &elsewhere, "1"]);
+    write_topology(&topology, a.ports().port_at(0), a.ports().port_at(2));
+    a.set_env("RUVIO_CLUSTER_TOPOLOGY", topology.to_str().unwrap());
+    a.set_env("RUVIO_CLUSTER_GROUP", "a");
+
+    let log = a.restart_refused();
+
+    assert!(
+        log.contains("does not serve under cluster_topology"),
+        "{log}"
+    );
+}
+
 #[test]
 fn each_node_serves_its_slots_and_redirects_the_rest() {
     let mut a = Server::start_with(&[("RUVIO_SHARDS", "2")]);
@@ -22,15 +55,7 @@ fn each_node_serves_its_slots_and_redirects_the_rest() {
     let topology = dir.path().join("topology.toml");
     let (a_port, b_port) = (a.ports().port_at(0), b.ports().port_at(0));
 
-    std::fs::write(
-        &topology,
-        format!(
-            "version = 7\n\
-             [[groups]]\nname = \"a\"\naddress = \"127.0.0.1:{a_port}\"\nshards = 2\nslots = [\"0-8191\"]\n\
-             [[groups]]\nname = \"b\"\naddress = \"127.0.0.1:{b_port}\"\nshards = 2\nslots = [\"8192-16383\"]\n"
-        ),
-    )
-    .unwrap();
+    write_topology(&topology, a_port, b_port);
 
     for (server, group) in [(&mut a, "a"), (&mut b, "b")] {
         server.set_env("RUVIO_CLUSTER_TOPOLOGY", topology.to_str().unwrap());
