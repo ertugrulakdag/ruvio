@@ -42,7 +42,7 @@ public final class RuvioOptions {
     public final String clientName;
     /** Timeout for opening the socket, in milliseconds (default 5000). */
     public final int connectTimeoutMillis;
-    /** How long blocking calls wait for a reply, in milliseconds; 0 (default) waits forever. */
+    /** How long blocking calls wait for a reply, in milliseconds (default 30000, plus a blocking command's own wait); 0 waits forever. */
     public final long commandTimeoutMillis;
     /** Maximum replies outstanding on one connection (default 16384). */
     public final int maxInFlight;
@@ -178,7 +178,7 @@ public final class RuvioOptions {
         private int database;
         private String clientName;
         private int connectTimeoutMillis = 5_000;
-        private long commandTimeoutMillis;
+        private long commandTimeoutMillis = 30_000;
         private int maxInFlight = 16_384;
         private Consumer<Object> pushListener;
         private boolean cluster;
@@ -293,11 +293,12 @@ public final class RuvioOptions {
         }
 
         /**
-         * How long blocking (synchronous) calls wait for a reply; 0 (default) waits forever. The
-         * command is not cancelled on the server when the wait times out; the call throws a
-         * {@link RuvioException}.
+         * How long blocking (synchronous) calls wait for a reply; default 30000 (30 s), 0 waits forever.
+         * The command is not cancelled on the server when the wait times out; the call throws a
+         * {@link RuvioException}. A blocking command gets its own wait on top ({@code blpop(5, k)} may
+         * take 5 s plus this), and one that waits forever (timeout 0) has no limit.
          *
-         * @param millis the wait in milliseconds; 0 (default) waits forever
+         * @param millis the wait in milliseconds; 0 waits forever
          * @return this builder
          */
         public Builder commandTimeoutMillis(long millis) {

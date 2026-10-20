@@ -248,6 +248,7 @@ func (cl *cluster) pipeSpread(ctx context.Context, t *topology, r *request, n in
 			// Every node is written before any is read. A node with nobody reading lets this
 			// goroutine read its replies below, without a hand-off to the node's reader.
 			s.conns[ni] = cn
+			cn.setDeadline(ctx, sub)
 			s.leads[ni], err = cn.send(sub, canLead)
 		}
 		if err != nil {
@@ -284,7 +285,8 @@ func (cl *cluster) pipeSpread(ctx context.Context, t *topology, r *request, n in
 		var ok bool
 		var err error
 		if s.leads[ni] {
-			ok, err = s.conns[ni].lead(ctx, sub)
+			s.conns[ni].lead(sub)
+			ok = true
 		} else {
 			ok, err = sub.wait(ctx)
 		}

@@ -22,6 +22,7 @@ import socket
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import _cluster as cl
+from ._blocking import FOREVER, blocking_wait, frames_wait, pipeline_wait
 from ._commands import Conv
 from ._pipeline import _EXEC, _MULTI
 from .client import PubSub, Ruvio, _Conn, _Options, _ReplicaOptions
@@ -144,9 +145,16 @@ class ClusterRuvio(Ruvio):
         p = conn.parser
         if p.decode is not dec:
             p.decode = dec
+        t = conn.opts.socket_timeout
+        wait = frames_wait(data) if t is not None else 0.0
         try:
+            if wait:
+                conn.sock.settimeout(None if wait == FOREVER else t + wait)  # type: ignore[union-attr]
             conn.sock.sendall(data)  # type: ignore[union-attr]
-            return conn.read()
+            reply = conn.read()
+            if wait:
+                conn.sock.settimeout(t)  # type: ignore[union-attr]
+            return reply
         except BaseException as exc:
             raise _fail(conn, exc) from None
 
@@ -167,10 +175,12 @@ class ClusterRuvio(Ruvio):
         except BaseException as exc:
             raise _fail(conn, exc) from None
 
-    def _scatter(self, jobs: List[Tuple[_Conn, bytes, int]], dec: bool) -> List[Any]:
+    def _scatter(self, jobs: List[Tuple[_Conn, bytes, int]], dec: bool, wait: float = 0.0) -> List[Any]:
         """Writes every job to its node first, then reads: the nodes work in parallel.
 
-        Returns one entry per job (a list of raw replies, or the exception for a dead node)."""
+        ``wait`` is the widest wait of a blocking command among the jobs (see ``_blocking``): the reads
+        get it on top of ``socket_timeout``. Returns one entry per job (a list of raw replies, or the
+        exception for a dead node)."""
         sent: List[Any] = []
         for conn, data, n in jobs:
             try:
@@ -183,8 +193,13 @@ class ClusterRuvio(Ruvio):
             if isinstance(n, BaseException):
                 out.append(n)
                 continue
+            t = conn.opts.socket_timeout
             try:
+                if wait and t is not None and conn.sock is not None:
+                    conn.sock.settimeout(None if wait == FOREVER else t + wait)
                 out.append(self._read(conn, n))
+                if wait and t is not None and conn.sock is not None:
+                    conn.sock.settimeout(t)
             except (ConnectionError, OSError) as exc:
                 out.append(exc)
         return out
@@ -381,9 +396,15 @@ class ClusterRuvio(Ruvio):
                 p = conn.parser
                 if p.decode is not dec:
                     p.decode = dec
+                t = conn.opts.socket_timeout
+                wait = blocking_wait(data) if t is not None else 0.0
                 try:
+                    if wait:
+                        conn.sock.settimeout(None if wait == FOREVER else t + wait)  # type: ignore[union-attr]
                     conn.sock.sendall(data)  # type: ignore[union-attr]
                     reply = conn.read()
+                    if wait:
+                        conn.sock.settimeout(t)  # type: ignore[union-attr]
                 except BaseException as exc:
                     raise _fail(conn, exc) from None
                 if reply.__class__ is MovedError:
@@ -635,6 +656,9 @@ class ClusterRuvio(Ruvio):
         return cl.scan_finish(reply, node_i, len(c.nodes))
 
     # ---------------------------------------------------------------- pipelines
+    def _pipeline_wait(self, payload: List[bytes]) -> float:
+        return pipeline_wait(payload) if self._conn.opts.socket_timeout is not None else 0.0
+
     def _batch(self, payload: List[bytes], count: int) -> List[Any]:
         c = self._cl
         if c.mode != 1:
@@ -656,7 +680,7 @@ class ClusterRuvio(Ruvio):
                     jobs = [(self._read_conn(i), b"".join(bufs[i]), len(bufs[i])) for i in order]
                 else:
                     jobs = [(c.targets[i].conn, b"".join(bufs[i]), len(bufs[i])) for i in order]
-                results = self._scatter(jobs, dec)
+                results = self._scatter(jobs, dec, self._pipeline_wait(payload))
         finally:
             for b in bufs:
                 b.clear()
@@ -683,7 +707,7 @@ class ClusterRuvio(Ruvio):
         c = self._cl
         groups, subs = cl.pipeline_groups(payload, c.slots)  # raises before anything is sent
         order = [(c.targets[ni], pos, frames) for ni, (pos, frames) in groups.items()]
-        results = self._scatter([(node.conn, b"".join(frames), len(frames)) for node, _, frames in order], dec)
+        results = self._scatter([(node.conn, b"".join(frames), len(frames)) for node, _, frames in order], dec, self._pipeline_wait(payload))
         n = len(payload)
         replies: List[Any] = [None] * (n if subs is None else n + len(subs))
         failure: Optional[BaseException] = None

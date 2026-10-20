@@ -34,16 +34,18 @@ The matrix counts a subcommand such as `CLIENT ID` as its own command; the clien
 
 ## Timeouts
 
-Every client has the same two limits. The connect timeout is on by default; the command timeout is off by default, because blocking commands (`BLPOP`, `WAIT`, ...) legitimately wait. With it off, a half-open peer (the network dropped without a reset) blocks a call until the socket drops, so set it in production, above the longest blocking command you use.
+Every client has the same two limits, both on by default. The connect timeout (5 s) bounds opening a socket. The command timeout (30 s) bounds the wait for a reply, so a half-open peer (the network dropped without a reset) fails a call instead of blocking it until the socket drops. Set the command timeout to the client's "off" value in the table to wait forever.
 
-| Client | Connect timeout (default 5 s) | Command timeout (default none) | On expiry |
+A blocking command gets its own wait on top of the command timeout, so it never fails just because it waited as asked: `BLPOP k 5` may take 5 s plus the command timeout. A wait of `0` (block forever) means no deadline for that call. The wait is read from: the last argument of `BLPOP`, `BRPOP`, `BZPOPMIN`, `BZPOPMAX`, `BRPOPLPUSH` and `BLMOVE`, and the first argument of `BLMPOP` and `BZMPOP` (seconds, fractions allowed); `BLOCK ms` of `XREAD` and `XREADGROUP` (no `BLOCK`: not blocking); the last argument of `WAIT` and `WAITAOF`, and `WAIT ms` of `FILLGET key fill_ms WAIT ms` (milliseconds). An argument the client cannot parse also means no deadline. A pipeline or transaction that holds a blocking command gets the largest wait among them. A Pub/Sub (or `MONITOR`) connection never times out while it waits for messages.
+
+| Client | Connect timeout (default 5 s) | Command timeout (default 30 s); off value | On expiry |
 | --- | --- | --- | --- |
-| Rust | `ClientOptions::connect_timeout` | `ClientOptions::command_timeout` (or `set_read_timeout`) | `Error::Io` |
-| C# | `ConnectTimeout` | `CommandTimeout` | `TimeoutException` |
-| Go | `Options.DialTimeout` | `Options.CommandTimeout` (or a context deadline) | `context.DeadlineExceeded` |
-| Java | `connectTimeoutMillis` | `commandTimeoutMillis` | `RuvioException` |
-| Python | `connect_timeout` | `socket_timeout` | `ruvio.TimeoutError` |
-| Node.js | `connectTimeoutMs` | `commandTimeoutMs` | `ConnectionError` |
+| Rust | `ClientOptions::connect_timeout` | `ClientOptions::command_timeout` (or `set_read_timeout`); `None` | `Error::Io` |
+| C# | `ConnectTimeout` | `CommandTimeout`; `TimeSpan.Zero` | `TimeoutException` |
+| Go | `Options.DialTimeout` | `Options.CommandTimeout` (or a context deadline); a negative value | `context.DeadlineExceeded` |
+| Java | `connectTimeoutMillis` | `commandTimeoutMillis` (synchronous calls); `0` | `RuvioException` |
+| Python | `connect_timeout` | `socket_timeout` (sync client; asyncio: wrap calls in `asyncio.wait_for`); `None` | `ruvio.TimeoutError` |
+| Node.js | `connectTimeoutMs` | `commandTimeoutMs`; `0` | `ConnectionError` |
 
 Also here: [`ruvio-ui`](ruvio-ui/README.md), the browser operator UI (AGPL-3.0). The clients are MIT licensed ([license](LICENSE)).
 

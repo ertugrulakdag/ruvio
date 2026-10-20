@@ -858,21 +858,22 @@ fn json_typed_values_round_trip() {
 }
 
 #[test]
-fn read_timeout_on_a_command_reply_reopens_the_connection() {
+fn a_blocking_command_waits_its_own_timeout_on_top_of_the_read_timeout() {
     let Some(mut db) = connect(8) else { return };
 
-    db.set_read_timeout(Some(Duration::from_millis(150)))
+    db.set_read_timeout(Some(Duration::from_millis(200)))
         .unwrap();
 
-    // The server answers after the client gave up: that late reply must never be read as the
-    // answer to a later command. The 2 s block leaves the 150 ms read timeout a wide margin.
-    assert!(
-        db.blpop_key("timeout:never", Duration::from_secs(2))
-            .is_err()
+    // BLPOP k 1 on an empty list answers nil after 1 s, well past the 200 ms read timeout:
+    // the call gets 1 s + 200 ms and succeeds.
+    let started = std::time::Instant::now();
+    assert_eq!(
+        db.blpop_key("timeout:never", Duration::from_secs(1))
+            .unwrap(),
+        None
     );
+    assert!(started.elapsed() >= Duration::from_millis(900));
 
-    std::thread::sleep(Duration::from_millis(2100));
-    db.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     db.set("timeout:probe", "ok").unwrap();
     assert_eq!(
         db.get_string("timeout:probe").unwrap().as_deref(),

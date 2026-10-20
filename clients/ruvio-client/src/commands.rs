@@ -1111,8 +1111,8 @@ impl Client {
     /// # Returns
     /// `Some((key, value))`, or `None` when the timeout passes.
     ///
-    /// The connection is busy while it waits; set a read timeout longer than `timeout` (or none)
-    /// with [`Client::set_read_timeout`].
+    /// The connection is busy while it waits. The command timeout is extended by `timeout` for
+    /// this call, and `Duration::ZERO` has no deadline at all.
     ///
     /// # Examples
     ///
@@ -2175,8 +2175,8 @@ impl Client {
     /// * `timeout` - wait time rounded up to whole seconds; `Duration::ZERO` waits forever.
     ///
     /// # Returns
-    /// `Some((key, entry))`, or `None` on timeout. Set a read timeout longer than `timeout`
-    /// (see [`Client::set_read_timeout`]).
+    /// `Some((key, entry))`, or `None` on timeout. The command timeout is extended by
+    /// `timeout` for this call.
     pub fn bzpopmin(
         &mut self,
         keys: &[&str],
@@ -3592,7 +3592,7 @@ impl Client {
     ///
     /// `timeout` rounds up to whole seconds; `Duration::ZERO` waits forever. Returns the element
     /// or `None` on timeout. Ruvio retries every 5 ms instead of parking a waiter, and `BLMOVE`
-    /// is refused inside `MULTI` and scripts. Set a longer (or no) read timeout on the client.
+    /// is refused inside `MULTI` and scripts. The command timeout is extended by `timeout`.
     pub fn blmove(
         &mut self,
         source: &str,
