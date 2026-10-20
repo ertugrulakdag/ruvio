@@ -209,6 +209,7 @@ public final class Link implements AutoCloseable {
                 throw e;
             }
             if (remember) {
+                c.setCommandTimeout(options.commandTimeoutMillis);
                 current = index;
             }
             return c;
