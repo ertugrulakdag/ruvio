@@ -803,6 +803,14 @@ fn load_slot_moves(
 
     let moves = crate::slot_moves::SlotMoves::load(&config.persistence.data_dir, shard_count)?;
 
+    if moves.is_some() {
+        crate::slot_moves::SlotMoves::check_base(
+            &config.persistence.data_dir,
+            shard_count,
+            base.as_deref(),
+        )?;
+    }
+
     if moves.is_some() && config.replication.role != crate::config::ReplicationRole::Off {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -1074,8 +1082,8 @@ async fn serve_async(
         if let (count @ 1.., Some(slot)) = store.count_in_slots(&foreign) {
             return Err(io::Error::other(format!(
                 "shard {shard_id} holds {count} keys in slots it does not serve under \
-                 cluster_topology (first: slot {slot}); start with a map that gives this \
-                 group those slots, or with an empty data directory"
+                 cluster_topology (first: slot {slot}; expired keys count too); start with a \
+                 map that gives this group those slots, or with an empty data directory"
             )));
         }
     }

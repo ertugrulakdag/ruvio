@@ -36,6 +36,11 @@ pub(super) fn command(
 }
 
 fn install(state: &ShardState, map: &[u8]) -> Result<(), String> {
+    // One install at a time per process: two shards checking the version and writing the
+    // file at once could otherwise leave the older map on disk or in memory.
+    static INSTALLING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _installing = INSTALLING.lock().unwrap_or_else(|error| error.into_inner());
+
     const UNMAPPED: &str = "ERR RUVIO TOPOLOGY SET needs a node started with cluster_topology";
     let forwarding = state.forwarding.as_ref().ok_or(UNMAPPED)?;
     let current = forwarding

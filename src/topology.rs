@@ -29,6 +29,9 @@ pub struct TopologyGroup {
     pub shards: usize,
     /// Slot ranges the group owns, as `(first, last)`, in slot order.
     pub ranges: Vec<(u16, u16)>,
+    /// The shard of this group that serves each slot it owns (see [`TopologyGroup::shard_of`]),
+    /// computed once per map; `u16::MAX` for slots it does not own.
+    shard_by_slot: std::sync::Arc<[u16]>,
 }
 
 impl TopologyGroup {
@@ -36,21 +39,27 @@ impl TopologyGroup {
     /// `shards` equal runs, as the shard formula splits all 16384 (a group that owns every
     /// slot places them exactly as the formula does). `None` when the group does not own it.
     pub fn shard_of(&self, slot: u16) -> Option<usize> {
-        let total: usize = self
-            .ranges
+        let shard = *self.shard_by_slot.get(usize::from(slot))?;
+
+        (shard != u16::MAX).then_some(usize::from(shard))
+    }
+
+    fn place(ranges: &[(u16, u16)], shards: usize) -> std::sync::Arc<[u16]> {
+        let total: usize = ranges
             .iter()
             .map(|&(first, last)| usize::from(last - first) + 1)
             .sum();
+        let mut placed = vec![u16::MAX; HASH_SLOT_COUNT];
         let mut rank = 0;
 
-        for &(first, last) in &self.ranges {
-            if (first..=last).contains(&slot) {
-                return Some((rank + usize::from(slot - first)) * self.shards / total);
+        for &(first, last) in ranges {
+            for slot in first..=last {
+                placed[usize::from(slot)] = (rank * shards / total) as u16;
+                rank += 1;
             }
-            rank += usize::from(last - first) + 1;
         }
 
-        None
+        placed.into()
     }
 }
 
@@ -151,6 +160,12 @@ impl Topology {
         let saved = Self::load(&saved, group, local_shards)?;
 
         Ok(if saved.version > configured.version {
+            tracing::warn!(
+                saved = saved.version,
+                configured = configured.version,
+                "using the newer cluster map received from the coordinators ({TOPOLOGY_FILE} in \
+                 the data directory) instead of cluster_topology"
+            );
             saved
         } else {
             configured
@@ -215,6 +230,7 @@ impl Topology {
                     .to_owned(),
                 port,
                 shards: entry.shards,
+                shard_by_slot: TopologyGroup::place(&ranges, entry.shards),
                 ranges,
             });
         }

@@ -155,7 +155,8 @@ slots = ["8192-16383"]
 members = [ { address = "b1:6379", replication = "b1:26379" }, { address = "b2:6379", replication = "b2:26379" } ]
 ```
 
-Either every group has slots or none does, and every slot belongs to one group. Start every data node
+Either every group has `shards` or none does, every slot belongs to one group, and a group may
+have no slots yet (`slots = []`). Start every data node
 with a `cluster_topology` file holding the same groups and slots (version 1, each group named by its
 first member) and its own `cluster_group`. Once every group has an agreed primary the coordinators send
 each member the map with `RUVIO TOPOLOGY SET`, each group named by its agreed primary; its version is 1
@@ -163,7 +164,10 @@ plus the sum of the groups' epochs, so every failover raises it. A node keeps th
 in its data directory (`TOPOLOGY`) and starts from the newer of that file and `cluster_topology`. After
 a failover in one group, the other groups' nodes answer that group's keys with `MOVED` naming the new
 primary within a ping or two. A map that would change a node's own slots is refused: slots do not move
-between groups yet. The data-node user in `auth` also needs `RUVIO` for this.
+between groups yet. The data-node user in `auth` also needs `RUVIO` for this; a member that refuses
+the map is logged at most once a minute. The version only counts failovers: after editing the groups
+in `coordinator.toml`, raise the nodes to the new map by restarting them with an updated
+`cluster_topology` of a higher version.
 
 ## Limits of this version
 

@@ -77,7 +77,8 @@ pub struct Group {
     /// The first member is the primary when the coordinators start for the first time.
     pub members: Vec<Member>,
     /// Multi-node cluster: the group's shard count and the hash slots it owns
-    /// (`"first-last"` or one slot). Either every group has slots or none does.
+    /// (`"first-last"` or one slot; none for a group that joins empty). Either every group
+    /// has `shards` or none does.
     #[serde(default)]
     pub shards: Option<usize>,
     #[serde(default)]
@@ -179,14 +180,19 @@ impl CoordinatorConfig {
         let clustered = file
             .groups
             .iter()
-            .filter(|group| !group.slots.is_empty())
+            .filter(|group| group.shards.is_some())
             .count();
 
+        if file
+            .groups
+            .iter()
+            .any(|group| group.shards.is_none() && !group.slots.is_empty())
+        {
+            return Err("a group with slots needs shards".into());
+        }
         if clustered != 0 {
-            if clustered != file.groups.len()
-                || file.groups.iter().any(|group| group.shards.is_none())
-            {
-                return Err("with slots, every group needs slots and shards".into());
+            if clustered != file.groups.len() {
+                return Err("with shards, every group needs shards".into());
             }
             // The map the nodes will receive, checked as they check it.
             let text = cluster_map_text(&file.groups, 1, |_| 0);
@@ -225,12 +231,10 @@ impl CoordinatorConfig {
 
     /// The cluster map the data nodes get with `RUVIO TOPOLOGY SET`, and its version: each
     /// group named by its agreed primary. The version is 1 plus the sum of the groups'
-    /// epochs, so every failover raises it. `None` without slots, or before every group
+    /// epochs, so every failover raises it. `None` without shards, or before every group
     /// has an agreed primary.
     pub fn cluster_map(&self, primaries: &super::raft::Primaries) -> Option<(u64, String)> {
-        if self.groups.first()?.slots.is_empty() {
-            return None;
-        }
+        self.groups.first()?.shards?;
         let mut version = 1;
 
         for group in &self.groups {
@@ -387,9 +391,20 @@ members = [
         assert_eq!(topology.groups[1].host, "10.0.0.3");
         assert_eq!(topology.groups[0].port, 6379);
         assert!(
+            CoordinatorConfig::parse(&text.replace("shards = 1\n", ""))
+                .unwrap_err()
+                .contains("needs shards")
+        );
+        // A group may join with no slots, as long as the others cover every slot.
+        let empty = text
+            .replace("[\"0-8191\"]", "[\"0-16383\"]")
+            .replace("[\"8192-16383\"]", "[]");
+
+        assert!(CoordinatorConfig::parse(&empty).is_ok());
+        assert!(
             CoordinatorConfig::parse(&text.replace("slots = [\"8192-16383\"]\n", ""))
                 .unwrap_err()
-                .contains("every group")
+                .contains("slot 8192")
         );
         assert!(
             CoordinatorConfig::parse(&text.replace("8192-16383", "8192-16000"))

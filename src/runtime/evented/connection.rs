@@ -831,6 +831,21 @@ pub(super) async fn handle_client(
                                         write_response(&mut output, refusal)?;
                                         continue;
                                     }
+
+                                    // Another node of the cluster owns the slot. Inside MULTI
+                                    // the transaction is aborted, as Redis Cluster does.
+                                    if let Owner::Node(slot) = owner {
+                                        consumed += frame_length;
+                                        batch_commands += 1;
+                                        session.mark_queue_error();
+                                        redirect_to_node(
+                                            forwarding,
+                                            &mut output,
+                                            slot,
+                                            forwarding.fabric.slot_owner(slot),
+                                        )?;
+                                        continue;
+                                    }
                                 }
 
                                 // SWAPDB would swap the home shard's databases only, and a
@@ -851,21 +866,6 @@ pub(super) async fn handle_client(
                                     batch_commands += 1;
                                     session.mark_queue_error();
                                     output.write_all(reply)?;
-                                    continue;
-                                }
-
-                                // Another node of the cluster owns the slot. Inside MULTI the
-                                // transaction is aborted, as Redis Cluster does.
-                                if let Owner::Node(slot) = owner {
-                                    consumed += frame_length;
-                                    batch_commands += 1;
-                                    session.mark_queue_error();
-                                    redirect_to_node(
-                                        forwarding,
-                                        &mut output,
-                                        slot,
-                                        forwarding.fabric.slot_owner(slot),
-                                    )?;
                                     continue;
                                 }
 

@@ -125,7 +125,9 @@ async fn look(member: &Member, auth: Option<&str>, cluster: bool) -> Option<Sigh
             .ok()?
         {
             Value::Integer(version) => u64::try_from(version).ok(),
-            _ => None,
+            // Refused (an ACL without `ruvio|topology`, a release without the command): pushed
+            // anyway, so the refusal shows in the coordinator's log.
+            _ => Some(0),
         };
     }
 
@@ -224,7 +226,7 @@ pub async fn watch(config: Arc<CoordinatorConfig>, sightings: Sightings) {
     loop {
         tick.tick().await;
         let mut looks = Vec::new();
-        let cluster = config.groups.iter().any(|group| !group.slots.is_empty());
+        let cluster = config.groups.iter().any(|group| group.shards.is_some());
 
         for group in &config.groups {
             for (index, member) in group.members.iter().enumerate() {
@@ -348,9 +350,16 @@ async fn push_cluster_map(
     machine: &StateMachine,
     sightings: &Sightings,
 ) {
+    // Members a push is still running for, so a slow one never holds up the failover loop or
+    // gets a second push meanwhile; and when each member's failure was last logged.
+    static PUSHING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static WARNED: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
+    const WARN_EVERY: Duration = Duration::from_secs(60);
+
     let Some((version, map)) = config.cluster_map(&machine.primaries()) else {
         return;
     };
+    let map: Arc<[u8]> = map.into_bytes().into();
 
     for group in &config.groups {
         for (index, member) in group.members.iter().enumerate() {
@@ -363,20 +372,55 @@ async fn push_cluster_map(
             {
                 continue;
             }
-            match command(
-                member,
-                config.auth.as_deref(),
-                &[b"RUVIO", b"TOPOLOGY", b"SET", map.as_bytes()],
-            )
-            .await
+            let key = member.address.to_string();
             {
-                Ok(()) => {
-                    info!(group = %group.name, member = %member.address, version, "sent the cluster map")
+                let mut pushing = PUSHING.lock().unwrap_or_else(|error| error.into_inner());
+
+                if pushing.contains(&key) {
+                    continue;
                 }
-                Err(error) => {
-                    warn!(group = %group.name, member = %member.address, %error, "could not send the cluster map")
-                }
+                pushing.push(key.clone());
             }
+            let (member, auth, map, name) = (
+                member.clone(),
+                config.auth.clone(),
+                Arc::clone(&map),
+                group.name.clone(),
+            );
+
+            tokio::spawn(async move {
+                let result = command(
+                    &member,
+                    auth.as_deref(),
+                    &[b"RUVIO", b"TOPOLOGY", b"SET", &map],
+                )
+                .await;
+
+                match result {
+                    Ok(()) => {
+                        info!(group = %name, member = %member.address, version, "sent the cluster map")
+                    }
+                    Err(error) => {
+                        let mut warned = WARNED.lock().unwrap_or_else(|error| error.into_inner());
+                        let last = warned.iter_mut().find(|(known, _)| *known == key);
+
+                        if last
+                            .as_ref()
+                            .is_none_or(|(_, at)| at.elapsed() > WARN_EVERY)
+                        {
+                            warn!(group = %name, member = %member.address, %error, "could not send the cluster map (repeated at most once a minute)");
+                            match last {
+                                Some((_, at)) => *at = Instant::now(),
+                                None => warned.push((key.clone(), Instant::now())),
+                            }
+                        }
+                    }
+                }
+                PUSHING
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .retain(|known| *known != key);
+            });
         }
     }
 }

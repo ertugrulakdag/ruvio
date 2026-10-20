@@ -22,6 +22,11 @@ use crate::routing::{HASH_SLOT_COUNT, SlotTable, hash_slot, shard_for_slot};
 
 /// Name of the file in the data directory.
 pub(crate) const FILE_NAME: &str = "SLOTS";
+/// The starting table the moves were recorded against when it is not the formula (a
+/// cluster map's placement): one little-endian `u16` per slot, the local shard or
+/// [`NOT_LOCAL`]. Absent means the formula.
+pub(crate) const BASE_FILE_NAME: &str = "SLOTS_BASE";
+const NOT_LOCAL: u16 = u16::MAX;
 
 const MAGIC: &[u8; 8] = b"RVSLOTS1";
 const HEADER_LEN: usize = MAGIC.len() + 4 + 4;
@@ -116,7 +121,66 @@ impl SlotMoves {
 
     /// Replaces the file in `data_dir` with these moves, durably.
     pub(crate) fn save(&self, data_dir: &Path) -> io::Result<()> {
+        // The starting table first: a crash before `SLOTS` is replaced leaves moves that
+        // were recorded against the same table (a restart refuses any other).
+        match &self.base {
+            Some(base) => crate::replication::write_durably(
+                &data_dir.join(BASE_FILE_NAME),
+                &encode_base(base, self.shard_count),
+            )?,
+            None => match std::fs::remove_file(data_dir.join(BASE_FILE_NAME)) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                _ => {}
+            },
+        }
         crate::replication::write_durably(&data_dir.join(FILE_NAME), &self.encode())
+    }
+
+    /// Refuses moves saved against another starting table than `base` (`None`: the
+    /// formula): their replay would keep the wrong slots on each shard.
+    pub(crate) fn check_base(
+        data_dir: &Path,
+        shard_count: usize,
+        base: Option<&[u16]>,
+    ) -> io::Result<()> {
+        let saved = match std::fs::read(data_dir.join(BASE_FILE_NAME)) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        let formula: Vec<u16>;
+        let current = match base {
+            Some(base) => base,
+            None => {
+                formula = (0..HASH_SLOT_COUNT)
+                    .map(|slot| shard_for_slot(slot as u16, shard_count) as u16)
+                    .collect();
+                &formula
+            }
+        };
+        let expected = encode_base(current, shard_count as u16);
+        let matches = match &saved {
+            Some(saved) => *saved == expected,
+            // Saved against the formula.
+            None => (0..HASH_SLOT_COUNT)
+                .all(|slot| current[slot] == shard_for_slot(slot as u16, shard_count) as u16),
+        };
+
+        if matches {
+            return Ok(());
+        }
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "slots were moved between shards ({FILE_NAME} file) with another slot layout \
+                 ({}); start with the cluster_topology this node had then",
+                if saved.is_some() {
+                    "an earlier cluster_topology"
+                } else {
+                    "no cluster_topology"
+                }
+            ),
+        ))
     }
 
     /// The owner of every slot after the completed moves.
@@ -425,6 +489,20 @@ impl ReplayFilter {
             self.next += 1;
         }
     }
+}
+
+/// A starting table as [`BASE_FILE_NAME`] holds it: other nodes' slots as [`NOT_LOCAL`].
+fn encode_base(base: &[u16], shard_count: u16) -> Vec<u8> {
+    base.iter()
+        .flat_map(|&owner| {
+            if owner < shard_count {
+                owner
+            } else {
+                NOT_LOCAL
+            }
+            .to_le_bytes()
+        })
+        .collect()
 }
 
 #[cfg(test)]

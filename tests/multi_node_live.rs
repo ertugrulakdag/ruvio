@@ -240,3 +240,37 @@ fn slots_move_between_a_nodes_own_shards_and_survive_a_restart() {
 
     check(&mut client);
 }
+
+#[test]
+fn moves_made_without_a_map_refuse_a_start_with_one() {
+    let mut a = Server::start_with(&[
+        ("RUVIO_SHARDS", "2"),
+        ("RUVIO_DURABILITY", "always"),
+        ("RUVIO_SNAPSHOT_INTERVAL_MS", "0"),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let topology = dir.path().join("topology.toml");
+    let mut client = Client::connect(&a.address);
+
+    assert_eq!(client.call(&["SET", &key_in(0..100, "early"), "1"]), "OK");
+    assert_eq!(client.call(&["RUVIO", "MOVESLOTS", "0-99", "1"]), "OK");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+
+    while !client
+        .call(&["RUVIO", "MOVESLOTS", "STATUS"])
+        .contains("done")
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the move did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    write_topology(&topology, a.ports().port_at(0), a.ports().port_at(4));
+    a.set_env("RUVIO_CLUSTER_TOPOLOGY", topology.to_str().unwrap());
+    a.set_env("RUVIO_CLUSTER_GROUP", "a");
+
+    let log = a.restart_refused();
+
+    assert!(log.contains("with another slot layout"), "{log}");
+}
