@@ -34,7 +34,10 @@ fn a_node_holding_keys_the_map_gives_away_refuses_to_start() {
     let elsewhere = key_in(8192..16384, "elsewhere");
 
     // Written while the node owned every slot.
-    Client::connect(&a.ports().address_at(1).to_string()).call(&["SET", &elsewhere, "1"]);
+    assert_eq!(
+        Client::connect(&a.ports().address_at(1).to_string()).call(&["SET", &elsewhere, "1"]),
+        "OK"
+    );
     write_topology(&topology, a.ports().port_at(0), a.ports().port_at(2));
     a.set_env("RUVIO_CLUSTER_TOPOLOGY", topology.to_str().unwrap());
     a.set_env("RUVIO_CLUSTER_GROUP", "a");
