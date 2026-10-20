@@ -2479,6 +2479,130 @@ fn hot_key_set_keeps_absolute_and_kept_deadlines_through_the_log() {
     join_within(right, PATIENCE).unwrap();
 }
 
+/// A hot-key write whose WAL record is refused never reaches the shared store: the writer
+/// gets an error and the other shard still reads the old value (issue #52). Refused here:
+/// a record too large for a segment, and every write while the log is failed.
+#[test]
+fn a_refused_hot_key_write_leaves_the_old_value_for_every_shard() {
+    let directory = tempfile::tempdir().unwrap();
+    let persistence = PersistenceConfig {
+        profile: crate::DurabilityProfile::Everysec,
+        data_dir: directory.path().to_path_buf(),
+        wal_segment_bytes: 64 * 1024,
+        snapshot_interval: Duration::from_secs(3600),
+        ..PersistenceConfig::default()
+    };
+    let (left_addr, right_addr, stop, left_server, right_server) =
+        serve_two_shards_with(|config| {
+            config.persistence = persistence.clone();
+            config.hot_keys = vec![b"lock:*".to_vec()];
+        });
+    let old = b"$3\r\nold\r\n";
+    let large = vec![b'x'; 128 * 1024];
+
+    assert_eq!(
+        request(left_addr, &resp(&[&[b"SET", b"lock:a", b"old"]])),
+        b"+OK\r\n"
+    );
+    let oversized = request(left_addr, &resp(&[&[b"SET", b"lock:a", &large]]));
+
+    assert!(oversized.starts_with(b"-"), "{oversized:?}");
+    assert_eq!(request(right_addr, &resp(&[&[b"GET", b"lock:a"]])), old);
+
+    // The log fails on another key's write and cannot resume while writes keep failing.
+    fail_shard_writes(directory.path(), 0, u32::MAX);
+    let failed = request(left_addr, &resp(&[&[b"SET", b"lock:b", b"x"]]));
+
+    assert!(failed.starts_with(b"-MISCONF"), "{failed:?}");
+    for refused in [
+        &[&b"SET"[..], b"lock:a", b"new"][..],
+        &[b"DEL", b"lock:a"],
+        &[b"FLUSHALL"],
+    ] {
+        let reply = request(left_addr, &resp(&[refused]));
+
+        assert!(reply.starts_with(b"-MISCONF"), "{refused:?}: {reply:?}");
+        assert_eq!(
+            request(right_addr, &resp(&[&[b"GET", b"lock:a"]])),
+            old,
+            "{refused:?}"
+        );
+    }
+    stop_failing_writes(directory.path());
+
+    // The log resumes (after its retry pause) and takes the next write.
+    let deadline = Instant::now() + PATIENCE;
+
+    while request(left_addr, &resp(&[&[b"SET", b"lock:a", b"new"]])) != b"+OK\r\n" {
+        assert!(Instant::now() < deadline, "the log did not resume");
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        request(right_addr, &resp(&[&[b"GET", b"lock:a"]])),
+        b"$3\r\nnew\r\n"
+    );
+    stop.request();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
+}
+
+/// A hot-key write whose record was taken but whose log write then failed is in the shared
+/// store, as a grouped shard write is in its shard: it stays readable, its record is kept,
+/// and the log writes it first when it resumes, so it survives a crash after that.
+#[test]
+fn a_hot_key_write_whose_log_write_failed_is_written_when_the_log_resumes() {
+    let directory = tempfile::tempdir().unwrap();
+    let persistence = PersistenceConfig {
+        profile: crate::DurabilityProfile::Everysec,
+        data_dir: directory.path().to_path_buf(),
+        snapshot_interval: Duration::from_secs(3600),
+        ..PersistenceConfig::default()
+    };
+    let start = |persistence: PersistenceConfig| {
+        serve_two_shards_with(move |config| {
+            config.persistence = persistence.clone();
+            config.hot_keys = vec![b"lock:*".to_vec()];
+        })
+    };
+    let (left_addr, right_addr, stop, left_server, right_server) = start(persistence.clone());
+
+    fail_shard_writes(directory.path(), 0, 1);
+    let failed = request(left_addr, &resp(&[&[b"SET", b"lock:a", b"kept"]]));
+
+    stop_failing_writes(directory.path());
+    assert!(failed.starts_with(b"-MISCONF"), "{failed:?}");
+    assert_eq!(
+        request(right_addr, &resp(&[&[b"GET", b"lock:a"]])),
+        b"$4\r\nkept\r\n"
+    );
+    let deadline = Instant::now() + PATIENCE;
+
+    while request(left_addr, &resp(&[&[b"SET", b"lock:poke", b"x"]])) != b"+OK\r\n" {
+        assert!(Instant::now() < deadline, "the log did not resume");
+        thread::sleep(Duration::from_millis(50));
+    }
+    // A copy of the data directory now, as a crash would leave it: no checkpoint since.
+    let killed = tempfile::tempdir().unwrap();
+
+    copy_dir(directory.path(), killed.path());
+    stop.request();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
+
+    let (left_addr, _, stop, left_server, right_server) = start(PersistenceConfig {
+        data_dir: killed.path().to_path_buf(),
+        ..persistence
+    });
+
+    assert_eq!(
+        request(left_addr, &resp(&[&[b"GET", b"lock:a"]])),
+        b"$4\r\nkept\r\n"
+    );
+    stop.request();
+    join_within(left_server, PATIENCE).unwrap();
+    join_within(right_server, PATIENCE).unwrap();
+}
+
 /// One `SCAN` reply on a connection that stays open: a forwarded command answers only a
 /// client that is still connected.
 fn scan_page(address: SocketAddr, args: &[&[u8]]) -> (String, Vec<String>) {

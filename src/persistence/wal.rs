@@ -175,9 +175,6 @@ pub struct WalSink {
     /// The sequence of the last record of a hot-key write, which the shard applied to the
     /// shared hot store before the record synced (see `sync_hot_records`).
     hot_through: u64,
-    /// A hot-key write was applied to the shared hot store and then refused by this log:
-    /// the store may hold it until restart (see `sync_hot_records`).
-    hot_refused: bool,
     last_recovery: Option<Instant>,
     published: Arc<AtomicU64>,
     durable: Arc<AtomicU64>,
