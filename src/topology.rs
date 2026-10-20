@@ -4,11 +4,19 @@
 //! names every group and the slot ranges it owns; this node serves the slots of its own
 //! group and answers `MOVED` for the others. Without a topology nothing here is read.
 
-use std::{fmt, path::Path};
+use std::{
+    fmt,
+    path::Path,
+    sync::{Arc, RwLock},
+};
 
 use serde::Deserialize;
 
 use crate::routing::{HASH_SLOT_COUNT, SlotTable};
+
+/// The newest map a node received (`RUVIO TOPOLOGY SET`), in its data directory. At
+/// start the newer of this file and `cluster_topology` is used.
+pub const TOPOLOGY_FILE: &str = "TOPOLOGY";
 
 /// One group of the cluster, as clients reach its primary.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,6 +75,39 @@ impl fmt::Debug for Topology {
     }
 }
 
+/// The map every shard of a node reads, replaced whole when a newer one arrives
+/// (`RUVIO TOPOLOGY SET`). Read on redirects and `CLUSTER` replies only, never per command.
+#[derive(Clone)]
+pub struct SharedTopology(Arc<RwLock<Arc<Topology>>>);
+
+impl SharedTopology {
+    pub fn new(topology: Topology) -> Self {
+        Self(Arc::new(RwLock::new(Arc::new(topology))))
+    }
+
+    pub fn get(&self) -> Arc<Topology> {
+        Arc::clone(&self.0.read().unwrap_or_else(|error| error.into_inner()))
+    }
+
+    pub fn replace(&self, topology: Topology) {
+        *self.0.write().unwrap_or_else(|error| error.into_inner()) = Arc::new(topology);
+    }
+}
+
+impl PartialEq for SharedTopology {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for SharedTopology {}
+
+impl fmt::Debug for SharedTopology {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.get().fmt(formatter)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TopologyFile {
@@ -91,6 +132,29 @@ impl Topology {
 
         Self::parse(&text, group, local_shards)
             .map_err(|error| format!("topology {}: {error}", path.display()))
+    }
+
+    /// The newer of the configured map and the one saved in `data_dir` by an earlier
+    /// `RUVIO TOPOLOGY SET`.
+    pub fn load_newest(
+        path: &Path,
+        data_dir: &Path,
+        group: &str,
+        local_shards: usize,
+    ) -> Result<Self, String> {
+        let configured = Self::load(path, group, local_shards)?;
+        let saved = data_dir.join(TOPOLOGY_FILE);
+
+        if !saved.exists() {
+            return Ok(configured);
+        }
+        let saved = Self::load(&saved, group, local_shards)?;
+
+        Ok(if saved.version > configured.version {
+            saved
+        } else {
+            configured
+        })
     }
 
     pub fn parse(text: &str, group: &str, local_shards: usize) -> Result<Self, String> {

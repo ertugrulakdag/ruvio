@@ -76,6 +76,7 @@ mod pubsub;
 mod replica;
 #[cfg(all(test, not(miri)))]
 mod tests;
+mod topology;
 mod wal_group;
 
 use checkpoint::*;
@@ -485,7 +486,9 @@ pub fn run_with_force(config: &AppConfig, shutdown: ShutdownToken, force: bool) 
     )
     .map_err(|error| io::Error::other(error.to_string()))?;
 
-    if config.shards <= 1 {
+    // A one-shard node of a multi-node cluster still routes (to answer `MOVED`) and
+    // answers the cluster commands, so it runs as a cluster of one shard.
+    if config.shards <= 1 && config.cluster_topology.is_none() {
         let bind: SocketAddr = config
             .address
             .parse()
@@ -581,14 +584,24 @@ fn run_cluster(config: &AppConfig, shutdown: ShutdownToken, force: bool) -> io::
         // The cluster map places this group's slots on its shards first; moves between
         // the shards apply on top of it.
         if let Some(path) = &config.cluster_topology {
-            let topology =
-                crate::topology::Topology::load(path, &config.cluster_group, config.shards)
-                    .map_err(io::Error::other)?;
+            let topology = crate::topology::Topology::load_newest(
+                path,
+                &config.persistence.data_dir,
+                &config.cluster_group,
+                config.shards,
+            )
+            .map_err(io::Error::other)?;
 
-            fabric.set_topology(Arc::new(topology));
+            fabric.set_topology(topology);
         }
         let moves = load_slot_moves(config, config.shards)?;
 
+        if moves.is_some() && config.cluster_topology.is_some() {
+            return Err(io::Error::other(
+                "slots were moved between this server's shards (SLOTS file); cluster_topology \
+                 cannot be used with moved slots yet",
+            ));
+        }
         if let Some(moves) = &moves {
             moves.apply(&fabric.slot_table());
         }

@@ -28,6 +28,9 @@ pub struct Sighting {
     pub durable: u64,
     /// It answered `LOADING`: still copying its primary, never a candidate.
     pub loading: bool,
+    /// The cluster map version it serves (`RUVIO TOPOLOGY VERSION`), read only when the
+    /// coordinators manage a multi-node cluster.
+    pub topology: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,7 +81,7 @@ pub type Switches = broadcast::Sender<String>;
 const CALL_TIMEOUT: Duration = Duration::from_millis(1000);
 
 /// Pings one member and reads its role and synced sequence.
-async fn look(member: &Member, auth: Option<&str>) -> Option<Sighting> {
+async fn look(member: &Member, auth: Option<&str>, cluster: bool) -> Option<Sighting> {
     let mut client = NodeClient::connect(&member.address, auth, CALL_TIMEOUT)
         .await
         .ok()?;
@@ -113,6 +116,17 @@ async fn look(member: &Member, auth: Option<&str>) -> Option<Sighting> {
             };
         }
         _ => return None,
+    }
+
+    if cluster {
+        sighting.topology = match client
+            .call(&[b"RUVIO", b"TOPOLOGY", b"VERSION"], CALL_TIMEOUT)
+            .await
+            .ok()?
+        {
+            Value::Integer(version) => u64::try_from(version).ok(),
+            _ => None,
+        };
     }
 
     // Every shard's synced sequence: shard i answers on the address's port plus i.
@@ -210,6 +224,7 @@ pub async fn watch(config: Arc<CoordinatorConfig>, sightings: Sightings) {
     loop {
         tick.tick().await;
         let mut looks = Vec::new();
+        let cluster = config.groups.iter().any(|group| !group.slots.is_empty());
 
         for group in &config.groups {
             for (index, member) in group.members.iter().enumerate() {
@@ -218,7 +233,7 @@ pub async fn watch(config: Arc<CoordinatorConfig>, sightings: Sightings) {
                 let name = group.name.clone();
 
                 looks.push(tokio::spawn(async move {
-                    (name, index, look(&member, auth.as_deref()).await)
+                    (name, index, look(&member, auth.as_deref(), cluster).await)
                 }));
             }
         }
@@ -320,6 +335,48 @@ pub async fn lead(
             }
 
             reconcile(&config, group, primary, &seen).await;
+        }
+
+        push_cluster_map(&config, &machine, &sightings).await;
+    }
+}
+
+/// Sends the cluster map to every answering member that serves an older one, so `MOVED`
+/// names each group's agreed primary.
+async fn push_cluster_map(
+    config: &CoordinatorConfig,
+    machine: &StateMachine,
+    sightings: &Sightings,
+) {
+    let Some((version, map)) = config.cluster_map(&machine.primaries()) else {
+        return;
+    };
+
+    for group in &config.groups {
+        for (index, member) in group.members.iter().enumerate() {
+            let sighting = sightings.get(&group.name, index);
+
+            if sighting
+                .last_ok
+                .is_none_or(|at| at.elapsed() > config.down_after)
+                || sighting.topology.is_none_or(|served| served >= version)
+            {
+                continue;
+            }
+            match command(
+                member,
+                config.auth.as_deref(),
+                &[b"RUVIO", b"TOPOLOGY", b"SET", map.as_bytes()],
+            )
+            .await
+            {
+                Ok(()) => {
+                    info!(group = %group.name, member = %member.address, version, "sent the cluster map")
+                }
+                Err(error) => {
+                    warn!(group = %group.name, member = %member.address, %error, "could not send the cluster map")
+                }
+            }
         }
     }
 }
@@ -469,6 +526,8 @@ mod tests {
                     .unwrap(),
                 })
                 .collect(),
+            shards: None,
+            slots: Vec::new(),
         }
     }
 
@@ -478,6 +537,7 @@ mod tests {
             role: Some(Role::Replica(None)),
             durable,
             loading: false,
+            topology: None,
         }
     }
 

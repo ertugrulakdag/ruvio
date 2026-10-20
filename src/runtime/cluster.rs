@@ -28,7 +28,7 @@ pub(crate) struct ClusterRoute {
     /// Which shard owns each slot, shared by every shard of the process.
     pub slots: SlotTable,
     /// The other groups of a multi-node cluster; `None` on a node that owns every slot.
-    pub topology: Option<Arc<crate::topology::Topology>>,
+    pub topology: Option<crate::topology::SharedTopology>,
 }
 
 /// The other nodes serving one shard's slots, as this node knows them: a primary's
@@ -104,7 +104,7 @@ enum Holder {
 /// Without a topology this is [`SlotTable::ranges`] and the local shards.
 fn holder_ranges(route: &ClusterRoute) -> (Vec<(u16, u16, usize)>, Vec<Holder>) {
     let mut holders: Vec<Holder> = (0..route.shard_count).map(Holder::Local).collect();
-    let Some(topology) = &route.topology else {
+    let Some(topology) = route.topology.as_ref().map(|shared| shared.get()) else {
         return (route.slots.ranges(), holders);
     };
     let mut ranges: Vec<(u16, u16, usize)> = Vec::new();
@@ -151,7 +151,7 @@ fn holder_nodes(route: &ClusterRoute, peers: &[ShardPeers], holder: Holder) -> V
             let Some(group) = route
                 .topology
                 .as_ref()
-                .and_then(|topology| topology.groups.get(group))
+                .and_then(|shared| shared.get().groups.get(group).cloned())
             else {
                 return Vec::new();
             };
@@ -335,7 +335,7 @@ pub(crate) fn write_cluster_info(
     let epoch = route
         .topology
         .as_ref()
-        .map_or(size as u64, |topology| topology.version);
+        .map_or(size as u64, |shared| shared.get().version);
     let info = format!(
         "cluster_enabled:1\r\ncluster_state:ok\r\ncluster_slots_assigned:16384\r\ncluster_slots_ok:16384\r\ncluster_slots_pfail:0\r\ncluster_slots_fail:0\r\ncluster_known_nodes:{known}\r\ncluster_size:{size}\r\ncluster_current_epoch:{epoch}\r\ncluster_my_epoch:{}\r\n",
         route.shard_id + 1
@@ -435,7 +435,7 @@ pub(crate) fn redirect_if_remote(
     if owner >= route.shard_count
         && let Some(topology) = &route.topology
     {
-        return write_moved(output, topology, slot, owner, route.shard_count).map(|()| true);
+        return write_moved(output, &topology.get(), slot, owner, route.shard_count).map(|()| true);
     }
 
     let port = route.advertised_port + owner as u16;

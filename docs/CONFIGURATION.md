@@ -837,7 +837,11 @@ cluster shares. The map is fixed: start a group with its slots empty, or as the
 only group of a node that already holds data; data is not moved between groups
 yet. A node that holds keys in slots the map serves elsewhere (or on another of its
 own shards) refuses to start and names the first such slot; the check walks the
-keys once at startup, only when a map is set. A map needs `port_mode = "per-shard"` and cannot be combined with `hot_keys`.
+keys once at startup, only when a map is set. With `ruvio coordinator` managing the
+groups, the coordinators send each node a newer map after every failover (`RUVIO
+TOPOLOGY SET`, see `docs/COORDINATOR.md`); the node keeps it in `TOPOLOGY` in its data
+directory and starts from the newer of that file and `cluster_topology`. A one-shard
+node with a map answers the `CLUSTER` commands too. A map needs `port_mode = "per-shard"` and cannot be combined with `hot_keys`.
 `cpu_set` (`RUVIO_CPUSET`, `--cpu-set`) pins shard threads on Linux. It takes a
 CPU list such as `2`, `0-3` or `0,2,4-5`; shard `i` runs on the `i`th listed
 core and the list wraps when there are more shards than cores. Unset means no

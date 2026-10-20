@@ -1471,6 +1471,7 @@ fn plain_command(command: &Command<'_>) -> bool {
                 | Command::ConfigRewrite
                 | Command::ReplicaOf { .. }
                 | Command::MoveSlots(_)
+                | Command::Topology(_)
                 | Command::Role
                 | Command::Bgsave
                 | Command::ChangesSubscribe(_)
@@ -1817,6 +1818,12 @@ async fn dispatch_inner<'s>(
 
             Command::MoveSlots(target) => {
                 write_response(output, super::moveslots::command(state, *target))?;
+
+                return Ok(());
+            }
+
+            Command::Topology(map) => {
+                super::topology::command(state, map.as_deref(), output)?;
 
                 return Ok(());
             }

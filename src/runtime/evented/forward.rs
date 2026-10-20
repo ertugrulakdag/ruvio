@@ -212,7 +212,7 @@ pub(crate) struct Fabric {
     /// Slot moves between these shards.
     pub(super) mover: super::moveslots::SlotMover,
     /// The cluster map when this node is one of several; set before any shard serves.
-    topology: std::sync::OnceLock<Arc<crate::topology::Topology>>,
+    topology: std::sync::OnceLock<crate::topology::SharedTopology>,
 }
 
 #[derive(Clone)]
@@ -246,12 +246,19 @@ impl Fabric {
 
     /// Makes this node one of a multi-node cluster: the slots of other groups point past
     /// the local shards (see [`crate::topology::Topology::apply`]).
-    pub(crate) fn set_topology(&self, topology: Arc<crate::topology::Topology>) {
+    pub(crate) fn set_topology(&self, topology: crate::topology::Topology) {
         topology.apply(&self.slots, self.count);
-        let _ = self.topology.set(topology);
+        match self.topology.get() {
+            Some(shared) => shared.replace(topology),
+            None => {
+                let _ = self
+                    .topology
+                    .set(crate::topology::SharedTopology::new(topology));
+            }
+        }
     }
 
-    pub(crate) fn topology(&self) -> Option<&Arc<crate::topology::Topology>> {
+    pub(crate) fn topology(&self) -> Option<&crate::topology::SharedTopology> {
         self.topology.get()
     }
 
@@ -1454,7 +1461,7 @@ pub(super) fn redirect_to_node(
     }
     match forwarding.fabric.topology() {
         Some(topology) => {
-            crate::runtime::cluster::write_moved(output, topology, slot, owner, count)?
+            crate::runtime::cluster::write_moved(output, &topology.get(), slot, owner, count)?
         }
         None => output.write_all(b"-CLUSTERDOWN Hash slot not served\r\n")?,
     }
@@ -2235,6 +2242,7 @@ mod tests {
         "ConfigSet",
         "ReplicaOf",
         "MoveSlots",
+        "Topology",
         "Role",
         "Discard",
         "Echo",

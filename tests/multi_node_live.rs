@@ -112,4 +112,38 @@ fn each_node_serves_its_slots_and_redirects_the_rest() {
         on_a.call(&["CONFIG", "GET", "cluster-group"]),
         "[cluster-group,a]"
     );
+
+    // A newer map may move another group's primary, not this group's slots.
+    let map = |version: u64, a_slots: &str, b_port: u16| {
+        format!(
+            "version = {version}\n[[groups]]\nname = \"a\"\naddress = \"127.0.0.1:{a_port}\"\nshards = 2\nslots = [\"{a_slots}\"]\n\
+             [[groups]]\nname = \"b\"\naddress = \"127.0.0.1:{b_port}\"\nshards = 2\nslots = [\"8192-16383\"]\n"
+        )
+        .replace("\"8192-16383\"", if a_slots == "0-8191" { "\"8192-16383\"" } else { "\"8191-16383\"" })
+    };
+
+    assert_eq!(on_a.call(&["RUVIO", "TOPOLOGY", "VERSION"]), "7");
+    assert!(
+        on_a.call(&["RUVIO", "TOPOLOGY", "SET", &map(6, "0-8191", 9000)])
+            .contains("older")
+    );
+    assert!(
+        on_a.call(&["RUVIO", "TOPOLOGY", "SET", &map(8, "0-8190", 9000)])
+            .contains("this group's slots")
+    );
+    assert_eq!(
+        on_a.call(&["RUVIO", "TOPOLOGY", "SET", &map(8, "0-8191", 9000)]),
+        "OK"
+    );
+    assert_eq!(
+        on_a.call(&["GET", &remote]),
+        format!("ERR:MOVED {remote_slot} 127.0.0.1:9001")
+    );
+    assert_eq!(on_a.call(&["RUVIO", "TOPOLOGY", "VERSION"]), "8");
+
+    // The newer map survives a restart (kept in the data directory).
+    a.restart();
+    let mut on_a = Client::connect(&a.address);
+
+    assert_eq!(on_a.call(&["RUVIO", "TOPOLOGY", "VERSION"]), "8");
 }
