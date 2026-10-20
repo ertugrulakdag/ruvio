@@ -293,7 +293,7 @@ public final class RuvioOptions {
         }
 
         /**
-         * How long blocking (synchronous) calls wait for a reply; default 30000 (30 s), 0 waits forever.
+         * How long a call waits for a reply; default 30000 (30 s), 0 waits forever. Asynchronous futures fail with the same exception after this long.
          * The command is not cancelled on the server when the wait times out; the call throws a
          * {@link RuvioException}. A blocking command gets its own wait on top ({@code blpop(5, k)} may
          * take 5 s plus this), and one that waits forever (timeout 0) has no limit.

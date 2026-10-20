@@ -54,6 +54,9 @@ public class Connection implements AutoCloseable {
     private volatile long tail;
     private volatile long head;
 
+    private volatile long timeoutMillis;
+    private volatile Thread watchdog;
+
     private volatile Throwable closed;
     private volatile Consumer<Object> pushHandler;
     private ByteBuffer writeView;
@@ -103,6 +106,41 @@ public class Connection implements AutoCloseable {
      */
     public void setPushHandler(Consumer<Object> handler) {
         this.pushHandler = handler;
+    }
+
+    /**
+     * Turns on the command timeout for futures handed to callers: each request gets a deadline when it is
+     * queued (the timeout plus a blocking command's own wait, none for one that waits forever), and one
+     * daemon thread per connection fails overdue requests with {@link RuvioException}. The late reply is
+     * still read and dropped, so the connection stays in use. Call once, before the first command.
+     *
+     * @param millis the command timeout in milliseconds; 0 or less leaves it off
+     */
+    public void setCommandTimeout(long millis) {
+        if (millis <= 0 || watchdog != null || closed != null) {
+            return;
+        }
+        timeoutMillis = millis;
+        long period = Math.max(10, Math.min(1000, millis / 4)) * 1_000_000L;
+        Thread t = new Thread(() -> watchLoop(millis, period), writer.getName().replace("-writer", "-watchdog"));
+        t.setDaemon(true);
+        watchdog = t;
+        t.start();
+    }
+
+    private void watchLoop(long millis, long period) {
+        while (closed == null) {
+            LockSupport.parkNanos(this, period);
+            long now = System.nanoTime();
+            long t = tail; // the ring slots below t are published by this volatile read
+            for (long i = head; i < t; i++) {
+                Request<?> q = ring[(int) (i & mask)];
+                if (q != null && q.deadline != 0 && now - q.deadline >= 0) {
+                    q.deadline = 0;
+                    q.fail(new RuvioException("no reply within " + millis + " ms (command timeout)"));
+                }
+            }
+        }
     }
 
     /**
@@ -164,6 +202,10 @@ public class Connection implements AutoCloseable {
     public void end(Request<?> request) {
         long t = tail;
         boolean serial = t == head;
+        long tm = timeoutMillis;
+        if (tm > 0) {
+            request.arm(tm);
+        }
         ring[(int) (t & mask)] = request;
         tail = t + 1;
         submitLocked(serial);
@@ -184,7 +226,11 @@ public class Connection implements AutoCloseable {
         }
         long t = tail;
         boolean serial = t == head;
+        long tm = timeoutMillis;
         for (int i = 0; i < count; i++) {
+            if (tm > 0) {
+                requests[i].arm(tm);
+            }
             ring[(int) ((t + i) & mask)] = requests[i];
         }
         tail = t + count;
@@ -391,6 +437,12 @@ public class Connection implements AutoCloseable {
         if (q == null) {
             throw new RuvioException("protocol error: reply without a pending request");
         }
+        if (q.isDone()) {
+            // Failed by the command timeout (or cancelled): read the late reply and drop it.
+            r.skip();
+            popRequest();
+            return;
+        }
         if (t == '-') {
             RuvioServerException err = r.readError();
             popRequest();
@@ -445,6 +497,10 @@ public class Connection implements AutoCloseable {
             // closing anyway
         }
         LockSupport.unpark(writer);
+        Thread w = watchdog;
+        if (w != null) {
+            LockSupport.unpark(w);
+        }
         // Producers can no longer push (they check "closed" under the lock), so drain the ring.
         // Wait for the reader to stop touching head before draining from another thread.
         if (Thread.currentThread() != reader) {

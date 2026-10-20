@@ -164,6 +164,25 @@ class CollectionsLiveTest {
     }
 
     @Test
+    void asyncCommandTimeoutOnARealServer() throws Exception {
+        RuvioOptions o = Live.options(Live.DB).toBuilder().commandTimeoutMillis(300).build();
+        try (RuvioClient<String, String> t = RuvioClient.connect(o)) {
+            // A blocking command gets its own wait on top: BLPOP 1 returns nil after about 1 s, no timeout error.
+            long start = System.nanoTime();
+            assertNull(t.async().blpop(1, "bl:async:none").get(5, java.util.concurrent.TimeUnit.SECONDS));
+            long took = (System.nanoTime() - start) / 1_000_000;
+            assertTrue(took >= 900 && took < 2500, "took " + took + " ms");
+            // Plain commands still answer, and BLPOP 0 (forever) is not failed by the deadline check.
+            java.util.concurrent.CompletableFuture<?> forever = t.async().blpop(0, "bl:async:forever");
+            Thread.sleep(800);
+            assertFalse(forever.isDone());
+            c.rpush("bl:async:forever", "x");
+            assertNotNull(forever.get(5, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals("PONG", t.async().ping().get(5, java.util.concurrent.TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
     void sets() {
         assertEquals(3L, c.sadd("s1", "a", "b", "c"));
         assertEquals(1L, c.srem("s1", "c"));

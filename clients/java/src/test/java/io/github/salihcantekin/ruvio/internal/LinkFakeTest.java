@@ -113,6 +113,51 @@ class LinkFakeTest {
     }
 
     @Test
+    void anAsyncFutureFailsAtTheCommandTimeoutAndALateReplyIsDropped() throws Exception {
+        try (FakeNode n = new FakeNode(a -> {
+            if (a.get(0).equals("GET") && a.get(1).equals("slow")) {
+                try {
+                    Thread.sleep(450); // answers after the 300 ms limit
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return "$4\r\nlate\r\n";
+            }
+            return ok(a);
+        })) {
+            try (RuvioClient<String, String> c = RuvioClient.connect(to(n).commandTimeoutMillis(300).build())) {
+                long start = System.nanoTime();
+                java.util.concurrent.CompletableFuture<String> slow = c.async().get("slow");
+                java.util.concurrent.ExecutionException e = assertThrows(java.util.concurrent.ExecutionException.class, () -> slow.get(5, java.util.concurrent.TimeUnit.SECONDS));
+                long took = (System.nanoTime() - start) / 1_000_000;
+                assertTrue(e.getCause() instanceof RuvioException, String.valueOf(e.getCause()));
+                assertTrue(e.getCause().getMessage().contains("no reply within 300 ms"), e.getCause().getMessage());
+                assertTrue(took >= 290 && took < 440, "failed after " + took + " ms");
+                // The late reply is read and dropped: the next command gets its own reply, and the connection lives on.
+                java.util.concurrent.CompletableFuture<String> behind = c.async().get("fast");
+                assertEquals("value", behind.get(5, java.util.concurrent.TimeUnit.SECONDS));
+                assertEquals("value", c.async().get("again").get(5, java.util.concurrent.TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    @Test
+    void anAsyncBlockingCommandGetsItsOwnWaitAndOneThatWaitsForeverNone() throws Exception {
+        try (FakeNode n = new FakeNode(a -> a.get(0).equals("BLPOP") ? FakeNode.SILENT : ok(a))) {
+            try (RuvioClient<String, String> c = RuvioClient.connect(to(n).commandTimeoutMillis(200).build())) {
+                long start = System.nanoTime();
+                java.util.concurrent.CompletableFuture<?> timed = c.async().blpop(1, "k");
+                assertThrows(java.util.concurrent.ExecutionException.class, () -> timed.get(5, java.util.concurrent.TimeUnit.SECONDS));
+                long took = (System.nanoTime() - start) / 1_000_000;
+                assertTrue(took >= 1150 && took < 2000, "BLPOP 1 + 200 ms failed after " + took + " ms");
+                java.util.concurrent.CompletableFuture<?> forever = c.async().blpop(0, "k");
+                assertThrows(java.util.concurrent.TimeoutException.class, () -> forever.get(700, java.util.concurrent.TimeUnit.MILLISECONDS));
+                assertFalse(forever.isDone(), "BLPOP 0 has no deadline");
+            }
+        }
+    }
+
+    @Test
     void theCommandTimeoutDefaultsToThirtySeconds() {
         assertEquals(30_000, RuvioOptions.builder().build().commandTimeoutMillis);
         assertEquals(0, RuvioOptions.builder().commandTimeoutMillis(0).build().commandTimeoutMillis);
