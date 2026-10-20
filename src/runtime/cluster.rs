@@ -93,7 +93,7 @@ fn shard_nodes(route: &ClusterRoute, peers: &[ShardPeers], shard_id: usize) -> V
 
 /// Who serves a slot range: a shard of this node, or shard `shard` of another group's
 /// primary (multi-node cluster).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Holder {
     Local(usize),
     Remote { group: usize, shard: usize },
@@ -108,6 +108,11 @@ fn holder_ranges(route: &ClusterRoute) -> (Vec<(u16, u16, usize)>, Vec<Holder>) 
         return (route.slots.ranges(), holders);
     };
     let mut ranges: Vec<(u16, u16, usize)> = Vec::new();
+    let mut known: std::collections::HashMap<Holder, usize> = holders
+        .iter()
+        .enumerate()
+        .map(|(index, holder)| (*holder, index))
+        .collect();
 
     for slot in 0..crate::routing::HASH_SLOT_COUNT as u16 {
         let owner = route.slots.owner(slot);
@@ -125,13 +130,10 @@ fn holder_ranges(route: &ClusterRoute) -> (Vec<(u16, u16, usize)>, Vec<Holder>) 
                     .unwrap_or(0),
             }
         };
-        let index = match holders.iter().position(|known| *known == holder) {
-            Some(index) => index,
-            None => {
-                holders.push(holder);
-                holders.len() - 1
-            }
-        };
+        let index = *known.entry(holder).or_insert_with(|| {
+            holders.push(holder);
+            holders.len() - 1
+        });
 
         match ranges.last_mut() {
             Some((_, last, previous)) if *previous == index => *last = slot,

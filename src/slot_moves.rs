@@ -173,7 +173,8 @@ impl SlotMoves {
             io::ErrorKind::InvalidInput,
             format!(
                 "slots were moved between shards ({FILE_NAME} file) with another slot layout \
-                 ({}); start with the cluster_topology this node had then",
+                 ({}), or {BASE_FILE_NAME} is damaged; start with the cluster_topology this \
+                 node had then",
                 if saved.is_some() {
                     "an earlier cluster_topology"
                 } else {

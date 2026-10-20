@@ -980,6 +980,22 @@ async fn serve_async(
 
     store.apply_memory_limits(config.shard_memory_limits());
 
+    // With a cluster map, the lowest slot of another group a replay filter skipped: such
+    // keys refuse the start, as they do on a shard without a filter (below).
+    let other_group = |slot: u16| {
+        route.as_ref().is_some_and(|route| {
+            route.topology.is_some() && route.slots.owner(slot) >= route.shard_count
+        })
+    };
+    let mut skipped_foreign: Option<u16> = None;
+    let mut note_foreign = |key: &[u8]| {
+        let slot = crate::routing::hash_slot(key);
+
+        if other_group(slot) {
+            skipped_foreign = Some(skipped_foreign.map_or(slot, |known| known.min(slot)));
+        }
+    };
+
     // Entries go from the decoder straight into the store, so recovery holds one
     // shard's file and its store, not a second copy of the data.
     if let Some(plan) = &plan {
@@ -988,6 +1004,7 @@ async fn serve_async(
                 .as_mut()
                 .is_some_and(|filter| !filter.keeps_entry(&entry.key))
             {
+                note_foreign(&entry.key);
                 return Ok(());
             }
 
@@ -1039,6 +1056,7 @@ async fn serve_async(
                 store.drop_slots(slots);
             })
         {
+            mutation.for_each_write_key(&mut |key| note_foreign(key));
             continue;
         }
 
@@ -1074,6 +1092,13 @@ async fn serve_async(
     }
     // A node of a multi-node cluster must not hold keys the map serves elsewhere: they
     // would be unreachable here and missing there. One walk, only with a map.
+    if let Some(slot) = skipped_foreign {
+        return Err(io::Error::other(format!(
+            "shard {shard_id} recorded keys in slots another group serves under \
+             cluster_topology (first: slot {slot}); start with a map that gives this group \
+             those slots, or with an empty data directory"
+        )));
+    }
     if let Some(route) = route.as_ref().filter(|route| route.topology.is_some()) {
         let foreign: Vec<bool> = (0..crate::routing::HASH_SLOT_COUNT as u16)
             .map(|slot| route.slots.owner(slot) != shard_id as usize)

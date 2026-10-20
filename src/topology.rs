@@ -19,7 +19,7 @@ use crate::routing::{HASH_SLOT_COUNT, SlotTable};
 pub const TOPOLOGY_FILE: &str = "TOPOLOGY";
 
 /// One group of the cluster, as clients reach its primary.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct TopologyGroup {
     pub name: String,
     /// Client host of the group's primary.
@@ -29,37 +29,54 @@ pub struct TopologyGroup {
     pub shards: usize,
     /// Slot ranges the group owns, as `(first, last)`, in slot order.
     pub ranges: Vec<(u16, u16)>,
-    /// The shard of this group that serves each slot it owns (see [`TopologyGroup::shard_of`]),
-    /// computed once per map; `u16::MAX` for slots it does not own.
-    shard_by_slot: std::sync::Arc<[u16]>,
+    /// Its index in the map.
+    index: u16,
+    /// For every slot of the map, the owning group's index and the shard of that group that
+    /// serves it (see [`TopologyGroup::shard_of`]): one table per map, shared by its groups.
+    placed: std::sync::Arc<[(u16, u16)]>,
 }
+
+/// Equal when the group is described the same way; its placement follows from that.
+impl PartialEq for TopologyGroup {
+    fn eq(&self, other: &Self) -> bool {
+        (&self.name, &self.host, self.port, self.shards, &self.ranges)
+            == (
+                &other.name,
+                &other.host,
+                other.port,
+                other.shards,
+                &other.ranges,
+            )
+    }
+}
+
+impl Eq for TopologyGroup {}
 
 impl TopologyGroup {
     /// The shard of this group that serves `slot`: the group's slots, in order, split into
     /// `shards` equal runs, as the shard formula splits all 16384 (a group that owns every
     /// slot places them exactly as the formula does). `None` when the group does not own it.
     pub fn shard_of(&self, slot: u16) -> Option<usize> {
-        let shard = *self.shard_by_slot.get(usize::from(slot))?;
+        let (group, shard) = *self.placed.get(usize::from(slot))?;
 
-        (shard != u16::MAX).then_some(usize::from(shard))
+        (group == self.index).then_some(usize::from(shard))
     }
 
-    fn place(ranges: &[(u16, u16)], shards: usize) -> std::sync::Arc<[u16]> {
-        let total: usize = ranges
+    /// Writes this group's slots into `placed`.
+    fn place(&self, placed: &mut [(u16, u16)]) {
+        let total: usize = self
+            .ranges
             .iter()
             .map(|&(first, last)| usize::from(last - first) + 1)
             .sum();
-        let mut placed = vec![u16::MAX; HASH_SLOT_COUNT];
         let mut rank = 0;
 
-        for &(first, last) in ranges {
+        for &(first, last) in &self.ranges {
             for slot in first..=last {
-                placed[usize::from(slot)] = (rank * shards / total) as u16;
+                placed[usize::from(slot)] = (self.index, (rank * self.shards / total) as u16);
                 rank += 1;
             }
         }
-
-        placed.into()
     }
 }
 
@@ -180,6 +197,10 @@ impl Topology {
         if file.groups.is_empty() {
             return Err("no groups".into());
         }
+        // Group indices are `u16`, and a node's slot table holds `local_shards + groups`.
+        if local_shards + file.groups.len() > usize::from(u16::MAX) {
+            return Err("too many groups".into());
+        }
 
         for (index, entry) in file.groups.into_iter().enumerate() {
             if groups
@@ -230,9 +251,20 @@ impl Topology {
                     .to_owned(),
                 port,
                 shards: entry.shards,
-                shard_by_slot: TopologyGroup::place(&ranges, entry.shards),
                 ranges,
+                index: index as u16,
+                placed: std::sync::Arc::from(Vec::new()),
             });
+        }
+        let mut placed = vec![(0, 0); HASH_SLOT_COUNT];
+
+        for group in &groups {
+            group.place(&mut placed);
+        }
+        let placed: std::sync::Arc<[(u16, u16)]> = placed.into();
+
+        for group in &mut groups {
+            group.placed = std::sync::Arc::clone(&placed);
         }
 
         if let Some(slot) = owner.iter().position(Option::is_none) {
