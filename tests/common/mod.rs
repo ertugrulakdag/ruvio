@@ -161,6 +161,12 @@ impl Server {
         }
     }
 
+    /// Sets a `RUVIO_*` setting for the next start (see `restart`).
+    pub fn set_env(&mut self, key: &str, value: &str) {
+        self.env.retain(|(known, _)| known != key);
+        self.env.push((key.to_owned(), value.to_owned()));
+    }
+
     /// Starts the same server again on the same address and data directory.
     pub fn restart(&mut self) {
         self.stop();

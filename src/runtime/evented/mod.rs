@@ -578,6 +578,15 @@ fn run_cluster(config: &AppConfig, shutdown: ShutdownToken, force: bool) -> io::
     // Before any shard serves: every route reads the table the moves left, and new moves
     // are recorded next to the log.
     if let Some(fabric) = &fabric {
+        // The cluster map places this group's slots on its shards first; moves between
+        // the shards apply on top of it.
+        if let Some(path) = &config.cluster_topology {
+            let topology =
+                crate::topology::Topology::load(path, &config.cluster_group, config.shards)
+                    .map_err(io::Error::other)?;
+
+            fabric.set_topology(Arc::new(topology));
+        }
         let moves = load_slot_moves(config, config.shards)?;
 
         if let Some(moves) = &moves {
@@ -637,6 +646,9 @@ fn run_cluster(config: &AppConfig, shutdown: ShutdownToken, force: bool) -> io::
                 || crate::routing::SlotTable::from_formula(config.shards),
                 |fabric| fabric.slot_table(),
             ),
+            topology: fabric
+                .as_ref()
+                .and_then(|fabric| fabric.topology().cloned()),
         };
 
         let cfg = config.clone();
