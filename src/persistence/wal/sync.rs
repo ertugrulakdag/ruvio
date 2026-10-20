@@ -57,6 +57,21 @@ impl WalSink {
         }
     }
 
+    /// Ends the group a hot-key write opened (`begin_group`) once the shared hot store holds
+    /// it: the record staged under the store's lock is written now, outside that lock, and
+    /// under `always` synced, unless an enclosing group (`start` as in `sync_batch`) does
+    /// it later. As for any staged record, a failed write keeps it for recovery.
+    pub fn end_hot_write(&mut self, start: u64) -> Result<(), PersistenceError> {
+        let outermost = self.group == 1;
+
+        self.end_group()?;
+        if outermost && self.profile == DurabilityProfile::Always {
+            return self.sync_batch(start);
+        }
+
+        Ok(())
+    }
+
     /// Bytes appended since the outermost open group began; zero outside a group.
     pub fn group_bytes(&self) -> u64 {
         if self.group == 0 { 0 } else { self.group_bytes }
