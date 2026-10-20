@@ -244,22 +244,31 @@ impl Topology {
         })
     }
 
-    /// Fills the slot table: this group's slots go to its shards by
-    /// [`TopologyGroup::shard_of`], every other group's to that group's remote owner entry
+    /// The slot table this map gives: this group's slots on its shards by
+    /// [`TopologyGroup::shard_of`], every other group's on that group's remote owner entry
     /// (`local_shards + group index`, see [`Topology::remote`]).
-    pub fn apply(&self, table: &SlotTable, local_shards: usize) {
+    pub fn placement(&self, local_shards: usize) -> Vec<u16> {
+        let mut owners = vec![0; HASH_SLOT_COUNT];
+
         for (index, group) in self.groups.iter().enumerate() {
             for &(first, last) in &group.ranges {
                 for slot in first..=last {
-                    let owner = if index == self.local {
-                        group.shard_of(slot).unwrap_or(0)
+                    owners[usize::from(slot)] = if index == self.local {
+                        group.shard_of(slot).unwrap_or(0) as u16
                     } else {
-                        local_shards + index
+                        (local_shards + index) as u16
                     };
-
-                    table.assign(slot, owner);
                 }
             }
+        }
+
+        owners
+    }
+
+    /// Fills the slot table with [`Topology::placement`].
+    pub fn apply(&self, table: &SlotTable, local_shards: usize) {
+        for (slot, owner) in self.placement(local_shards).into_iter().enumerate() {
+            table.assign(slot as u16, usize::from(owner));
         }
     }
 

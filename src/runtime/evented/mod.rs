@@ -594,20 +594,24 @@ fn run_cluster(config: &AppConfig, shutdown: ShutdownToken, force: bool) -> io::
 
             fabric.set_topology(topology);
         }
-        let moves = load_slot_moves(config, config.shards)?;
+        let base = fabric
+            .topology()
+            .map(|shared| shared.get().placement(config.shards).into());
+        let moves = load_slot_moves(config, config.shards, base.clone())?;
 
-        if moves.is_some() && config.cluster_topology.is_some() {
-            return Err(io::Error::other(
-                "slots were moved between this server's shards (SLOTS file); cluster_topology \
-                 cannot be used with moved slots yet",
-            ));
-        }
         if let Some(moves) = &moves {
             moves.apply(&fabric.slot_table());
         }
         if config.persistence.profile.uses_wal() {
             fabric.mover.set_durable(
-                moves.unwrap_or_else(|| crate::slot_moves::SlotMoves::new(config.shards)),
+                moves.unwrap_or_else(|| {
+                    let moves = crate::slot_moves::SlotMoves::new(config.shards);
+
+                    match base {
+                        Some(base) => moves.with_base(base),
+                        None => moves,
+                    }
+                }),
                 config.persistence.data_dir.clone(),
             );
         }
@@ -791,6 +795,7 @@ pub fn serve(
 fn load_slot_moves(
     config: &AppConfig,
     shard_count: usize,
+    base: Option<std::sync::Arc<[u16]>>,
 ) -> io::Result<Option<crate::slot_moves::SlotMoves>> {
     if config.persistence.profile == crate::DurabilityProfile::Memory {
         return Ok(None);
@@ -806,7 +811,11 @@ fn load_slot_moves(
         ));
     }
 
-    Ok(moves)
+    // With a cluster map, moves were recorded against the map's placement.
+    Ok(match base {
+        Some(base) => moves.map(|moves| moves.with_base(base)),
+        None => moves,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -924,7 +933,14 @@ async fn serve_async(
     }
 
     let slot_moves = match &route {
-        Some(route) => load_slot_moves(&config, route.shard_count)?,
+        Some(route) => load_slot_moves(
+            &config,
+            route.shard_count,
+            route
+                .topology
+                .as_ref()
+                .map(|shared| shared.get().placement(route.shard_count).into()),
+        )?,
         None => None,
     };
     let mut slot_filter = slot_moves

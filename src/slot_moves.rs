@@ -1,6 +1,8 @@
 //! Slot ranges moved between the shards of one process, kept in the `SLOTS` file.
 //!
-//! Without the file every shard owns the slots the formula gives it ([`shard_for_slot`]).
+//! Without the file every shard owns the slots the formula gives it ([`shard_for_slot`]), or
+//! with a multi-node cluster map the slots the map places on it ([`SlotMoves::with_base`]):
+//! moves are recorded against that starting table.
 //! Each move appends one entry: the range, the shard it left and the shard it went to, the
 //! target's log sequence where its copy began (`since`) and the source's first sequence
 //! after the hand-over (`until`). An entry whose `until` is 0 was never completed: a move
@@ -54,6 +56,9 @@ impl SlotMove {
 pub(crate) struct SlotMoves {
     shard_count: u16,
     moves: Vec<SlotMove>,
+    /// The owner of every slot before any move, when it is not the formula: a cluster map's
+    /// placement, with other nodes' slots past the local shards. Not saved; the map is.
+    base: Option<std::sync::Arc<[u16]>>,
 }
 
 impl SlotMoves {
@@ -61,6 +66,22 @@ impl SlotMoves {
         Self {
             shard_count: shard_count as u16,
             moves: Vec::new(),
+            base: None,
+        }
+    }
+
+    /// Records moves against `base` (an owner per slot) instead of the formula.
+    pub(crate) fn with_base(mut self, base: std::sync::Arc<[u16]>) -> Self {
+        debug_assert_eq!(base.len(), HASH_SLOT_COUNT);
+        self.base = Some(base);
+        self
+    }
+
+    /// The owner of `slot` before any move.
+    fn base_owner(&self, slot: u16) -> u16 {
+        match &self.base {
+            Some(base) => base[usize::from(slot)],
+            None => shard_for_slot(slot, usize::from(self.shard_count)) as u16,
         }
     }
 
@@ -100,9 +121,8 @@ impl SlotMoves {
 
     /// The owner of every slot after the completed moves.
     pub(crate) fn owners(&self) -> Vec<u16> {
-        let count = usize::from(self.shard_count);
         let mut owners: Vec<u16> = (0..HASH_SLOT_COUNT)
-            .map(|slot| shard_for_slot(slot as u16, count) as u16)
+            .map(|slot| self.base_owner(slot as u16))
             .collect();
 
         for entry in self.moves.iter().filter(|entry| entry.completed()) {
@@ -180,7 +200,7 @@ impl SlotMoves {
     }
 
     /// What recovery of `shard` keeps, or `None` when no move concerns it (it then owns
-    /// what the formula gives it, for its whole log).
+    /// what the starting table gives it, for its whole log).
     pub(crate) fn replay_filter(
         &self,
         shard: usize,
@@ -196,9 +216,8 @@ impl SlotMoves {
             return None;
         }
 
-        let count = usize::from(self.shard_count);
         let mut owned: Vec<bool> = (0..HASH_SLOT_COUNT)
-            .map(|slot| shard_for_slot(slot as u16, count) == usize::from(shard))
+            .map(|slot| self.base_owner(slot as u16) == shard)
             .collect();
         // A shard's own sequences increase with time, so its gains and losses are in
         // order; the sort only makes that explicit.
@@ -307,6 +326,7 @@ impl SlotMoves {
         valid.then_some(Self {
             shard_count: shard_count as u16,
             moves,
+            base: None,
         })
     }
 }

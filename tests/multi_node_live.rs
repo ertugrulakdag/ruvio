@@ -147,3 +147,96 @@ fn each_node_serves_its_slots_and_redirects_the_rest() {
 
     assert_eq!(on_a.call(&["RUVIO", "TOPOLOGY", "VERSION"]), "8");
 }
+
+#[test]
+fn slots_move_between_a_nodes_own_shards_and_survive_a_restart() {
+    let mut a = Server::start_with(&[
+        ("RUVIO_SHARDS", "2"),
+        ("RUVIO_DURABILITY", "always"),
+        ("RUVIO_SNAPSHOT_INTERVAL_MS", "0"),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let topology = dir.path().join("topology.toml");
+    let b_port = a.ports().port_at(4);
+
+    // Group a owns 0-4095: 0-2047 on shard 0 and 2048-4095 on shard 1, where the shard
+    // formula would put all of them on shard 0.
+    std::fs::write(
+        &topology,
+        format!(
+            "version = 1\n\
+             [[groups]]\nname = \"a\"\naddress = \"127.0.0.1:{}\"\nshards = 2\nslots = [\"0-4095\"]\n\
+             [[groups]]\nname = \"b\"\naddress = \"127.0.0.1:{b_port}\"\nshards = 2\nslots = [\"4096-16383\"]\n",
+            a.ports().port_at(0)
+        ),
+    )
+    .unwrap();
+    a.set_env("RUVIO_CLUSTER_TOPOLOGY", topology.to_str().unwrap());
+    a.set_env("RUVIO_CLUSTER_GROUP", "a");
+    a.restart();
+
+    // Keys on both shards; then 0-1023 moves from shard 0 to shard 1.
+    let keys: Vec<String> = (0..)
+        .map(|n| format!("moving:{n}"))
+        .filter(|key| {
+            let slot = hash_slot(key.as_bytes());
+
+            slot < 1024 || (2048..4096).contains(&slot)
+        })
+        .take(300)
+        .collect();
+    let mut client = Client::connect(&a.address);
+
+    for key in &keys {
+        assert_eq!(client.call(&["SET", key, key]), "OK");
+    }
+    // Another group's range cannot move.
+    assert!(
+        client
+            .call(&["RUVIO", "MOVESLOTS", "9000-9100", "1"])
+            .contains("another node")
+    );
+    assert_eq!(client.call(&["RUVIO", "MOVESLOTS", "0-1023", "1"]), "OK");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+
+    while !client
+        .call(&["RUVIO", "MOVESLOTS", "STATUS"])
+        .contains("done")
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the move did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    let (shard0, shard1) = (a.ports().port_at(0), a.ports().port_at(1));
+    let check = |client: &mut Client| {
+        let slots = client.call(&["CLUSTER", "SLOTS"]);
+
+        assert!(
+            slots.contains(&format!("[0,1023,[127.0.0.1,{shard1},")),
+            "{slots}"
+        );
+        assert!(
+            slots.contains(&format!("[1024,2047,[127.0.0.1,{shard0},")),
+            "{slots}"
+        );
+        assert!(
+            slots.contains(&format!("[2048,4095,[127.0.0.1,{shard1},")),
+            "{slots}"
+        );
+        assert!(slots.contains(&format!(",[127.0.0.1,{b_port},")), "{slots}");
+        for key in &keys {
+            assert_eq!(client.call(&["GET", key]), *key);
+        }
+    };
+
+    check(&mut client);
+
+    // The move is kept against the map's placement across a restart.
+    a.restart();
+    let mut client = Client::connect(&a.address);
+
+    check(&mut client);
+}

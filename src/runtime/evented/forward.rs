@@ -247,10 +247,19 @@ impl Fabric {
     /// Makes this node one of a multi-node cluster: the slots of other groups point past
     /// the local shards (see [`crate::topology::Topology::apply`]).
     pub(crate) fn set_topology(&self, topology: crate::topology::Topology) {
-        topology.apply(&self.slots, self.count);
         match self.topology.get() {
-            Some(shared) => shared.replace(topology),
+            // A newer map keeps this node's slots (and the moves between its shards); only
+            // the other groups' entries are rewritten.
+            Some(shared) => {
+                for (slot, owner) in topology.placement(self.count).into_iter().enumerate() {
+                    if usize::from(owner) >= self.count {
+                        self.slots.assign(slot as u16, usize::from(owner));
+                    }
+                }
+                shared.replace(topology);
+            }
             None => {
+                topology.apply(&self.slots, self.count);
                 let _ = self
                     .topology
                     .set(crate::topology::SharedTopology::new(topology));

@@ -842,6 +842,8 @@ groups, the coordinators send each node a newer map after every failover (`RUVIO
 TOPOLOGY SET`, see `docs/COORDINATOR.md`); the node keeps it in `TOPOLOGY` in its data
 directory and starts from the newer of that file and `cluster_topology`. A one-shard
 node with a map answers the `CLUSTER` commands too. A map needs `port_mode = "per-shard"` and cannot be combined with `hot_keys`.
+`RUVIO MOVESLOTS` still moves this group's slots between the node's own shards, starting
+from the map's placement; another group's range cannot be moved.
 `cpu_set` (`RUVIO_CPUSET`, `--cpu-set`) pins shard threads on Linux. It takes a
 CPU list such as `2`, `0-3` or `0,2,4-5`; shard `i` runs on the `i`th listed
 core and the list wraps when there are more shards than cores. Unset means no
