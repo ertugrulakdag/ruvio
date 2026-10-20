@@ -55,6 +55,17 @@ The generated bill of materials lists crate name, version, and purl for every
 package in the resolved graph, including optional Linux `io-uring` crates.
 Signed SLSA provenance is not wired yet; see `docs/RELEASE_EVIDENCE.md`.
 
+## Scanner image
+
+`.oss-scanner/` holds the files Anthropic's [OSS Scanner](https://github.com/anthropics/oss-scanner)
+reads when a project is enrolled there: `Dockerfile` (installs the pinned
+toolchain, fetches every crate, builds `ruvio` and `ruvio-ctl` in debug, and
+compiles the library tests) and `threat_model.md` (a short guide that points to
+`docs/THREAT_MODEL.md`). Enrolment is a pull request to that repository and is
+separate from this one. The files have no effect on the PR gate, CI, or any
+release artifact. The image can be checked the way the scanner builds it with
+`tools/check` from the OSS Scanner repository.
+
 ## Vulnerability reporting
 
 Private reports go through GitHub Security Advisories. See `SECURITY.md`.
